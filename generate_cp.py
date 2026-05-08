@@ -56,10 +56,10 @@ DEFAULTS = {
     "dotacia_bateria_max_eur": 1800,
     "dotacia_max_total": 3500,      # CELKOVÝ strop dotácie (FVE + BESS dokopy)
     "obchodnik": {
-        "meno": "Lukáš Bago",
-        "funkcia": "CEO",
-        "tel": "+421 918 187 762",
-        "email": "bago.lukas@gmail.com",
+        "meno": "Dominik Galaba",
+        "funkcia": "Office & Administration Manager",
+        "tel": "+421 917 424 564",
+        "email": "dominik.galaba@energovision.sk",
     },
 }
 
