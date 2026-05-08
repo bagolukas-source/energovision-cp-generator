@@ -1,623 +1,431 @@
 """
-Energovision B2C cenovka — Webhook server pre Notion → PDF generovanie.
+generate_cp_html.py — Energovision B2C CP generator (HTML→PDF verzia)
 
-Endpointy:
-- POST /webhook/prepocet — prerátá ceny pre lead, updatne Notion polia
-- POST /webhook/generate-pdf — vyrobí PDF + uploaduje do Notion stránky
-- GET /health — healthcheck pre Render
-
-Deployovať na Render.com (alebo iný cloud s Python 3.11+).
+Vstup: lead.json
+Výstupy: CP_*.pdf (krásne renderované cez WeasyPrint), CP_*.eml, kalkulacia_*.xlsx
 """
-import os
-import sys
-import json
-import logging
-import re
-import tempfile
+
+import json, sys, os, datetime, subprocess, re
 from pathlib import Path
-from functools import wraps
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
+from email.utils import formatdate
 
-from flask import Flask, request, jsonify
-import requests
-
-# Import existujúcich modulov z generátora
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Re-použijeme logiku z generate_cp.py
+sys.path.insert(0, str(Path(__file__).parent))
 from generate_cp import (
-    load_cennik, vyrataj_konfig, vyrataj_ceny,
-    vyrataj_navratnost, vyrob_grafy
-)
-from generate_cp_html import vyrob_html_pdf
-from generate_from_notion import (
-    lead_from_notion, predpocitaj_ceny_pre_record,
-    check_compatibility, INVERTOR_BATTERY_COMPAT, safe_filename,
+    load_cennik, vyrataj_konfig, vyrataj_ceny, vyrataj_navratnost,
+    vyrob_grafy, vyrob_internu_kalkulaciu, ZHOTOVITEL, DEFAULTS
 )
 
-logging.basicConfig(level=logging.INFO)
-log = logging.getLogger("evo")
+_SD = os.path.dirname(os.path.abspath(__file__))
+BRAND_HEADER = os.path.join(_SD, "energovision_header.png")
+TEMPLATE = os.path.join(_SD, "cp_template.html")
 
-app = Flask(__name__)
 
-# === ENV ===
-NOTION_TOKEN = os.environ.get("NOTION_TOKEN", "")
-NOTION_DATABASE_ID = os.environ.get("NOTION_DATABASE_ID", "ba7a1d6c-63a9-43da-b66d-2b1c7e8660da")
-WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 
-NOTION_API = "https://api.notion.com/v1"
-NOTION_HEADERS = {
-    "Authorization": f"Bearer {NOTION_TOKEN}",
-    "Notion-Version": "2022-06-28",
-    "Content-Type": "application/json",
+# Hardcoded wallbox kódy → ľudsky čitateľný label (žiadna cennik dependency)
+WALLBOX_LABELS = {
+    "WBX-001": "Solinteg 7 kW 1F",
+    "WBX-002": "Solinteg 11 kW 3F",
+    "WBX-003": "Huawei 22 kW 3F",
+    "WBX-004": "Huawei 7 kW 1F",
+    "WBX-005": "GoodWe 11 kW",
+    "WBX-006": "GoodWe 22 kW",
 }
 
+def _wallbox_label(wallbox_kod, cennik=None):
+    """Krátky label wallboxu podľa kódu — bez cennik dependency."""
+    if not wallbox_kod:
+        return ""
+    return WALLBOX_LABELS.get(wallbox_kod, wallbox_kod)
 
-def require_secret(f):
-    """Dekorátor — kontroluje X-Webhook-Secret header."""
-    @wraps(f)
-    def wrapper(*args, **kwargs):
-        if WEBHOOK_SECRET:
-            received = request.headers.get("X-Webhook-Secret", "")
-            if received != WEBHOOK_SECRET:
-                return jsonify({"error": "unauthorized"}), 401
-        return f(*args, **kwargs)
-    return wrapper
-
-
-def notion_get_page(page_id):
-    """Stiahne Notion page properties."""
-    r = requests.get(f"{NOTION_API}/pages/{page_id}", headers=NOTION_HEADERS, timeout=20)
-    r.raise_for_status()
-    return r.json()
+def fmt_eur(x):
+    """123456.78 → '123 456,78 €' (slovensky)"""
+    s = f"{x:,.2f}"
+    s = s.replace(",", "X").replace(".", ",").replace("X", " ")
+    return s + " €"
 
 
-def notion_props_to_flat(page):
-    """Z Notion API response (page properties) urob flat dict {prop_name: value}."""
-    out = {}
-    props = page.get("properties", {})
-    for name, prop in props.items():
-        ptype = prop.get("type")
-        if ptype == "title":
-            out[name] = "".join(t.get("plain_text", "") for t in prop["title"])
-        elif ptype == "rich_text":
-            out[name] = "".join(t.get("plain_text", "") for t in prop["rich_text"])
-        elif ptype == "select":
-            out[name] = (prop["select"] or {}).get("name", "")
-        elif ptype == "multi_select":
-            out[name] = json.dumps([s["name"] for s in prop["multi_select"]], ensure_ascii=False)
-        elif ptype == "number":
-            out[name] = prop["number"]
-        elif ptype == "checkbox":
-            out[name] = "__YES__" if prop["checkbox"] else "__NO__"
-        elif ptype == "url":
-            out[name] = prop["url"]
-        elif ptype == "email":
-            out[name] = prop["email"]
-        elif ptype == "phone_number":
-            out[name] = prop["phone_number"]
-        elif ptype == "unique_id":
-            uid = prop["unique_id"]
-            out[name] = f"{uid.get('prefix','')}-{uid['number']}" if uid.get('prefix') else str(uid["number"])
-    return out
+def short(name, max_len=42):
+    if len(name) <= max_len: return name
+    return name[:max_len-1].rsplit(" ", 1)[0] + "…"
 
 
-def notion_update_page(page_id, properties):
-    """Update Notion stránku s novými properties (Notion API v2022-06-28 formát)."""
-    payload = {"properties": properties}
-    r = requests.patch(f"{NOTION_API}/pages/{page_id}", headers=NOTION_HEADERS, json=payload, timeout=20)
-    r.raise_for_status()
-    return r.json()
+def shorten_konstrukcia(name):
+    """'Rovná strecha Juh — balastová konštrukcia 13°' → 'Plochá strecha (J, 13°)'"""
+    if "Rovná" in name and "Juh" in name: return "Plochá strecha (J, 13°)"
+    if "Rovná" in name: return "Plochá strecha (V/Z, 10°)"
+    if "Škridla" in name: return "Šikmá — háky na škridle"
+    if "Plech" in name and "Kombi" in name: return "Šikmá — kombivrut na plech"
+    if "Falc" in name: return "Šikmá — falcový úchyt"
+    return name
 
 
-def notion_set_number(prop_name, value):
-    return {prop_name: {"number": float(value) if value is not None else None}}
+def shorten_menic(name):
+    """'Solinteg MHT-10K-25 hybridný 10 kW 3F' → 'Solinteg MHT-10K-25'"""
+    if " hybridný " in name: return name.split(" hybridný ")[0]
+    return name
 
 
-def notion_set_text(prop_name, value):
-    return {prop_name: {"rich_text": [{"text": {"content": str(value)[:2000]}}]}}
+def shorten_panel(name):
+    """'LONGi Hi-MO X10 LR7-60HVH 535-545 Wp čierny rám' → 'LONGi Hi-MO X10 540 Wp'"""
+    if "LONGi" in name:
+        if "545" in name or "540" in name: return "LONGi Hi-MO X10 540 Wp"
+        if "470" in name: return "LONGi Hi-MO X10 470 Wp"
+    return short(name, 35)
 
 
-def notion_set_select(prop_name, value):
-    return {prop_name: {"select": {"name": value}} if value else {prop_name: {"select": None}}}
+def _sk_int(x):
+    """123456 → '123 456' (slovenský formát)"""
+    return f"{int(round(x)):,}".replace(",", " ")
+
+def _sk_dec(x, n=2):
+    """12.345 → '12,35' (slovenská desatinná čiarka)"""
+    return f"{x:.{n}f}".replace(".", ",")
 
 
-def notion_set_url(prop_name, value):
-    return {prop_name: {"url": value or None}}
+def gen_copywriting(lead, konfig, ceny, navratnost):
+    """Vygeneruje personalizované copywritingové texty na základe leadu."""
+    priezvisko = lead["meno"].split()[-1]
+    spotreba = lead["rocna_spotreba_kwh"]
+    cena_el = lead.get("cena_el_eur_kwh", 0.16)
+    rocna_faktura = spotreba * cena_el
+    vykon = konfig["vykon_kwp"]
+    vyroba = navratnost["rocna_vyroba_kwh"]
+    pokrytie = min(100, vyroba / spotreba * 100)
+    nadvyroba_pct = (vyroba / spotreba * 100) - 100 if vyroba > spotreba else 0
+
+    # Vek leadu — pre age-aware úvodný pozdrav
+    vek_dni = lead.get("vek_dni", 0)
+
+    # Typ domácnosti podľa spotreby
+    if spotreba < 3500: typ = "menšia domácnosť (1–2 osoby alebo úsporná prevádzka)"
+    elif spotreba < 5500: typ = "štandardná rodina (2–3 osoby)"
+    elif spotreba < 8500: typ = "väčšia rodina (3–4 osoby)"
+    else: typ = "vysoká spotreba (väčšia rodina alebo dom s tepelným čerpadlom či elektromobilom)"
+
+    # === ÚVODNÝ POZDRAV (titulka) — age-aware ===
+    if vek_dni < 14:
+        # Čerstvý lead — štandardný úvod
+        uvodny_pozdrav = (
+            f"Pán {priezvisko}, ďakujem za prejavený záujem. "
+            f"Pripravil som pre Vás návrh, ktorý vychádza z údajov, čo ste nám poskytli — "
+            f"a z toho, ako u Vás reálne fungujú spotreba aj strecha. Verím, že Vás zaujme."
+        )
+    elif vek_dni < 60:
+        # Stredný lead — vďačnosť za trpezlivosť
+        uvodny_pozdrav = (
+            f"Pán {priezvisko}, ďakujem za Vašu trpezlivosť. "
+            f"Pripravil som pre Vás návrh prispôsobený údajom, ktoré ste nám poskytli pri prvotnom dopyte — "
+            f"prepočítaný na aktuálne ceny a podmienky."
+        )
+    else:
+        # Starý lead (60+ dní) — ospravedlnenie + dôvod prečo to ešte stojí
+        mesiace = vek_dni // 30
+        uvodny_pozdrav = (
+            f"Pán {priezvisko}, ospravedlňujem sa za neskorú reakciu na Váš dopyt z pred ~{mesiace} mesiacmi. "
+            f"Téma sa medzitým posunula — vyšla nová výzva Zelená domácnostiam 2026 a ceny elektriny "
+            f"pokračovali v raste. Pripravil som pre Vás aktualizovanú ponuku — verím, že je u Vás projekt "
+            f"FVE stále aktuálny a táto verzia Vás zaujme viac."
+        )
+
+    # === POCHOPENIE POTRIEB ===
+    p1 = (
+        f"Vaša ročná spotreba <strong>{_sk_int(spotreba)} kWh</strong> zodpovedá charakteristike: "
+        f"<strong>{typ}</strong>. Pri aktuálnej cene cca {_sk_dec(cena_el)} €/kWh to znamená "
+        f"<strong>~ {_sk_int(rocna_faktura)} € ročne</strong> len za samotnú elektrinu. "
+        f"A keďže ceny v posledných rokoch rástli o 3–8 % ročne, o päť rokov to môže byť výrazne viac."
+    )
+
+    p2_parts = []
+    kon = konfig["konstrukcia"]
+    if "Rovná" in kon and "Juh" in kon:
+        p2_parts.append("Vaša rovná strecha s J orientáciou je pre fotovoltiku ideálna — vieme z nej získať blízke maximum.")
+    elif "Rovná" in kon:
+        p2_parts.append("Vaša rovná strecha umožňuje optimálne nasmerovanie panelov balastovou konštrukciou.")
+    elif "Škridla" in kon:
+        p2_parts.append("Vaša šikmá strecha so škridlou je štandardný case, s ktorým máme bohaté skúsenosti.")
+    elif "Plech" in kon or "Falc" in kon:
+        p2_parts.append("Plechová strecha je pre montáž rýchla a čistá — bez prierazov do krytiny.")
+    else:
+        p2_parts.append("Pre Vašu konštrukciu strechy máme overené riešenie.")
+
+    if konfig["ma_bateriu"]:
+        p2_parts.append("Súčasťou návrhu je aj batériové úložisko, takže časť vyrobenej energie použijete aj večer alebo cez víkend.")
+    else:
+        p2_parts.append("Pre začiatok Vám neodporúčame batériu — pridať ju budete môcť kedykoľvek neskôr (menič je pripravený).")
+
+    if konfig["ma_wallbox"]:
+        p2_parts.append("Pridali sme aj wallbox pre nabíjanie elektromobilu priamo zo slnka.")
+
+    p2 = " ".join(p2_parts)
+
+    # Záver
+    if nadvyroba_pct > 20:
+        zaver = (
+            f"Navrhujeme výkon <strong>{_sk_dec(vykon)} kWp</strong>, ktorý pokryje Vašu spotrebu "
+            f"na 100 % a vyrobí ešte {nadvyroba_pct:.0f} % naviac. Prebytky predáme do siete za "
+            f"výkupnú cenu, alebo ich neskôr viete uložiť do prípadnej batérie."
+        )
+    elif pokrytie >= 95:
+        zaver = (
+            f"Navrhujeme výkon <strong>{_sk_dec(vykon)} kWp</strong>, ktorý pokryje takmer celú Vašu spotrebu. "
+            f"S batériou alebo posunom spotreby do dňa (pranie, varenie, nabíjanie) sa dostanete blízko energetickej sebestačnosti."
+        )
+    else:
+        zaver = (
+            f"Navrhujeme výkon <strong>{_sk_dec(vykon)} kWp</strong>, ktorý pokryje cca "
+            f"<strong>{pokrytie:.0f} %</strong> Vašej spotreby. Zvyšok dokúpite ako doteraz, "
+            f"ale za výrazne nižší ročný účet."
+        )
+
+    # === RIEŠENIE INTRO ===
+    rieseni_intro = (
+        f"Zostava postavená tak, aby vyrobila ~{_sk_int(vyroba)} kWh ročne a pokryla "
+        f"{pokrytie:.0f} % Vašej spotreby. Komponenty sú overené značky, montáž robíme vlastným tímom."
+    )
+
+    # === BENEFITY ===
+    rocna_uspora = navratnost["rocne_uspora_eur"]
+    nav_rokov = navratnost["navratnost_rokov"]
+    benefit_uspora = (
+        f"Ročná úspora <strong>~{_sk_int(rocna_uspora)} €</strong> pri dnešných cenách. "
+        f"Keďže ceny elektriny rastú a panely majú degradáciu len ~0,5 % ročne, úspora sa s každým rokom zvyšuje. "
+        f"Investícia sa Vám vráti za <strong>~{_sk_dec(nav_rokov, 1)} rokov</strong> — a potom ďalších 15+ rokov vyrábate prakticky zadarmo."
+    )
+
+    benefit_nezavislost = (
+        "Distribučky každý rok upravujú ceny — a smerujú nahor. S vlastnou FVE zafixujete cenu časti svojej "
+        "spotreby na 25+ rokov dopredu. Žiadne nemilé prekvapenia keď príde nová tarifa."
+    )
+
+    if konfig["ma_bateriu"]:
+        benefit_bateria = (
+            f"Batéria s kapacitou {_sk_dec(konfig['bateria_kwh'], 1)} kWh uloží to, čo cez deň nestihnete spotrebovať. "
+            "Večer a v noci čerpáte vlastnú elektrinu zo slnka, nie zo siete. Samospotreba sa tak zvyšuje "
+            "z bežných ~70 % až na 90 %+."
+        )
+    else:
+        benefit_bateria = (
+            "Hybridný menič v tejto zostave je pripravený na neskoršie pripojenie batérie. "
+            "Keď sa rozhodnete (typicky po prvej zime, keď uvidíte reálne čísla), pridáme ju "
+            "bez väčších úprav. Žiadny duplicitný menič, žiadne prerábanie."
+        )
+
+    # === NÁVRATNOSŤ TEXT ===
+    navratnost_text = (
+        f"Pri dnešných cenách elektriny ({_sk_dec(cena_el)} €/kWh) sa investícia po dotácii "
+        f"<strong>{_sk_int(ceny['cena_finalna'])} €</strong> vráti za "
+        f"<strong>~{_sk_dec(nav_rokov, 1)} rokov</strong>. "
+        f"S rastom cien elektriny (3 % ročne) bude návratnosť reálne kratšia. "
+        f"Za 25 rokov životnosti panelov ušetríte <strong>~{_sk_int(navratnost['uspora_25_rokov'])} €</strong>."
+    )
+
+    # === UZATVORENIE ===
+    uzatvorenie_p1 = (
+        f"Pán {priezvisko}, fotovoltika je rozhodnutie na 25+ rokov. "
+        f"Nie je to o tom, kto má najlacnejšiu ponuku v tomto týždni — je to o tom, "
+        f"komu zveríte strechu svojho domu a kto Vám zdvihne telefón, keď budete potrebovať servis o päť rokov."
+    )
+    uzatvorenie_p2 = (
+        f"Vašu ponuku mám rezervovanú do <strong>{(datetime.date.today() + datetime.timedelta(days=lead.get('platnost_dni',30))).strftime('%d. %m. %Y')}</strong>. "
+        f"Ak budete mať akúkoľvek otázku — od technického detailu po platobné podmienky — "
+        f"som Vám k dispozícii telefonicky aj e-mailom. Nečakajte, ozvite sa."
+    )
+
+    return {
+        "uvodny_pozdrav": uvodny_pozdrav,
+        "pochopenie_p1": p1,
+        "pochopenie_p2": p2,
+        "pochopenie_zaver": zaver,
+        "rieseni_intro": rieseni_intro,
+        "benefit_uspora": benefit_uspora,
+        "benefit_nezavislost": benefit_nezavislost,
+        "benefit_batería": benefit_bateria,
+        "navratnost_text": navratnost_text,
+        "uzatvorenie_p1": uzatvorenie_p1,
+        "uzatvorenie_p2": uzatvorenie_p2,
+    }
 
 
-# ============================================================
-# HEALTHCHECK
-# ============================================================
-@app.route("/health")
-def health():
-    return jsonify({
-        "status": "ok",
-        "service": "energovision-cp-generator",
-        "notion_token_set": bool(NOTION_TOKEN),
-    })
+def vyrob_html_pdf(lead, konfig, ceny, navratnost, grafy, out_pdf):
+    from jinja2 import Environment, FileSystemLoader
+    from weasyprint import HTML, CSS
+
+    today = datetime.date.today()
+    platnost = today + datetime.timedelta(days=lead.get("platnost_dni", DEFAULTS["platnost_dni"]))
+
+    obch = lead.get("obchodnik", DEFAULTS["obchodnik"])
+
+    # extrahnúť Wp panela z názvu
+    panel_n = konfig["panel"]
+    wp_match = re.search(r"(\d{3})\s*Wp", panel_n.replace("-", " "))
+    wp = int(wp_match.group(1)) if wp_match else int(round(konfig["vykon_kwp"] * 1000 / konfig["pocet_panelov"]))
+    if 535 <= wp <= 545: wp = 540
+
+    distribucka_short = lead.get("distribucka", "ZSD")
+    distribucka_full = {
+        "ZSD": "Západoslovenskou distribučnou (ZSD)",
+        "SSD": "Stredoslovenskou distribučnou (SSD)",
+        "VSD": "Východoslovenskou distribučnou (VSD)",
+    }.get(distribucka_short, "distribučnou spoločnosťou")
+
+    # orientácia
+    orientacia = lead.get("orientacia", "J")
+    orientacia_text = {
+        "J": "južná orientácia — najproduktívnejšia",
+        "JV": "juhovýchodná — výborná, prevažujúce ranné slnko",
+        "JZ": "juhozápadná — výborná, prevažujúce popoludňajšie slnko",
+        "V": "východná — solídna ranná produkcia",
+        "Z": "západná — solídna popoludňajšia produkcia",
+    }.get(orientacia, "orientácia podľa zamerania")
+
+    cw = gen_copywriting(lead, konfig, ceny, navratnost)
+
+    ctx = {
+        "lead": lead,
+        "obch": obch,
+        "today": today.strftime("%d. %m. %Y"),
+        "platnost_do": platnost.strftime("%d. %m. %Y"),
+        "cislo_ponuky": lead.get("cislo_ponuky", f"PON-{today:%Y-%m%d}"),
+        "header_img": f"file://{BRAND_HEADER}",
+        "vykon_kwp_sk": f"{konfig['vykon_kwp']:.2f}".replace(".", ","),
+        "pocet_panelov": konfig["pocet_panelov"],
+        "panel_short": shorten_panel(konfig["panel"]),
+        "menic_short": shorten_menic(konfig["menic"]),
+        "konstrukcia_short": shorten_konstrukcia(konfig["konstrukcia"]),
+        "wp_panel": wp,
+        "rocna_vyroba": navratnost["rocna_vyroba_kwh"],
+        "rocne_uspora": navratnost["rocne_uspora_eur"],
+        "navratnost_rokov_sk": f"{navratnost['navratnost_rokov']:.1f}".replace(".", ","),
+        "uspora_25_rokov": navratnost["uspora_25_rokov"],
+        "kg_co2_rok": navratnost["kg_co2_rok"],
+        "pokrytie_pct": min(100, navratnost["rocna_vyroba_kwh"] / lead["rocna_spotreba_kwh"] * 100),
+        "ma_bateriu": konfig["ma_bateriu"],
+        "ma_wallbox": konfig["ma_wallbox"],
+        "bateria_kwh_sk": f"{konfig['bateria_kwh']:.2f}".replace(".", ",") if konfig["ma_bateriu"] else "",
+        "wallbox_short": _wallbox_label(lead.get("wallbox_kod")) if konfig["ma_wallbox"] else "",
+        "cena_bez_dph_eur": fmt_eur(ceny["cena_bez_dph"]),
+        "dph_eur": fmt_eur(ceny["cena_s_dph"] - ceny["cena_bez_dph"]),
+        "cena_s_dph_eur": fmt_eur(ceny["cena_s_dph"]),
+        "dotacia_eur": fmt_eur(ceny["dotacia"]),
+        "zlava_eur": fmt_eur(ceny["zlava_eur"]),
+        "cena_finalna_eur": fmt_eur(ceny["cena_finalna"]),
+        "dotacia": ceny["dotacia"],
+        "zlava": ceny["zlava_eur"],
+        "chart_uspora": f"file://{grafy['uspora']}",
+        "chart_vyroba": f"file://{grafy['vyroba']}",
+        "chart_porovnanie": f"file://{grafy['porovnanie']}",
+        "platby": lead.get("platby", "60 % zálohová faktúra vopred  ·  30 % po nainštalovaní elektrárne  ·  10 % po protokolárnom odovzdaní"),
+        "distribucka_full": distribucka_full,
+        "distribucka_short": distribucka_short,
+        "orientacia_text": orientacia_text,
+        "rocna_faktura_eur": f"{lead['rocna_spotreba_kwh'] * lead.get('cena_el_eur_kwh', 0.16):,.0f}".replace(",", " "),
+        "cena_el_sk": f"{lead.get('cena_el_eur_kwh', 0.16):.2f}".replace(".", ","),
+        **cw,
+    }
+
+    env = Environment(loader=FileSystemLoader(str(Path(TEMPLATE).parent)))
+    tmpl = env.get_template(Path(TEMPLATE).name)
+    html_str = tmpl.render(**ctx)
+
+    # uložím aj HTML pre debug
+    html_path = out_pdf.replace(".pdf", ".html")
+    with open(html_path, "w", encoding="utf-8") as f:
+        f.write(html_str)
+
+    HTML(string=html_str, base_url=str(Path(TEMPLATE).parent)).write_pdf(out_pdf)
+    return out_pdf
 
 
-# ============================================================
-# WEBHOOK 1: PREPOČET CIEN
-# Trigger: Notion Button "🔄 Prepočítaj cenu"
-# Vstup: { "page_id": "..." }
-# ============================================================
-@app.route("/webhook/prepocet", methods=["POST"])
-@require_secret
-def prepocet():
-    body = request.get_json(silent=True) or {}
-    page_id = body.get("page_id")
-    if not page_id:
-        return jsonify({"error": "missing page_id"}), 400
+def vyrob_eml_v2(lead, konfig, ceny, navratnost, pdf_path, out_path):
+    obch = lead.get("obchodnik", DEFAULTS["obchodnik"])
+    body = f"""Dobrý deň, pán {lead['meno'].split()[-1]},
 
-    log.info(f"Prepočet pre page {page_id}")
-    page = notion_get_page(page_id)
-    notion_props = notion_props_to_flat(page)
+ďakujem za Váš záujem o fotovoltickú elektráreň pre Váš dom v {lead['mesto']}.
+V prílohe Vám posielam cenovú ponuku spracovanú na základe údajov, ktoré ste mi poskytli.
 
-    # Vyrátá ceny pre A/B/C
-    ceny = predpocitaj_ceny_pre_record(notion_props)
+Krátko zhrnuté:
+- Výkon FVE: {konfig['vykon_kwp']:.2f} kWp ({konfig['pocet_panelov']} ks panelov)
+- Predpokladaná ročná výroba: {navratnost['rocna_vyroba_kwh']:,.0f} kWh
+- Predpokladaná ročná úspora: {navratnost['rocne_uspora_eur']:,.0f} EUR
+- Cena s DPH: {ceny['cena_s_dph']:,.2f} EUR
+- Cena po dotácii Zelená domácnostiam: {ceny['cena_finalna']:,.2f} EUR
+- Návratnosť: cca {navratnost['navratnost_rokov']:.1f} rokov
 
-    # Update Notion polí
-    update = {}
-    a = ceny.get("A", {})
-    b = ceny.get("B", {})
-    c = ceny.get("C", {})
+Ako ďalší krok navrhujem bezplatnú obhliadku, kde upresníme technické detaily
+a finalizujeme cenu. Stačí zavolať alebo odpovedať na tento email.
 
-    if a.get("cena_s_dph"):
-        update.update(notion_set_number("Cena A s DPH", round(a["cena_s_dph"], 2)))
-        update.update(notion_set_number("Nákupná cena A €", round(a["nakupna"], 2)))
-        update.update(notion_set_number("Zisk A €", round(a["zisk"], 2)))
-    if b.get("cena_s_dph"):
-        update.update(notion_set_number("Cena B s DPH", round(b["cena_s_dph"], 2)))
-        update.update(notion_set_number("Nákupná cena B €", round(b["nakupna"], 2)))
-        update.update(notion_set_number("Zisk B €", round(b["zisk"], 2)))
-    if c.get("cena_s_dph"):
-        update.update(notion_set_number("Cena C s DPH", round(c["cena_s_dph"], 2)))
-        update.update(notion_set_number("Nákupná cena C €", round(c["nakupna"], 2)))
-        update.update(notion_set_number("Zisk C €", round(c["zisk"], 2)))
+Ponuka je platná {lead.get('platnost_dni', 30)} dní.
 
-    # Auto-vyplnenie "Batéria výkon" = počet × kWh per modul (z labelu typu)
-    bat_typ = notion_props.get("Batéria (typ)") or ""
-    m_bat = re.search(r"(\d+(?:[.,]\d+)?)\s*kWh", bat_typ)
-    per_modul = float(m_bat.group(1).replace(",", ".")) if m_bat else 0
-    pocet_raw = notion_props.get("Batéria počet")
-    try:
-        pocet = int(pocet_raw) if pocet_raw not in (None, "") else 0
-    except (TypeError, ValueError):
-        pocet = 0
-    if pocet > 0 and per_modul > 0:
-        update.update(notion_set_number("Batéria výkon", round(pocet * per_modul, 2)))
+Ak máte akékoľvek otázky, som Vám k dispozícii.
 
-    suma = (b.get("cena_s_dph") or a.get("cena_s_dph") or c.get("cena_s_dph"))
-    if suma:
-        update.update(notion_set_number("Suma CP s DPH", round(suma, 2)))
+S pozdravom,
+{obch['meno']}
+{obch['funkcia']}, {ZHOTOVITEL['nazov']}
+{obch['tel']}  |  {obch['email']}
+""".replace(",", " ")
 
-    # Veľkosť (auto label)
-    if a:
-        from generate_from_notion import lead_from_notion
-        lead = lead_from_notion(notion_props, "A")
-        velkost = f"{lead['vykon_kwp']:.2f} kWp / {lead.get('panel_pocet', '?')}× LONGi"
-        if notion_props.get("Batéria (kWh)"):
-            velkost += f" + {notion_props['Batéria (kWh)']} kWh"
-        update.update(notion_set_text("Veľkosť", velkost))
-
-    if update:
-        notion_update_page(page_id, update)
-        log.info(f"Updatnuté {len(update)} polí")
-
-    return jsonify({"success": True, "ceny": ceny, "fields_updated": len(update)})
+    msg = MIMEMultipart()
+    msg['From'] = ''
+    msg['To'] = lead.get("email", "")
+    msg['Subject'] = f"Cenová ponuka FVE pre Váš dom — Energovision"
+    msg['Date'] = formatdate(localtime=True)
+    msg['X-Unsent'] = '1'
+    msg.attach(MIMEText(body, 'plain', 'utf-8'))
+    if pdf_path and Path(pdf_path).exists():
+        with open(pdf_path, 'rb') as f:
+            part = MIMEBase('application', 'pdf')
+            part.set_payload(f.read())
+            encoders.encode_base64(part)
+            part.add_header('Content-Disposition', f'attachment; filename="{Path(pdf_path).name}"')
+            msg.attach(part)
+    with open(out_path, 'w', encoding='utf-8') as f:
+        f.write(msg.as_string())
 
 
-# ============================================================
-# WEBHOOK 2: GENERATE PDF
-# Trigger: Notion Button "🖨 Vytlač ponuku"
-# Vstup: { "page_id": "...", "variant": "A" | "B" | "C" }
-# ============================================================
-@app.route("/webhook/generate-pdf", methods=["POST"])
-@require_secret
-def generate_pdf():
-    body = request.get_json(silent=True) or {}
-    page_id = body.get("page_id")
-    variant = body.get("variant", "A")
-    if not page_id:
-        return jsonify({"error": "missing page_id"}), 400
+def main(lead_path):
+    with open(lead_path, encoding="utf-8") as f:
+        lead = json.load(f)
 
-    log.info(f"Generate PDF pre page {page_id}, variant {variant}")
-
-    page = notion_get_page(page_id)
-    notion_props = notion_props_to_flat(page)
-    lead = lead_from_notion(notion_props, variant)
-
-    # Kompatibilita
-    if variant in ("B", "C"):
-        ok, msg = check_compatibility(lead["invertor_kod"], lead.get("bateria_kod"))
-        if not ok:
-            return jsonify({"error": f"incompatible: {msg}"}), 400
-
+    print(f"📋 Lead: {lead['meno']} ({lead['mesto']})")
     cennik = load_cennik()
     konfig = vyrataj_konfig(lead, cennik)
     ceny = vyrataj_ceny(konfig, lead)
     navratnost = vyrataj_navratnost(konfig, ceny, lead)
 
-    # Vyrob v dočasnom adresári
-    with tempfile.TemporaryDirectory() as tmpdir:
-        priezvisko = safe_filename(lead["meno"].split()[-1])
-        ev_id = lead.get("cislo_ponuky", "EV-XX-001-A")
-        from datetime import datetime
-        datum = datetime.now().strftime("%Y-%m-%d")
-        base = f"{ev_id}_{priezvisko}_{datum}"
+    priezv = lead["meno"].split()[-1].replace(" ", "_")
+    mesto = lead["mesto"].split(",")[0].replace(" ", "_")
+    base = f"CP_{priezv}_{mesto}_v2"
+    interna = f"kalkulacia_{priezv}_{mesto}_v2"
+    out_dir = lead.get("out_dir", "/sessions/magical-eager-gates/mnt/outputs")
 
-        # Grafy
-        grafy = vyrob_grafy(navratnost, lead, tmpdir, base)
+    print("📊 Generujem grafy...")
+    grafy = vyrob_grafy(navratnost, lead, out_dir, base)
 
-        # PDF
-        pdf_path = os.path.join(tmpdir, f"{base}.pdf")
-        vyrob_html_pdf(lead, konfig, ceny, navratnost, grafy, pdf_path)
+    print(f"🎨 Generujem krásne PDF cez HTML+CSS3 ...")
+    pdf_path = f"{out_dir}/{base}.pdf"
+    vyrob_html_pdf(lead, konfig, ceny, navratnost, grafy, pdf_path)
 
-        # TODO: Upload PDF do Notion stránky ako file attachment
-        # Notion API neumožňuje priame upload — treba cez S3 alebo
-        # cez file URL property. Najjednoduchšie: pridať PDF na S3
-        # alebo Render's persistent disk + URL do Notion.
-        pdf_size = os.path.getsize(pdf_path)
+    print(f"💼 Generujem internú kalkuláciu ...")
+    vyrob_internu_kalkulaciu(lead, konfig, ceny, navratnost, f"{out_dir}/{interna}.xlsx")
 
-        # Provisional: vrátime PDF ako base64 (Make.com to dokáže uložiť)
-        import base64
-        with open(pdf_path, "rb") as f:
-            pdf_b64 = base64.b64encode(f.read()).decode("ascii")
+    print(f"✉️  Generujem .eml draft ...")
+    vyrob_eml_v2(lead, konfig, ceny, navratnost, pdf_path, f"{out_dir}/{base}.eml")
 
-    # folder_name: bez variantu (-A/-B/-C) a bez dátumu — stabilný v čase per zákazník
-    ev_id_root = ev_id[:-2] if len(ev_id) >= 2 and ev_id[-2] == "-" and ev_id[-1] in "ABC" else ev_id
-    folder_name = f"{ev_id_root}_{priezvisko}"
-
-    return jsonify({
-        "success": True,
-        "ev_id": ev_id,
-        "filename": f"{base}.pdf",
-        "folder_name": folder_name,
-        "size_bytes": pdf_size,
-        "cena_s_dph": ceny["cena_s_dph"],
-        "cena_finalna": ceny["cena_finalna"],
-        "pdf_base64": pdf_b64,
-    })
-
-
-# ============================================================
-# WEBHOOK 3: EMAIL TEMPLATE BUILDER
-# Trigger: Notion Button "📧 Odoslať email"
-# Vstup: { "page_id": "..." }
-# Výstup: { "to": "...", "subject": "...", "body_html": "...",
-#          "attachments": [{"name": "...", "dropbox_path": "..."}],
-#          "obchodnik": {...}, "variants_sent": ["A","B"] }
-# ============================================================
-@app.route("/webhook/email-template", methods=["POST"])
-@require_secret
-def email_template():
-    try:
-        return _email_template_impl()
-    except Exception as e:
-        import traceback
-        tb = traceback.format_exc()
-        log.error(f"email_template padol: {e}\n{tb}")
-        return jsonify({
-            "error": str(e),
-            "traceback": tb,
-        }), 500
-
-
-def _is_valid_email(email):
-    """Jednoduchá validácia emailu — prítomnosť @ + bodka + min dĺžka."""
-    if not email or "@" not in email:
-        return False
-    parts = email.strip().split("@")
-    if len(parts) != 2:
-        return False
-    local, domain = parts
-    if len(local) < 1 or len(domain) < 4:
-        return False
-    if "." not in domain:
-        return False
-    # TLD min 2 znaky
-    tld = domain.rsplit(".", 1)[-1]
-    if len(tld) < 2:
-        return False
-    return True
-
-
-def _email_template_impl():
-    body = request.get_json(silent=True) or {}
-    page_id = body.get("page_id")
-    if not page_id:
-        return jsonify({"error": "missing page_id"}), 400
-
-    log.info(f"Email template pre page {page_id}")
-    page = notion_get_page(page_id)
-    notion_props = notion_props_to_flat(page)
-
-    # Detekuj zakliknuté varianty — tolerantný matching property názvu (akýkoľvek prefix "Variant A/B/C")
-    variants_active = []
-    log.info(f"notion_props keys: {list(notion_props.keys())[:30]}")
-    for k, v in notion_props.items():
-        k_lower = k.lower().strip()
-        if v == "__YES__":
-            if k_lower.startswith("variant a"):
-                if "A" not in variants_active:
-                    variants_active.append("A")
-            elif k_lower.startswith("variant b"):
-                if "B" not in variants_active:
-                    variants_active.append("B")
-            elif k_lower.startswith("variant c"):
-                if "C" not in variants_active:
-                    variants_active.append("C")
-    log.info(f"variants_active: {variants_active}")
-
-    if not variants_active:
-        # Diagnostický error: vypíšeme aké hodnoty sme videli pre Variant properties
-        variant_props_seen = {k: v for k, v in notion_props.items() if "variant" in k.lower()}
-        return jsonify({"error": f"Žiadny variant nie je zakliknutý. Variant properties seen: {variant_props_seen}"}), 400
-
-    # Lead data — z A variantu (kvôli základným údajom; ceny berieme zo všetkých)
-    from generate_from_notion import lead_from_notion, OBCHODNICI, DEFAULT_OBCHODNIK
-    lead_a = lead_from_notion(notion_props, "A")
-
-    priezvisko = lead_a["meno"].split()[-1] if lead_a.get("meno") else "Zákazník"
-    mesto = lead_a.get("mesto", "")
-    email_zakaznika = (lead_a.get("email") or notion_props.get("Email") or "").strip()
-    if not _is_valid_email(email_zakaznika):
-        log.warning(f"Neplatný email pre page {page_id}: '{email_zakaznika}'")
-        return jsonify({
-            "success": False,
-            "email_valid": False,
-            "error": f"Neplatný email zákazníka: '{email_zakaznika}'. Skontroluj 'Email' property v Notion DB.",
-            "to": "",
-            "subject": "",
-            "body_html": "",
-            "attachments": [],
-            "obchodnik": {},
-            "variants_sent": [],
-        }), 200  # Status 200 aby Make scenár pokračoval k Notion update
-    obchodnik = OBCHODNICI.get(notion_props.get("Obchodník") or notion_props.get("Obchodnik") or "", DEFAULT_OBCHODNIK)
-
-    vykon_kwp = lead_a.get("vykon_kwp", 0)
-    bateria_kwh = float(notion_props.get("Batéria výkon") or 0)
-
-    # Ceny zo všetkých zakliknutých variant
-    ceny = {
-        "A": notion_props.get("Cena A s DPH"),
-        "B": notion_props.get("Cena B s DPH"),
-        "C": notion_props.get("Cena C s DPH"),
-    }
-
-    # Vygeneruj PDF pre každý aktívny variant a vráť ako base64
-    from generate_from_notion import safe_filename
-    import base64
-    priezvisko_clean = safe_filename(priezvisko)
-    attachments = []
-    cennik = load_cennik()
-    for v in variants_active:
-        try:
-            lead_v = lead_from_notion(notion_props, v)
-            if v in ("B", "C"):
-                ok, _msg = check_compatibility(lead_v["invertor_kod"], lead_v.get("bateria_kod"))
-                if not ok:
-                    log.warning(f"Variant {v} incompatible: {_msg}, skipping attachment")
-                    continue
-            konfig_v = vyrataj_konfig(lead_v, cennik)
-            ceny_v = vyrataj_ceny(konfig_v, lead_v)
-            navratnost_v = vyrataj_navratnost(konfig_v, ceny_v, lead_v)
-            with tempfile.TemporaryDirectory() as tmpdir:
-                ev_id_v = lead_v.get("cislo_ponuky", f"EV-XX-001-{v}")
-                from datetime import datetime as _dt
-                datum_v = _dt.now().strftime("%Y-%m-%d")
-                base_v = f"{ev_id_v}_{priezvisko_clean}_{datum_v}"
-                grafy_v = vyrob_grafy(navratnost_v, lead_v, tmpdir, base_v)
-                pdf_path_v = os.path.join(tmpdir, f"{base_v}.pdf")
-                vyrob_html_pdf(lead_v, konfig_v, ceny_v, navratnost_v, grafy_v, pdf_path_v)
-                with open(pdf_path_v, "rb") as fp:
-                    pdf_b64 = base64.b64encode(fp.read()).decode("ascii")
-                # folder_name — stabilný per zákazník, bez variantu/dátumu
-                _evid_root = ev_id_v[:-2] if len(ev_id_v) >= 2 and ev_id_v[-2] == "-" and ev_id_v[-1] in "ABC" else ev_id_v
-                _folder = f"{_evid_root}_{priezvisko_clean}"
-                attachments.append({
-                    "filename": f"{base_v}.pdf",
-                    "folder_name": _folder,
-                    "data": pdf_b64,
-                })
-        except Exception as e:
-            log.error(f"PDF gen pre variant {v} zlyhal: {e}")
-            continue
-
-    # ===== EMAIL TEMPLATES =====
-    subject = build_subject(priezvisko, mesto, variants_active)
-    body_html = build_email_body(priezvisko, mesto, vykon_kwp, bateria_kwh, ceny, variants_active, obchodnik)
-
-    return jsonify({
-        "success": True,
-        "email_valid": True,
-        "to": email_zakaznika,
-        "subject": subject,
-        "body_html": body_html,
-        "attachments": attachments,
-        "obchodnik": obchodnik,
-        "variants_sent": variants_active,
-    })
-
-
-def build_subject(priezvisko, mesto, variants):
-    """Subject riadok — krátky, identifikovateľný."""
-    if len(variants) == 1:
-        v_label = {"A": "FVE", "B": "FVE + batéria", "C": "FVE + batéria + wallbox"}[variants[0]]
-        return f"Cenová ponuka {v_label} pre {priezvisko}, {mesto}"
-    return f"Cenová ponuka FVE — {priezvisko}, {mesto} ({len(variants)} varianty)"
-
-
-def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchodnik):
-    """
-    HTML email body s marketingovým textom (slovenský trh, 30y FVE expert tone).
-    Per-variant blocks + comparison + signature.
-    """
-    cena_a = ceny.get("A") or 0
-    cena_b = ceny.get("B") or 0
-    cena_c = ceny.get("C") or 0
-
-    # === INTRO ===
-    n_var = len(variants)
-    intro = f"""
-    <p>Dobrý deň pán/pani {priezvisko},</p>
-    <p>v nadväznosti na našu obhliadku Vám zasielam pripravenú cenovú ponuku pre fotovoltickú elektráreň
-    pre Vašu domácnosť v <strong>{mesto}</strong>.
-    Pripravil som {("jednu variantu" if n_var == 1 else f"{n_var} varianty")} podľa toho, ako chcete využiť energiu zo slnka.</p>
-    """
-
-    blocks = []
-
-    # === BLOCK A — iba FVE ===
-    if "A" in variants:
-        blocks.append(f"""
-        <h3 style="color:#1B5E3F;margin-top:24px;">Varianta A — fotovoltika {kwp} kWp</h3>
-        <p>Najlacnejšia cesta ako začať. Panely vyrábajú elektrinu cez deň, ktorú spotrebovávate priamo
-        — typicky pokryje 60-70 % Vašej dennej spotreby. Ideálne ak doma cez deň žije rodina, sušiete
-        bielizeň, varíte alebo používate tepelné čerpadlo na ohrev TÚV.</p>
-        <ul>
-          <li><strong>Investícia po dotácii Zelená domácnostiam:</strong> {cena_a:,.0f} € s DPH</li>
-          <li><strong>Návratnosť:</strong> 6–8 rokov pri dnešnej cene elektriny 0,16 €/kWh</li>
-          <li><strong>Záruka:</strong> 30 rokov na panely LONGi, 10 rokov na menič Huawei</li>
-          <li><strong>Inštalácia:</strong> 1–2 dni, bez stavebných úprav</li>
-        </ul>
-        <p style="background:#F0F8F4;padding:12px;border-left:4px solid #1B5E3F;font-size:14px;">
-          <strong>Pre slovenský trh:</strong> 60 % FVE inštalácií v rodinných domoch ide bez batérie.
-          Distribučné spoločnosti odkupujú prebytky za 0,04–0,06 €/kWh, čo postačí na základnú nezávislosť.
-        </p>
-        """.replace(",", " "))
-
-    # === BLOCK B — FVE + BESS ===
-    if "B" in variants:
-        bat_str = f"{bateria_kwh:.0f} kWh" if bateria_kwh else "batéria"
-        blocks.append(f"""
-        <h3 style="color:#1B5E3F;margin-top:24px;">Varianta B — fotovoltika {kwp} kWp + batéria {bat_str}</h3>
-        <p>Energetická nezávislosť — slnko ukladáte do batérie a používate večer/v noci/keď je zamračené.
-        Pri zlepšujúcich sa zľavách na komponenty je toto pre Slovákov dnes najatraktívnejšia voľba,
-        najmä pre rodiny ktoré sú doma <strong>predovšetkým ráno a večer</strong>.</p>
-        <ul>
-          <li><strong>Investícia po dotácii:</strong> {cena_b:,.0f} € s DPH</li>
-          <li><strong>Pokrytie spotreby:</strong> 85–95 % pri správnom dimenzovaní</li>
-          <li><strong>Návratnosť:</strong> 8–11 rokov</li>
-          <li><strong>Backup:</strong> pri výpadku siete batéria automaticky prepne dom na ostrov (voliteľne)</li>
-          <li><strong>Záruka batérie:</strong> 10 rokov / 6 000 cyklov</li>
-        </ul>
-        <p style="background:#F0F8F4;padding:12px;border-left:4px solid #1B5E3F;font-size:14px;">
-          <strong>Pozor na kalkulácie:</strong> Distribučné poplatky v SR rastú každoročne ~5–8 %.
-          Batéria vám teda chráni nielen pred volatilitou ceny silovej elektriny ale aj pred budúcim rastom
-          poplatkov za distribúciu.
-        </p>
-        """.replace(",", " "))
-
-    # === BLOCK C — FVE + BESS + Wallbox ===
-    if "C" in variants:
-        bat_str = f"{bateria_kwh:.0f} kWh" if bateria_kwh else "batéria"
-        blocks.append(f"""
-        <h3 style="color:#1B5E3F;margin-top:24px;">Varianta C — kompletné riešenie + wallbox pre elektromobil</h3>
-        <p>FVE {kwp} kWp + batéria {bat_str} + smart wallbox. Vaše auto sa nabíja zo slnka — zadarmo —
-        a wallbox automaticky reaguje na prebytky FVE. Riešenie pre rodiny s elektromobilom alebo plánom kúpiť
-        EV v najbližších rokoch.</p>
-        <ul>
-          <li><strong>Investícia:</strong> {cena_c:,.0f} € s DPH</li>
-          <li><strong>Úspora paliva:</strong> ~ 1 200 € ročne pri 15 000 km/rok namiesto benzínu</li>
-          <li><strong>Plná energetická nezávislosť:</strong> spotreba domu + auto z vlastnej elektriny</li>
-          <li><strong>Smart logika:</strong> wallbox sa zapne keď FVE má nadbytok, nezasahuje do siete</li>
-        </ul>
-        <p style="background:#F0F8F4;padding:12px;border-left:4px solid #1B5E3F;font-size:14px;">
-          <strong>Slovenský kontext:</strong> Pri raste cien benzínu/nafty a zvyšujúcich sa parkovných
-          poplatkoch vo veľkých mestách (Bratislava, Košice) sa elektromobil vracia za 4-6 rokov samostatne.
-          S vlastnou FVE ešte rýchlejšie.
-        </p>
-        """.replace(",", " "))
-
-    # === COMPARISON ak viac variant ===
-    comparison = ""
-    if len(variants) > 1:
-        rows = []
-        if "A" in variants:
-            rows.append(f"<tr><td>A — iba FVE</td><td style='text-align:right;'>{cena_a:,.0f} €</td><td>~7 rokov</td><td>Šetríš cez deň</td></tr>".replace(",", " "))
-        if "B" in variants:
-            rows.append(f"<tr><td>B — FVE + batéria</td><td style='text-align:right;'>{cena_b:,.0f} €</td><td>~9 rokov</td><td>Plná denná + nočná nezávislosť</td></tr>".replace(",", " "))
-        if "C" in variants:
-            rows.append(f"<tr><td>C — komplet + wallbox</td><td style='text-align:right;'>{cena_c:,.0f} €</td><td>~11 rokov</td><td>+ EV nabíjanie zadarmo</td></tr>".replace(",", " "))
-
-        comparison = f"""
-        <h3 style="color:#1B5E3F;margin-top:24px;">Krátke porovnanie</h3>
-        <table style="border-collapse:collapse;width:100%;font-size:14px;">
-          <thead>
-            <tr style="background:#1B5E3F;color:white;">
-              <th style="padding:8px;text-align:left;">Varianta</th>
-              <th style="padding:8px;text-align:right;">Cena s DPH</th>
-              <th style="padding:8px;text-align:left;">Návratnosť</th>
-              <th style="padding:8px;text-align:left;">Komfort</th>
-            </tr>
-          </thead>
-          <tbody>{"".join(rows)}</tbody>
-        </table>
-        <p style="font-size:14px;font-style:italic;color:#555;margin-top:8px;">
-        Moja osobná poznámka po 30 rokoch v energetike: ak nemáte konkrétny plán na elektromobil v
-        najbližších 2–3 rokoch, varianta B prináša najlepší pomer komfortu k investícii. Hybridný menič
-        v balíku umožňuje doplnenie batérie kedykoľvek neskôr — bez prerábania systému.
-        </p>
-        """
-
-    # === ATTACHMENTY popis ===
-    n_pdf = len(variants)
-    pdf_note = f"<p>V <strong>prílohe e-mailu</strong> nájdete {('detailný PDF dokument' if n_pdf == 1 else f'{n_pdf} PDF dokumenty')} s technickou špecifikáciou, vizualizáciou rozloženia panelov, návratnostnou kalkuláciou na 25 rokov a podmienkami inštalácie.</p>"
-
-    # === CTA + SIGNATURE ===
-    cta = f"""
-    <h3 style="color:#1B5E3F;margin-top:24px;">Ďalšie kroky</h3>
-    <p>Ponuka platí 30 dní. Ak Vás niektorá varianta zaujala alebo máte otázky, stačí mi odpísať alebo zavolať.
-    Dohodneme si <strong>bezplatnú obhliadku</strong> v termíne ktorý Vám vyhovuje — meriame strechu, navrhneme
-    optimálne rozloženie panelov a doladíme finálnu ponuku.</p>
-    <p style="margin-top:16px;">S úctou a pozdravom,</p>
-    <table style="margin-top:8px;font-size:14px;">
-      <tr>
-        <td style="padding:0;border:none;">
-          <strong style="font-size:15px;">{obchodnik["meno"]}</strong><br/>
-          <span style="color:#666;">{obchodnik["funkcia"]}</span><br/>
-          📞 <a href="tel:{obchodnik["tel"].replace(" ","")}" style="color:#1B5E3F;text-decoration:none;">{obchodnik["tel"]}</a><br/>
-          ✉️ <a href="mailto:{obchodnik["email"]}" style="color:#1B5E3F;text-decoration:none;">{obchodnik["email"]}</a>
-        </td>
-      </tr>
-    </table>
-    <hr style="margin:20px 0;border:none;border-top:1px solid #ddd;"/>
-    <p style="font-size:12px;color:#888;">
-      <strong>Energovision s.r.o.</strong> | IČO: 53 036 280 |
-      <a href="https://energovision.sk" style="color:#888;">energovision.sk</a>
-    </p>
-    """
-
-    full_html = f"""
-    <html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;line-height:1.5;color:#333;max-width:700px;">
-    {intro}
-    {"".join(blocks)}
-    {comparison}
-    {pdf_note}
-    {cta}
-    </body></html>
-    """
-    return full_html
-
-
-# ============================================================
-# ROOT — info
-# ============================================================
-@app.route("/")
-def root():
-    return jsonify({
-        "service": "Energovision B2C cenovka generator",
-        "version": "1.0.0",
-        "endpoints": [
-            "GET /health",
-            "POST /webhook/prepocet",
-            "POST /webhook/generate-pdf",
-            "POST /webhook/email-template",
-        ],
-    })
+    print(f"\n✅ Hotovo:")
+    print(f"   {pdf_path}")
+    print(f"   {out_dir}/{base}.eml")
+    print(f"   {out_dir}/{interna}.xlsx")
+    print(f"\n💰 Súhrn cien:")
+    print(f"   Cena s DPH:        {ceny['cena_s_dph']:>12,.2f} €".replace(",", " "))
+    print(f"   Dotácia:           {-ceny['dotacia']:>12,.0f} €".replace(",", " "))
+    print(f"   Cena po dotácii:   {ceny['cena_po_dotacii']:>12,.2f} €".replace(",", " "))
+    print(f"   Návratnosť:        {navratnost['navratnost_rokov']:>12.1f} rokov")
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    main(sys.argv[1] if len(sys.argv) > 1 else "lead_sedlar.json")
