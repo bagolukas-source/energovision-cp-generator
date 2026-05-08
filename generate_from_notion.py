@@ -128,8 +128,15 @@ def predpocitaj_ceny_pre_record(notion_props):
 
 
 def safe_filename(s):
-    """Nový pre file system — vyhodí diakritiku a špeciálne znaky."""
-    return re.sub(r'[^\w\-]', '_', s)
+    """Pre file system — strip diakritiky + nepovolené znaky → '_' (ASCII-safe)."""
+    import unicodedata
+    if not s:
+        return ""
+    # NFD dekompozícia + drop combining marks (diakritika)
+    nfd = unicodedata.normalize('NFD', s)
+    ascii_str = ''.join(c for c in nfd if unicodedata.category(c) != 'Mn')
+    # Iba ASCII alfanumerické + dash + underscore
+    return re.sub(r'[^A-Za-z0-9\-]', '_', ascii_str)
 
 
 def detekuj_vek_leadu(notion_props):
