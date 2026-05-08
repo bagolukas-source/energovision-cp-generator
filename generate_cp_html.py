@@ -25,6 +25,26 @@ BRAND_HEADER = os.path.join(_SD, "energovision_header.png")
 TEMPLATE = os.path.join(_SD, "cp_template.html")
 
 
+
+def _wallbox_label(wallbox_kod, cennik):
+    """Vyextrahuj krátky label wallboxu z Cennika podľa kódu."""
+    import re as _re
+    if not wallbox_kod or wallbox_kod not in cennik:
+        return ""
+    nazov = cennik[wallbox_kod].get("nazov", "")
+    # napr. "HUAWEI AC Smart 22 kW/32A 3F" → "Huawei 22 kW 3F"
+    m = _re.search(r"(\d+)\s*kW", nazov)
+    kw = m.group(0) if m else ""
+    fazy = ""
+    if "3F" in nazov: fazy = "3F"
+    elif "1F" in nazov: fazy = "1F"
+    brand = ""
+    if "HUAWEI" in nazov.upper(): brand = "Huawei"
+    elif "Solinteg" in nazov: brand = "Solinteg"
+    elif "GoodWe" in nazov: brand = "GoodWe"
+    parts = [p for p in [brand, kw, fazy] if p]
+    return " ".join(parts) if parts else nazov
+
 def fmt_eur(x):
     """123456.78 → '123 456,78 €' (slovensky)"""
     s = f"{x:,.2f}"
