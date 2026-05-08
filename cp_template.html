@@ -82,17 +82,19 @@
   }
   .cover-header-right { text-align: right; }
   .cover-logo {
-    font-size: 28pt;
+    font-size: 38pt;
     font-weight: 800;
-    letter-spacing: -1pt;
+    letter-spacing: 0;
     color: var(--black);
     line-height: 1;
+    white-space: nowrap;
   }
   .cover-logo .accent { color: var(--green); }
   .cover-tagline {
-    font-size: 9pt;
+    font-size: 10pt;
     color: var(--gray);
-    margin-top: 2mm;
+    margin-top: 3mm;
+    letter-spacing: 0.3px;
   }
   .cover-hero {
     margin-top: 12mm;
@@ -139,11 +141,15 @@
   .cover-info-value { font-size: 11.5pt; color: var(--black); font-weight: 600; }
 
   .cover-footer {
-    margin: 8mm -18mm 0 -18mm;
-    padding: 6mm 18mm;
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: 210mm;
+    padding: 7mm 18mm;
     background: var(--green-bg);
     border-top: 3px solid var(--green);
-    display: table; width: calc(100% + 36mm);
+    display: table;
     box-sizing: border-box;
   }
   .cover-footer-cell { display: table-cell; vertical-align: top; }
