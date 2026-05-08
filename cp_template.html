@@ -149,18 +149,31 @@
     padding: 7mm 18mm;
     background: var(--green-bg);
     border-top: 3px solid var(--green);
-    display: table;
     box-sizing: border-box;
   }
-  .cover-footer-cell { display: table-cell; vertical-align: top; }
-  .cover-footer-cell:last-child { text-align: right; }
+  .cover-footer-inner {
+    display: table;
+    width: 100%;
+    table-layout: fixed;
+  }
+  .cover-footer-cell {
+    display: table-cell;
+    vertical-align: top;
+    width: 50%;
+    padding-right: 6mm;
+  }
+  .cover-footer-cell:last-child {
+    padding-right: 0;
+    padding-left: 6mm;
+    text-align: right;
+  }
   .cover-footer .label {
     font-size: 8pt; color: var(--gray); text-transform: uppercase;
     letter-spacing: 1.5px; margin-bottom: 2mm;
   }
-  .cover-footer .name { font-size: 13pt; font-weight: 700; color: var(--black); }
-  .cover-footer .role { font-size: 10pt; color: var(--gray); margin-top: 1mm; }
-  .cover-footer .contact { font-size: 10pt; color: var(--black); margin-top: 1mm; }
+  .cover-footer .name { font-size: 12pt; font-weight: 700; color: var(--black); }
+  .cover-footer .role { font-size: 9.5pt; color: var(--gray); margin-top: 1mm; line-height: 1.3; }
+  .cover-footer .contact { font-size: 9.5pt; color: var(--black); margin-top: 1mm; word-wrap: break-word; }
 
   /* ===== HEADER NA INTERIÉROVÝCH STRANÁCH ===== */
   .page-header {
@@ -492,7 +505,7 @@
     </div>
     <div class="cover-info-row">
       <div class="cover-info-cell cover-info-label">Adresa</div>
-      <div class="cover-info-cell cover-info-value">{{ lead.ulica }}, {{ lead.psc }} {{ lead.mesto }}</div>
+      <div class="cover-info-cell cover-info-value">{% if lead.ulica %}{{ lead.ulica }}{% if lead.psc or lead.mesto %}, {% endif %}{% endif %}{% if lead.psc %}{{ lead.psc }} {% endif %}{{ lead.mesto }}</div>
     </div>
     <div class="cover-info-row">
       <div class="cover-info-cell cover-info-label">Číslo ponuky</div>
@@ -505,15 +518,17 @@
   </div>
 
   <div class="cover-footer">
-    <div class="cover-footer-cell">
-      <div class="label">Vypracoval</div>
-      <div class="name">{{ obch.meno }}</div>
-      <div class="role">{{ obch.funkcia }}, Energovision, s.r.o.</div>
-    </div>
-    <div class="cover-footer-cell">
-      <div class="label">Kontakt</div>
-      <div class="contact">{{ obch.tel }}</div>
-      <div class="contact">{{ obch.email }}</div>
+    <div class="cover-footer-inner">
+      <div class="cover-footer-cell">
+        <div class="label">Vypracoval</div>
+        <div class="name">{{ obch.meno }}</div>
+        <div class="role">{{ obch.funkcia }}, Energovision, s.r.o.</div>
+      </div>
+      <div class="cover-footer-cell">
+        <div class="label">Kontakt</div>
+        <div class="contact">{{ obch.tel }}</div>
+        <div class="contact">{{ obch.email }}</div>
+      </div>
     </div>
   </div>
 </div>
