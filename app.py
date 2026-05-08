@@ -299,17 +299,27 @@ def email_template():
     page = notion_get_page(page_id)
     notion_props = notion_props_to_flat(page)
 
-    # Detekuj zakliknuté varianty z checkboxov
+    # Detekuj zakliknuté varianty — tolerantný matching property názvu (akýkoľvek prefix "Variant A/B/C")
     variants_active = []
-    if notion_props.get("Variant A - FVE") == "__YES__":
-        variants_active.append("A")
-    if notion_props.get("Variant B - FVE + BESS") == "__YES__":
-        variants_active.append("B")
-    if notion_props.get("Variant C - FVE + BESS + Wallbox") == "__YES__":
-        variants_active.append("C")
+    log.info(f"notion_props keys: {list(notion_props.keys())[:30]}")
+    for k, v in notion_props.items():
+        k_lower = k.lower().strip()
+        if v == "__YES__":
+            if k_lower.startswith("variant a"):
+                if "A" not in variants_active:
+                    variants_active.append("A")
+            elif k_lower.startswith("variant b"):
+                if "B" not in variants_active:
+                    variants_active.append("B")
+            elif k_lower.startswith("variant c"):
+                if "C" not in variants_active:
+                    variants_active.append("C")
+    log.info(f"variants_active: {variants_active}")
 
     if not variants_active:
-        return jsonify({"error": "Žiadny variant nie je zaklik­nutý (Variant A/B/C checkbox)"}), 400
+        # Diagnostický error: vypíšeme aké hodnoty sme videli pre Variant properties
+        variant_props_seen = {k: v for k, v in notion_props.items() if "variant" in k.lower()}
+        return jsonify({"error": f"Žiadny variant nie je zakliknutý. Variant properties seen: {variant_props_seen}"}), 400
 
     # Lead data — z A variantu (kvôli základným údajom; ceny berieme zo všetkých)
     from generate_from_notion import lead_from_notion, OBCHODNICI, DEFAULT_OBCHODNIK
