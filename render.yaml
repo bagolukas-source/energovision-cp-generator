@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: energovision-cp-generator
+    runtime: python
+    plan: starter
+    region: frankfurt
+    buildCommand: |
+      apt-get update && apt-get install -y libpango-1.0-0 libpangoft2-1.0-0
+      pip install -r requirements.txt
+    startCommand: gunicorn app:app --workers 2 --bind 0.0.0.0:$PORT --timeout 120
+    healthCheckPath: /health
+    envVars:
+      - key: NOTION_TOKEN
+        sync: false  # zadáš v Render dashboard ako secret
+      - key: NOTION_DATABASE_ID
+        value: ba7a1d6c-63a9-43da-b66d-2b1c7e8660da
+      - key: WEBHOOK_SECRET
+        generateValue: true  # auto-vygeneruje secret pre webhook autentifikáciu
