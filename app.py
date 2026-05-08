@@ -241,7 +241,9 @@ def generate_pdf():
     with tempfile.TemporaryDirectory() as tmpdir:
         priezvisko = safe_filename(lead["meno"].split()[-1])
         ev_id = lead.get("cislo_ponuky", "EV-XX-001-A")
-        base = f"{ev_id}_{priezvisko}"
+        from datetime import datetime
+        datum = datetime.now().strftime("%Y-%m-%d")
+        base = f"{ev_id}_{priezvisko}_{datum}"
 
         # Grafy
         grafy = vyrob_grafy(navratnost, lead, tmpdir, base)
@@ -261,10 +263,15 @@ def generate_pdf():
         with open(pdf_path, "rb") as f:
             pdf_b64 = base64.b64encode(f.read()).decode("ascii")
 
+    # folder_name: bez variantu (-A/-B/-C) a bez dátumu — stabilný v čase per zákazník
+    ev_id_root = ev_id[:-2] if len(ev_id) >= 2 and ev_id[-2] == "-" and ev_id[-1] in "ABC" else ev_id
+    folder_name = f"{ev_id_root}_{priezvisko}"
+
     return jsonify({
         "success": True,
         "ev_id": ev_id,
         "filename": f"{base}.pdf",
+        "folder_name": folder_name,
         "size_bytes": pdf_size,
         "cena_s_dph": ceny["cena_s_dph"],
         "cena_finalna": ceny["cena_finalna"],
@@ -323,20 +330,44 @@ def email_template():
         "C": notion_props.get("Cena C s DPH"),
     }
 
-    # Filename pattern pre attachmenty (musí zodpovedať Dropbox uploadu)
+    # Vygeneruj PDF pre každý aktívny variant a vráť ako base64
     from generate_from_notion import safe_filename
+    import base64
     priezvisko_clean = safe_filename(priezvisko)
-    ev_id_root = lead_a.get("cislo_ponuky", "EV-26-XXX-A")[:-2]  # bez "-A" sufixu
-    folder_name = f"{ev_id_root}_{priezvisko_clean}"
-
     attachments = []
+    cennik = load_cennik()
     for v in variants_active:
-        cislo = f"{ev_id_root}-{v}"
-        fname = f"{cislo}_{priezvisko_clean}.pdf"
-        attachments.append({
-            "name": fname,
-            "dropbox_path": f"/Obchod/B2C ponuky/{folder_name}/{fname}",
-        })
+        try:
+            lead_v = lead_from_notion(notion_props, v)
+            if v in ("B", "C"):
+                ok, _msg = check_compatibility(lead_v["invertor_kod"], lead_v.get("bateria_kod"))
+                if not ok:
+                    log.warning(f"Variant {v} incompatible: {_msg}, skipping attachment")
+                    continue
+            konfig_v = vyrataj_konfig(lead_v, cennik)
+            ceny_v = vyrataj_ceny(konfig_v, lead_v)
+            navratnost_v = vyrataj_navratnost(konfig_v, ceny_v, lead_v)
+            with tempfile.TemporaryDirectory() as tmpdir:
+                ev_id_v = lead_v.get("cislo_ponuky", f"EV-XX-001-{v}")
+                from datetime import datetime as _dt
+                datum_v = _dt.now().strftime("%Y-%m-%d")
+                base_v = f"{ev_id_v}_{priezvisko_clean}_{datum_v}"
+                grafy_v = vyrob_grafy(navratnost_v, lead_v, tmpdir, base_v)
+                pdf_path_v = os.path.join(tmpdir, f"{base_v}.pdf")
+                vyrob_html_pdf(lead_v, konfig_v, ceny_v, navratnost_v, grafy_v, pdf_path_v)
+                with open(pdf_path_v, "rb") as fp:
+                    pdf_b64 = base64.b64encode(fp.read()).decode("ascii")
+                # folder_name — stabilný per zákazník, bez variantu/dátumu
+                _evid_root = ev_id_v[:-2] if len(ev_id_v) >= 2 and ev_id_v[-2] == "-" and ev_id_v[-1] in "ABC" else ev_id_v
+                _folder = f"{_evid_root}_{priezvisko_clean}"
+                attachments.append({
+                    "filename": f"{base_v}.pdf",
+                    "folder_name": _folder,
+                    "data": pdf_b64,
+                })
+        except Exception as e:
+            log.error(f"PDF gen pre variant {v} zlyhal: {e}")
+            continue
 
     # ===== EMAIL TEMPLATES =====
     subject = build_subject(priezvisko, mesto, variants_active)
