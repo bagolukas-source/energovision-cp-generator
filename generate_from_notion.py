@@ -596,8 +596,22 @@ def lead_from_notion(notion_props, variant):
     wallbox_kod = None
 
     if variant in ("B", "C"):
-        bateria_kwh = float(notion_props.get("Batéria (kWh)") or 10)
-        bateria_kod = BATERIA_MAP.get(notion_props.get("Batéria (typ)"), "BAT-001")
+        bateria_typ = notion_props.get("Batéria (typ)") or ""
+        bateria_kod = BATERIA_MAP.get(bateria_typ, "BAT-001")
+        # Extrahuj per-modul kWh zo select labelu, napr. "Huawei LUNA2000 — 5 kWh" → 5.0
+        m_modul = re.search(r"(\d+(?:[.,]\d+)?)\s*kWh", bateria_typ)
+        per_modul_kwh = float(m_modul.group(1).replace(",", ".")) if m_modul else 5.0
+        # Spočítaj kapacitu: počet × per-modul kWh; fallback na staré "Batéria (kWh)" ako absolútna hodnota
+        pocet_raw = notion_props.get("Batéria počet")
+        try:
+            pocet = int(pocet_raw) if pocet_raw not in (None, "") else None
+        except (TypeError, ValueError):
+            pocet = None
+        if pocet is not None and pocet > 0:
+            bateria_kwh = pocet * per_modul_kwh
+        else:
+            # Backward compat: ak je "Batéria (kWh)" zadané ako absolútna hodnota (zo starých záznamov)
+            bateria_kwh = float(notion_props.get("Batéria (kWh)") or 10)
 
     if variant == "C":
         wallbox = True
