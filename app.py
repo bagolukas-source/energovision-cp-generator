@@ -290,6 +290,19 @@ def generate_pdf():
 @app.route("/webhook/email-template", methods=["POST"])
 @require_secret
 def email_template():
+    try:
+        return _email_template_impl()
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        log.error(f"email_template padol: {e}\n{tb}")
+        return jsonify({
+            "error": str(e),
+            "traceback": tb,
+        }), 500
+
+
+def _email_template_impl():
     body = request.get_json(silent=True) or {}
     page_id = body.get("page_id")
     if not page_id:
