@@ -302,6 +302,25 @@ def email_template():
         }), 500
 
 
+def _is_valid_email(email):
+    """Jednoduchá validácia emailu — prítomnosť @ + bodka + min dĺžka."""
+    if not email or "@" not in email:
+        return False
+    parts = email.strip().split("@")
+    if len(parts) != 2:
+        return False
+    local, domain = parts
+    if len(local) < 1 or len(domain) < 4:
+        return False
+    if "." not in domain:
+        return False
+    # TLD min 2 znaky
+    tld = domain.rsplit(".", 1)[-1]
+    if len(tld) < 2:
+        return False
+    return True
+
+
 def _email_template_impl():
     body = request.get_json(silent=True) or {}
     page_id = body.get("page_id")
@@ -340,7 +359,20 @@ def _email_template_impl():
 
     priezvisko = lead_a["meno"].split()[-1] if lead_a.get("meno") else "Zákazník"
     mesto = lead_a.get("mesto", "")
-    email_zakaznika = lead_a.get("email") or notion_props.get("Email") or ""
+    email_zakaznika = (lead_a.get("email") or notion_props.get("Email") or "").strip()
+    if not _is_valid_email(email_zakaznika):
+        log.warning(f"Neplatný email pre page {page_id}: '{email_zakaznika}'")
+        return jsonify({
+            "success": False,
+            "email_valid": False,
+            "error": f"Neplatný email zákazníka: '{email_zakaznika}'. Skontroluj 'Email' property v Notion DB.",
+            "to": "",
+            "subject": "",
+            "body_html": "",
+            "attachments": [],
+            "obchodnik": {},
+            "variants_sent": [],
+        }), 200  # Status 200 aby Make scenár pokračoval k Notion update
     obchodnik = OBCHODNICI.get(notion_props.get("Obchodník") or notion_props.get("Obchodnik") or "", DEFAULT_OBCHODNIK)
 
     vykon_kwp = lead_a.get("vykon_kwp", 0)
@@ -398,6 +430,7 @@ def _email_template_impl():
 
     return jsonify({
         "success": True,
+        "email_valid": True,
         "to": email_zakaznika,
         "subject": subject,
         "body_html": body_html,
