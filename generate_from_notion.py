@@ -685,7 +685,7 @@ def lead_from_notion(notion_props, variant):
         "dotacia": True,
         "platby": "60 % zálohová faktúra vopred  ·  30 % po nainštalovaní elektrárne  ·  10 % po protokolárnom odovzdaní",
         "cislo_ponuky": cislo_ponuky,
-        "obchodnik": OBCHODNICI.get(notion_props.get("Obchodník") or "", DEFAULT_OBCHODNIK),
+        "obchodnik": OBCHODNICI.get(notion_props.get("Obchodník") or notion_props.get("Obchodnik") or "", DEFAULT_OBCHODNIK),
     }
 
 
