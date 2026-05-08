@@ -165,7 +165,7 @@ def vyrataj_konfig(lead, cennik):
         ("PRC-005", 1, "Inžiniering: revízia, žiadosti DIS+SIEA+dodávateľ el.", "projekt", cennik["PRC-005"]["cena"]),
     ]
     if lead.get("bateria_kwh", 0) > 0:
-        praca.append(("PRC-002", lead["bateria_kwh"], "Inštalácia batérie + drobný materiál", "kWh", cennik["PRC-002"]["cena"]))
+        praca.append(("PRC-002", 1, "Doplnenie batérie (paušál)", "kpl", cennik["PRC-002"]["cena"]))
     # doprava — default 100 km (typická SK trasa)
     km = lead.get("doprava_km", 100)
     praca.append(("PRC-006", km, f"Doprava materiálu ({km} km)", "km", cennik["PRC-006"]["cena"]))
