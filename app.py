@@ -12,6 +12,7 @@ import os
 import sys
 import json
 import logging
+import re
 import tempfile
 from pathlib import Path
 from functools import wraps
@@ -172,6 +173,18 @@ def prepocet():
         update.update(notion_set_number("Cena C s DPH", round(c["cena_s_dph"], 2)))
         update.update(notion_set_number("Nákupná cena C €", round(c["nakupna"], 2)))
         update.update(notion_set_number("Zisk C €", round(c["zisk"], 2)))
+
+    # Auto-vyplnenie "Batéria výkon" = počet × kWh per modul (z labelu typu)
+    bat_typ = notion_props.get("Batéria (typ)") or ""
+    m_bat = re.search(r"(\d+(?:[.,]\d+)?)\s*kWh", bat_typ)
+    per_modul = float(m_bat.group(1).replace(",", ".")) if m_bat else 0
+    pocet_raw = notion_props.get("Batéria počet")
+    try:
+        pocet = int(pocet_raw) if pocet_raw not in (None, "") else 0
+    except (TypeError, ValueError):
+        pocet = 0
+    if pocet > 0 and per_modul > 0:
+        update.update(notion_set_number("Batéria výkon", round(pocet * per_modul, 2)))
 
     suma = (b.get("cena_s_dph") or a.get("cena_s_dph") or c.get("cena_s_dph"))
     if suma:
