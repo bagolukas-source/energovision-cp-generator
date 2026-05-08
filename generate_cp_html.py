@@ -1,361 +1,1001 @@
-"""
-generate_cp_html.py — Energovision B2C CP generator (HTML→PDF verzia)
-Vstup: lead.json
-Výstupy: CP_*.pdf (krásne renderované cez WeasyPrint), CP_*.eml, kalkulacia_*.xlsx
-"""
-import json, sys, os, datetime, subprocess, re
-from pathlib import Path
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.mime.base import MIMEBase
-from email import encoders
-from email.utils import formatdate
-# Re-použijeme logiku z generate_cp.py
-sys.path.insert(0, str(Path(__file__).parent))
-from generate_cp import (
-    load_cennik, vyrataj_konfig, vyrataj_ceny, vyrataj_navratnost,
-    vyrob_grafy, vyrob_internu_kalkulaciu, ZHOTOVITEL, DEFAULTS
-)
-_SD = os.path.dirname(os.path.abspath(__file__))
-BRAND_HEADER = os.path.join(_SD, "energovision_header.png")
-TEMPLATE = os.path.join(_SD, "cp_template.html")
 
-# Hardcoded mapping wallbox kódov → ľudsky čitateľný label
-WALLBOX_LABELS = {
-    "WBX-001": "Solinteg 7 kW 1F",
-    "WBX-002": "Solinteg 11 kW 3F",
-    "WBX-003": "Huawei 22 kW 3F",
-    "WBX-004": "Huawei 7 kW 1F",
-    "WBX-005": "GoodWe 11 kW",
-    "WBX-006": "GoodWe 22 kW",
-}
-
-def _wallbox_label(wallbox_kod):
-    """Krátky label wallboxu podľa kódu — bez cennik dependency."""
-    if not wallbox_kod:
-        return ""
-    return WALLBOX_LABELS.get(wallbox_kod, wallbox_kod)
-
-def fmt_eur(x):
-    """123456.78 → '123 456,78 €' (slovensky)"""
-    s = f"{x:,.2f}"
-    s = s.replace(",", "X").replace(".", ",").replace("X", " ")
-    return s + " €"
-def short(name, max_len=42):
-    if len(name) <= max_len: return name
-    return name[:max_len-1].rsplit(" ", 1)[0] + "…"
-def shorten_konstrukcia(name):
-    """'Rovná strecha Juh — balastová konštrukcia 13°' → 'Plochá strecha (J, 13°)'"""
-    if "Rovná" in name and "Juh" in name: return "Plochá strecha (J, 13°)"
-    if "Rovná" in name: return "Plochá strecha (V/Z, 10°)"
-    if "Škridla" in name: return "Šikmá — háky na škridle"
-    if "Plech" in name and "Kombi" in name: return "Šikmá — kombivrut na plech"
-    if "Falc" in name: return "Šikmá — falcový úchyt"
-    return name
-def shorten_menic(name):
-    """'Solinteg MHT-10K-25 hybridný 10 kW 3F' → 'Solinteg MHT-10K-25'"""
-    if " hybridný " in name: return name.split(" hybridný ")[0]
-    return name
-def shorten_panel(name):
-    """'LONGi Hi-MO X10 LR7-60HVH 535-545 Wp čierny rám' → 'LONGi Hi-MO X10 540 Wp'"""
-    if "LONGi" in name:
-        if "545" in name or "540" in name: return "LONGi Hi-MO X10 540 Wp"
-        if "470" in name: return "LONGi Hi-MO X10 470 Wp"
-    return short(name, 35)
-def _sk_int(x):
-    """123456 → '123 456' (slovenský formát)"""
-    return f"{int(round(x)):,}".replace(",", " ")
-def _sk_dec(x, n=2):
-    """12.345 → '12,35' (slovenská desatinná čiarka)"""
-    return f"{x:.{n}f}".replace(".", ",")
-def gen_copywriting(lead, konfig, ceny, navratnost):
-    """Vygeneruje personalizované copywritingové texty na základe leadu."""
-    priezvisko = lead["meno"].split()[-1]
-    spotreba = lead["rocna_spotreba_kwh"]
-    cena_el = lead.get("cena_el_eur_kwh", 0.16)
-    rocna_faktura = spotreba * cena_el
-    vykon = konfig["vykon_kwp"]
-    vyroba = navratnost["rocna_vyroba_kwh"]
-    pokrytie = min(100, vyroba / spotreba * 100)
-    nadvyroba_pct = (vyroba / spotreba * 100) - 100 if vyroba > spotreba else 0
-    # Vek leadu — pre age-aware úvodný pozdrav
-    vek_dni = lead.get("vek_dni", 0)
-    # Typ domácnosti podľa spotreby
-    if spotreba < 3500: typ = "menšia domácnosť (1–2 osoby alebo úsporná prevádzka)"
-    elif spotreba < 5500: typ = "štandardná rodina (2–3 osoby)"
-    elif spotreba < 8500: typ = "väčšia rodina (3–4 osoby)"
-    else: typ = "vysoká spotreba (väčšia rodina alebo dom s tepelným čerpadlom či elektromobilom)"
-    # === ÚVODNÝ POZDRAV (titulka) — age-aware ===
-    if vek_dni < 14:
-        uvodny_pozdrav = (
-            f"Pán {priezvisko}, ďakujem za prejavený záujem. "
-            f"Pripravil som pre Vás návrh, ktorý vychádza z údajov, čo ste nám poskytli — "
-            f"a z toho, ako u Vás reálne fungujú spotreba aj strecha. Verím, že Vás zaujme."
-        )
-    elif vek_dni < 60:
-        uvodny_pozdrav = (
-            f"Pán {priezvisko}, ďakujem za Vašu trpezlivosť. "
-            f"Pripravil som pre Vás návrh prispôsobený údajom, ktoré ste nám poskytli pri prvotnom dopyte — "
-            f"prepočítaný na aktuálne ceny a podmienky."
-        )
-    else:
-        mesiace = vek_dni // 30
-        uvodny_pozdrav = (
-            f"Pán {priezvisko}, ospravedlňujem sa za neskorú reakciu na Váš dopyt z pred ~{mesiace} mesiacmi. "
-            f"Téma sa medzitým posunula — vyšla nová výzva Zelená domácnostiam 2026 a ceny elektriny "
-            f"pokračovali v raste. Pripravil som pre Vás aktualizovanú ponuku — verím, že je u Vás projekt "
-            f"FVE stále aktuálny a táto verzia Vás zaujme viac."
-        )
-    # === POCHOPENIE POTRIEB ===
-    p1 = (
-        f"Vaša ročná spotreba <strong>{_sk_int(spotreba)} kWh</strong> zodpovedá charakteristike: "
-        f"<strong>{typ}</strong>. Pri aktuálnej cene cca {_sk_dec(cena_el)} €/kWh to znamená "
-        f"<strong>~ {_sk_int(rocna_faktura)} € ročne</strong> len za samotnú elektrinu. "
-        f"A keďže ceny v posledných rokoch rástli o 3–8 % ročne, o päť rokov to môže byť výrazne viac."
-    )
-    p2_parts = []
-    kon = konfig["konstrukcia"]
-    if "Rovná" in kon and "Juh" in kon:
-        p2_parts.append("Vaša rovná strecha s J orientáciou je pre fotovoltiku ideálna — vieme z nej získať blízke maximum.")
-    elif "Rovná" in kon:
-        p2_parts.append("Vaša rovná strecha umožňuje optimálne nasmerovanie panelov balastovou konštrukciou.")
-    elif "Škridla" in kon:
-        p2_parts.append("Vaša šikmá strecha so škridlou je štandardný case, s ktorým máme bohaté skúsenosti.")
-    elif "Plech" in kon or "Falc" in kon:
-        p2_parts.append("Plechová strecha je pre montáž rýchla a čistá — bez prierazov do krytiny.")
-    else:
-        p2_parts.append("Pre Vašu konštrukciu strechy máme overené riešenie.")
-    if konfig["ma_bateriu"]:
-        p2_parts.append("Súčasťou návrhu je aj batériové úložisko, takže časť vyrobenej energie použijete aj večer alebo cez víkend.")
-    else:
-        p2_parts.append("Pre začiatok Vám neodporúčame batériu — pridať ju budete môcť kedykoľvek neskôr (menič je pripravený).")
-    if konfig["ma_wallbox"]:
-        p2_parts.append("Pridali sme aj wallbox pre nabíjanie elektromobilu priamo zo slnka.")
-    p2 = " ".join(p2_parts)
-    # Záver
-    if nadvyroba_pct > 20:
-        zaver = (
-            f"Navrhujeme výkon <strong>{_sk_dec(vykon)} kWp</strong>, ktorý pokryje Vašu spotrebu "
-            f"na 100 % a vyrobí ešte {nadvyroba_pct:.0f} % naviac. Prebytky predáme do siete za "
-            f"výkupnú cenu, alebo ich neskôr viete uložiť do prípadnej batérie."
-        )
-    elif pokrytie >= 95:
-        zaver = (
-            f"Navrhujeme výkon <strong>{_sk_dec(vykon)} kWp</strong>, ktorý pokryje takmer celú Vašu spotrebu. "
-            f"S batériou alebo posunom spotreby do dňa (pranie, varenie, nabíjanie) sa dostanete blízko energetickej sebestačnosti."
-        )
-    else:
-        zaver = (
-            f"Navrhujeme výkon <strong>{_sk_dec(vykon)} kWp</strong>, ktorý pokryje cca "
-            f"<strong>{pokrytie:.0f} %</strong> Vašej spotreby. Zvyšok dokúpite ako doteraz, "
-            f"ale za výrazne nižší ročný účet."
-        )
-    # === RIEŠENIE INTRO ===
-    rieseni_intro = (
-        f"Zostava postavená tak, aby vyrobila ~{_sk_int(vyroba)} kWh ročne a pokryla "
-        f"{pokrytie:.0f} % Vašej spotreby. Komponenty sú overené značky, montáž robíme vlastným tímom."
-    )
-    # === BENEFITY ===
-    rocna_uspora = navratnost["rocne_uspora_eur"]
-    nav_rokov = navratnost["navratnost_rokov"]
-    benefit_uspora = (
-        f"Ročná úspora <strong>~{_sk_int(rocna_uspora)} €</strong> pri dnešných cenách. "
-        f"Keďže ceny elektriny rastú a panely majú degradáciu len ~0,5 % ročne, úspora sa s každým rokom zvyšuje. "
-        f"Investícia sa Vám vráti za <strong>~{_sk_dec(nav_rokov, 1)} rokov</strong> — a potom ďalších 15+ rokov vyrábate prakticky zadarmo."
-    )
-    benefit_nezavislost = (
-        "Distribučky každý rok upravujú ceny — a smerujú nahor. S vlastnou FVE zafixujete cenu časti svojej "
-        "spotreby na 25+ rokov dopredu. Žiadne nemilé prekvapenia keď príde nová tarifa."
-    )
-    if konfig["ma_bateriu"]:
-        benefit_bateria = (
-            f"Batéria s kapacitou {_sk_dec(konfig['bateria_kwh'], 1)} kWh uloží to, čo cez deň nestihnete spotrebovať. "
-            "Večer a v noci čerpáte vlastnú elektrinu zo slnka, nie zo siete. Samospotreba sa tak zvyšuje "
-            "z bežných ~70 % až na 90 %+."
-        )
-    else:
-        benefit_bateria = (
-            "Hybridný menič v tejto zostave je pripravený na neskoršie pripojenie batérie. "
-            "Keď sa rozhodnete (typicky po prvej zime, keď uvidíte reálne čísla), pridáme ju "
-            "bez väčších úprav. Žiadny duplicitný menič, žiadne prerábanie."
-        )
-    # === NÁVRATNOSŤ TEXT ===
-    navratnost_text = (
-        f"Pri dnešných cenách elektriny ({_sk_dec(cena_el)} €/kWh) sa investícia po dotácii "
-        f"<strong>{_sk_int(ceny['cena_finalna'])} €</strong> vráti za "
-        f"<strong>~{_sk_dec(nav_rokov, 1)} rokov</strong>. "
-        f"S rastom cien elektriny (3 % ročne) bude návratnosť reálne kratšia. "
-        f"Za 25 rokov životnosti panelov ušetríte <strong>~{_sk_int(navratnost['uspora_25_rokov'])} €</strong>."
-    )
-    # === UZATVORENIE ===
-    uzatvorenie_p1 = (
-        f"Pán {priezvisko}, fotovoltika je rozhodnutie na 25+ rokov. "
-        f"Nie je to o tom, kto má najlacnejšiu ponuku v tomto týždni — je to o tom, "
-        f"komu zveríte strechu svojho domu a kto Vám zdvihne telefón, keď budete potrebovať servis o päť rokov."
-    )
-    uzatvorenie_p2 = (
-        f"Vašu ponuku mám rezervovanú do <strong>{(datetime.date.today() + datetime.timedelta(days=lead.get('platnost_dni',30))).strftime('%d. %m. %Y')}</strong>. "
-        f"Ak budete mať akúkoľvek otázku — od technického detailu po platobné podmienky — "
-        f"som Vám k dispozícii telefonicky aj e-mailom. Nečakajte, ozvite sa."
-    )
-    return {
-        "uvodny_pozdrav": uvodny_pozdrav,
-        "pochopenie_p1": p1,
-        "pochopenie_p2": p2,
-        "pochopenie_zaver": zaver,
-        "rieseni_intro": rieseni_intro,
-        "benefit_uspora": benefit_uspora,
-        "benefit_nezavislost": benefit_nezavislost,
-        "benefit_batería": benefit_bateria,
-        "navratnost_text": navratnost_text,
-        "uzatvorenie_p1": uzatvorenie_p1,
-        "uzatvorenie_p2": uzatvorenie_p2,
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+<meta charset="utf-8">
+<title>Cenová ponuka — {{ lead.meno }}</title>
+<style>
+  /* ===== TYPOGRAFIA & PAGE ===== */
+  @page {
+    size: A4;
+    margin: 0 0 11mm 0;
+    @bottom-left {
+      content: "Energovision, s.r.o.  \00B7  IČO 53 036 280  \00B7  www.energovision.sk";
+      font: 7.5pt 'Helvetica', sans-serif; color: #888;
+      margin: 0 0 4mm 18mm; white-space: nowrap;
+      vertical-align: bottom;
     }
-def vyrob_html_pdf(lead, konfig, ceny, navratnost, grafy, out_pdf):
-    from jinja2 import Environment, FileSystemLoader
-    from weasyprint import HTML, CSS
-    today = datetime.date.today()
-    platnost = today + datetime.timedelta(days=lead.get("platnost_dni", DEFAULTS["platnost_dni"]))
-    obch = lead.get("obchodnik", DEFAULTS["obchodnik"])
-    # extrahnúť Wp panela z názvu
-    panel_n = konfig["panel"]
-    wp_match = re.search(r"(\d{3})\s*Wp", panel_n.replace("-", " "))
-    wp = int(wp_match.group(1)) if wp_match else int(round(konfig["vykon_kwp"] * 1000 / konfig["pocet_panelov"]))
-    if 535 <= wp <= 545: wp = 540
-    distribucka_short = lead.get("distribucka", "ZSD")
-    distribucka_full = {
-        "ZSD": "Západoslovenskou distribučnou (ZSD)",
-        "SSD": "Stredoslovenskou distribučnou (SSD)",
-        "VSD": "Východoslovenskou distribučnou (VSD)",
-    }.get(distribucka_short, "distribučnou spoločnosťou")
-    # orientácia
-    orientacia = lead.get("orientacia", "J")
-    orientacia_text = {
-        "J": "južná orientácia — najproduktívnejšia",
-        "JV": "juhovýchodná — výborná, prevažujúce ranné slnko",
-        "JZ": "juhozápadná — výborná, prevažujúce popoludňajšie slnko",
-        "V": "východná — solídna ranná produkcia",
-        "Z": "západná — solídna popoludňajšia produkcia",
-    }.get(orientacia, "orientácia podľa zamerania")
-    cw = gen_copywriting(lead, konfig, ceny, navratnost)
-    ctx = {
-        "lead": lead,
-        "obch": obch,
-        "today": today.strftime("%d. %m. %Y"),
-        "platnost_do": platnost.strftime("%d. %m. %Y"),
-        "cislo_ponuky": lead.get("cislo_ponuky", f"PON-{today:%Y-%m%d}"),
-        "header_img": f"file://{BRAND_HEADER}",
-        "vykon_kwp_sk": f"{konfig['vykon_kwp']:.2f}".replace(".", ","),
-        "pocet_panelov": konfig["pocet_panelov"],
-        "panel_short": shorten_panel(konfig["panel"]),
-        "menic_short": shorten_menic(konfig["menic"]),
-        "konstrukcia_short": shorten_konstrukcia(konfig["konstrukcia"]),
-        "wp_panel": wp,
-        "rocna_vyroba": navratnost["rocna_vyroba_kwh"],
-        "rocne_uspora": navratnost["rocne_uspora_eur"],
-        "navratnost_rokov_sk": f"{navratnost['navratnost_rokov']:.1f}".replace(".", ","),
-        "uspora_25_rokov": navratnost["uspora_25_rokov"],
-        "kg_co2_rok": navratnost["kg_co2_rok"],
-        "pokrytie_pct": min(100, navratnost["rocna_vyroba_kwh"] / lead["rocna_spotreba_kwh"] * 100),
-        "ma_bateriu": konfig["ma_bateriu"],
-        "ma_wallbox": konfig["ma_wallbox"],
-        "bateria_kwh_sk": f"{konfig['bateria_kwh']:.2f}".replace(".", ",") if konfig["ma_bateriu"] else "",
-        "wallbox_short": _wallbox_label(lead.get("wallbox_kod")) if konfig["ma_wallbox"] else "",
-        "cena_bez_dph_eur": fmt_eur(ceny["cena_bez_dph"]),
-        "dph_eur": fmt_eur(ceny["cena_s_dph"] - ceny["cena_bez_dph"]),
-        "cena_s_dph_eur": fmt_eur(ceny["cena_s_dph"]),
-        "dotacia_eur": fmt_eur(ceny["dotacia"]),
-        "zlava_eur": fmt_eur(ceny["zlava_eur"]),
-        "cena_finalna_eur": fmt_eur(ceny["cena_finalna"]),
-        "dotacia": ceny["dotacia"],
-        "zlava": ceny["zlava_eur"],
-        "chart_uspora": f"file://{grafy['uspora']}",
-        "chart_vyroba": f"file://{grafy['vyroba']}",
-        "chart_porovnanie": f"file://{grafy['porovnanie']}",
-        "platby": lead.get("platby", "60 % zálohová faktúra vopred  ·  30 % po nainštalovaní elektrárne  ·  10 % po protokolárnom odovzdaní"),
-        "distribucka_full": distribucka_full,
-        "distribucka_short": distribucka_short,
-        "orientacia_text": orientacia_text,
-        "rocna_faktura_eur": f"{lead['rocna_spotreba_kwh'] * lead.get('cena_el_eur_kwh', 0.16):,.0f}".replace(",", " "),
-        "cena_el_sk": f"{lead.get('cena_el_eur_kwh', 0.16):.2f}".replace(".", ","),
-        **cw,
+    @bottom-right {
+      content: "strana " counter(page) " / " counter(pages);
+      font: 7.5pt 'Helvetica', sans-serif; color: #888;
+      margin: 0 18mm 4mm 0; white-space: nowrap;
+      vertical-align: bottom;
     }
-    env = Environment(loader=FileSystemLoader(str(Path(TEMPLATE).parent)))
-    tmpl = env.get_template(Path(TEMPLATE).name)
-    html_str = tmpl.render(**ctx)
-    # uložím aj HTML pre debug
-    html_path = out_pdf.replace(".pdf", ".html")
-    with open(html_path, "w", encoding="utf-8") as f:
-        f.write(html_str)
-    HTML(string=html_str, base_url=str(Path(TEMPLATE).parent)).write_pdf(out_pdf)
-    return out_pdf
-def vyrob_eml_v2(lead, konfig, ceny, navratnost, pdf_path, out_path):
-    obch = lead.get("obchodnik", DEFAULTS["obchodnik"])
-    body = f"""Dobrý deň, pán {lead['meno'].split()[-1]},
-ďakujem za Váš záujem o fotovoltickú elektráreň pre Váš dom v {lead['mesto']}.
-V prílohe Vám posielam cenovú ponuku spracovanú na základe údajov, ktoré ste mi poskytli.
-Krátko zhrnuté:
-- Výkon FVE: {konfig['vykon_kwp']:.2f} kWp ({konfig['pocet_panelov']} ks panelov)
-- Predpokladaná ročná výroba: {navratnost['rocna_vyroba_kwh']:,.0f} kWh
-- Predpokladaná ročná úspora: {navratnost['rocne_uspora_eur']:,.0f} EUR
-- Cena s DPH: {ceny['cena_s_dph']:,.2f} EUR
-- Cena po dotácii Zelená domácnostiam: {ceny['cena_finalna']:,.2f} EUR
-- Návratnosť: cca {navratnost['navratnost_rokov']:.1f} rokov
-Ako ďalší krok navrhujem bezplatnú obhliadku, kde upresníme technické detaily
-a finalizujeme cenu. Stačí zavolať alebo odpovedať na tento email.
-Ponuka je platná {lead.get('platnost_dni', 30)} dní.
-Ak máte akékoľvek otázky, som Vám k dispozícii.
-S pozdravom,
-{obch['meno']}
-{obch['funkcia']}, {ZHOTOVITEL['nazov']}
-{obch['tel']}  |  {obch['email']}
-""".replace(",", " ")
-    msg = MIMEMultipart()
-    msg['From'] = ''
-    msg['To'] = lead.get("email", "")
-    msg['Subject'] = f"Cenová ponuka FVE pre Váš dom — Energovision"
-    msg['Date'] = formatdate(localtime=True)
-    msg['X-Unsent'] = '1'
-    msg.attach(MIMEText(body, 'plain', 'utf-8'))
-    if pdf_path and Path(pdf_path).exists():
-        with open(pdf_path, 'rb') as f:
-            part = MIMEBase('application', 'pdf')
-            part.set_payload(f.read())
-            encoders.encode_base64(part)
-            part.add_header('Content-Disposition', f'attachment; filename="{Path(pdf_path).name}"')
-            msg.attach(part)
-    with open(out_path, 'w', encoding='utf-8') as f:
-        f.write(msg.as_string())
-def main(lead_path):
-    with open(lead_path, encoding="utf-8") as f:
-        lead = json.load(f)
-    print(f"📋 Lead: {lead['meno']} ({lead['mesto']})")
-    cennik = load_cennik()
-    konfig = vyrataj_konfig(lead, cennik)
-    ceny = vyrataj_ceny(konfig, lead)
-    navratnost = vyrataj_navratnost(konfig, ceny, lead)
-    priezv = lead["meno"].split()[-1].replace(" ", "_")
-    mesto = lead["mesto"].split(",")[0].replace(" ", "_")
-    base = f"CP_{priezv}_{mesto}_v2"
-    interna = f"kalkulacia_{priezv}_{mesto}_v2"
-    out_dir = lead.get("out_dir", "/Users/lukasbago/Library/Application Support/Claude/local-agent-mode-sessions/3d41275a-8413-4b71-9fc3-5cd0aaff426e/a447700c-2339-401c-b424-9225200de607/local_ac01c1aa-97eb-44c5-b9ed-918b2f76a281/outputs")
-    print("📊 Generujem grafy...")
-    grafy = vyrob_grafy(navratnost, lead, out_dir, base)
-    print(f"🎨 Generujem krásne PDF cez HTML+CSS3 ...")
-    pdf_path = f"{out_dir}/{base}.pdf"
-    vyrob_html_pdf(lead, konfig, ceny, navratnost, grafy, pdf_path)
-    print(f"💼 Generujem internú kalkuláciu ...")
-    vyrob_internu_kalkulaciu(lead, konfig, ceny, navratnost, f"{out_dir}/{interna}.xlsx")
-    print(f"✉️  Generujem .eml draft ...")
-    vyrob_eml_v2(lead, konfig, ceny, navratnost, pdf_path, f"{out_dir}/{base}.eml")
-    print(f"\n✅ Hotovo:")
-    print(f"   {pdf_path}")
-    print(f"   {out_dir}/{base}.eml")
-    print(f"   {out_dir}/{interna}.xlsx")
-    print(f"\n💰 Súhrn cien:")
-    print(f"   Cena s DPH:        {ceny['cena_s_dph']:>12,.2f} €".replace(",", " "))
-    print(f"   Dotácia:           {-ceny['dotacia']:>12,.0f} €".replace(",", " "))
-    print(f"   Cena po dotácii:   {ceny['cena_po_dotacii']:>12,.2f} €".replace(",", " "))
-    print(f"   Návratnosť:        {navratnost['navratnost_rokov']:>12.1f} rokov")
-if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else "lead_sedlar.json")
+  }
+  @page :first {
+    @bottom-left { content: ""; }
+    @bottom-right { content: ""; }
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { font: 10.5pt/1.55 'Helvetica', 'Arial', sans-serif; color: #2c2c2c; }
+
+  :root {
+    --green: #92D050;
+    --green-dark: #6FB022;
+    --green-light: #E8F5D8;
+    --green-bg: #F5FBEC;
+    --black: #1a1a1a;
+    --gray: #6b6b6b;
+    --gray-mid: #999;
+    --gray-light: #d4d4d4;
+    --bg-soft: #fafafa;
+  }
+
+  h1, h2, h3, h4 { font-weight: 700; color: var(--black); }
+  strong { color: var(--black); font-weight: 700; }
+  p { margin: 0 0 3mm 0; }
+
+  .page {
+    width: 210mm;
+    min-height: 297mm;
+    padding: 18mm 18mm 22mm 18mm;
+    page-break-after: always;
+    position: relative;
+  }
+  .page:last-child { page-break-after: auto; }
+
+  /* ===== TITULKA ===== */
+  .cover {
+    padding: 18mm 18mm 0 18mm;
+  }
+  .cover-header img { width: 100%; max-width: 175mm; display: block; }
+  .cover-header-new {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-bottom: 8mm;
+    border-bottom: 2px solid var(--green);
+    margin-bottom: 4mm;
+  }
+  .cover-header-left { display: flex; flex-direction: column; gap: 2mm; }
+  .cover-header-badge {
+    text-transform: uppercase;
+    letter-spacing: 3px;
+    font-size: 9pt;
+    color: var(--green-dark);
+    font-weight: 700;
+  }
+  .cover-header-meta {
+    font-size: 9pt;
+    color: var(--gray);
+  }
+  .cover-header-right { text-align: right; }
+  .cover-logo {
+    font-size: 38pt;
+    font-weight: 800;
+    letter-spacing: 0;
+    color: var(--black);
+    line-height: 1;
+    white-space: nowrap;
+  }
+  .cover-logo .accent { color: var(--green); }
+  .cover-tagline {
+    font-size: 10pt;
+    color: var(--gray);
+    margin-top: 3mm;
+    letter-spacing: 0.3px;
+  }
+  .cover-hero {
+    margin-top: 12mm;
+  }
+  .cover-eyebrow {
+    text-transform: uppercase; letter-spacing: 4px;
+    font-size: 10pt; color: var(--green-dark); font-weight: 700;
+    margin-bottom: 4mm;
+  }
+  .cover-title {
+    font-size: 36pt; line-height: 1.05; color: var(--black);
+    margin-bottom: 4mm; font-weight: 800; letter-spacing: -0.5pt;
+  }
+  .cover-title .accent { color: var(--green-dark); }
+  .cover-sub {
+    font-size: 12pt; color: var(--gray);
+    margin-bottom: 6mm; max-width: 140mm; line-height: 1.55;
+  }
+  .cover-personal {
+    margin-top: 5mm;
+    padding: 5mm 0;
+    border-top: 1px solid rgba(0,0,0,0.08);
+    border-bottom: 1px solid rgba(0,0,0,0.08);
+    font-size: 11pt; color: var(--black); font-style: italic;
+    max-width: 160mm; line-height: 1.55;
+  }
+  .cover-personal .signoff {
+    display: block; margin-top: 3mm; font-style: normal; color: var(--gray);
+    font-size: 10pt;
+  }
+  .cover-info {
+    margin-top: 7mm;
+    display: table; width: 100%; border-collapse: collapse;
+  }
+  .cover-info-row { display: table-row; }
+  .cover-info-cell {
+    display: table-cell; padding: 2.5mm 0; vertical-align: middle;
+    border-bottom: 1px solid rgba(0,0,0,0.10);
+  }
+  .cover-info-label {
+    font-size: 8.5pt; color: var(--gray); text-transform: uppercase;
+    letter-spacing: 1.5px; width: 35mm;
+  }
+  .cover-info-value { font-size: 11.5pt; color: var(--black); font-weight: 600; }
+
+  .cover-footer {
+    margin: 8mm -18mm 0 -18mm;
+    padding: 7mm 18mm;
+    background: var(--green-bg);
+    border-top: 3px solid var(--green);
+    box-sizing: border-box;
+  }
+  .cover-footer-inner {
+    display: table;
+    width: 100%;
+    table-layout: fixed;
+  }
+  .cover-footer-cell {
+    display: table-cell;
+    vertical-align: top;
+    width: 50%;
+    padding-right: 6mm;
+  }
+  .cover-footer-cell:last-child {
+    padding-right: 0;
+    padding-left: 6mm;
+    text-align: right;
+  }
+  .cover-footer .label {
+    font-size: 8pt; color: var(--gray); text-transform: uppercase;
+    letter-spacing: 1.5px; margin-bottom: 2mm;
+  }
+  .cover-footer .name { font-size: 12pt; font-weight: 700; color: var(--black); }
+  .cover-footer .role { font-size: 9.5pt; color: var(--gray); margin-top: 1mm; line-height: 1.3; }
+  .cover-footer .contact { font-size: 9.5pt; color: var(--black); margin-top: 1mm; word-wrap: break-word; }
+
+  /* ===== HEADER NA INTERIÉROVÝCH STRANÁCH ===== */
+  .page-header {
+    display: table; width: 100%;
+    padding-bottom: 4mm; border-bottom: 2px solid var(--green); margin-bottom: 8mm;
+  }
+  .page-header-cell { display: table-cell; vertical-align: middle; }
+  .page-header-cell.right { text-align: right; }
+  .page-header-cell.left {
+    font-size: 16pt; font-weight: 800; color: var(--black); letter-spacing: -0.5pt;
+  }
+  .page-header-cell.left .accent { color: var(--green-dark); }
+  .page-header-meta { font-size: 9pt; color: var(--gray); }
+
+  /* ===== NADPISY SEKCIÍ ===== */
+  .section-eyebrow {
+    display: inline-block; background: var(--green); color: var(--black);
+    font-size: 8.5pt; font-weight: 700; text-transform: uppercase; letter-spacing: 2px;
+    padding: 2mm 4mm; border-radius: 2mm; margin-bottom: 4mm;
+  }
+  h2.section-title {
+    font-size: 22pt; line-height: 1.15; margin-bottom: 6mm; color: var(--black);
+  }
+  h2.section-title small {
+    display: block; font-size: 11pt; font-weight: 400; color: var(--gray);
+    margin-top: 2mm; line-height: 1.5;
+  }
+  h3 {
+    font-size: 13pt; margin: 7mm 0 3mm 0; color: var(--black);
+  }
+
+  /* ===== STORYTELLING — LEAD PARAGRAFY ===== */
+  .lead-text {
+    font-size: 11.5pt; line-height: 1.7; color: #333;
+    margin-bottom: 5mm;
+  }
+  .lead-text strong { color: var(--green-dark); }
+  .lead-quote {
+    background: var(--green-bg);
+    border-left: 4px solid var(--green);
+    padding: 5mm 6mm; border-radius: 0 3mm 3mm 0;
+    font-size: 11pt; color: #333; line-height: 1.6;
+    margin: 5mm 0;
+  }
+  .lead-quote .quote-label {
+    display: block; font-size: 8pt; color: var(--green-dark);
+    text-transform: uppercase; letter-spacing: 2px; font-weight: 700;
+    margin-bottom: 2mm;
+  }
+
+  /* ===== KARTY KONFIGURÁCIE ===== */
+  .config-grid {
+    display: table; width: 100%; border-spacing: 3mm;
+    margin: 6mm 0 4mm -3mm; width: calc(100% + 6mm);
+  }
+  .config-row { display: table-row; }
+  .config-card {
+    display: table-cell; background: var(--bg-soft);
+    border: 1px solid var(--gray-light); border-radius: 3mm;
+    padding: 5mm; width: 33.33%; vertical-align: top;
+  }
+  .config-card.highlight {
+    background: linear-gradient(135deg, var(--green) 0%, var(--green-dark) 100%);
+    color: white; border: none;
+  }
+  .config-card.highlight .ck-label { color: rgba(255,255,255,0.85); }
+  .config-card.highlight .ck-value { color: white; }
+  .ck-icon {
+    width: 9mm; height: 9mm; background: var(--green);
+    border-radius: 50%; display: inline-block; margin-bottom: 3mm;
+    text-align: center; line-height: 9mm; font-weight: 700;
+    color: white; font-size: 13pt;
+  }
+  .config-card.highlight .ck-icon { background: rgba(255,255,255,0.25); }
+  .ck-label {
+    font-size: 9pt; color: var(--gray); text-transform: uppercase;
+    letter-spacing: 1px; margin-bottom: 1mm;
+  }
+  .ck-value {
+    font-size: 13pt; font-weight: 700; color: var(--black); line-height: 1.25;
+  }
+  .ck-sub { font-size: 9pt; color: var(--gray); margin-top: 1mm; }
+
+  /* ===== BENEFITY (storytelling) ===== */
+  .benefits {
+    margin: 5mm 0;
+  }
+  .benefit-row {
+    display: table; width: 100%;
+    margin-bottom: 5mm;
+    page-break-inside: avoid; break-inside: avoid;
+  }
+  .benefit-num {
+    display: table-cell; width: 14mm; vertical-align: top;
+  }
+  .benefit-num-circle {
+    width: 11mm; height: 11mm; border-radius: 50%;
+    background: var(--green); color: white;
+    text-align: center; line-height: 11mm;
+    font-weight: 800; font-size: 13pt;
+  }
+  .benefit-body { display: table-cell; vertical-align: top; padding-left: 2mm; }
+  .benefit-title {
+    font-size: 12pt; font-weight: 700; color: var(--black);
+    margin-bottom: 1mm;
+  }
+  .benefit-text { font-size: 10.5pt; color: #444; line-height: 1.55; }
+
+  /* ===== METRIKY ===== */
+  .metrics-grid {
+    display: table; width: 100%; border-spacing: 3mm;
+    margin: 6mm 0 4mm -3mm; width: calc(100% + 6mm);
+  }
+  .metric {
+    display: table-cell; background: white;
+    border-left: 4px solid var(--green); padding: 5mm; width: 25%;
+    vertical-align: middle;
+    border-top: 1px solid var(--gray-light);
+    border-right: 1px solid var(--gray-light);
+    border-bottom: 1px solid var(--gray-light);
+    border-radius: 0 2mm 2mm 0;
+  }
+  .metric-value {
+    font-size: 19pt; font-weight: 800; color: var(--green-dark);
+    line-height: 1.05; margin-bottom: 2mm; white-space: nowrap;
+  }
+  .metric-label { font-size: 9pt; color: var(--gray); }
+
+  /* ===== CENA ===== */
+  .price-block {
+    background: linear-gradient(135deg, #ffffff 0%, var(--green-bg) 100%);
+    border: 1px solid var(--green); border-radius: 4mm;
+    padding: 8mm; margin: 6mm 0;
+  }
+  .price-row {
+    display: table; width: 100%; padding: 2.5mm 0;
+    border-bottom: 1px dashed rgba(0,0,0,0.08);
+  }
+  .price-row:last-child { border-bottom: none; }
+  .price-row .label, .price-row .value {
+    display: table-cell; vertical-align: middle;
+  }
+  .price-row .label { font-size: 11pt; }
+  .price-row .value { text-align: right; font-size: 11pt; font-weight: 600; }
+  .price-row.discount .value { color: var(--green-dark); font-weight: 700; }
+  .price-row.final {
+    margin-top: 4mm; padding: 5mm 4mm;
+    background: linear-gradient(90deg, var(--green) 0%, var(--green-dark) 100%);
+    border-radius: 3mm;
+  }
+  .price-row.final .label, .price-row.final .value {
+    color: white; font-weight: 800; font-size: 16pt;
+  }
+  .price-note {
+    font-size: 8.5pt; color: var(--gray); font-style: italic; margin-top: 4mm;
+  }
+
+  /* ===== GRAFY ===== */
+  .chart-block { margin: 3mm 0 4mm 0; }
+  .chart-block img { width: 100%; display: block; }
+  .chart-caption {
+    font-size: 8.5pt; color: var(--gray); font-style: italic; margin-top: 1.5mm;
+  }
+
+  /* ===== ZARUKY / "ČO JE V CENE" ===== */
+  .check-grid {
+    display: table; width: 100%; border-spacing: 2mm;
+    margin: 4mm 0 0 -2mm; width: calc(100% + 4mm);
+  }
+  .check-card {
+    display: table-cell; width: 50%; padding: 4mm;
+    background: var(--bg-soft); border-radius: 2mm; vertical-align: top;
+  }
+  .check-card .check-title {
+    font-size: 11pt; font-weight: 700; color: var(--green-dark);
+    margin-bottom: 2mm;
+  }
+  .check-list { list-style: none; padding: 0; }
+  .check-list li {
+    padding: 1.5mm 0 1.5mm 6mm; position: relative;
+    font-size: 10pt; border-bottom: 1px solid rgba(0,0,0,0.05);
+  }
+  .check-list li:last-child { border-bottom: none; }
+  .check-list li::before {
+    content: "✓"; position: absolute; left: 0;
+    color: var(--green-dark); font-weight: 700;
+  }
+
+  /* ===== "PREČO MY" — rozšírená ===== */
+  .why-row {
+    display: table; width: 100%; margin-bottom: 5mm;
+    page-break-inside: avoid; break-inside: avoid;
+  }
+  .why-icon-cell {
+    display: table-cell; width: 14mm; vertical-align: top;
+  }
+  .why-icon-circle {
+    width: 11mm; height: 11mm; border-radius: 50%;
+    background: var(--green); color: white;
+    text-align: center; line-height: 11mm;
+    font-weight: 700; font-size: 13pt;
+  }
+  .why-body { display: table-cell; vertical-align: top; padding-left: 2mm; }
+  .why-h {
+    font-size: 12pt; font-weight: 700; color: var(--black); margin-bottom: 1mm;
+  }
+  .why-t { font-size: 10.5pt; color: #444; line-height: 1.55; }
+
+  /* ===== CTA / KONTAKT ===== */
+  .cta-block {
+    background: linear-gradient(135deg, var(--black) 0%, #2c2c2c 100%);
+    color: white; border-radius: 4mm; padding: 8mm; margin: 5mm 0;
+    page-break-inside: avoid; break-inside: avoid;
+  }
+  .cta-block .title {
+    color: var(--green); font-size: 9pt; text-transform: uppercase;
+    letter-spacing: 2px; margin-bottom: 3mm;
+  }
+  .cta-block h3 {
+    color: white; font-size: 18pt; margin: 0 0 3mm 0;
+  }
+  .cta-block .lead {
+    color: rgba(255,255,255,0.85); font-size: 11pt; line-height: 1.55;
+    margin-bottom: 5mm;
+  }
+  .cta-buttons {
+    display: table; width: 100%; border-spacing: 3mm 0;
+  }
+  .cta-button {
+    display: table-cell; width: 50%; padding: 5mm;
+    background: rgba(255,255,255,0.08); border-radius: 3mm;
+  }
+  .cta-button .ic { font-size: 9pt; color: var(--green); text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 1mm; }
+  .cta-button .v { font-size: 13pt; font-weight: 700; color: white; }
+
+  .crosssell {
+    background: var(--green-bg); border-left: 4px solid var(--green);
+    padding: 5mm; border-radius: 0 3mm 3mm 0; margin: 4mm 0;
+    page-break-inside: avoid; break-inside: avoid;
+  }
+  .crosssell .title {
+    font-weight: 700; color: var(--green-dark); font-size: 12pt; margin-bottom: 3mm;
+  }
+  .crosssell ul { list-style: none; padding: 0; }
+  .crosssell li {
+    padding: 1.5mm 0 1.5mm 6mm; position: relative; font-size: 10pt;
+  }
+  .crosssell li::before {
+    content: "+"; position: absolute; left: 0; color: var(--green-dark); font-weight: 700;
+  }
+
+  /* ===== TIMELINE ===== */
+  .timeline {
+    margin: 5mm 0; border-left: 3px solid var(--green); padding-left: 8mm;
+    position: relative;
+  }
+  .timeline-item {
+    position: relative; padding: 2mm 0 2mm 4mm;
+    page-break-inside: avoid; break-inside: avoid;
+  }
+  .timeline-item::before {
+    content: ""; position: absolute; left: -10.5mm; top: 4mm;
+    width: 4mm; height: 4mm; background: white;
+    border: 2.5px solid var(--green); border-radius: 50%;
+  }
+  .timeline-when {
+    font-size: 9pt; color: var(--green-dark); font-weight: 700;
+    text-transform: uppercase; letter-spacing: 1px; margin-bottom: 1mm;
+  }
+  .timeline-what { font-size: 10.5pt; color: var(--black); }
+
+  .price-block, .check-grid, .config-grid, .metrics-grid, .lead-quote, .chart-block {
+    page-break-inside: avoid; break-inside: avoid;
+  }
+  h2.section-title, h3 { page-break-after: avoid; break-after: avoid; }
+
+  /* "Tri možnosti A/B/C" musia byť pohromade */
+  .benefits-tight { page-break-inside: avoid; break-inside: avoid; }
+  .benefits-tight .benefit-row { margin-bottom: 3mm; }
+
+  .small-note { font-size: 8.5pt; color: var(--gray); }
+  .company-footer {
+    margin-top: 12mm; padding-top: 6mm;
+    border-top: 2px solid var(--green);
+    page-break-inside: avoid; break-inside: avoid;
+  }
+  .company-row { display: table; width: 100%; }
+  .company-cell {
+    display: table-cell; width: 33.33%; vertical-align: top; padding-right: 6mm;
+  }
+  .cf-label {
+    font-size: 8pt; color: var(--gray); text-transform: uppercase;
+    letter-spacing: 1.5px; margin-bottom: 2mm;
+  }
+  .cf-text { font-size: 9.5pt; color: var(--black); line-height: 1.55; }
+</style>
+</head>
+<body>
+
+<!-- ============ STRANA 1 — TITULKA + ÚVOD ============ -->
+<div class="page cover">
+  <div class="cover-header-new">
+    <div class="cover-header-left">
+      <span class="cover-header-badge">CENOVÁ PONUKA</span>
+      <span class="cover-header-meta">{{ cislo_ponuky }} · {{ today }}</span>
+    </div>
+    <div class="cover-header-right">
+      <div class="cover-logo">energo<span class="accent">vision</span></div>
+      <div class="cover-tagline">Moderné energetické riešenia, ktoré hľadáte</div>
+    </div>
+  </div>
+
+  <div class="cover-hero">
+    <h1 class="cover-title">Vlastná elektrina<br><span class="accent">priamo z Vašej strechy</span></h1>
+    <div class="cover-sub">
+      Návrh fotovoltickej elektrárne {{ vykon_kwp_sk }} kWp pripravený osobne pre Vás —
+      vrátane vybavenia dotácie, montáže a uvedenia do prevádzky.
+    </div>
+    <div class="cover-personal">
+      „{{ uvodny_pozdrav }}"
+      <span class="signoff">— {{ obch.meno }}, {{ obch.funkcia }}</span>
+    </div>
+  </div>
+
+  <div class="cover-info">
+    <div class="cover-info-row">
+      <div class="cover-info-cell cover-info-label">Pre</div>
+      <div class="cover-info-cell cover-info-value">{{ lead.meno }}</div>
+    </div>
+    <div class="cover-info-row">
+      <div class="cover-info-cell cover-info-label">Adresa</div>
+      <div class="cover-info-cell cover-info-value">{% if lead.ulica %}{{ lead.ulica }}{% if lead.psc or lead.mesto %}, {% endif %}{% endif %}{% if lead.psc %}{{ lead.psc }} {% endif %}{{ lead.mesto }}</div>
+    </div>
+    <div class="cover-info-row">
+      <div class="cover-info-cell cover-info-label">Číslo ponuky</div>
+      <div class="cover-info-cell cover-info-value">{{ cislo_ponuky }}</div>
+    </div>
+    <div class="cover-info-row">
+      <div class="cover-info-cell cover-info-label">Platnosť do</div>
+      <div class="cover-info-cell cover-info-value">{{ platnost_do }}</div>
+    </div>
+  </div>
+
+  <div class="cover-footer">
+    <div class="cover-footer-inner">
+      <div class="cover-footer-cell">
+        <div class="label">Vypracoval</div>
+        <div class="name">{{ obch.meno }}</div>
+        <div class="role">{{ obch.funkcia }}, Energovision, s.r.o.</div>
+      </div>
+      <div class="cover-footer-cell">
+        <div class="label">Kontakt</div>
+        <div class="contact">{{ obch.tel }}</div>
+        <div class="contact">{{ obch.email }}</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ STRANA 2 — POCHOPENIE POTRIEB ============ -->
+<div class="page">
+  <div class="page-header">
+    <div class="page-header-cell left">energo<span class="accent">vision</span></div>
+    <div class="page-header-cell right page-header-meta">
+      Cenová ponuka  ·  {{ cislo_ponuky }}  ·  {{ today }}
+    </div>
+  </div>
+
+  <div class="section-eyebrow">01  ·  Vaša situácia</div>
+  <h2 class="section-title">Čo sme z Vášho dopytu pochopili
+    <small>Pred tým než navrhneme riešenie, ujasníme si východiská. Ak sa v niečom nezhodujeme, ozvite sa — radi to upresníme.</small>
+  </h2>
+
+  <p class="lead-text">{{ pochopenie_p1 | safe }}</p>
+  <p class="lead-text">{{ pochopenie_p2 | safe }}</p>
+
+  <div class="lead-quote">
+    <span class="quote-label">Východisko pre návrh</span>
+    {{ pochopenie_zaver | safe }}
+  </div>
+
+  <h3>Vstupy z Vášho dopytu</h3>
+  <div class="config-grid">
+    <div class="config-row">
+      <div class="config-card">
+        <div class="ck-label">Ročná spotreba</div>
+        <div class="ck-value">{{ "{:,}".format(lead.rocna_spotreba_kwh).replace(',',' ') }} kWh</div>
+        <div class="ck-sub">~ {{ rocna_faktura_eur }} €/rok pri {{ cena_el_sk }} €/kWh</div>
+      </div>
+      <div class="config-card">
+        <div class="ck-label">Strecha</div>
+        <div class="ck-value">{{ konstrukcia_short }}</div>
+        <div class="ck-sub">{{ orientacia_text }}</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ STRANA 3 — RIEŠENIE ============ -->
+<div class="page">
+  <div class="page-header">
+    <div class="page-header-cell left">energo<span class="accent">vision</span></div>
+    <div class="page-header-cell right page-header-meta">
+      Cenová ponuka  ·  {{ cislo_ponuky }}  ·  {{ today }}
+    </div>
+  </div>
+
+  <div class="section-eyebrow">02  ·  Riešenie</div>
+  <h2 class="section-title">Čo Vám navrhujeme
+    <small>{{ rieseni_intro }}</small>
+  </h2>
+
+  <div class="config-grid">
+    <div class="config-row">
+      <div class="config-card highlight">
+        <div class="ck-icon">⚡</div>
+        <div class="ck-label">Inštalovaný výkon</div>
+        <div class="ck-value">{{ vykon_kwp_sk }} kWp</div>
+        <div class="ck-sub">{{ pocet_panelov }} panelov</div>
+      </div>
+      <div class="config-card">
+        <div class="ck-icon">☀</div>
+        <div class="ck-label">Predpokladaná výroba</div>
+        <div class="ck-value">{{ "{:,}".format(rocna_vyroba|round|int).replace(',',' ') }} kWh</div>
+        <div class="ck-sub">ročne</div>
+      </div>
+      <div class="config-card">
+        <div class="ck-icon">%</div>
+        <div class="ck-label">Pokrytie spotreby</div>
+        <div class="ck-value">{{ pokrytie_pct|round|int }} %</div>
+        <div class="ck-sub">Vašej ročnej spotreby</div>
+      </div>
+    </div>
+  </div>
+
+  <h3>Z čoho sa zostava skladá</h3>
+  <div class="config-grid">
+    <div class="config-row">
+      <div class="config-card">
+        <div class="ck-label">Fotovoltické panely</div>
+        <div class="ck-value">{{ panel_short }}</div>
+        <div class="ck-sub">{{ pocet_panelov }} ks · {{ wp_panel }} Wp / panel · 25 rokov záruka výkonu</div>
+      </div>
+      <div class="config-card">
+        <div class="ck-label">Hybridný menič</div>
+        <div class="ck-value">{{ menic_short }}</div>
+        <div class="ck-sub">3-fázový, monitoring cez aplikáciu, 10 rokov záruka</div>
+      </div>
+      <div class="config-card">
+        <div class="ck-label">Konštrukcia</div>
+        <div class="ck-value">{{ konstrukcia_short }}</div>
+        <div class="ck-sub">Certifikované hliníkové komponenty, statika počítaná na lokalitu</div>
+      </div>
+    </div>
+    <div class="config-row">
+      {% if ma_bateriu %}
+      <div class="config-card">
+        <div class="ck-label">Batériové úložisko</div>
+        <div class="ck-value">{{ bateria_kwh_sk }} kWh</div>
+        <div class="ck-sub">LFP technológia, životnosť 10+ rokov, ukladanie prebytkov pre večerné hodiny</div>
+      </div>
+      {% endif %}
+      {% if ma_wallbox %}
+      <div class="config-card">
+        <div class="ck-label">Wallbox pre EV</div>
+        <div class="ck-value">{{ wallbox_short }}</div>
+        <div class="ck-sub">Inteligentná integrácia s FVE — nabíjanie zo slnka, nie zo siete</div>
+      </div>
+      {% endif %}
+      <div class="config-card">
+        <div class="ck-label">SmartMeter + monitoring</div>
+        <div class="ck-value">3-fázové meranie</div>
+        <div class="ck-sub">Aplikácia v mobile, sledovanie výroby a spotreby v reálnom čase</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ STRANA 4 — BENEFITY (storytelling) ============ -->
+<div class="page">
+  <div class="page-header">
+    <div class="page-header-cell left">energo<span class="accent">vision</span></div>
+    <div class="page-header-cell right page-header-meta">
+      Cenová ponuka  ·  {{ cislo_ponuky }}  ·  {{ today }}
+    </div>
+  </div>
+
+  <div class="section-eyebrow">03  ·  Hlavné benefity</div>
+  <h2 class="section-title">Čo Vám táto investícia reálne prinesie
+    <small>Nie sú to len čísla v tabuľke. Toto sa zmení vo Vašej domácnosti od dňa, keď FVE pustíme.</small>
+  </h2>
+
+  <div class="benefits">
+    <div class="benefit-row">
+      <div class="benefit-num"><div class="benefit-num-circle">1</div></div>
+      <div class="benefit-body">
+        <div class="benefit-title">Ušetríte približne {{ "{:,}".format(rocne_uspora|round|int).replace(',',' ') }} € ročne — a postupom času viac</div>
+        <div class="benefit-text">{{ benefit_uspora | safe }}</div>
+      </div>
+    </div>
+
+    <div class="benefit-row">
+      <div class="benefit-num"><div class="benefit-num-circle">2</div></div>
+      <div class="benefit-body">
+        <div class="benefit-title">Nezávislosť od cien elektriny v sieti</div>
+        <div class="benefit-text">{{ benefit_nezavislost | safe }}</div>
+      </div>
+    </div>
+
+    <div class="benefit-row">
+      <div class="benefit-num"><div class="benefit-num-circle">3</div></div>
+      <div class="benefit-body">
+        <div class="benefit-title">{% if ma_bateriu %}Vlastná elektrina aj večer{% else %}Pripravené na rozšírenie batériou{% endif %}</div>
+        <div class="benefit-text">{{ benefit_batería | safe }}</div>
+      </div>
+    </div>
+
+    <div class="benefit-row">
+      <div class="benefit-num"><div class="benefit-num-circle">4</div></div>
+      <div class="benefit-body">
+        <div class="benefit-title">Zhodnotenie nehnuteľnosti</div>
+        <div class="benefit-text">Rodinné domy s nainštalovanou FVE majú na trhu vyššiu hodnotu o niekoľko tisíc eur. Pri prípadnom predaji
+          je to plus, ktoré kupujúci ocení — najmä v ére rastúcich cien energií.</div>
+      </div>
+    </div>
+
+    <div class="benefit-row">
+      <div class="benefit-num"><div class="benefit-num-circle">5</div></div>
+      <div class="benefit-body">
+        <div class="benefit-title">Pokoj a komfort, žiadna administratíva navyše</div>
+        <div class="benefit-text">Vybavenie pripojenia k distribučnej sieti, žiadosť o dotáciu Zelená domácnostiam, revíziu
+          aj registráciu malého zdroja vybavujeme za Vás. Vy sa staráte o domácnosť — my o všetko ostatné.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ STRANA 5 — CENA + NÁVRATNOSŤ ============ -->
+<div class="page">
+  <div class="page-header">
+    <div class="page-header-cell left">energo<span class="accent">vision</span></div>
+    <div class="page-header-cell right page-header-meta">
+      Cenová ponuka  ·  {{ cislo_ponuky }}  ·  {{ today }}
+    </div>
+  </div>
+
+  <div class="section-eyebrow">04  ·  Cena</div>
+  <h2 class="section-title">Vaša investícia
+    <small>Pevná cena na komplet, vrátane materiálu, práce, projekcie, revízie a vybavenia dotácie. Po obhliadke sa fixuje v zmluve.</small>
+  </h2>
+
+  <div class="price-block">
+    <div class="price-row">
+      <div class="label">Fotovoltické zariadenie {{ vykon_kwp_sk }} kWp{% if ma_bateriu %} + batéria {{ bateria_kwh_sk }} kWh{% endif %}{% if ma_wallbox %} + wallbox{% endif %}</div>
+      <div class="value">{{ cena_bez_dph_eur }}</div>
+    </div>
+    <div class="price-row">
+      <div class="label">DPH 23 %</div>
+      <div class="value">{{ dph_eur }}</div>
+    </div>
+    <div class="price-row" style="border-top: 2px solid rgba(0,0,0,0.15); margin-top: 2mm; padding-top: 4mm;">
+      <div class="label"><strong>Cena s DPH</strong></div>
+      <div class="value"><strong>{{ cena_s_dph_eur }}</strong></div>
+    </div>
+    {% if dotacia > 0 %}
+    <div class="price-row discount">
+      <div class="label">− Dotácia Zelená domácnostiam</div>
+      <div class="value">− {{ dotacia_eur }}</div>
+    </div>
+    {% endif %}
+    {% if zlava > 0 %}
+    <div class="price-row discount">
+      <div class="label">− Zľava</div>
+      <div class="value">− {{ zlava_eur }}</div>
+    </div>
+    {% endif %}
+    <div class="price-row final">
+      <div class="label">Vaša cena po dotácii</div>
+      <div class="value">{{ cena_finalna_eur }}</div>
+    </div>
+  </div>
+
+  <p class="price-note">Cena platí 30 dní od dátumu vystavenia. Sadzba DPH 23 % podľa platnej legislatívy SR.</p>
+
+  <h3>Návratnosť investície v skratke</h3>
+  <p class="lead-text">{{ navratnost_text | safe }}</p>
+  <p class="lead-text" style="font-size: 10pt; color: var(--gray);">Detailné grafy návratnosti, mesačnej výroby a porovnania nákladov nájdete na ďalšej strane.</p>
+</div>
+
+<!-- ============ STRANA 6 — GRAFY (3 spolu) ============ -->
+<div class="page">
+  <div class="page-header">
+    <div class="page-header-cell left">energo<span class="accent">vision</span></div>
+    <div class="page-header-cell right page-header-meta">
+      Cenová ponuka  ·  {{ cislo_ponuky }}  ·  {{ today }}
+    </div>
+  </div>
+
+  <div class="section-eyebrow">05  ·  Výroba & úspora v čase</div>
+  <h2 class="section-title" style="font-size: 18pt; margin-bottom: 4mm;">Vaša FVE v číslach
+    <small style="font-size: 10pt;">Tri pohľady na rovnakú vec — koľko vyrobí, koľko ušetrí a ako rýchlo sa Vám vráti.</small>
+  </h2>
+
+  <div class="chart-block">
+    <img src="{{ chart_uspora }}" style="max-height: 95mm; width: auto; max-width: 100%; margin: 0 auto; display: block;">
+    <div class="chart-caption">25-ročná kumulatívna úspora pri 3 % ročnom raste cien elektriny a 0,5 % degradácii. Návratnosť počítaná z ceny po dotácii.</div>
+  </div>
+
+  <div class="chart-block" style="margin-top: 8mm;">
+    <img src="{{ chart_vyroba }}" style="max-height: 95mm; width: auto; max-width: 100%; margin: 0 auto; display: block;">
+    <div class="chart-caption">Predpokladaná mesačná výroba elektrárne {{ vykon_kwp_sk }} kWp. Najvyššia produkcia od marca do septembra.</div>
+  </div>
+</div>
+
+<!-- ============ STRANA 7 — V CENE & ZÁRUKY + PREČO MY ============ -->
+<div class="page">
+  <div class="page-header">
+    <div class="page-header-cell left">energo<span class="accent">vision</span></div>
+    <div class="page-header-cell right page-header-meta">
+      Cenová ponuka  ·  {{ cislo_ponuky }}  ·  {{ today }}
+    </div>
+  </div>
+
+  <div class="section-eyebrow">06  ·  V cene & záruky</div>
+  <h2 class="section-title">Čo všetko od nás dostávate</h2>
+
+  <div class="check-grid">
+    <div class="check-card">
+      <div class="check-title">Súčasťou ceny</div>
+      <ul class="check-list">
+        <li>Komponenty zo zostavy: panely, menič{% if ma_bateriu %}, batéria{% endif %}, konštrukcia, kabeláž, ochrany, smartmeter</li>
+        <li>Montáž a uvedenie do prevádzky vlastným tímom</li>
+        <li>Revízna správa elektroinštalácie</li>
+        <li>Vybavenie pripojenia do distribučnej siete</li>
+        {% if dotacia > 0 %}<li>Vybavenie žiadosti o dotáciu Zelená domácnostiam</li>{% endif %}
+        <li>Doprava materiálu na miesto inštalácie</li>
+        <li>Inštalácia mobilnej aplikácie + zaškolenie</li>
+        <li><strong>Bezplatná prvá ročná kontrola</strong> po 12 mesiacoch (vizuálna kontrola, dotiahnutie, monitoring, čistota)</li>
+      </ul>
+    </div>
+    <div class="check-card">
+      <div class="check-title">Záruky</div>
+      <ul class="check-list">
+        <li><strong>25 rokov</strong> na lineárny pokles výkonu panelov</li>
+        <li><strong>12 rokov</strong> produktová záruka na panely</li>
+        <li><strong>10 rokov</strong> na fotovoltický menič</li>
+        {% if ma_bateriu %}<li><strong>10 rokov</strong> na batériové úložisko</li>{% endif %}
+        <li><strong>12 rokov</strong> na našu montáž</li>
+        <li><strong>10 rokov</strong> na konštrukciu</li>
+        <li>Pozáručný servis a podpora po skončení záruk</li>
+      </ul>
+    </div>
+  </div>
+
+</div>
+
+<!-- ============ STRANA 8 — PREČO SI VYBRAŤ ENERGOVISION ============ -->
+<div class="page">
+  <div class="page-header">
+    <div class="page-header-cell left">energo<span class="accent">vision</span></div>
+    <div class="page-header-cell right page-header-meta">
+      Cenová ponuka  ·  {{ cislo_ponuky }}  ·  {{ today }}
+    </div>
+  </div>
+
+  <div class="section-eyebrow">07  ·  Prečo si vybrať Energovision</div>
+  <h2 class="section-title">Päť dôvodov, prečo to nerobiť kompromisom
+    <small>Fotovoltika nie je len o paneloch. Je to o tom, kto Vám ju navrhol, namontoval a kto Vám zdvihne telefón o päť rokov, keď budete potrebovať pomoc.</small>
+  </h2>
+
+  <div class="why-row">
+    <div class="why-icon-cell"><div class="why-icon-circle">1</div></div>
+    <div class="why-body">
+      <div class="why-h">Vlastný realizačný tím — nie subdodávatelia</div>
+      <div class="why-t">Montáž robia naši ľudia, nie najatá brigáda. Vďaka tomu kontrolujeme kvalitu, držíme termíny a ak niečo počas záruky treba doriešiť, prídeme my — nie niekto, koho už nezohnáte.</div>
+    </div>
+  </div>
+
+  <div class="why-row">
+    <div class="why-icon-cell"><div class="why-icon-circle">2</div></div>
+    <div class="why-body">
+      <div class="why-h">Certifikovaný zhotoviteľ SIEA pre Zelenú domácnostiam</div>
+      <div class="why-t">Sme zaregistrovaní v zozname zhotoviteľov SIEA. Žiadosť o dotáciu pripravíme a podáme za Vás — vrátane podkladov, splnomocnení a komunikácie s úradom.</div>
+    </div>
+  </div>
+
+  <div class="why-row">
+    <div class="why-icon-cell"><div class="why-icon-circle">3</div></div>
+    <div class="why-body">
+      <div class="why-h">Komplexný servis pod jednou strechou</div>
+      <div class="why-t">FVE, batérie, wallboxy, revízie, údržba aj bleskozvody. Keď potrebujete o päť rokov rozšíriť batériu alebo pridať wallbox, voláte tomu istému človeku, ktorý Vám systém staval.</div>
+    </div>
+  </div>
+
+  <div class="why-row">
+    <div class="why-icon-cell"><div class="why-icon-circle">4</div></div>
+    <div class="why-body">
+      <div class="why-h">Komponenty z overených značiek, nie no-name</div>
+      <div class="why-t">Pracujeme so značkami, ktoré majú zastúpenie na Slovensku a budú existovať aj o 15 rokov. Pri reklamácii nemusíte hľadať dovozcu zo zahraničia — riešime to my.</div>
+    </div>
+  </div>
+
+  <div class="why-row">
+    <div class="why-icon-cell"><div class="why-icon-circle">5</div></div>
+    <div class="why-body">
+      <div class="why-h">Transparentná cena, žiadne prekvapenia po podpise</div>
+      <div class="why-t">Cena v tejto ponuke je pevná. Nemeníme ju kvôli „nečakaným nákladom" počas montáže. Ak by sa pri obhliadke zistilo niečo neštandardné (napr. potreba výmeny rozvádzača), prediskutujeme to s Vami pred zmluvou — nikdy potom.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ STRANA 8 — HARMONOGRAM + UZATVORENIE + CTA ============ -->
+<div class="page">
+  <div class="page-header">
+    <div class="page-header-cell left">energo<span class="accent">vision</span></div>
+    <div class="page-header-cell right page-header-meta">
+      Cenová ponuka  ·  {{ cislo_ponuky }}  ·  {{ today }}
+    </div>
+  </div>
+
+  <div class="section-eyebrow">08  ·  Ako prebieha realizácia</div>
+  <h2 class="section-title">Od podpisu po prvú vlastnú kWh — 8 až 12 týždňov
+    <small>Najviac času trvá vybavenie pripojenia od distribučky. Samotná montáž je otázka 1–3 dní.</small>
+  </h2>
+
+  <div class="timeline">
+    <div class="timeline-item">
+      <div class="timeline-when">Deň D  ·  Podpis zmluvy</div>
+      <div class="timeline-what">Po Vašom súhlase pripravíme zmluvu o dielo a zálohovú faktúru.</div>
+    </div>
+    <div class="timeline-item">
+      <div class="timeline-when">D + 1–2 týždne  ·  Obhliadka & projekt</div>
+      <div class="timeline-what">Stretneme sa u Vás doma, zameriame strechu a pripravíme projektovú dokumentáciu.</div>
+    </div>
+    <div class="timeline-item">
+      <div class="timeline-when">D + 4–8 týždňov  ·  Pripojenie</div>
+      <div class="timeline-what">Vybavíme zmluvu o pripojení s príslušnou distribučnou spoločnosťou (ZSD/SSD/VSD) a registráciu malého zdroja.</div>
+    </div>
+    <div class="timeline-item">
+      <div class="timeline-when">D + 8–10 týždňov  ·  Montáž</div>
+      <div class="timeline-what">Inštalácia panelov, meniča{% if ma_bateriu %}, batérie{% endif %} a kabeláže — typicky 1–3 dni.</div>
+    </div>
+    <div class="timeline-item">
+      <div class="timeline-when">D + 10–11 týždňov  ·  Revízia & spustenie</div>
+      <div class="timeline-what">Revízia, uvedenie do prevádzky, zaškolenie na mobilnú aplikáciu.</div>
+    </div>
+    <div class="timeline-item">
+      <div class="timeline-when">D + 11+ týždňov  ·  Doplatok & sledovanie</div>
+      <div class="timeline-what">Záverečná faktúra. Začínate vyrábať vlastnú elektrinu a sledovať to v aplikácii.</div>
+    </div>
+  </div>
+
+  <h3>Platobné podmienky</h3>
+  <p>{{ platby }}</p>
+
+  <div class="crosssell">
+    <div class="title">Chcete to ešte rozšíriť?</div>
+    <ul>
+      {% if not ma_bateriu %}<li><strong>Doplnenie batériového úložiska</strong> — zvýšenie samospotreby z ~70 % na ~90 %</li>{% endif %}
+      {% if not ma_wallbox %}<li><strong>Wallbox pre elektromobil</strong> — nabíjanie priamo zo slnka</li>{% endif %}
+      <li><strong>Pravidelná revízia</strong> elektroinštalácie a FVE (každé 4 roky)</li>
+      <li><strong>Údržbová zmluva od 80 €/rok</strong> — ročná diaľková kontrola monitoringu + 1 fyzická obhliadka, prioritný servis pri poruche</li>
+      <li><strong>Bleskozvod</strong> pre rodinný dom (ak chýba)</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ============ STRANA 9 — UZATVORENIE + CTA ============ -->
+<div class="page">
+  <div class="page-header">
+    <div class="page-header-cell left">energo<span class="accent">vision</span></div>
+    <div class="page-header-cell right page-header-meta">
+      Cenová ponuka  ·  {{ cislo_ponuky }}  ·  {{ today }}
+    </div>
+  </div>
+
+  <div class="section-eyebrow">09  ·  Ďalší krok</div>
+  <h2 class="section-title">Pripravený urobiť rozhodnutie?
+    <small>Žiadne dlhé čakanie, žiadny tlak. Stačí jeden telefonát alebo email a posunieme sa k bezplatnej obhliadke.</small>
+  </h2>
+
+  <p class="lead-text">{{ uzatvorenie_p1 | safe }}</p>
+  <p class="lead-text">{{ uzatvorenie_p2 | safe }}</p>
+
+  <div class="cta-block">
+    <div class="title">Volajte alebo napíšte</div>
+    <h3>{{ obch.meno }}</h3>
+    <div class="lead">{{ obch.funkcia }}, Energovision, s.r.o. — odpovedám do 24 hodín v pracovný deň.</div>
+    <div class="cta-buttons">
+      <div class="cta-button">
+        <div class="ic">Telefón</div>
+        <div class="v">{{ obch.tel }}</div>
+      </div>
+      <div class="cta-button">
+        <div class="ic">E-mail</div>
+        <div class="v">{{ obch.email }}</div>
+      </div>
+    </div>
+  </div>
+
+  <h3 style="margin-top: 6mm;">Tri možnosti, ako môžeme pokračovať</h3>
+  <div class="benefits benefits-tight" style="margin-bottom: 6mm;">
+    <div class="benefit-row">
+      <div class="benefit-num"><div class="benefit-num-circle">A</div></div>
+      <div class="benefit-body">
+        <div class="benefit-title">Súhlasíte s ponukou</div>
+        <div class="benefit-text">Stačí odpísať „súhlasím" alebo zavolať. Dohodneme termín obhliadky a pripravíme zmluvu.</div>
+      </div>
+    </div>
+    <div class="benefit-row">
+      <div class="benefit-num"><div class="benefit-num-circle">B</div></div>
+      <div class="benefit-body">
+        <div class="benefit-title">Niečo treba upraviť</div>
+        <div class="benefit-text">Iný výkon, iné komponenty, iné platobné podmienky? Povedzte čo a do 48 hodín pošleme aktualizovanú verziu.</div>
+      </div>
+    </div>
+    <div class="benefit-row">
+      <div class="benefit-num"><div class="benefit-num-circle">C</div></div>
+      <div class="benefit-body">
+        <div class="benefit-title">Potrebujete čas alebo obhliadku</div>
+        <div class="benefit-text">Bezplatná obhliadka u Vás doma trvá 30–45 minút. Po nej budete vedieť presne, čo a za koľko — bez záväzku.</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>
