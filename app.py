@@ -551,7 +551,7 @@ def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchod
     </table>
     <hr style="margin:20px 0;border:none;border-top:1px solid #ddd;"/>
     <p style="font-size:12px;color:#888;">
-      <strong>Energovision s.r.o.</strong> | IČO: 53 036 280 | Slovenská asociácia fotovoltického priemyslu (SAPI) |
+      <strong>Energovision s.r.o.</strong> | IČO: 53 036 280 |
       <a href="https://energovision.sk" style="color:#888;">energovision.sk</a>
     </p>
     """
