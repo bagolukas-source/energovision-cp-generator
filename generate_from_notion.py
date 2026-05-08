@@ -627,11 +627,16 @@ def lead_from_notion(notion_props, variant):
         wallbox_kod = WALLBOX_MAP.get(notion_props.get("Wallbox (typ)"), "WBX-002")
 
     # ID ponuky — formát EV-26-XXX-{Variant}
+    # Akceptuje: number, "150", "EV-150", "B2C-150", atď. — extrahuje prvé číslo
     id_p = notion_props.get("ID ponuky")
-    try:
-        id_int = int(id_p)
-    except (TypeError, ValueError):
+    if id_p is None or id_p == "":
         id_int = 0
+    else:
+        try:
+            id_int = int(id_p)
+        except (TypeError, ValueError):
+            _m_id = re.search(r"\d+", str(id_p))
+            id_int = int(_m_id.group(0)) if _m_id else 0
     cislo_ponuky = f"EV-26-{id_int:03d}-{variant}" if id_int else f"EV-26-{variant}"
 
     # Telefón / email z Notion
