@@ -36,7 +36,7 @@ KONSTRUKCIA_MAP = {
     "Škridla": "KON-001",
     "Plech kombivrut": "KON-002",
     "Falcový plech": "KON-003",
-    "Plochá strecha — J 25°": "KON-004",
+    "Plochá strecha — J 13°": "KON-004",
     "Plochá strecha — V/Z 10°": "KON-005",
 }
 BATERIA_MAP = {
@@ -573,7 +573,16 @@ def lead_from_notion(notion_props, variant):
     panel_kod = PANEL_MAP.get(notion_props.get("Panel"), "PAN-002")
     inv_kod = INVERTOR_MAP.get(notion_props.get("Menič"), "INV-001")
     kon_kod = KONSTRUKCIA_MAP.get(notion_props.get("Konštrukcia (typ)"), "KON-004")
-    pocet_panelov = int(notion_props.get("Počet panelov") or 24)
+    # Počet panelov — akceptuje Number (int/float) aj Select label ("12", "12 ks", "12 panelov")
+    _val = notion_props.get("Počet panelov")
+    if _val is None or _val == "":
+        pocet_panelov = 24
+    else:
+        try:
+            pocet_panelov = int(_val)
+        except (TypeError, ValueError):
+            _m = re.search(r"\d+", str(_val))
+            pocet_panelov = int(_m.group(0)) if _m else 24
 
     # Wp panela na výpočet kWp
     wp = 540 if "540" in (notion_props.get("Panel") or "") else 470
@@ -902,7 +911,7 @@ if __name__ == "__main__":
         "Panel": "LONGi 540 Wp",
         "Menič": "Solinteg MHT-10K-25",
         "Počet panelov": 24,
-        "Konštrukcia (typ)": "Plochá strecha — J 25°",
+        "Konštrukcia (typ)": "Plochá strecha — J 13°",
         "Batéria (typ)": "Pylontech Force H3 — 5.12 kWh",
         "Batéria (kWh)": 10.24,
         "Wallbox (typ)": "Solinteg 11 kW (3F)",
