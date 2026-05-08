@@ -50,11 +50,7 @@ DEFAULTS = {
     "degradacia_pct_rok": 0.5,      # ročná degradácia panelov %
     "vyroba_kwh_per_kwp": 1075,     # SR priemer pre J orientáciu
     "narast_cien_el_pct_rok": 3.0,  # ročný nárast ceny elektriny
-    "dotacia_eur_per_kwp": 350,     # Zelená domácnostiam — sadzba pre FVE
-    "dotacia_max_eur": 3500,        # Strop pre FVE časť
-    "dotacia_bateria_eur_per_kwh": 200,
-    "dotacia_bateria_max_eur": 1800,
-    "dotacia_max_total": 3500,      # CELKOVÝ strop dotácie (FVE + BESS dokopy)
+    "dotacia_flat_eur": 1500,       # Univerzálna dotácia (zjednodušený výpočet)
     "obchodnik": {
         "meno": "Dominik Galaba",
         "funkcia": "Office & Administration Manager",
@@ -203,12 +199,8 @@ def vyrataj_ceny(konfig, lead):
 
     # Dotácia Zelená domácnostiam — celkový strop 3 500 € na inštaláciu (FVE + BESS dokopy)
     if lead.get("dotacia", True):
-        dotacia_fve = min(konfig["vykon_kwp"] * DEFAULTS["dotacia_eur_per_kwp"], DEFAULTS["dotacia_max_eur"])
-        dotacia_bat = 0
-        if konfig["ma_bateriu"]:
-            dotacia_bat = min(konfig["bateria_kwh"] * DEFAULTS["dotacia_bateria_eur_per_kwh"], DEFAULTS["dotacia_bateria_max_eur"])
-        # Celkový strop
-        dotacia = min(dotacia_fve + dotacia_bat, DEFAULTS["dotacia_max_total"])
+        # Univerzálna dotácia 1500 € (zjednodušený výpočet)
+        dotacia = DEFAULTS["dotacia_flat_eur"]
     else:
         dotacia = 0
 
