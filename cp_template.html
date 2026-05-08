@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="sk">
 <head>
@@ -59,6 +60,40 @@
     padding: 18mm 18mm 0 18mm;
   }
   .cover-header img { width: 100%; max-width: 175mm; display: block; }
+  .cover-header-new {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-bottom: 8mm;
+    border-bottom: 2px solid var(--green);
+    margin-bottom: 4mm;
+  }
+  .cover-header-left { display: flex; flex-direction: column; gap: 2mm; }
+  .cover-header-badge {
+    text-transform: uppercase;
+    letter-spacing: 3px;
+    font-size: 9pt;
+    color: var(--green-dark);
+    font-weight: 700;
+  }
+  .cover-header-meta {
+    font-size: 9pt;
+    color: var(--gray);
+  }
+  .cover-header-right { text-align: right; }
+  .cover-logo {
+    font-size: 28pt;
+    font-weight: 800;
+    letter-spacing: -1pt;
+    color: var(--black);
+    line-height: 1;
+  }
+  .cover-logo .accent { color: var(--green); }
+  .cover-tagline {
+    font-size: 9pt;
+    color: var(--gray);
+    margin-top: 2mm;
+  }
   .cover-hero {
     margin-top: 12mm;
   }
@@ -421,12 +456,18 @@
 
 <!-- ============ STRANA 1 — TITULKA + ÚVOD ============ -->
 <div class="page cover">
-  <div class="cover-header">
-    <img src="{{ header_img }}" alt="Energovision">
+  <div class="cover-header-new">
+    <div class="cover-header-left">
+      <span class="cover-header-badge">CENOVÁ PONUKA</span>
+      <span class="cover-header-meta">{{ cislo_ponuky }} · {{ today }}</span>
+    </div>
+    <div class="cover-header-right">
+      <div class="cover-logo">energo<span class="accent">vision</span></div>
+      <div class="cover-tagline">Moderné energetické riešenia, ktoré hľadáte</div>
+    </div>
   </div>
 
   <div class="cover-hero">
-    <div class="cover-eyebrow">Cenová ponuka  ·  {{ today }}</div>
     <h1 class="cover-title">Vlastná elektrina<br><span class="accent">priamo z Vašej strechy</span></h1>
     <div class="cover-sub">
       Návrh fotovoltickej elektrárne {{ vykon_kwp_sk }} kWp pripravený osobne pre Vás —
@@ -505,11 +546,6 @@
         <div class="ck-label">Strecha</div>
         <div class="ck-value">{{ konstrukcia_short }}</div>
         <div class="ck-sub">{{ orientacia_text }}</div>
-      </div>
-      <div class="config-card">
-        <div class="ck-label">Distribučná spoločnosť</div>
-        <div class="ck-value">{{ distribucka_short }}</div>
-        <div class="ck-sub">{{ distribucka_full }}</div>
       </div>
     </div>
   </div>
@@ -647,7 +683,7 @@
       <div class="benefit-num"><div class="benefit-num-circle">5</div></div>
       <div class="benefit-body">
         <div class="benefit-title">Pokoj a komfort, žiadna administratíva navyše</div>
-        <div class="benefit-text">Vybavovanie pripojenia s {{ distribucka_short }}, žiadosť o dotáciu Zelená domácnostiam, revíziu
+        <div class="benefit-text">Vybavenie pripojenia k distribučnej sieti, žiadosť o dotáciu Zelená domácnostiam, revíziu
           aj registráciu malého zdroja vybavujeme za Vás. Vy sa staráte o domácnosť — my o všetko ostatné.</div>
       </div>
     </div>
@@ -853,7 +889,7 @@
     </div>
     <div class="timeline-item">
       <div class="timeline-when">D + 4–8 týždňov  ·  Pripojenie</div>
-      <div class="timeline-what">Vybavíme zmluvu o pripojení s {{ distribucka_full }} a registráciu malého zdroja.</div>
+      <div class="timeline-what">Vybavíme zmluvu o pripojení s príslušnou distribučnou spoločnosťou (ZSD/SSD/VSD) a registráciu malého zdroja.</div>
     </div>
     <div class="timeline-item">
       <div class="timeline-when">D + 8–10 týždňov  ·  Montáž</div>
