@@ -38,8 +38,8 @@ def short(name, max_len=42):
 
 
 def shorten_konstrukcia(name):
-    """'Rovná strecha Juh — balastová konštrukcia 25°' → 'Plochá strecha (J, 25°)'"""
-    if "Rovná" in name and "Juh" in name: return "Plochá strecha (J, 25°)"
+    """'Rovná strecha Juh — balastová konštrukcia 13°' → 'Plochá strecha (J, 13°)'"""
+    if "Rovná" in name and "Juh" in name: return "Plochá strecha (J, 13°)"
     if "Rovná" in name: return "Plochá strecha (V/Z, 10°)"
     if "Škridla" in name: return "Šikmá — háky na škridle"
     if "Plech" in name and "Kombi" in name: return "Šikmá — kombivrut na plech"
