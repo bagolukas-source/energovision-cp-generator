@@ -290,7 +290,7 @@ def vyrob_html_pdf(lead, konfig, ceny, navratnost, grafy, out_pdf):
         "ma_bateriu": konfig["ma_bateriu"],
         "ma_wallbox": konfig["ma_wallbox"],
         "bateria_kwh_sk": f"{konfig['bateria_kwh']:.2f}".replace(".", ",") if konfig["ma_bateriu"] else "",
-        "wallbox_short": "11 kW 3F" if konfig["ma_wallbox"] else "",
+        "wallbox_short": _wallbox_label(lead.get("wallbox_kod"), cennik) if konfig["ma_wallbox"] else "",
         "cena_bez_dph_eur": fmt_eur(ceny["cena_bez_dph"]),
         "dph_eur": fmt_eur(ceny["cena_s_dph"] - ceny["cena_bez_dph"]),
         "cena_s_dph_eur": fmt_eur(ceny["cena_s_dph"]),
