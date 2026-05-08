@@ -169,7 +169,7 @@ def vyrob_kombinovany_command(lead, results, out_command_path, ev_id, vek_dni=0)
     `results` = list dictov (cena_s_dph, cena_finalna, navratnost_rokov, pdf, ma_bateriu, ma_wallbox)
     `vek_dni` = vek leadu v dňoch (pre age-aware úvod)
     """
-    obch = lead.get("obchodnik", {"meno": "Lukáš Bago", "tel": "+421 918 187 762", "email": "bago.lukas@gmail.com"})
+    obch = lead.get("obchodnik", DEFAULT_OBCHODNIK)
     priezvisko = lead["meno"].split()[-1]
     mesto = lead["mesto"]
 
@@ -417,7 +417,7 @@ def vyrob_outlook_draft_command(lead, konfig, ceny, navratnost, pdf_path, out_co
 
     Mac path zodpovedajúca lokálne (treba zameniť /sessions/... → /Users/lukasbago/...).
     """
-    obch = lead.get("obchodnik", {"meno": "Lukáš Bago", "tel": "+421 918 187 762", "email": "bago.lukas@gmail.com"})
+    obch = lead.get("obchodnik", DEFAULT_OBCHODNIK)
     priezvisko = lead["meno"].split()[-1]
     mesto = lead["mesto"]
     rocna_uspora = navratnost.get("rocne_uspora_eur", 0)
@@ -522,6 +522,38 @@ APPLESCRIPT
     with open(out_command_path, "w", encoding="utf-8") as f:
         f.write(script)
     os.chmod(out_command_path, 0o755)
+
+
+# ============================================================
+# OBCHODNÍCI — mapovanie Notion select → kontaktné údaje
+# ============================================================
+OBCHODNICI = {
+    "Dominik Galaba": {
+        "meno": "Dominik Galaba",
+        "funkcia": "Office & Administration Manager",
+        "tel": "+421 917 424 564",
+        "email": "dominik.galaba@energovision.sk",
+    },
+    "Pavol Kaprál": {
+        "meno": "Ing. Pavol Kaprál",
+        "funkcia": "Sale & Project Manager",
+        "tel": "+421 911 700 727",
+        "email": "pavol.kapral@energovision.sk",
+    },
+    "Andrej Herman": {
+        "meno": "Andrej Herman",
+        "funkcia": "Sales Manager",
+        "tel": "+421 948 887 979",
+        "email": "andrej.herman@energovision.sk",
+    },
+    "Lukáš Bago": {
+        "meno": "Lukáš Bago",
+        "funkcia": "Konateľ spoločnosti",
+        "tel": "+421 918 187 762",
+        "email": "lukas.bago@energovision.sk",
+    },
+}
+DEFAULT_OBCHODNIK = OBCHODNICI["Dominik Galaba"]
 
 
 def lead_from_notion(notion_props, variant):
@@ -630,12 +662,7 @@ def lead_from_notion(notion_props, variant):
         "dotacia": True,
         "platby": "60 % zálohová faktúra vopred  ·  30 % po nainštalovaní elektrárne  ·  10 % po protokolárnom odovzdaní",
         "cislo_ponuky": cislo_ponuky,
-        "obchodnik": {
-            "meno": "Lukáš Bago",
-            "funkcia": "CEO",
-            "tel": "+421 918 187 762",
-            "email": "bago.lukas@gmail.com",
-        },
+        "obchodnik": OBCHODNICI.get(notion_props.get("Obchodník") or "", DEFAULT_OBCHODNIK),
     }
 
 
