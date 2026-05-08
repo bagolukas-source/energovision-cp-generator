@@ -273,6 +273,248 @@ def generate_pdf():
 
 
 # ============================================================
+# WEBHOOK 3: EMAIL TEMPLATE BUILDER
+# Trigger: Notion Button "📧 Odoslať email"
+# Vstup: { "page_id": "..." }
+# Výstup: { "to": "...", "subject": "...", "body_html": "...",
+#          "attachments": [{"name": "...", "dropbox_path": "..."}],
+#          "obchodnik": {...}, "variants_sent": ["A","B"] }
+# ============================================================
+@app.route("/webhook/email-template", methods=["POST"])
+@require_secret
+def email_template():
+    body = request.get_json(silent=True) or {}
+    page_id = body.get("page_id")
+    if not page_id:
+        return jsonify({"error": "missing page_id"}), 400
+
+    log.info(f"Email template pre page {page_id}")
+    page = notion_get_page(page_id)
+    notion_props = notion_props_to_flat(page)
+
+    # Detekuj zakliknuté varianty z checkboxov
+    variants_active = []
+    if notion_props.get("Variant A - FVE") == "__YES__":
+        variants_active.append("A")
+    if notion_props.get("Variant B - FVE + BESS") == "__YES__":
+        variants_active.append("B")
+    if notion_props.get("Variant C - FVE + BESS + Wallbox") == "__YES__":
+        variants_active.append("C")
+
+    if not variants_active:
+        return jsonify({"error": "Žiadny variant nie je zaklik­nutý (Variant A/B/C checkbox)"}), 400
+
+    # Lead data — z A variantu (kvôli základným údajom; ceny berieme zo všetkých)
+    from generate_from_notion import lead_from_notion, OBCHODNICI, DEFAULT_OBCHODNIK
+    lead_a = lead_from_notion(notion_props, "A")
+
+    priezvisko = lead_a["meno"].split()[-1] if lead_a.get("meno") else "Zákazník"
+    mesto = lead_a.get("mesto", "")
+    email_zakaznika = lead_a.get("email") or notion_props.get("Email") or ""
+    obchodnik = OBCHODNICI.get(notion_props.get("Obchodník") or notion_props.get("Obchodnik") or "", DEFAULT_OBCHODNIK)
+
+    vykon_kwp = lead_a.get("vykon_kwp", 0)
+    bateria_kwh = float(notion_props.get("Batéria výkon") or 0)
+
+    # Ceny zo všetkých zakliknutých variant
+    ceny = {
+        "A": notion_props.get("Cena A s DPH"),
+        "B": notion_props.get("Cena B s DPH"),
+        "C": notion_props.get("Cena C s DPH"),
+    }
+
+    # Filename pattern pre attachmenty (musí zodpovedať Dropbox uploadu)
+    from generate_from_notion import safe_filename
+    priezvisko_clean = safe_filename(priezvisko)
+    ev_id_root = lead_a.get("cislo_ponuky", "EV-26-XXX-A")[:-2]  # bez "-A" sufixu
+    folder_name = f"{ev_id_root}_{priezvisko_clean}"
+
+    attachments = []
+    for v in variants_active:
+        cislo = f"{ev_id_root}-{v}"
+        fname = f"{cislo}_{priezvisko_clean}.pdf"
+        attachments.append({
+            "name": fname,
+            "dropbox_path": f"/Obchod/B2C ponuky/{folder_name}/{fname}",
+        })
+
+    # ===== EMAIL TEMPLATES =====
+    subject = build_subject(priezvisko, mesto, variants_active)
+    body_html = build_email_body(priezvisko, mesto, vykon_kwp, bateria_kwh, ceny, variants_active, obchodnik)
+
+    return jsonify({
+        "success": True,
+        "to": email_zakaznika,
+        "subject": subject,
+        "body_html": body_html,
+        "attachments": attachments,
+        "obchodnik": obchodnik,
+        "variants_sent": variants_active,
+    })
+
+
+def build_subject(priezvisko, mesto, variants):
+    """Subject riadok — krátky, identifikovateľný."""
+    if len(variants) == 1:
+        v_label = {"A": "FVE", "B": "FVE + batéria", "C": "FVE + batéria + wallbox"}[variants[0]]
+        return f"Cenová ponuka {v_label} pre {priezvisko}, {mesto}"
+    return f"Cenová ponuka FVE — {priezvisko}, {mesto} ({len(variants)} varianty)"
+
+
+def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchodnik):
+    """
+    HTML email body s marketingovým textom (slovenský trh, 30y FVE expert tone).
+    Per-variant blocks + comparison + signature.
+    """
+    cena_a = ceny.get("A") or 0
+    cena_b = ceny.get("B") or 0
+    cena_c = ceny.get("C") or 0
+
+    # === INTRO ===
+    n_var = len(variants)
+    intro = f"""
+    <p>Dobrý deň pán/pani {priezvisko},</p>
+    <p>v nadväznosti na našu obhliadku Vám zasielam pripravenú cenovú ponuku pre fotovoltickú elektráreň
+    pre Vašu domácnosť v <strong>{mesto}</strong>.
+    Pripravil som {("jednu variantu" if n_var == 1 else f"{n_var} varianty")} podľa toho, ako chcete využiť energiu zo slnka.</p>
+    """
+
+    blocks = []
+
+    # === BLOCK A — iba FVE ===
+    if "A" in variants:
+        blocks.append(f"""
+        <h3 style="color:#1B5E3F;margin-top:24px;">Varianta A — fotovoltika {kwp} kWp</h3>
+        <p>Najlacnejšia cesta ako začať. Panely vyrábajú elektrinu cez deň, ktorú spotrebovávate priamo
+        — typicky pokryje 60-70 % Vašej dennej spotreby. Ideálne ak doma cez deň žije rodina, sušiete
+        bielizeň, varíte alebo používate tepelné čerpadlo na ohrev TÚV.</p>
+        <ul>
+          <li><strong>Investícia po dotácii Zelená domácnostiam:</strong> {cena_a:,.0f} € s DPH</li>
+          <li><strong>Návratnosť:</strong> 6–8 rokov pri dnešnej cene elektriny 0,16 €/kWh</li>
+          <li><strong>Záruka:</strong> 30 rokov na panely LONGi, 10 rokov na menič Huawei</li>
+          <li><strong>Inštalácia:</strong> 1–2 dni, bez stavebných úprav</li>
+        </ul>
+        <p style="background:#F0F8F4;padding:12px;border-left:4px solid #1B5E3F;font-size:14px;">
+          <strong>Pre slovenský trh:</strong> 60 % FVE inštalácií v rodinných domoch ide bez batérie.
+          Distribučné spoločnosti odkupujú prebytky za 0,04–0,06 €/kWh, čo postačí na základnú nezávislosť.
+        </p>
+        """.replace(",", " "))
+
+    # === BLOCK B — FVE + BESS ===
+    if "B" in variants:
+        bat_str = f"{bateria_kwh:.0f} kWh" if bateria_kwh else "batéria"
+        blocks.append(f"""
+        <h3 style="color:#1B5E3F;margin-top:24px;">Varianta B — fotovoltika {kwp} kWp + batéria {bat_str}</h3>
+        <p>Energetická nezávislosť — slnko ukladáte do batérie a používate večer/v noci/keď je zamračené.
+        Pri zlepšujúcich sa zľavách na komponenty je toto pre Slovákov dnes najatraktívnejšia voľba,
+        najmä pre rodiny ktoré sú doma <strong>predovšetkým ráno a večer</strong>.</p>
+        <ul>
+          <li><strong>Investícia po dotácii:</strong> {cena_b:,.0f} € s DPH</li>
+          <li><strong>Pokrytie spotreby:</strong> 85–95 % pri správnom dimenzovaní</li>
+          <li><strong>Návratnosť:</strong> 8–11 rokov</li>
+          <li><strong>Backup:</strong> pri výpadku siete batéria automaticky prepne dom na ostrov (voliteľne)</li>
+          <li><strong>Záruka batérie:</strong> 10 rokov / 6 000 cyklov</li>
+        </ul>
+        <p style="background:#F0F8F4;padding:12px;border-left:4px solid #1B5E3F;font-size:14px;">
+          <strong>Pozor na kalkulácie:</strong> Distribučné poplatky v SR rastú každoročne ~5–8 %.
+          Batéria vám teda chráni nielen pred volatilitou ceny silovej elektriny ale aj pred budúcim rastom
+          poplatkov za distribúciu.
+        </p>
+        """.replace(",", " "))
+
+    # === BLOCK C — FVE + BESS + Wallbox ===
+    if "C" in variants:
+        bat_str = f"{bateria_kwh:.0f} kWh" if bateria_kwh else "batéria"
+        blocks.append(f"""
+        <h3 style="color:#1B5E3F;margin-top:24px;">Varianta C — kompletné riešenie + wallbox pre elektromobil</h3>
+        <p>FVE {kwp} kWp + batéria {bat_str} + smart wallbox. Vaše auto sa nabíja zo slnka — zadarmo —
+        a wallbox automaticky reaguje na prebytky FVE. Riešenie pre rodiny s elektromobilom alebo plánom kúpiť
+        EV v najbližších rokoch.</p>
+        <ul>
+          <li><strong>Investícia:</strong> {cena_c:,.0f} € s DPH</li>
+          <li><strong>Úspora paliva:</strong> ~ 1 200 € ročne pri 15 000 km/rok namiesto benzínu</li>
+          <li><strong>Plná energetická nezávislosť:</strong> spotreba domu + auto z vlastnej elektriny</li>
+          <li><strong>Smart logika:</strong> wallbox sa zapne keď FVE má nadbytok, nezasahuje do siete</li>
+        </ul>
+        <p style="background:#F0F8F4;padding:12px;border-left:4px solid #1B5E3F;font-size:14px;">
+          <strong>Slovenský kontext:</strong> Pri raste cien benzínu/nafty a zvyšujúcich sa parkovných
+          poplatkoch vo veľkých mestách (Bratislava, Košice) sa elektromobil vracia za 4-6 rokov samostatne.
+          S vlastnou FVE ešte rýchlejšie.
+        </p>
+        """.replace(",", " "))
+
+    # === COMPARISON ak viac variant ===
+    comparison = ""
+    if len(variants) > 1:
+        rows = []
+        if "A" in variants:
+            rows.append(f"<tr><td>A — iba FVE</td><td style='text-align:right;'>{cena_a:,.0f} €</td><td>~7 rokov</td><td>Šetríš cez deň</td></tr>".replace(",", " "))
+        if "B" in variants:
+            rows.append(f"<tr><td>B — FVE + batéria</td><td style='text-align:right;'>{cena_b:,.0f} €</td><td>~9 rokov</td><td>Plná denná + nočná nezávislosť</td></tr>".replace(",", " "))
+        if "C" in variants:
+            rows.append(f"<tr><td>C — komplet + wallbox</td><td style='text-align:right;'>{cena_c:,.0f} €</td><td>~11 rokov</td><td>+ EV nabíjanie zadarmo</td></tr>".replace(",", " "))
+
+        comparison = f"""
+        <h3 style="color:#1B5E3F;margin-top:24px;">Krátke porovnanie</h3>
+        <table style="border-collapse:collapse;width:100%;font-size:14px;">
+          <thead>
+            <tr style="background:#1B5E3F;color:white;">
+              <th style="padding:8px;text-align:left;">Varianta</th>
+              <th style="padding:8px;text-align:right;">Cena s DPH</th>
+              <th style="padding:8px;text-align:left;">Návratnosť</th>
+              <th style="padding:8px;text-align:left;">Komfort</th>
+            </tr>
+          </thead>
+          <tbody>{"".join(rows)}</tbody>
+        </table>
+        <p style="font-size:14px;font-style:italic;color:#555;margin-top:8px;">
+        Moja osobná poznámka po 30 rokoch v energetike: ak nemáte konkrétny plán na elektromobil v
+        najbližších 2–3 rokoch, varianta B prináša najlepší pomer komfortu k investícii. Hybridný menič
+        v balíku umožňuje doplnenie batérie kedykoľvek neskôr — bez prerábania systému.
+        </p>
+        """
+
+    # === ATTACHMENTY popis ===
+    n_pdf = len(variants)
+    pdf_note = f"<p>V <strong>prílohe e-mailu</strong> nájdete {('detailný PDF dokument' if n_pdf == 1 else f'{n_pdf} PDF dokumenty')} s technickou špecifikáciou, vizualizáciou rozloženia panelov, návratnostnou kalkuláciou na 25 rokov a podmienkami inštalácie.</p>"
+
+    # === CTA + SIGNATURE ===
+    cta = f"""
+    <h3 style="color:#1B5E3F;margin-top:24px;">Ďalšie kroky</h3>
+    <p>Ponuka platí 30 dní. Ak Vás niektorá varianta zaujala alebo máte otázky, stačí mi odpísať alebo zavolať.
+    Dohodneme si <strong>bezplatnú obhliadku</strong> v termíne ktorý Vám vyhovuje — meriame strechu, navrhneme
+    optimálne rozloženie panelov a doladíme finálnu ponuku.</p>
+    <p style="margin-top:16px;">S úctou a pozdravom,</p>
+    <table style="margin-top:8px;font-size:14px;">
+      <tr>
+        <td style="padding:0;border:none;">
+          <strong style="font-size:15px;">{obchodnik["meno"]}</strong><br/>
+          <span style="color:#666;">{obchodnik["funkcia"]}</span><br/>
+          📞 <a href="tel:{obchodnik["tel"].replace(" ","")}" style="color:#1B5E3F;text-decoration:none;">{obchodnik["tel"]}</a><br/>
+          ✉️ <a href="mailto:{obchodnik["email"]}" style="color:#1B5E3F;text-decoration:none;">{obchodnik["email"]}</a>
+        </td>
+      </tr>
+    </table>
+    <hr style="margin:20px 0;border:none;border-top:1px solid #ddd;"/>
+    <p style="font-size:12px;color:#888;">
+      <strong>Energovision s.r.o.</strong> | IČO: 53 036 280 | Slovenská asociácia fotovoltického priemyslu (SAPI) |
+      <a href="https://energovision.sk" style="color:#888;">energovision.sk</a>
+    </p>
+    """
+
+    full_html = f"""
+    <html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;line-height:1.5;color:#333;max-width:700px;">
+    {intro}
+    {"".join(blocks)}
+    {comparison}
+    {pdf_note}
+    {cta}
+    </body></html>
+    """
+    return full_html
+
+
+# ============================================================
 # ROOT — info
 # ============================================================
 @app.route("/")
@@ -284,6 +526,7 @@ def root():
             "GET /health",
             "POST /webhook/prepocet",
             "POST /webhook/generate-pdf",
+            "POST /webhook/email-template",
         ],
     })
 
