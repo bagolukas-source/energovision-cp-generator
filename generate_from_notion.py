@@ -569,13 +569,27 @@ def lead_from_notion(notion_props, variant):
     variant: "A" (FVE), "B" (FVE+BESS), "C" (FVE+BESS+Wallbox)
     """
     title = notion_props.get("Zákazník", "Zákazník")
-    # priezvisko / mesto extract z title "Sedlár, Janíkovce"
+    # priezvisko z title (prvá časť pred čiarkou; alebo posledné slovo ak žiadna čiarka)
     if "," in title:
-        priezvisko, mesto = [s.strip() for s in title.split(",", 1)]
+        priezvisko = title.split(",", 1)[0].strip()
     else:
-        parts = title.rsplit(" ", 1)
-        priezvisko = parts[-1] if len(parts) > 1 else title
-        mesto = notion_props.get("Mesto", "")
+        priezvisko = title.rsplit(" ", 1)[-1].strip() if " " in title else title.strip()
+
+    # Mesto property môže obsahovať aj ulicu — formát "Ulica číslo, Mesto"
+    # Ak je čiarka v Mesto property, prvá časť je ulica, druhá mesto
+    # Inak sa fallback na druhú časť title alebo iba mesto
+    mesto_full = (notion_props.get("Mesto") or "").strip()
+    ulica_from_mesto = ""
+    if "," in mesto_full:
+        _parts = [p.strip() for p in mesto_full.split(",", 1)]
+        ulica_from_mesto = _parts[0]
+        mesto = _parts[1]
+    elif mesto_full:
+        mesto = mesto_full
+    elif "," in title:
+        mesto = title.split(",", 1)[1].strip()
+    else:
+        mesto = ""
 
     panel_kod = PANEL_MAP.get(notion_props.get("Panel"), "PAN-002")
     inv_kod = INVERTOR_MAP.get(notion_props.get("Menič"), "INV-001")
@@ -650,13 +664,16 @@ def lead_from_notion(notion_props, variant):
     telefon = notion_props.get("Telefón") or ""
     email = notion_props.get("Email") or ""
 
-    # ulica z poznámok ak je
+    # Ulica + PSČ — najprv skús z Poznámok regex "adresa: ulica, 12345"
+    # Ak nenájde, použij ulica_from_mesto (vyextrahované z Mesto property vyššie)
     ulica = ""
     psc = ""
     m_addr = re.search(r"adresa[\s:]+([^,]+),\s*(\d{3}\s?\d{2})", pozn, re.I)
     if m_addr:
         ulica = m_addr.group(1).strip()
         psc = m_addr.group(2)
+    elif ulica_from_mesto:
+        ulica = ulica_from_mesto
 
     # Per-variant marža s fallbackom na centrálnu "Marža %"
     marza_central = notion_props.get("Marža %") or 30
@@ -671,7 +688,7 @@ def lead_from_notion(notion_props, variant):
     vek_dni = detekuj_vek_leadu(notion_props)
 
     return {
-        "meno": f"{priezvisko.split(',')[0].strip()}",
+        "meno": priezvisko,
         "mesto": mesto,
         "psc": psc,
         "ulica": ulica,
