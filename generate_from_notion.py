@@ -569,12 +569,19 @@ def lead_from_notion(notion_props, variant):
     Z Notion properties zostaví lead.json pre konkrétny variant.
     variant: "A" (FVE), "B" (FVE+BESS), "C" (FVE+BESS+Wallbox)
     """
-    title = notion_props.get("Zákazník", "Zákazník")
-    # priezvisko z title (prvá časť pred čiarkou; alebo posledné slovo ak žiadna čiarka)
+    title = notion_props.get("Zákazník", "Zákazník").strip()
+    # Title moze byt: "Meno Priezvisko" (novy format) alebo "Priezvisko, Mesto" (stary format)
     if "," in title:
-        priezvisko = title.split(",", 1)[0].strip()
+        # Stary format "Priezvisko, Mesto" - cela prva cast je priezvisko (mozno aj viacslovne)
+        full_name = title.split(",", 1)[0].strip()
+        priezvisko = full_name
     else:
-        priezvisko = title.rsplit(" ", 1)[-1].strip() if " " in title else title.strip()
+        # Novy format "Meno Priezvisko" - cele to ide do PDF, priezvisko vyextrahujeme
+        full_name = title
+        if " " in title:
+            priezvisko = title.rsplit(" ", 1)[-1].strip()
+        else:
+            priezvisko = title.strip()
 
     # Mesto property môže obsahovať aj ulicu — formát "Ulica číslo, Mesto"
     # Ak je čiarka v Mesto property, prvá časť je ulica, druhá mesto
@@ -712,7 +719,8 @@ def lead_from_notion(notion_props, variant):
     vek_dni = detekuj_vek_leadu(notion_props)
 
     return {
-        "meno": priezvisko,
+        "meno": full_name,  # cele meno (Meno Priezvisko) - pouzite v PDF "PRE" a titulke
+        "priezvisko": priezvisko,  # iba priezvisko - pre filename, folder, salutacie
         "mesto": mesto,
         "psc": psc,
         "ulica": ulica,
