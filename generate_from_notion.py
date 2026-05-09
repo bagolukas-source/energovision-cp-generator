@@ -20,6 +20,7 @@ from generate_cp import (
 # Mapovanie Notion select hodnôt → kódy v Cenníku
 PANEL_MAP = {
     "LONGi 470 Wp": "PAN-001",
+    "LONGi 535 Wp": "PAN-002",  # PAN-002 je v cenniku 535-545 Wp panel
     "LONGi 540 Wp": "PAN-002",
 }
 INVERTOR_MAP = {
