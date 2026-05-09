@@ -51,6 +51,10 @@ DEFAULT_SPOTREBA_KWH = 8000
 # Panel default pre auto-konfiguráciu
 AUTO_PANEL = "LONGi 535 Wp"
 AUTO_PANEL_WP = 535
+# DC oversize: panely sa dimenzujú s prebytkom voči AC menicu (typicky 1.2-1.35x)
+AUTO_DC_OVERSIZE = 1.28
+# Zaokrúhliť počet panelov nahor na párne číslo (kvôli stringom + symetrii inštalácie)
+AUTO_ROUND_TO_EVEN = True
 
 NOTION_API = "https://api.notion.com/v1"
 NOTION_HEADERS = {
@@ -162,15 +166,34 @@ def menic_solinteg_default():
 
 
 def auto_sizing_from_spotreba(spotreba_kwh, ma_bateriu=False):
-    """1:1 mapping spotreby na vykon FVE.
-    Spotreba 8000 kWh -> 8 kWp -> 15x LONGi 535 Wp -> 8K menic.
+    """Mapping spotreby na vykon FVE s DC oversize.
+    
+    Vzorec: pocet_panelov = ceil(spotreba * 1.28 / 535), zaokruhlene hore na parne.
+    Mernicu vyberame podla AC kWp (= round(spotreba/1000), clamp 3-12).
+    
+    Priklady:
+      Spotreba 10 000 kWh -> 24 panelov LONGi 535 Wp = 12.84 kWp DC, 10K menic AC
+      Spotreba  8 000 kWh -> 20 panelov = 10.7 kWp DC, 8K menic
+      Spotreba  5 000 kWh -> 12 panelov = 6.42 kWp DC, 5K menic
     """
+    # AC velkost menica (1:1 so spotrebou, clamp 3-12 kWp B2C strop)
     target_kwp = max(3, min(12, round(spotreba_kwh / 1000)))
-    pocet_panelov = math.ceil(target_kwp * 1000 / AUTO_PANEL_WP)
+
+    # Pocet panelov: spotreba * DC oversize / Wp panelu
+    pocet_raw = math.ceil(spotreba_kwh * AUTO_DC_OVERSIZE / AUTO_PANEL_WP)
+
+    # Zaokruhlit nahor na parne cislo (pre symetricke 2-row stringy)
+    if AUTO_ROUND_TO_EVEN and pocet_raw % 2 != 0:
+        pocet_raw += 1
+
+    # Min 6 panelov, max 30 (kvoli B2C limit + stringom)
+    pocet_panelov = max(6, min(30, pocet_raw))
+
     if ma_bateriu:
         menic = menic_solinteg_default()
     else:
         menic = menic_huawei_pre_kwp(target_kwp)
+
     return {
         "target_kwp": target_kwp,
         "pocet_panelov": pocet_panelov,
@@ -192,8 +215,8 @@ def claude_extract_leads(raw_text):
         "{\n"
         '  "leads": [\n'
         "    {\n"
-        '      "meno": "krstné meno priezvisko alebo null",\n'
-        '      "priezvisko": "iba priezvisko alebo null",\n'
+        '      "meno": "iba krstné meno (napr. Peter), nie celé meno + priezvisko, alebo null",\n'
+        '      "priezvisko": "iba priezvisko (napr. Novák), bez krstného mena, alebo null",\n'
         '      "telefon": "+421... alebo null",\n'
         '      "email": "email@... alebo null",\n'
         '      "ulica_cislo": "ulica + číslo alebo null",\n'
@@ -281,14 +304,20 @@ def lead_to_notion_properties(lead):
     """Z parsed lead dict vyrob Notion API properties payload pre Zakaznici B2C DB."""
     props = {}
 
-    title_parts = []
-    if lead.get("priezvisko"):
-        title_parts.append(str(lead["priezvisko"]))
-    elif lead.get("meno"):
-        title_parts.append(str(lead["meno"]))
-    if lead.get("mesto"):
-        title_parts.append(str(lead["mesto"]))
-    title_text = ", ".join(title_parts) if title_parts else "Nový lead (bez mena)"
+    # Title = Meno Priezvisko (mesto ide do separatneho Mesto property, NIE do title)
+    meno = (lead.get("meno") or "").strip()
+    priezvisko = (lead.get("priezvisko") or "").strip()
+    # Ak meno uz obsahuje priezvisko (full name), pouzi iba meno
+    if meno and priezvisko and priezvisko.lower() in meno.lower():
+        title_text = meno
+    elif meno and priezvisko:
+        title_text = f"{meno} {priezvisko}"
+    elif meno:
+        title_text = meno
+    elif priezvisko:
+        title_text = priezvisko
+    else:
+        title_text = "Nový lead (bez mena)"
     props["Zákazník"] = {"title": [{"text": {"content": title_text[:200]}}]}
 
     if lead.get("telefon"):
@@ -331,8 +360,9 @@ def lead_to_notion_properties(lead):
     props["Menič"] = {"select": {"name": sizing["menic"]}}
 
     konstr_sel = _select_or_none(lead.get("typ_strechy"), KONSTRUKCIA_OPTIONS)
-    if konstr_sel:
-        props["Konštrukcia (typ)"] = konstr_sel
+    if not konstr_sel:
+        konstr_sel = {"select": {"name": "Škridla"}}  # default ak AI nezistila
+    props["Konštrukcia (typ)"] = konstr_sel
 
     if variant in ("B", "C"):
         bat_sel = _select_or_none(lead.get("bateria_odporucana"), BATERIA_OPTIONS)
@@ -528,6 +558,11 @@ def auto_konfig():
         update_props["Batéria počet"] = {"select": {"name": "1"}}
     elif not ma_bateriu:
         update_props["Batéria počet"] = {"select": {"name": "0"}}
+
+    # Default konstrukcia "Skridla" ak este nie je nastavena
+    konstr_aktualna = flat.get("Konštrukcia (typ)")
+    if not konstr_aktualna:
+        update_props["Konštrukcia (typ)"] = {"select": {"name": "Škridla"}}
 
     try:
         notion_update_page(page_id, update_props)
