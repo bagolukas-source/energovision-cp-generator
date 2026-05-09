@@ -110,6 +110,18 @@ def notion_props_to_flat(page):
         elif ptype == "unique_id":
             uid = prop["unique_id"]
             out[name] = f"{uid.get('prefix','')}-{uid['number']}" if uid.get('prefix') else str(uid["number"])
+        elif ptype == "files":
+            # Files property — vrati JSON pole s file objektmi (name + url)
+            files_arr = []
+            for f in prop.get("files", []) or []:
+                fname = f.get("name", "file")
+                if f.get("type") == "external":
+                    furl = f.get("external", {}).get("url", "")
+                else:
+                    furl = f.get("file", {}).get("url", "")
+                if furl:
+                    files_arr.append({"name": fname, "url": furl})
+            out[name] = json.dumps(files_arr, ensure_ascii=False) if files_arr else ""
     return out
 
 
@@ -867,9 +879,45 @@ def _email_template_impl():
             log.error(f"PDF gen pre variant {v} zlyhal: {e}")
             continue
 
+    # ===== ROZLOŽENIE PANELOV (extra attachment z Notion files property) =====
+    rozlozenie_attached = False
+    rozlozenie_json = notion_props.get("Rozloženie panelov") or ""
+    if rozlozenie_json:
+        try:
+            rozlozenie_files = json.loads(rozlozenie_json)
+        except (ValueError, TypeError):
+            rozlozenie_files = []
+        for rf in rozlozenie_files[:3]:  # max 3 files
+            try:
+                fname = rf.get("name") or "rozlozenie_panelov.pdf"
+                furl = rf.get("url")
+                if not furl:
+                    continue
+                # safe filename
+                fname_clean = safe_filename(fname.rsplit(".", 1)[0])
+                fext = fname.rsplit(".", 1)[-1] if "." in fname else "pdf"
+                final_name = f"Rozlozenie_panelov_{priezvisko_clean}.{fext}"
+                # Stiahni cez requests + base64
+                r_dl = requests.get(furl, timeout=60)
+                r_dl.raise_for_status()
+                pdf_b64_rozl = base64.b64encode(r_dl.content).decode("ascii")
+                _evid_root_r = (lead_a.get("cislo_ponuky") or "EV-XX-001-A")
+                _evid_root_r = _evid_root_r[:-2] if len(_evid_root_r) >= 2 and _evid_root_r[-2] == "-" and _evid_root_r[-1] in "ABC" else _evid_root_r
+                _folder_r = f"{_evid_root_r}_{priezvisko_clean}"
+                attachments.append({
+                    "filename": final_name,
+                    "folder_name": _folder_r,
+                    "data": pdf_b64_rozl,
+                })
+                rozlozenie_attached = True
+                log.info(f"Rozlozenie panelov pridane: {final_name} ({len(r_dl.content)} bajtov)")
+            except Exception as e:
+                log.warning(f"Stiahnut rozlozenie panelov zlyhalo: {e}")
+
     # ===== EMAIL TEMPLATES =====
-    subject = build_subject(priezvisko, mesto, variants_active)
-    body_html = build_email_body(priezvisko, mesto, vykon_kwp, bateria_kwh, ceny, variants_active, obchodnik)
+    typ_ponuky = notion_props.get("Typ ponuky") or "Indikatívna"
+    subject = build_subject(priezvisko, mesto, variants_active, typ_ponuky=typ_ponuky)
+    body_html = build_email_body(priezvisko, mesto, vykon_kwp, bateria_kwh, ceny, variants_active, obchodnik, typ_ponuky=typ_ponuky, ma_rozlozenie=rozlozenie_attached)
 
     return jsonify({
         "success": True,
@@ -883,31 +931,62 @@ def _email_template_impl():
     })
 
 
-def build_subject(priezvisko, mesto, variants):
-    """Subject riadok — krátky, identifikovateľný."""
+def build_subject(priezvisko, mesto, variants, typ_ponuky="Indikatívna"):
+    """Subject riadok — krátky, identifikovateľný. Pri Indikatívnej ponuke sa pridáva prefix."""
+    prefix = "Indikatívna cenová ponuka" if typ_ponuky == "Indikatívna" else "Cenová ponuka"
     if len(variants) == 1:
         v_label = {"A": "FVE", "B": "FVE + batéria", "C": "FVE + batéria + wallbox"}[variants[0]]
-        return f"Cenová ponuka {v_label} pre {priezvisko}, {mesto}"
-    return f"Cenová ponuka FVE — {priezvisko}, {mesto} ({len(variants)} varianty)"
+        return f"{prefix} {v_label} pre {priezvisko}, {mesto}"
+    return f"{prefix} FVE — {priezvisko}, {mesto} ({len(variants)} varianty)"
 
 
-def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchodnik):
+def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchodnik, typ_ponuky="Indikatívna", ma_rozlozenie=False):
     """
     HTML email body s marketingovým textom (slovenský trh, 30y FVE expert tone).
     Per-variant blocks + comparison + signature.
+
+    typ_ponuky: "Indikatívna" (bez obhliadky, default) alebo "Exaktná" (po obhliadke)
+    ma_rozlozenie: True ak v emaily je priložené aj rozlozenie panelov
     """
     cena_a = ceny.get("A") or 0
     cena_b = ceny.get("B") or 0
     cena_c = ceny.get("C") or 0
 
-    # === INTRO ===
+    # === INTRO — 2 verzie podla typu ponuky ===
     n_var = len(variants)
-    intro = f"""
-    <p>Dobrý deň pán/pani {priezvisko},</p>
-    <p>v nadväznosti na našu obhliadku Vám zasielam pripravenú cenovú ponuku pre fotovoltickú elektráreň
-    pre Vašu domácnosť v <strong>{mesto}</strong>.
-    Pripravil som {("jednu variantu" if n_var == 1 else f"{n_var} varianty")} podľa toho, ako chcete využiť energiu zo slnka.</p>
-    """
+    n_var_str = "jednu variantu" if n_var == 1 else f"{n_var} varianty"
+
+    if typ_ponuky == "Exaktná":
+        # Po obhliadke — preverené data, presné ceny
+        intro = f"""
+        <p>Dobrý deň pán/pani {priezvisko},</p>
+        <p>v nadväznosti na našu obhliadku Vašej nehnuteľnosti v <strong>{mesto}</strong>
+        Vám zasielam <strong>presnú cenovú ponuku</strong> pre fotovoltickú elektráreň.
+        Údaje sú overené priamo na mieste — strecha, konštrukcia, spotreba aj umiestnenie panelov.
+        Pripravil som {n_var_str} podľa toho, ako chcete využiť energiu zo slnka.</p>
+        """
+    else:
+        # Indikatívna — bez obhliadky, len odhad z dopytu
+        intro = f"""
+        <p>Dobrý deň pán/pani {priezvisko},</p>
+        <p>na základe údajov, ktoré ste nám poskytli, Vám zasielam <strong>indikatívnu cenovú ponuku</strong>
+        pre fotovoltickú elektráreň pre Vašu domácnosť v <strong>{mesto}</strong>.
+        Pripravil som {n_var_str} podľa toho, ako chcete využiť energiu zo slnka.</p>
+        <p style="background:#FFF8E1;padding:12px;border-left:4px solid #F59E0B;font-size:14px;margin:16px 0;">
+          <strong>Pozn.:</strong> Toto je <em>indikatívna ponuka</em> spracovaná z údajov v dopyte —
+          bez fyzickej obhliadky. Presnú cenu Vám pripravíme po obhliadke nehnuteľnosti, kedy si overíme
+          stav strechy, ideálne umiestnenie panelov a kabelážnu trasu. Ceny sa môžu mierne upraviť
+          (typicky ±5–10 %) podľa skutočného stavu.
+        </p>
+        """
+
+    if ma_rozlozenie:
+        intro += """
+        <p style="background:#E0F2F1;padding:12px;border-left:4px solid #1B5E3F;font-size:14px;margin:16px 0;">
+          <strong>📐 V prílohe nájdete aj návrh rozloženia panelov</strong> na Vašej streche —
+          vizualizáciu z nášho projekčného software, ktorá ukáže optimálne umiestnenie a počet panelov.
+        </p>
+        """
 
     blocks = []
 
