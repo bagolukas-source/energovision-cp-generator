@@ -618,6 +618,9 @@ def lead_from_notion(notion_props, variant):
         wp = 535  # default novy LONGi 535 Wp
     vykon_kwp = round(pocet_panelov * wp / 1000, 2)
 
+    # Poznamky text - pouzity pre Spotreba fallback aj pre adresu nizsie
+    pozn = notion_props.get("Poznámky") or ""
+
     # Spotreba — najprv skus novu Spotreba property (NUMBER), potom Poznamky, potom default
     spotreba_raw = notion_props.get("Spotreba")
     spotreba = None
@@ -628,7 +631,6 @@ def lead_from_notion(notion_props, variant):
             spotreba = None
     if spotreba is None:
         # Backward compat: skus z Poznamok formatu "spotreba: X kWh"
-        pozn = notion_props.get("Poznámky") or ""
         m = re.search(r"spotreba[\s:]+(\d+(?:\s?\d+)?)\s*kWh", pozn, re.I)
         if m:
             spotreba = int(m.group(1).replace(" ", ""))
