@@ -13,6 +13,7 @@ import sys
 import json
 import logging
 import re
+import math
 import tempfile
 from pathlib import Path
 from functools import wraps
@@ -41,6 +42,15 @@ app = Flask(__name__)
 NOTION_TOKEN = os.environ.get("NOTION_TOKEN", "")
 NOTION_DATABASE_ID = os.environ.get("NOTION_DATABASE_ID", "ba7a1d6c-63a9-43da-b66d-2b1c7e8660da")
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-5-20250929")
+
+# Default spotreba ak nezadaná zákazníkom (priemer SK domácnosti)
+DEFAULT_SPOTREBA_KWH = 8000
+
+# Panel default pre auto-konfiguráciu
+AUTO_PANEL = "LONGi 535 Wp"
+AUTO_PANEL_WP = 535
 
 NOTION_API = "https://api.notion.com/v1"
 NOTION_HEADERS = {
@@ -122,6 +132,255 @@ def notion_set_select(prop_name, value):
 def notion_set_url(prop_name, value):
     return {prop_name: {"url": value or None}}
 
+def notion_create_page_in_db(database_id, properties):
+    """Vytvor novú page v Notion DB."""
+    payload = {
+        "parent": {"database_id": database_id},
+        "properties": properties,
+    }
+    r = requests.post(f"{NOTION_API}/pages", headers=NOTION_HEADERS, json=payload, timeout=20)
+    r.raise_for_status()
+    return r.json()
+
+
+# ===== AUTO-SIZING LOGIKA =====
+def menic_huawei_pre_kwp(kwp):
+    """Mapovanie kWp -> Huawei menic (Variant A FVE-only)."""
+    if kwp <= 5:
+        return "Huawei SUN2000-5K"
+    elif kwp <= 6:
+        return "Huawei SUN2000-6K"
+    elif kwp <= 8:
+        return "Huawei SUN2000-8K"
+    else:
+        return "Huawei SUN2000-10K"
+
+
+def menic_solinteg_default():
+    """Solinteg MHT-10K-25 zvlada 5-10 kWp s bateriou."""
+    return "Solinteg MHT-10K-25"
+
+
+def auto_sizing_from_spotreba(spotreba_kwh, ma_bateriu=False):
+    """1:1 mapping spotreby na vykon FVE.
+    Spotreba 8000 kWh -> 8 kWp -> 15x LONGi 535 Wp -> 8K menic.
+    """
+    target_kwp = max(3, min(12, round(spotreba_kwh / 1000)))
+    pocet_panelov = math.ceil(target_kwp * 1000 / AUTO_PANEL_WP)
+    if ma_bateriu:
+        menic = menic_solinteg_default()
+    else:
+        menic = menic_huawei_pre_kwp(target_kwp)
+    return {
+        "target_kwp": target_kwp,
+        "pocet_panelov": pocet_panelov,
+        "panel": AUTO_PANEL,
+        "menic": menic,
+    }
+
+
+def claude_extract_leads(raw_text):
+    """Zavola Claude API a vrati pole leadov ako Python list."""
+    if not ANTHROPIC_API_KEY:
+        raise RuntimeError("ANTHROPIC_API_KEY nie je nastaveny v env vars")
+
+    system_prompt = (
+        "Si parser pre slovenskú energetickú firmu Energovision (FVE, batérie, wallbox, trafostanice, revízie).\n\n"
+        "Z neformálneho textu (email, formulár, tabuľka, voicemail prepis, OCR) extrahuješ údaje o ZÁKAZNÍKOCH.\n\n"
+        "JEDEN INPUT MÔŽE OBSAHOVAŤ VIAC LEADOV. Vráť ich VŠETKY ako pole.\n\n"
+        "Vráť IBA platný JSON v presnej štruktúre:\n"
+        "{\n"
+        '  "leads": [\n'
+        "    {\n"
+        '      "meno": "krstné meno priezvisko alebo null",\n'
+        '      "priezvisko": "iba priezvisko alebo null",\n'
+        '      "telefon": "+421... alebo null",\n'
+        '      "email": "email@... alebo null",\n'
+        '      "ulica_cislo": "ulica + číslo alebo null",\n'
+        '      "mesto": "iba mesto alebo null",\n'
+        '      "psc": "PSČ alebo null",\n'
+        '      "spotreba_kwh_rok": "číslo (ak zákazník zadal) alebo null",\n'
+        '      "rocna_faktura_eur": null alebo číslo,\n'
+        '      "typ_dopytu": ["FVE", "Batéria", "Wallbox", "Revízia", "Bleskozvod", "Iné"],\n'
+        '      "typ_strechy": "Škridla / Plech kombivrut / Falcový plech / Plochá strecha — J 13° / Plochá strecha — V/Z 10° / null",\n'
+        '      "orientacia": "J / V-Z / J-V / J-Z / null",\n'
+        '      "bateria_odporucana": "Solinteg EBA B5K1 — 5.12 kWh / Solinteg EBA B5K1 — 10.24 kWh / Pylontech Force H3 — 5.12 kWh / Huawei LUNA2000 — 5 kWh / Huawei LUNA2000 — 7 kWh / null",\n'
+        '      "wallbox_odporucany": "Solinteg 7 kW (1F) / Solinteg 11 kW (3F) / Huawei AC Smart 22 kW / Huawei AC Smart 7 kW / GoodWe 11 kW / GoodWe 22 kW / null",\n'
+        '      "variant_odporucany": "A" alebo "B" alebo "C",\n'
+        '      "priorita": "Vysoká / Stredná / Nízka",\n'
+        '      "poznamky": "krátke zhrnutie kontextu, max 200 znakov"\n'
+        "    }\n"
+        "  ]\n"
+        "}\n\n"
+        "Pravidlá:\n"
+        "- Variant A = iba FVE, B = FVE+batéria, C = FVE+batéria+wallbox\n"
+        "- Ak EV/elektromobil/wallbox -> C; ostrov/výpadky/akumulácia -> minimálne B; iba znižovanie účtu -> A\n"
+        "- Slovenské diakritiky zachovaj. Telefón normalizuj na +421 formát.\n"
+        "- DÔLEŽITÉ: spotreba_kwh_rok dávaj LEN ak je v texte explicitne uvedená. Ak nie, daj null. NEVYMÝŠĽAJ z faktúry.\n"
+        "- Batéria default: Solinteg EBA B5K1 — 10.24 kWh ak spotreba >5000 kWh, inak 5.12 kWh.\n"
+        "- Ak chýba údaj, daj null. ZIADNE markdown bloky, IBA surový JSON {...}."
+    )
+
+    user_prompt = f"Tu je raw lead text \u2014 moze obsahovat 1 alebo viac leadov:\n\n{raw_text[:15000]}"
+
+    headers = {
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+    payload = {
+        "model": ANTHROPIC_MODEL,
+        "max_tokens": 4096,
+        "temperature": 0.1,
+        "system": system_prompt,
+        "messages": [{"role": "user", "content": user_prompt}],
+    }
+    r = requests.post("https://api.anthropic.com/v1/messages", headers=headers, json=payload, timeout=90)
+    r.raise_for_status()
+    resp = r.json()
+    text = resp["content"][0]["text"].strip()
+
+    text = re.sub(r"^```(?:json)?\s*", "", text)
+    text = re.sub(r"\s*```$", "", text)
+    text = text.strip()
+
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as e:
+        log.error("Claude vratil ne-JSON: %s", text[:500])
+        raise RuntimeError(f"Claude vratil neplatny JSON: {e}")
+
+    return data.get("leads", [])
+
+
+KONSTRUKCIA_OPTIONS = {
+    "Škridla", "Plech kombivrut", "Falcový plech",
+    "Plochá strecha — J 13°", "Plochá strecha — V/Z 10°",
+}
+BATERIA_OPTIONS = {
+    "Pylontech Force H3 — 5.12 kWh",
+    "Solinteg EBA B5K1 — 5.12 kWh", "Solinteg EBA B5K1 — 10.24 kWh",
+    "Huawei LUNA2000 — 5 kWh", "Huawei LUNA2000 — 7 kWh",
+}
+WALLBOX_OPTIONS = {
+    "Solinteg 7 kW (1F)", "Solinteg 11 kW (3F)",
+    "Huawei AC Smart 22 kW", "Huawei AC Smart 7 kW",
+    "GoodWe 11 kW", "GoodWe 22 kW",
+}
+TYP_DOPYTU_OPTIONS = {"FVE", "Batéria", "Wallbox", "Revízia", "Bleskozvod", "Iné"}
+PRIORITA_OPTIONS = {"Vysoká", "Stredná", "Nízka"}
+
+
+def _select_or_none(value, allowed_set):
+    if value and value in allowed_set:
+        return {"select": {"name": value}}
+    return None
+
+
+def lead_to_notion_properties(lead):
+    """Z parsed lead dict vyrob Notion API properties payload pre Zakaznici B2C DB."""
+    props = {}
+
+    title_parts = []
+    if lead.get("priezvisko"):
+        title_parts.append(str(lead["priezvisko"]))
+    elif lead.get("meno"):
+        title_parts.append(str(lead["meno"]))
+    if lead.get("mesto"):
+        title_parts.append(str(lead["mesto"]))
+    title_text = ", ".join(title_parts) if title_parts else "Nový lead (bez mena)"
+    props["Zákazník"] = {"title": [{"text": {"content": title_text[:200]}}]}
+
+    if lead.get("telefon"):
+        props["Telefón"] = {"phone_number": str(lead["telefon"])[:50]}
+    if lead.get("email"):
+        props["Email"] = {"email": str(lead["email"])[:200]}
+
+    mesto_parts = []
+    if lead.get("ulica_cislo"):
+        mesto_parts.append(str(lead["ulica_cislo"]))
+    if lead.get("mesto"):
+        mesto_parts.append(str(lead["mesto"]))
+    if mesto_parts:
+        props["Mesto"] = {"rich_text": [{"text": {"content": ", ".join(mesto_parts)[:500]}}]}
+
+    variant = (lead.get("variant_odporucany") or "A").upper()
+    props["Variant A — FVE"] = {"checkbox": variant == "A"}
+    props["Variant B — FVE + BESS"] = {"checkbox": variant == "B"}
+    props["Variant C — FVE + BESS + Wallbox"] = {"checkbox": variant == "C"}
+
+    # SPOTREBA + AUTO-SIZING
+    spotreba_raw = lead.get("spotreba_kwh_rok")
+    if spotreba_raw is not None:
+        try:
+            spotreba_val = float(spotreba_raw)
+            spotreba_zdroj = "Zákazník zadal"
+        except (ValueError, TypeError):
+            spotreba_val = float(DEFAULT_SPOTREBA_KWH)
+            spotreba_zdroj = "Default 8000 (SK priemer)"
+    else:
+        spotreba_val = float(DEFAULT_SPOTREBA_KWH)
+        spotreba_zdroj = "Default 8000 (SK priemer)"
+
+    props["Spotreba"] = {"number": spotreba_val}
+    props["Spotreba zdroj"] = {"select": {"name": spotreba_zdroj}}
+
+    sizing = auto_sizing_from_spotreba(spotreba_val, ma_bateriu=variant in ("B", "C"))
+    props["Panel"] = {"select": {"name": sizing["panel"]}}
+    props["Počet panelov"] = {"number": sizing["pocet_panelov"]}
+    props["Menič"] = {"select": {"name": sizing["menic"]}}
+
+    konstr_sel = _select_or_none(lead.get("typ_strechy"), KONSTRUKCIA_OPTIONS)
+    if konstr_sel:
+        props["Konštrukcia (typ)"] = konstr_sel
+
+    if variant in ("B", "C"):
+        bat_sel = _select_or_none(lead.get("bateria_odporucana"), BATERIA_OPTIONS)
+        if not bat_sel:
+            default_bat = "Solinteg EBA B5K1 — 10.24 kWh" if spotreba_val > 5000 else "Solinteg EBA B5K1 — 5.12 kWh"
+            bat_sel = {"select": {"name": default_bat}}
+        props["Batéria (typ)"] = bat_sel
+        props["Batéria počet"] = {"select": {"name": "1"}}
+    else:
+        props["Batéria počet"] = {"select": {"name": "0"}}
+
+    if variant == "C":
+        wb_sel = _select_or_none(lead.get("wallbox_odporucany"), WALLBOX_OPTIONS)
+        if not wb_sel:
+            wb_sel = {"select": {"name": "Solinteg 11 kW (3F)"}}
+        props["Wallbox (typ)"] = wb_sel
+
+    typ_dopytu_raw = lead.get("typ_dopytu") or []
+    if isinstance(typ_dopytu_raw, str):
+        typ_dopytu_raw = [typ_dopytu_raw]
+    typ_dopytu_clean = [t for t in typ_dopytu_raw if t in TYP_DOPYTU_OPTIONS]
+    if not typ_dopytu_clean:
+        typ_dopytu_clean = ["FVE"]
+    props["Typ dopytu"] = {"multi_select": [{"name": t} for t in typ_dopytu_clean]}
+
+    prio_sel = _select_or_none(lead.get("priorita"), PRIORITA_OPTIONS)
+    if prio_sel:
+        props["Priorita"] = prio_sel
+
+    poznamky_parts = []
+    if spotreba_zdroj == "Zákazník zadal":
+        poznamky_parts.append(f"Spotreba: {int(spotreba_val)} kWh/rok (zadaná)")
+    else:
+        poznamky_parts.append(f"Spotreba: {int(spotreba_val)} kWh/rok (default SK priemer)")
+    if lead.get("rocna_faktura_eur"):
+        poznamky_parts.append(f"Faktúra: {lead['rocna_faktura_eur']} €/rok")
+    if lead.get("orientacia"):
+        poznamky_parts.append(f"Orientácia: {lead['orientacia']}")
+    if lead.get("psc"):
+        poznamky_parts.append(f"PSČ: {lead['psc']}")
+    if lead.get("poznamky"):
+        poznamky_parts.append(str(lead["poznamky"]))
+    poznamky_parts.append(f"[AI parsed → auto-sizing: {sizing['target_kwp']} kWp / {sizing['pocet_panelov']}× panel]")
+    props["Poznámky"] = {"rich_text": [{"text": {"content": " | ".join(poznamky_parts)[:1900]}}]}
+
+    return props
+
+
 
 # ============================================================
 # HEALTHCHECK
@@ -132,6 +391,155 @@ def health():
         "status": "ok",
         "service": "energovision-cp-generator",
         "notion_token_set": bool(NOTION_TOKEN),
+    })
+
+
+# ============================================================
+# WEBHOOK 0: PARSUJ LEADY (Multi-lead intake parser)
+# Trigger: Notion Button "🔍 Parsuj leady" v Lead Inbox DB
+# ============================================================
+@app.route("/webhook/parsuj-leady", methods=["POST"])
+@require_secret
+def parsuj_leady():
+    body = request.get_json(force=True, silent=True) or {}
+    page_id = body.get("page_id")
+    if not page_id:
+        return jsonify({"error": "missing page_id"}), 400
+
+    log.info("[parsuj-leady] page_id=%s", page_id)
+
+    try:
+        source_page = notion_get_page(page_id)
+    except Exception as e:
+        return jsonify({"error": f"notion_get failed: {e}"}), 500
+
+    flat = notion_props_to_flat(source_page)
+    raw_text = (flat.get("Surový lead") or "").strip()
+
+    if not raw_text:
+        try:
+            notion_update_page(page_id, {"Status": {"select": {"name": "🔴 Chyba"}}})
+        except Exception:
+            pass
+        return jsonify({"error": "Surový lead je prázdny"}), 400
+
+    log.info("[parsuj-leady] raw_text dlzka=%d znakov", len(raw_text))
+
+    try:
+        leads = claude_extract_leads(raw_text)
+    except Exception as e:
+        log.exception("Claude extraction zlyhala")
+        try:
+            notion_update_page(page_id, {
+                "Status": {"select": {"name": "🔴 Chyba"}},
+                "Surový lead": {"rich_text": [{"text": {"content": f"Claude error: {e}"[:1900]}}]},
+            })
+        except Exception:
+            pass
+        return jsonify({"error": f"claude failed: {e}"}), 500
+
+    if not leads:
+        try:
+            notion_update_page(page_id, {"Status": {"select": {"name": "🔴 Chyba"}}})
+        except Exception:
+            pass
+        return jsonify({"error": "Claude nenasiel ziadne leady"}), 400
+
+    log.info("[parsuj-leady] extrahovanych leadov: %d", len(leads))
+
+    created = []
+    failed = []
+    for i, lead in enumerate(leads):
+        try:
+            props = lead_to_notion_properties(lead)
+            new_page = notion_create_page_in_db(NOTION_DATABASE_ID, props)
+            created.append({
+                "id": new_page.get("id"),
+                "url": new_page.get("url"),
+                "title": (lead.get("priezvisko") or lead.get("meno") or f"Lead #{i+1}"),
+            })
+        except Exception as e:
+            log.exception("Vytvorenie page #%d zlyhalo", i + 1)
+            failed.append({"index": i + 1, "error": str(e), "lead_preview": str(lead)[:200]})
+
+    try:
+        notion_update_page(page_id, {
+            "Surový lead": {"rich_text": []},
+            "Počet vyparsovaných": {"number": len(created)},
+            "Status": {"select": {"name": "🟢 Spracované"}},
+        })
+    except Exception as e:
+        log.warning("Cleanup source page zlyhal: %s", e)
+
+    return jsonify({"ok": True, "created": len(created), "failed": len(failed), "leads": created, "errors": failed})
+
+
+# ============================================================
+# WEBHOOK 0b: AUTO-KONFIG (sizing zo Spotreby)
+# Trigger: Notion Button "🎯 Auto-konfig" v Zákazníci B2C
+# ============================================================
+@app.route("/webhook/auto-konfig", methods=["POST"])
+@require_secret
+def auto_konfig():
+    body = request.get_json(force=True, silent=True) or {}
+    page_id = body.get("page_id")
+    if not page_id:
+        return jsonify({"error": "missing page_id"}), 400
+
+    log.info("[auto-konfig] page_id=%s", page_id)
+
+    try:
+        page = notion_get_page(page_id)
+    except Exception as e:
+        return jsonify({"error": f"notion_get failed: {e}"}), 500
+
+    flat = notion_props_to_flat(page)
+
+    spotreba_raw = flat.get("Spotreba")
+    if spotreba_raw is not None:
+        try:
+            spotreba_val = float(spotreba_raw)
+            spotreba_zdroj = "Zákazník zadal"
+        except (ValueError, TypeError):
+            spotreba_val = float(DEFAULT_SPOTREBA_KWH)
+            spotreba_zdroj = "Default 8000 (SK priemer)"
+    else:
+        spotreba_val = float(DEFAULT_SPOTREBA_KWH)
+        spotreba_zdroj = "Default 8000 (SK priemer)"
+
+    var_b = flat.get("Variant B — FVE + BESS") == "__YES__"
+    var_c = flat.get("Variant C — FVE + BESS + Wallbox") == "__YES__"
+    ma_bateriu = var_b or var_c
+
+    sizing = auto_sizing_from_spotreba(spotreba_val, ma_bateriu=ma_bateriu)
+
+    update_props = {
+        "Spotreba": {"number": spotreba_val},
+        "Spotreba zdroj": {"select": {"name": spotreba_zdroj}},
+        "Panel": {"select": {"name": sizing["panel"]}},
+        "Počet panelov": {"number": sizing["pocet_panelov"]},
+        "Menič": {"select": {"name": sizing["menic"]}},
+    }
+
+    bat_aktualna = flat.get("Batéria (typ)")
+    if ma_bateriu and not bat_aktualna:
+        default_bat = "Solinteg EBA B5K1 — 10.24 kWh" if spotreba_val > 5000 else "Solinteg EBA B5K1 — 5.12 kWh"
+        update_props["Batéria (typ)"] = {"select": {"name": default_bat}}
+        update_props["Batéria počet"] = {"select": {"name": "1"}}
+    elif not ma_bateriu:
+        update_props["Batéria počet"] = {"select": {"name": "0"}}
+
+    try:
+        notion_update_page(page_id, update_props)
+    except Exception as e:
+        log.exception("Notion update zlyhal")
+        return jsonify({"error": f"notion_update failed: {e}"}), 500
+
+    return jsonify({
+        "ok": True,
+        "spotreba": spotreba_val,
+        "spotreba_zdroj": spotreba_zdroj,
+        "sizing": sizing,
     })
 
 
@@ -611,6 +1019,8 @@ def root():
         "version": "1.0.0",
         "endpoints": [
             "GET /health",
+            "POST /webhook/parsuj-leady",
+            "POST /webhook/auto-konfig",
             "POST /webhook/prepocet",
             "POST /webhook/generate-pdf",
             "POST /webhook/email-template",
