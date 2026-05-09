@@ -591,6 +591,99 @@ def auto_konfig():
 
 
 # ============================================================
+# WEBHOOK SANDBOX: TEST ROZLOZENIE PANELOV
+# Trigger: Notion Button v "🎨 SolarEdge Rebuild Test" DB
+# Vstup: { "page_id": "..." }
+# Robi: stiahne SolarEdge PDF zo "SolarEdge raw report" property,
+# extrahuje obrazky+data, vyrobi branded PDF, vrati base64 + filename.
+# Make pak ulozi do Dropbox + nastavi "Branded report" property.
+# ============================================================
+@app.route("/webhook/test-rozlozenie", methods=["POST"])
+@require_secret
+def test_rozlozenie():
+    body = request.get_json(silent=True) or {}
+    page_id = body.get("page_id")
+    if not page_id:
+        return jsonify({"error": "missing page_id"}), 400
+
+    log.info(f"[test-rozlozenie] page_id={page_id}")
+
+    try:
+        page = notion_get_page(page_id)
+    except Exception as e:
+        return jsonify({"error": f"notion_get failed: {e}"}), 500
+
+    flat = notion_props_to_flat(page)
+
+    # Najdi SolarEdge raw report file URL
+    raw_files_json = flat.get("SolarEdge raw report") or ""
+    raw_url = None
+    if raw_files_json:
+        try:
+            files = json.loads(raw_files_json)
+            if files and isinstance(files, list):
+                raw_url = files[0].get("url")
+        except (ValueError, TypeError):
+            pass
+
+    if not raw_url:
+        # Set status na chybu
+        try:
+            notion_update_page(page_id, {
+                "Status": {"select": {"name": "🔴 Chyba"}},
+                "Poznámky": {"rich_text": [{"text": {"content": "Chyba: 'SolarEdge raw report' je prazdny — nahraj PDF z Designera."}}]},
+            })
+        except Exception:
+            pass
+        return jsonify({"error": "SolarEdge raw report property je prazdna"}), 400
+
+    # Set status na "spracovavam"
+    try:
+        notion_update_page(page_id, {
+            "Status": {"select": {"name": "⚙️ Spracovávam"}},
+        })
+    except Exception:
+        pass
+
+    # Spracovanie
+    try:
+        from solar_rebuild import process_solaredge_pdf
+        import base64 as _b64
+        # Heuristika: ak je v Poznamkach "BESS" alebo "bateria", pouzi 90% samospotrebu
+        pozn_lower = (flat.get("Poznámky") or "").lower()
+        ma_bateriu = ("bess" in pozn_lower or "bateri" in pozn_lower or "wallbox" in pozn_lower)
+
+        pdf_bytes, priezvisko_safe, summary = process_solaredge_pdf(raw_url, ma_bateriu=ma_bateriu)
+        pdf_b64 = _b64.b64encode(pdf_bytes).decode("ascii")
+
+        from datetime import datetime as _dt
+        datum = _dt.now().strftime("%Y-%m-%d")
+        filename = f"Rozlozenie_{priezvisko_safe}_{datum}.pdf"
+        folder_name = f"SolarEdge_rebuild_test/{priezvisko_safe}"
+
+        log.info(f"[test-rozlozenie] hotovo: {filename} ({len(pdf_bytes)//1024} KB)")
+
+        return jsonify({
+            "success": True,
+            "filename": filename,
+            "folder_name": folder_name,
+            "data": pdf_b64,
+            "summary": summary,
+        })
+
+    except Exception as e:
+        log.exception("[test-rozlozenie] zlyhalo")
+        try:
+            notion_update_page(page_id, {
+                "Status": {"select": {"name": "🔴 Chyba"}},
+                "Poznámky": {"rich_text": [{"text": {"content": f"Chyba: {str(e)[:1800]}"}}]},
+            })
+        except Exception:
+            pass
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================================
 # WEBHOOK 1: PREPOČET CIEN
 # Trigger: Notion Button "🔄 Prepočítaj cenu"
 # Vstup: { "page_id": "..." }
@@ -1135,6 +1228,7 @@ def root():
             "GET /health",
             "POST /webhook/parsuj-leady",
             "POST /webhook/auto-konfig",
+            "POST /webhook/test-rozlozenie",
             "POST /webhook/prepocet",
             "POST /webhook/generate-pdf",
             "POST /webhook/email-template",
