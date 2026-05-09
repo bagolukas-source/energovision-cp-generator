@@ -606,18 +606,34 @@ def lead_from_notion(notion_props, variant):
             pocet_panelov = int(_m.group(0)) if _m else 24
 
     # Wp panela na výpočet kWp
-    wp = 540 if "540" in (notion_props.get("Panel") or "") else 470
+    panel_str = (notion_props.get("Panel") or "")
+    if "540" in panel_str:
+        wp = 540
+    elif "535" in panel_str:
+        wp = 535
+    elif "470" in panel_str:
+        wp = 470
+    else:
+        wp = 535  # default novy LONGi 535 Wp
     vykon_kwp = round(pocet_panelov * wp / 1000, 2)
 
-    # Spotreba — z poznámok nemáme presné, používame default 6500 (priemerná SK rodina)
-    # ak v Notion neexistuje pole, treba spotrebu uložiť do Poznámok formátom "spotreba: X kWh"
-    pozn = notion_props.get("Poznámky") or ""
-    m = re.search(r"spotreba[\s:]+(\d+(?:\s?\d+)?)\s*kWh", pozn, re.I)
-    if m:
-        spotreba = int(m.group(1).replace(" ", ""))
-    else:
-        # fallback: typická spotreba podľa veľkosti FVE
-        spotreba = max(3500, int(vykon_kwp * 800))  # ~800 kWh/kWp ako typická spotreba
+    # Spotreba — najprv skus novu Spotreba property (NUMBER), potom Poznamky, potom default
+    spotreba_raw = notion_props.get("Spotreba")
+    spotreba = None
+    if spotreba_raw is not None:
+        try:
+            spotreba = int(float(spotreba_raw))
+        except (TypeError, ValueError):
+            spotreba = None
+    if spotreba is None:
+        # Backward compat: skus z Poznamok formatu "spotreba: X kWh"
+        pozn = notion_props.get("Poznámky") or ""
+        m = re.search(r"spotreba[\s:]+(\d+(?:\s?\d+)?)\s*kWh", pozn, re.I)
+        if m:
+            spotreba = int(m.group(1).replace(" ", ""))
+    if spotreba is None or spotreba <= 0:
+        # Univerzalny default 8000 kWh (priemer SK domacnosti)
+        spotreba = 8000
 
     # Komponenty — podľa variantu
     bateria_kwh = 0
@@ -676,11 +692,16 @@ def lead_from_notion(notion_props, variant):
         ulica = ulica_from_mesto
 
     # Per-variant marža s fallbackom na centrálnu "Marža %"
-    marza_central = notion_props.get("Marža %") or 30
+    # POZOR: nepouzivaj `or 30` — keby uzivatel nastavil 0% maržu, fallbackoval by na 30%!
+    # Spravne: kontrola na None (chyba/empty) vs 0 (zamerne nastavene).
+    def _marza_or(val, fallback):
+        return fallback if val is None else val
+
+    marza_central = _marza_or(notion_props.get("Marža %"), 30)
     marza_per_variant = {
-        "A": notion_props.get("Marža A %") or marza_central,
-        "B": notion_props.get("Marža B %") or marza_central,
-        "C": notion_props.get("Marža C %") or marza_central,
+        "A": _marza_or(notion_props.get("Marža A %"), marza_central),
+        "B": _marza_or(notion_props.get("Marža B %"), marza_central),
+        "C": _marza_or(notion_props.get("Marža C %"), marza_central),
     }
     marza_pct = int(marza_per_variant.get(variant, marza_central))
 
