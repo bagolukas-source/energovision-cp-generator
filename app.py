@@ -368,7 +368,8 @@ def lead_to_notion_properties(lead):
 
     sizing = auto_sizing_from_spotreba(spotreba_val, ma_bateriu=variant in ("B", "C"))
     props["Panel"] = {"select": {"name": sizing["panel"]}}
-    props["Počet panelov"] = {"number": sizing["pocet_panelov"]}
+    # Pocet panelov je teraz SELECT v Notione (nie number) - hodnoty 1-30
+    props["Počet panelov"] = {"select": {"name": str(sizing["pocet_panelov"])}}
     props["Menič"] = {"select": {"name": sizing["menic"]}}
 
     konstr_sel = _select_or_none(lead.get("typ_strechy"), KONSTRUKCIA_OPTIONS)
@@ -386,7 +387,7 @@ def lead_to_notion_properties(lead):
     else:
         props["Batéria počet"] = {"select": {"name": "0"}}
 
-    if variant == "C":
+    if variant in ("C", "D"):
         wb_sel = _select_or_none(lead.get("wallbox_odporucany"), WALLBOX_OPTIONS)
         if not wb_sel:
             wb_sel = {"select": {"name": "Solinteg 11 kW (3F)"}}
@@ -559,7 +560,7 @@ def auto_konfig():
         "Spotreba": {"number": spotreba_val},
         "Spotreba zdroj": {"select": {"name": spotreba_zdroj}},
         "Panel": {"select": {"name": sizing["panel"]}},
-        "Počet panelov": {"number": sizing["pocet_panelov"]},
+        "Počet panelov": {"select": {"name": str(sizing["pocet_panelov"])}},
         "Menič": {"select": {"name": sizing["menic"]}},
     }
 
@@ -820,7 +821,7 @@ def prepocet():
     if pocet > 0 and per_modul > 0:
         update.update(notion_set_number("Batéria výkon", round(pocet * per_modul, 2)))
 
-    suma = (b.get("cena_s_dph") or a.get("cena_s_dph") or c.get("cena_s_dph"))
+    suma = (b.get("cena_s_dph") or a.get("cena_s_dph") or c.get("cena_s_dph") or d.get("cena_s_dph"))
     if suma:
         update.update(notion_set_number("Suma CP s DPH", round(suma, 2)))
 
@@ -1114,7 +1115,7 @@ def build_subject(priezvisko, mesto, variants, typ_ponuky="Indikatívna"):
     """Subject riadok — krátky, identifikovateľný. Pri Indikatívnej ponuke sa pridáva prefix."""
     prefix = "Indikatívna cenová ponuka" if typ_ponuky == "Indikatívna" else "Cenová ponuka"
     if len(variants) == 1:
-        v_label = {"A": "FVE", "B": "FVE + batéria", "C": "FVE + batéria + wallbox"}[variants[0]]
+        v_label = {"A": "FVE", "B": "FVE + batéria", "C": "FVE + batéria + wallbox", "D": "FVE + wallbox"}[variants[0]]
         return f"{prefix} {v_label} pre {priezvisko}, {mesto}"
     return f"{prefix} FVE — {priezvisko}, {mesto} ({len(variants)} varianty)"
 
@@ -1130,6 +1131,7 @@ def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchod
     cena_a = ceny.get("A") or 0
     cena_b = ceny.get("B") or 0
     cena_c = ceny.get("C") or 0
+    cena_d = ceny.get("D") or 0
 
     # === INTRO — 2 verzie podla typu ponuky ===
     n_var = len(variants)
@@ -1207,6 +1209,25 @@ def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchod
           <strong>Pozor na kalkulácie:</strong> Distribučné poplatky v SR rastú každoročne ~5–8 %.
           Batéria vám teda chráni nielen pred volatilitou ceny silovej elektriny ale aj pred budúcim rastom
           poplatkov za distribúciu.
+        </p>
+        """.replace(",", " "))
+
+    # === BLOCK D — FVE + Wallbox (bez baterie) ===
+    if "D" in variants:
+        blocks.append(f"""
+        <h3 style="color:#1B5E3F;margin-top:24px;">Varianta D — fotovoltika {kwp} kWp + wallbox (bez batérie)</h3>
+        <p>Pre rodiny s elektromobilom ktoré <strong>nepotrebujú batériu</strong> — auto sa nabíja priamo zo slnka cez deň.
+        Wallbox automaticky reaguje na prebytky FVE a využíva ich na nabíjanie EV. Optimálne riešenie ak doma cez deň
+        bývate menej a hlavnou prioritou je nabíjanie auta zo slnka.</p>
+        <ul>
+          <li><strong>Investícia po dotácii:</strong> {cena_d:,.0f} € s DPH</li>
+          <li><strong>Návratnosť:</strong> 7–9 rokov pri kombinácii FVE + EV nabíjanie</li>
+          <li><strong>Výhoda:</strong> nižšia investícia ako varianta C, ale stále plné EV nabíjanie zo slnka</li>
+          <li><strong>Hybridný menič:</strong> možnosť doplnenia batérie neskôr bez prerábania systému</li>
+        </ul>
+        <p style="background:#F0F8F4;padding:12px;border-left:4px solid #1B5E3F;font-size:14px;">
+          <strong>Dlhodobý plán:</strong> mnoho rodín začína s variant D a po 2-3 rokoch dopĺňa batériu, keď vidia
+          svoj reálny profil spotreby. Týmto spôsobom investujú postupne a vyhnú sa pre/poddimenzovaniu batérie.
         </p>
         """.replace(",", " "))
 
