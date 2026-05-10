@@ -703,15 +703,25 @@ def lead_from_notion(notion_props, variant):
 
     # Per-variant marža s fallbackom na centrálnu "Marža %"
     # POZOR: nepouzivaj `or 30` — keby uzivatel nastavil 0% maržu, fallbackoval by na 30%!
-    # Spravne: kontrola na None (chyba/empty) vs 0 (zamerne nastavene).
+    # Marža je teraz SELECT v Notione (string "0", "5", "10", ..., "100") — nie number.
+    # Treba handlovat None aj prazdny string ("") aj numeric value (legacy).
     def _marza_or(val, fallback):
-        return fallback if val is None else val
+        if val is None or val == "":
+            return fallback
+        try:
+            return int(val)
+        except (ValueError, TypeError):
+            # ak je to napr. "30 %" alebo neparsovatelne, fallback
+            import re as _re
+            _m = _re.search(r"\d+", str(val))
+            return int(_m.group(0)) if _m else fallback
 
     marza_central = _marza_or(notion_props.get("Marža %"), 30)
     marza_per_variant = {
         "A": _marza_or(notion_props.get("Marža A %"), marza_central),
         "B": _marza_or(notion_props.get("Marža B %"), marza_central),
         "C": _marza_or(notion_props.get("Marža C %"), marza_central),
+        "D": _marza_or(notion_props.get("Marža D %"), marza_central),
     }
     marza_pct = int(marza_per_variant.get(variant, marza_central))
 
