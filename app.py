@@ -808,6 +808,11 @@ def prepocet():
         update.update(notion_set_number("Cena C s DPH", round(c["cena_s_dph"], 2)))
         update.update(notion_set_number("Nákupná cena C €", round(c["nakupna"], 2)))
         update.update(notion_set_number("Zisk C €", round(c["zisk"], 2)))
+    d = ceny.get("D", {})
+    if d.get("cena_s_dph"):
+        update.update(notion_set_number("Cena D s DPH", round(d["cena_s_dph"], 2)))
+        update.update(notion_set_number("Nákupná cena D €", round(d["nakupna"], 2)))
+        update.update(notion_set_number("Zisk D €", round(d["zisk"], 2)))
 
     # Auto-vyplnenie "Batéria výkon" = počet × kWh per modul (z labelu typu)
     bat_typ = notion_props.get("Batéria (typ)") or ""
