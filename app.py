@@ -684,6 +684,92 @@ def test_rozlozenie():
 
 
 # ============================================================
+# WEBHOOK PROD: SPRACUJ ROZLOZENIE PANELOV (Zakaznici B2C)
+# Trigger: Notion Button "🎨 Spracuj rozloženie" v DB Zakaznici B2C
+# Vstup: { "page_id": "..." }
+# Robi: stiahne SolarEdge PDF z "SolarEdge raw" property,
+# extrahuje obrazky+data, vyrobi branded PDF, vrati base64.
+# Make pak ulozi do Dropbox + nastavi "Rozlozenie panelov" property.
+# Variant-aware: ak ma B/C zaskrtnute, pouzije 90% samospotrebu (s bateriou).
+# ============================================================
+@app.route("/webhook/spracuj-rozlozenie", methods=["POST"])
+@require_secret
+def spracuj_rozlozenie():
+    body = request.get_json(silent=True) or {}
+    page_id = body.get("page_id")
+    if not page_id:
+        return jsonify({"error": "missing page_id"}), 400
+
+    log.info(f"[spracuj-rozlozenie] page_id={page_id}")
+
+    try:
+        page = notion_get_page(page_id)
+    except Exception as e:
+        return jsonify({"error": f"notion_get failed: {e}"}), 500
+
+    flat = notion_props_to_flat(page)
+
+    raw_files_json = flat.get("SolarEdge raw") or ""
+    raw_url = None
+    if raw_files_json:
+        try:
+            files = json.loads(raw_files_json)
+            if files and isinstance(files, list):
+                raw_url = files[0].get("url")
+        except (ValueError, TypeError):
+            pass
+
+    if not raw_url:
+        return jsonify({
+            "success": False,
+            "error": "SolarEdge raw property je prazdna — najprv nahraj PDF z Designera."
+        }), 200  # 200 aby Make scenar pokracoval na error handler ak chce
+
+    try:
+        from solar_rebuild import process_solaredge_pdf
+        import base64 as _b64
+
+        # Variant-aware samospotreba — B/C = bateria → 90%
+        var_b = flat.get("Variant B — FVE + BESS") == "__YES__"
+        var_c = flat.get("Variant C — FVE + BESS + Wallbox") == "__YES__"
+        ma_bateriu = var_b or var_c
+
+        pdf_bytes, _pdf_priezvisko, summary = process_solaredge_pdf(raw_url, ma_bateriu=ma_bateriu)
+        pdf_b64 = _b64.b64encode(pdf_bytes).decode("ascii")
+
+        # PRIEZVISKO z Notion title (konzistentne s generate-pdf endpointom)
+        # — nie z PDF extrakcie, lebo "BUCEK" v PDF != "Bucek" v Notion
+        from generate_from_notion import lead_from_notion as _lfn, safe_filename as _sf
+        try:
+            _lead = _lfn(flat, "A")
+            priezvisko = _lead.get("meno", "").split()[-1] if _lead.get("meno") else "Klient"
+        except Exception:
+            priezvisko = "Klient"
+        priezvisko_safe = _sf(priezvisko) or "Klient"
+
+        # ID z Notion ID ponuky property — rovnaky format ako generate-pdf
+        id_p = flat.get("ID ponuky") or ""
+        id_match = re.search(r"\d+", str(id_p))
+        ev_id = f"EV-26-{int(id_match.group(0)):03d}" if id_match else "EV-XX"
+        filename = f"{ev_id}_Rozlozenie_{priezvisko_safe}.pdf"
+        folder_name = f"{ev_id}_{priezvisko_safe}"
+
+        log.info(f"[spracuj-rozlozenie] hotovo: {filename} ({len(pdf_bytes)//1024} KB) ma_bateriu={ma_bateriu}")
+
+        return jsonify({
+            "success": True,
+            "filename": filename,
+            "folder_name": folder_name,
+            "data": pdf_b64,
+            "summary": summary,
+        })
+
+    except Exception as e:
+        log.exception("[spracuj-rozlozenie] zlyhalo")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ============================================================
 # WEBHOOK 1: PREPOČET CIEN
 # Trigger: Notion Button "🔄 Prepočítaj cenu"
 # Vstup: { "page_id": "..." }
@@ -1229,6 +1315,7 @@ def root():
             "POST /webhook/parsuj-leady",
             "POST /webhook/auto-konfig",
             "POST /webhook/test-rozlozenie",
+            "POST /webhook/spracuj-rozlozenie",
             "POST /webhook/prepocet",
             "POST /webhook/generate-pdf",
             "POST /webhook/email-template",
