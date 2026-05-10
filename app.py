@@ -524,6 +524,23 @@ def parsuj_leady():
 @app.route("/webhook/auto-konfig", methods=["POST"])
 @require_secret
 def auto_konfig():
+    """
+    All-in-one Auto-konfig.
+
+    1. Sizing zo Spotreby (Panel, Pocet, Menic) — vzdy ma_bateriu=True (Solinteg menic, kompatibilny s baterion)
+    2. Konstrukcia default Skridla
+    3. Bateria default 1 ks podla znacky menica:
+       - Solinteg menic -> Solinteg EBA B5K1 (5.12 alebo 10.24 podla spotreby)
+       - Huawei menic   -> Huawei LUNA2000 (5 alebo 7 kWh)
+       - GoodWe menic   -> Pylontech Force H3 5.12
+    4. Wallbox default podla znacky menica:
+       - Solinteg -> Solinteg 11 kW (3F)
+       - Huawei   -> Huawei AC Smart 22 kW
+       - GoodWe   -> GoodWe 22 kW
+    5. Po nastaveni props prepocita ceny pre VSETKY 4 varianty (A/B/C/D)
+       a zapise Cena/Naukpna/Zisk + Suma CP s DPH
+    6. Vrati zhrnutie s 4 cenami — uzivatel si vyklika ktoru chce ponuknut.
+    """
     body = request.get_json(force=True, silent=True) or {}
     page_id = body.get("page_id")
     if not page_id:
@@ -538,6 +555,7 @@ def auto_konfig():
 
     flat = notion_props_to_flat(page)
 
+    # === SPOTREBA ===
     spotreba_raw = flat.get("Spotreba")
     if spotreba_raw is not None:
         try:
@@ -550,44 +568,124 @@ def auto_konfig():
         spotreba_val = float(DEFAULT_SPOTREBA_KWH)
         spotreba_zdroj = "Default 8000 (SK priemer)"
 
-    var_b = flat.get("Variant B — FVE + BESS") == "__YES__"
-    var_c = flat.get("Variant C — FVE + BESS + Wallbox") == "__YES__"
-    ma_bateriu = var_b or var_c
+    # === SIZING — vzdy s bateriou aby sme dostali Solinteg/hybridny menic ===
+    sizing = auto_sizing_from_spotreba(spotreba_val, ma_bateriu=True)
+    menic = sizing["menic"]
 
-    sizing = auto_sizing_from_spotreba(spotreba_val, ma_bateriu=ma_bateriu)
+    # === BATERIA podla znacky menica ===
+    bat_aktualna = flat.get("Batéria (typ)")
+    if not bat_aktualna:
+        if "Solinteg" in menic:
+            bat_typ = "Solinteg EBA B5K1 — 10.24 kWh" if spotreba_val > 5000 else "Solinteg EBA B5K1 — 5.12 kWh"
+        elif "Huawei" in menic:
+            bat_typ = "Huawei LUNA2000 — 7 kWh" if spotreba_val > 5000 else "Huawei LUNA2000 — 5 kWh"
+        elif "GoodWe" in menic:
+            bat_typ = "Pylontech Force H3 — 5.12 kWh"
+        else:
+            bat_typ = "Solinteg EBA B5K1 — 10.24 kWh"
+    else:
+        bat_typ = bat_aktualna
 
-    update_props = {
+    # === WALLBOX podla znacky menica ===
+    wb_aktualna = flat.get("Wallbox (typ)")
+    if not wb_aktualna:
+        if "Solinteg" in menic:
+            wb_typ = "Solinteg 11 kW (3F)"
+        elif "Huawei" in menic:
+            wb_typ = "Huawei AC Smart 22 kW"
+        elif "GoodWe" in menic:
+            wb_typ = "GoodWe 22 kW"
+        else:
+            wb_typ = "Solinteg 11 kW (3F)"
+    else:
+        wb_typ = wb_aktualna
+
+    # === KONSTRUKCIA default Skridla ===
+    konstr_aktualna = flat.get("Konštrukcia (typ)")
+    konstr_typ = konstr_aktualna or "Škridla"
+
+    # === KROK 1: Update vsetky komponenty + Spotreba ===
+    update_props_komponenty = {
         "Spotreba": {"number": spotreba_val},
         "Spotreba zdroj": {"select": {"name": spotreba_zdroj}},
         "Panel": {"select": {"name": sizing["panel"]}},
         "Počet panelov": {"select": {"name": str(sizing["pocet_panelov"])}},
-        "Menič": {"select": {"name": sizing["menic"]}},
+        "Menič": {"select": {"name": menic}},
+        "Konštrukcia (typ)": {"select": {"name": konstr_typ}},
+        "Batéria (typ)": {"select": {"name": bat_typ}},
+        "Batéria počet": {"select": {"name": "1"}},
+        "Wallbox (typ)": {"select": {"name": wb_typ}},
     }
 
-    bat_aktualna = flat.get("Batéria (typ)")
-    if ma_bateriu and not bat_aktualna:
-        default_bat = "Solinteg EBA B5K1 — 10.24 kWh" if spotreba_val > 5000 else "Solinteg EBA B5K1 — 5.12 kWh"
-        update_props["Batéria (typ)"] = {"select": {"name": default_bat}}
-        update_props["Batéria počet"] = {"select": {"name": "1"}}
-    elif not ma_bateriu:
-        update_props["Batéria počet"] = {"select": {"name": "0"}}
-
-    # Default konstrukcia "Skridla" ak este nie je nastavena
-    konstr_aktualna = flat.get("Konštrukcia (typ)")
-    if not konstr_aktualna:
-        update_props["Konštrukcia (typ)"] = {"select": {"name": "Škridla"}}
-
     try:
-        notion_update_page(page_id, update_props)
+        notion_update_page(page_id, update_props_komponenty)
     except Exception as e:
-        log.exception("Notion update zlyhal")
-        return jsonify({"error": f"notion_update failed: {e}"}), 500
+        log.exception("Notion update komponent zlyhal")
+        return jsonify({"error": f"notion_update komponenty failed: {e}"}), 500
+
+    # === KROK 2: Re-fetch page (s novymi props) a prepocet vsetkych 4 variantov ===
+    try:
+        page2 = notion_get_page(page_id)
+        flat2 = notion_props_to_flat(page2)
+        from generate_from_notion import predpocitaj_ceny_pre_record
+        ceny = predpocitaj_ceny_pre_record(flat2)
+    except Exception as e:
+        log.exception("Predpocet zlyhal")
+        # Komponenty su nastavene, ale ceny zlyhali - vratime castocny success
+        return jsonify({
+            "ok": False,
+            "warning": "Komponenty nastavene, ale predpocet cien zlyhal",
+            "error": str(e),
+            "sizing": sizing,
+        }), 200
+
+    # === KROK 3: Update Notion s cenami pre A/B/C/D ===
+    price_update = {}
+    sumarne = {}
+    for v in ("A", "B", "C", "D"):
+        cv = ceny.get(v, {})
+        if cv.get("cena_s_dph"):
+            price_update.update(notion_set_number(f"Cena {v} s DPH", round(cv["cena_s_dph"], 2)))
+            price_update.update(notion_set_number(f"Nákupná cena {v} €", round(cv["nakupna"], 2)))
+            price_update.update(notion_set_number(f"Zisk {v} €", round(cv["zisk"], 2)))
+            sumarne[v] = round(cv["cena_s_dph"], 2)
+
+    # Suma CP s DPH = preferuj B (kombi), inak A
+    suma = (ceny.get("B", {}).get("cena_s_dph")
+            or ceny.get("A", {}).get("cena_s_dph")
+            or ceny.get("D", {}).get("cena_s_dph")
+            or ceny.get("C", {}).get("cena_s_dph"))
+    if suma:
+        price_update.update(notion_set_number("Suma CP s DPH", round(suma, 2)))
+
+    # Auto-vyplnenie "Bateria vykon"
+    m_bat = re.search(r"(\d+(?:[.,]\d+)?)\s*kWh", bat_typ)
+    if m_bat:
+        per_modul = float(m_bat.group(1).replace(",", "."))
+        price_update.update(notion_set_number("Batéria výkon", round(per_modul * 1, 2)))
+
+    if price_update:
+        try:
+            notion_update_page(page_id, price_update)
+        except Exception as e:
+            log.warning("Notion price update zlyhal: %s", e)
+
+    log.info("[auto-konfig] hotovo. Sizing=%s, Ceny=%s", sizing, sumarne)
 
     return jsonify({
         "ok": True,
         "spotreba": spotreba_val,
         "spotreba_zdroj": spotreba_zdroj,
         "sizing": sizing,
+        "komponenty": {
+            "panel": sizing["panel"],
+            "pocet_panelov": sizing["pocet_panelov"],
+            "menic": menic,
+            "bateria": bat_typ,
+            "wallbox": wb_typ,
+            "konstrukcia": konstr_typ,
+        },
+        "ceny": sumarne,
     })
 
 
