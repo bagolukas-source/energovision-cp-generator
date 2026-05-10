@@ -97,16 +97,16 @@ def predpocitaj_ceny_pre_record(notion_props):
     Vráti dict {variant: {cena_s_dph, nakupna, zisk, marza_pct}}."""
     cennik = load_cennik()
     out = {}
-    for variant in ("A", "B", "C"):
-        # Variant B/C potrebujú batériu, C aj wallbox — ak chýba, preskoč
+    for variant in ("A", "B", "C", "D"):
+        # Variant B/C potrebujú batériu, C/D aj wallbox — ak chýba, preskoč
         if variant in ("B", "C") and not notion_props.get("Batéria (typ)"):
             continue
-        if variant == "C" and not notion_props.get("Wallbox (typ)"):
+        if variant in ("C", "D") and not notion_props.get("Wallbox (typ)"):
             continue
         try:
             lead = lead_from_notion(notion_props, variant)
 
-            # Kompatibilita check
+            # Kompatibilita check (iba ak ma bateriu)
             if variant in ("B", "C"):
                 ok, msg = check_compatibility(lead["invertor_kod"], lead.get("bateria_kod"))
                 if not ok:
@@ -669,7 +669,7 @@ def lead_from_notion(notion_props, variant):
             # Backward compat: ak je "Batéria (kWh)" zadané ako absolútna hodnota (zo starých záznamov)
             bateria_kwh = float(notion_props.get("Batéria (kWh)") or 10)
 
-    if variant == "C":
+    if variant in ("C", "D"):
         wallbox = True
         wallbox_kod = WALLBOX_MAP.get(notion_props.get("Wallbox (typ)"), "WBX-002")
 
