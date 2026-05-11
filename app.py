@@ -1274,6 +1274,15 @@ def generuj_realizacne():
 
     menic = flat.get("Menič") or "Solinteg MHT-10K-25"
     konstrukcia = flat.get("Konštrukcia (typ)") or "Škridla"
+    panel_typ = flat.get("Panel") or "LONGi 535 Wp"
+
+    # Sériové čísla pre revíznu správu/protokol
+    sn_menic = flat.get("Sériové č. meniča") or ""
+    sn_panelov = flat.get("Sériové č. panelov") or ""
+
+    # Doplnkové polia
+    hlavny_istic = flat.get("Hlavný istič") or "3x25A"
+    predajca_energii = flat.get("Predajca energií") or ""
 
     # Wallbox — iba pri C alebo D
     wallbox_typ_raw = flat.get("Wallbox (typ)") or ""
@@ -1283,22 +1292,36 @@ def generuj_realizacne():
         wallbox_typ = ""
     ma_wallbox = bool(wallbox_typ)
 
-    # Datum spustenia
-    datum_spustenia_raw = flat.get("date:Dátum spustenia:start", "")
-    datum_spustenia = ""
-    if datum_spustenia_raw:
+    # Datumy — Dátum revízie, Dátum odovzdania, Dátum spustenia
+    def _parse_d(raw):
+        if not raw:
+            return ""
         try:
-            d = datetime.strptime(datum_spustenia_raw[:10], "%Y-%m-%d")
-            datum_spustenia = d.strftime("%d.%m.%Y")
+            d = datetime.strptime(raw[:10], "%Y-%m-%d")
+            return d.strftime("%d.%m.%Y")
         except Exception:
-            datum_spustenia = datum_spustenia_raw
+            return raw
+
+    datum_revizie = _parse_d(flat.get("date:Dátum revízie:start", ""))
+    datum_odovzdania = _parse_d(flat.get("date:Dátum odovzdania:start", ""))
+    datum_spustenia = _parse_d(flat.get("date:Dátum spustenia:start", ""))
+
+    datum_dnes_str = datetime.now().strftime("%d.%m.%Y")
+    if not datum_revizie:
+        datum_revizie = datum_odovzdania or datum_spustenia or datum_dnes_str
+    if not datum_odovzdania:
+        datum_odovzdania = datum_revizie
     if not datum_spustenia:
-        datum_spustenia = datetime.now().strftime("%d.%m.%Y")
+        datum_spustenia = datum_odovzdania
 
     # ID ponuky
     id_p = flat.get("ID ponuky") or ""
     m_id = re.search(r"\d+", str(id_p))
     ev_id_root = f"EV-26-{int(m_id.group(0)):03d}" if m_id else "EV-XX"
+
+    # Číslo PoUVV — z Notion alebo z ev_id
+    cislo_pouvv = flat.get("Číslo PoUVV") or f"P-26-{ev_id_root.replace('EV-26-', '')}"
+    revizny_technik = flat.get("Revízny technik") or "Miloš Ďurička"
 
     lead_data = {
         "meno_priezvisko": meno_priezvisko,
@@ -1308,16 +1331,25 @@ def generuj_realizacne():
         "email": email,
         "vykon_kwp": vykon_kwp,
         "pocet_panelov": pocet_panelov,
+        "panel_typ": panel_typ,
         "menic": menic,
+        "sn_menic": sn_menic,
+        "sn_panelov": sn_panelov,
         "bateria_typ": bateria_typ,
         "pocet_baterii": pocet_baterii,
         "bateria_kwh": bateria_kwh,
         "konstrukcia": konstrukcia,
         "wallbox_typ": wallbox_typ,
         "ma_wallbox": ma_wallbox,
+        "hlavny_istic": hlavny_istic,
+        "predajca_energii": predajca_energii,
         "datum_zahajenia": datum_spustenia,
-        "datum_odovzdania": datum_spustenia,
+        "datum_odovzdania": datum_odovzdania,
+        "datum_revizie": datum_revizie,
+        "datum_dnes": datum_dnes_str,
         "cislo_protokolu": ev_id_root,
+        "cislo_pouvv": cislo_pouvv,
+        "revizny_technik": revizny_technik,
         "ev_id": ev_id_root,
     }
 
@@ -1360,6 +1392,185 @@ def generuj_realizacne():
 
     except Exception as e:
         log.exception("[generuj-realizacne] zlyhalo")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ============================================================
+# WEBHOOK: GENERUJ PD (Projektová dokumentácia — malé zdroje do 10 kW)
+# Trigger: Notion button "🏗 Generuj projekt"
+# Vstup: { "page_id": "..." }
+# Výstup: 5 DOCX dokumentov (krycí list, zoznam, technická správa, PoUVV, súhrnná)
+# ============================================================
+@app.route("/webhook/generuj-pd", methods=["POST"])
+@require_secret
+def generuj_pd():
+    body = request.get_json(force=True, silent=True) or {}
+    page_id = body.get("page_id")
+    if not page_id:
+        return jsonify({"error": "missing page_id"}), 400
+
+    log.info("[generuj-pd] page_id=%s", page_id)
+
+    try:
+        page = notion_get_page(page_id)
+    except Exception as e:
+        return jsonify({"error": f"notion_get failed: {e}"}), 500
+
+    flat = notion_props_to_flat(page)
+
+    from datetime import datetime
+    from generate_from_notion import safe_filename as _sf
+
+    meno_priezvisko = flat.get("Zákazník", "")
+    telefon = flat.get("Telefón", "")
+    email = flat.get("Email", "")
+    ulica = flat.get("Ulica číslo", "")
+    mesto = flat.get("Mesto", "")
+    psc = flat.get("PSČ", "")
+    adresa_parts = [p for p in [ulica, mesto] if p]
+    adresa = ", ".join(adresa_parts)
+    trvale_bydlisko = flat.get("Trvalé bydlisko", "") or adresa
+
+    # Variant + konfig
+    variant_select = flat.get("Variant do zmluvy") or ""
+    m_v = re.match(r"\s*([ABCD])", variant_select)
+    variant = m_v.group(1) if m_v else "B"
+
+    pocet_panelov_raw = flat.get("Počet panelov") or "0"
+    try:
+        pocet_panelov = int(pocet_panelov_raw)
+    except (ValueError, TypeError):
+        pocet_panelov = 0
+    vykon_kwp = round(pocet_panelov * 535 / 1000, 2)
+
+    panel_typ = flat.get("Panel") or "LONGi 535 Wp"
+    menic = flat.get("Menič") or "Solinteg MHT-10K-25"
+    konstrukcia = flat.get("Konštrukcia (typ)") or "Šikmá strecha (škridla)"
+    hlavny_istic = flat.get("Hlavný istič") or "3x25A"
+
+    # Bateria iba B/C
+    bateria_typ_raw = flat.get("Batéria (typ)") or ""
+    pocet_baterii_raw = flat.get("Batéria počet") or "0"
+    try:
+        pocet_baterii_int = int(pocet_baterii_raw)
+    except (ValueError, TypeError):
+        pocet_baterii_int = 0
+    if variant in ("B", "C"):
+        bateria_typ = bateria_typ_raw
+        pocet_baterii = pocet_baterii_int
+    else:
+        bateria_typ = ""
+        pocet_baterii = 0
+    m_bat = re.search(r"(\d+(?:[.,]\d+)?)\s*kWh", bateria_typ)
+    per_modul_kwh = float(m_bat.group(1).replace(",", ".")) if m_bat else 0
+    bateria_kwh = round(pocet_baterii * per_modul_kwh, 2)
+
+    # Wallbox iba C/D
+    wallbox_typ_raw = flat.get("Wallbox (typ)") or ""
+    if variant in ("C", "D"):
+        wallbox_typ = wallbox_typ_raw
+    else:
+        wallbox_typ = ""
+    ma_wallbox = bool(wallbox_typ)
+
+    # ID ponuky → ev_id (P-26-XXX)
+    id_p = flat.get("ID ponuky") or ""
+    m_id = re.search(r"\d+", str(id_p))
+    ev_id_root = f"EV-26-{int(m_id.group(0)):03d}" if m_id else "EV-XX"
+
+    # PD-špecifické polia
+    dis = flat.get("Distribučná spoločnosť") or ""
+    cislo_pouvv = flat.get("Číslo PoUVV") or f"PoUVV-{ev_id_root}"
+    parcely = flat.get("Parcelné čísla") or ""
+    eic = flat.get("EIC odberného miesta") or ""
+    eic_dodavka = flat.get("EIC dodávka") or ""
+    katastr = flat.get("Katastrálne územie") or ""
+    predajca = flat.get("Predajca energií") or ""
+
+    lead_data = {
+        "meno_priezvisko": meno_priezvisko,
+        "telefon": telefon, "email": email,
+        "adresa": adresa, "trvale_bydlisko": trvale_bydlisko,
+        "ulica_cislo": ulica, "mesto": mesto, "psc": psc,
+        "vykon_kwp": vykon_kwp, "pocet_panelov": pocet_panelov,
+        "panel_typ": panel_typ, "menic": menic,
+        "bateria_typ": bateria_typ, "pocet_baterii": pocet_baterii, "bateria_kwh": bateria_kwh,
+        "konstrukcia": konstrukcia,
+        "ma_wallbox": ma_wallbox, "wallbox_typ": wallbox_typ,
+        "hlavny_istic": hlavny_istic,
+        "dis": dis,
+        "cislo_pouvv": cislo_pouvv,
+        "parcelne_cisla": parcely,
+        "eic": eic, "eic_dodavka": eic_dodavka,
+        "katastralne_uzemie": katastr,
+        "predajca_energii": predajca,
+        "datum_dnes": datetime.now().strftime("%d.%m.%Y"),
+        "ev_id": ev_id_root,
+        "variant": variant,
+    }
+
+    log.info("[generuj-pd] %s: %.2f kWp variant=%s, dis=%s",
+             meno_priezvisko, vykon_kwp, variant, dis)
+
+    # Skús stiahnuť SolarEdge raw PDF pre technický výkres (voliteľné)
+    solaredge_pdf_bytes = None
+    raw_files_json = flat.get("SolarEdge raw") or ""
+    if raw_files_json:
+        try:
+            import json as _json
+            files_arr = _json.loads(raw_files_json) if isinstance(raw_files_json, str) else raw_files_json
+            if files_arr and isinstance(files_arr, list):
+                se_url = None
+                for f in files_arr:
+                    if isinstance(f, dict):
+                        se_url = f.get("file", {}).get("url") or f.get("external", {}).get("url") or f.get("url")
+                        if se_url:
+                            break
+                if se_url:
+                    r = requests.get(se_url, timeout=60)
+                    r.raise_for_status()
+                    solaredge_pdf_bytes = r.content
+                    log.info("[generuj-pd] SolarEdge PDF stiahnutý (%d B)", len(solaredge_pdf_bytes))
+        except Exception as e:
+            log.warning("[generuj-pd] SolarEdge raw nedostupný: %s", e)
+
+    try:
+        from generuj_pd import vygeneruj_projektovu_dokumentaciu
+        import base64 as _b64
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            files = vygeneruj_projektovu_dokumentaciu(lead_data, tmpdir, solaredge_pdf_bytes=solaredge_pdf_bytes)
+
+            attachments = []
+            for kluc, path in files.items():
+                with open(path, "rb") as f:
+                    raw = f.read()
+                attachments.append({
+                    "kluc": kluc,
+                    "filename": Path(path).name,
+                    "data": _b64.b64encode(raw).decode("ascii"),
+                })
+
+            priezvisko_safe = _sf(meno_priezvisko.split()[-1] if meno_priezvisko else "Klient") or "Klient"
+            folder_name = f"{ev_id_root}_{priezvisko_safe}/Projekcia"
+
+            log.info("[generuj-pd] hotovo: %d dokumentov", len(attachments))
+
+            return jsonify({
+                "success": True,
+                "folder_name": folder_name,
+                "attachments": attachments,
+                "summary": {
+                    "klient": meno_priezvisko,
+                    "ev_id": ev_id_root,
+                    "vykon_kwp": vykon_kwp,
+                    "variant": variant,
+                    "dis": dis,
+                },
+            })
+
+    except Exception as e:
+        log.exception("[generuj-pd] zlyhalo")
         return jsonify({"success": False, "error": str(e)}), 500
 
 
