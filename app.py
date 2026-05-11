@@ -41,6 +41,7 @@ app = Flask(__name__)
 # === ENV ===
 NOTION_TOKEN = os.environ.get("NOTION_TOKEN", "")
 NOTION_DATABASE_ID = os.environ.get("NOTION_DATABASE_ID", "ba7a1d6c-63a9-43da-b66d-2b1c7e8660da")
+NOTION_MATERIAL_PO_DB_ID = os.environ.get("NOTION_MATERIAL_PO_DB_ID", "a8690d6826114d5097c8bbfb36c02d7c")
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-5-20250929")
@@ -604,7 +605,7 @@ def auto_konfig():
     konstr_aktualna = flat.get("Konštrukcia (typ)")
     konstr_typ = konstr_aktualna or "Škridla"
 
-    # === KROK 1: Update vsetky komponenty + Spotreba ===
+    # === KROK 1: Update vsetky komponenty + Spotreba + DEFAULT marze 30% ===
     update_props_komponenty = {
         "Spotreba": {"number": spotreba_val},
         "Spotreba zdroj": {"select": {"name": spotreba_zdroj}},
@@ -616,6 +617,13 @@ def auto_konfig():
         "Batéria počet": {"select": {"name": "1"}},
         "Wallbox (typ)": {"select": {"name": wb_typ}},
     }
+
+    # Default marza 30% pre vsetky varianty ak este nie su nastavene
+    DEFAULT_MARZA = "30"
+    for v in ("A", "B", "C", "D"):
+        marza_aktualna = flat.get(f"Marža {v} %")
+        if not marza_aktualna or marza_aktualna == "":
+            update_props_komponenty[f"Marža {v} %"] = {"select": {"name": DEFAULT_MARZA}}
 
     try:
         notion_update_page(page_id, update_props_komponenty)
@@ -869,6 +877,1137 @@ def spracuj_rozlozenie():
 
 
 # ============================================================
+# WEBHOOK: GENERUJ DOKUMENTY (post-vyhra)
+# Trigger: Notion Button "📄 Generuj zmluvy" v Zákazníci B2C
+# Vstup: { "page_id": "..." }
+# Robi: Načíta Notion data, vyplní 4 templaty (Zmluva, Splnomocnenie,
+# GDPR, Dotaznik), vráti base64 + filename + folder. Make uploadne
+# do Dropboxu + zapise do Notion property fields.
+# ============================================================
+@app.route("/webhook/generuj-dokumenty", methods=["POST"])
+@require_secret
+def generuj_dokumenty():
+    body = request.get_json(force=True, silent=True) or {}
+    page_id = body.get("page_id")
+    if not page_id:
+        return jsonify({"error": "missing page_id"}), 400
+
+    log.info("[generuj-dokumenty] page_id=%s", page_id)
+
+    try:
+        page = notion_get_page(page_id)
+    except Exception as e:
+        return jsonify({"error": f"notion_get failed: {e}"}), 500
+
+    flat = notion_props_to_flat(page)
+
+    # === Zostav lead_data zo zaznamu ===
+    from datetime import datetime
+    from generate_from_notion import lead_from_notion as _lfn, safe_filename as _sf
+
+    # Pouzi variant A pre zakladne lead udaje
+    try:
+        _lead = _lfn(flat, "A")
+    except Exception:
+        _lead = {}
+
+    meno_priezvisko = flat.get("Zákazník", "")
+    telefon = flat.get("Telefón", "")
+    email = flat.get("Email", "")
+
+    # Adresa: kombinacia ulice, mesto, psc
+    ulica = flat.get("Ulica číslo", "")
+    mesto = flat.get("Mesto", "")
+    psc = flat.get("PSČ", "")
+    adresa_parts = [p for p in [ulica, psc, mesto] if p]
+    adresa = ", ".join(adresa_parts)
+
+    trvale_bydlisko = flat.get("Trvalé bydlisko", "") or adresa
+
+    cislo_op = flat.get("Číslo OP", "")
+
+    # Datum narodenia format date YYYY-MM-DD -> DD.MM.YYYY
+    datum_narodenia_raw = flat.get("date:Dátum narodenia:start", "") or flat.get("Dátum narodenia", "")
+    datum_narodenia = ""
+    if datum_narodenia_raw:
+        try:
+            d = datetime.strptime(datum_narodenia_raw[:10], "%Y-%m-%d")
+            datum_narodenia = d.strftime("%d.%m.%Y")
+        except Exception:
+            datum_narodenia = datum_narodenia_raw
+
+    # Cenova ponuka - vyber prvy zaskrtnuty variant (priorita: B > A > C > D)
+    variant_to_use = None
+    for v in ("B", "A", "C", "D"):
+        prop_name = {
+            "A": "Variant A — FVE",
+            "B": "Variant B — FVE + BESS",
+            "C": "Variant C — FVE + BESS + Wallbox",
+            "D": "Variant D — FVE + Wallbox",
+        }[v]
+        if flat.get(prop_name) == "__YES__":
+            variant_to_use = v
+            break
+
+    cena_s_dph = 0
+    if variant_to_use:
+        cena_key = f"Cena {variant_to_use} s DPH"
+        cena_s_dph = float(flat.get(cena_key) or 0)
+    cena_bez_dph = round(cena_s_dph / 1.23, 2) if cena_s_dph else 0
+
+    # ID ponuky
+    id_p = flat.get("ID ponuky") or ""
+    m_id = re.search(r"\d+", str(id_p))
+    ev_id_root = f"EV-26-{int(m_id.group(0)):03d}" if m_id else "EV-XX"
+    cislo_cp = f"{ev_id_root}-{variant_to_use or 'A'}"
+
+    # Datum cenovej ponuky
+    datum_cp_raw = flat.get("date:Dátum odoslania CP:start", "")
+    datum_cp = ""
+    if datum_cp_raw:
+        try:
+            d = datetime.strptime(datum_cp_raw[:10], "%Y-%m-%d")
+            datum_cp = d.strftime("%d.%m.%Y")
+        except Exception:
+            datum_cp = datum_cp_raw
+
+    # Vykon FVE z poctu panelov × 535
+    pocet_panelov_raw = flat.get("Počet panelov") or "0"
+    try:
+        pocet_panelov = int(pocet_panelov_raw)
+    except (ValueError, TypeError):
+        pocet_panelov = 0
+    vykon_kwp = round(pocet_panelov * 535 / 1000, 2)
+
+    datum_dnes = datetime.now().strftime("%d.%m.%Y")
+
+    lead_data = {
+        "meno_priezvisko": meno_priezvisko,
+        "adresa": adresa,
+        "telefon": telefon,
+        "email": email,
+        "vykon_kwp": vykon_kwp,
+        "cislo_cp": cislo_cp,
+        "datum_cp": datum_cp,
+        "miesto_vykonu": adresa,
+        "cena_eur": cena_bez_dph,  # do zmluvy ide cena bez DPH
+        "datum_dnes": datum_dnes,
+        "datum_narodenia": datum_narodenia,
+        "cislo_op": cislo_op,
+        "trvale_bydlisko": trvale_bydlisko,
+        "ev_id": ev_id_root,
+        # Pre dotaznik
+        "ulica_cislo": ulica,
+        "mesto": mesto,
+        "psc": psc,
+        "iban": flat.get("IBAN", ""),
+        "banka": flat.get("Banka", ""),
+        "eic": flat.get("EIC odberného miesta", ""),
+        "cislo_obch_partnera": flat.get("Číslo obchodného partnera", ""),
+        "spotreba": str(flat.get("Spotreba") or ""),
+        "hlavny_istic": flat.get("Hlavný istič", ""),
+        "predajca_energii": flat.get("Predajca energií", ""),
+        "katastralne_uzemie": flat.get("Katastrálne územie", ""),
+        "parcelne_cisla": flat.get("Parcelné čísla", ""),
+        "adresa_om": adresa,
+    }
+
+    log.info("[generuj-dokumenty] lead_data: meno=%r, ev_id=%r, cena=%r",
+             lead_data["meno_priezvisko"], lead_data["ev_id"], lead_data["cena_eur"])
+
+    # === Vyrob 4 dokumenty ===
+    try:
+        from generuj_dokumenty import vygeneruj_balik_dokumentov
+        import base64 as _b64
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            files = vygeneruj_balik_dokumentov(lead_data, tmpdir)
+
+            attachments = []
+            for kluc, path in files.items():
+                with open(path, "rb") as f:
+                    raw = f.read()
+                attachments.append({
+                    "kluc": kluc,
+                    "filename": Path(path).name,
+                    "data": _b64.b64encode(raw).decode("ascii"),
+                })
+
+            priezvisko_safe = _sf(meno_priezvisko.split()[-1] if meno_priezvisko else "Klient") or "Klient"
+            folder_name = f"{ev_id_root}_{priezvisko_safe}"
+
+            log.info("[generuj-dokumenty] vyrobenych %d dokumentov", len(attachments))
+
+            return jsonify({
+                "success": True,
+                "folder_name": folder_name,
+                "attachments": attachments,
+                "summary": {
+                    "klient": meno_priezvisko,
+                    "ev_id": ev_id_root,
+                    "cena_bez_dph": cena_bez_dph,
+                    "variant": variant_to_use,
+                    "vykon_kwp": vykon_kwp,
+                },
+            })
+
+    except Exception as e:
+        log.exception("[generuj-dokumenty] zlyhalo")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ============================================================
+# WEBHOOK: EMAIL ZMLUVY (poslat klientovi 4 dokumenty)
+# Trigger: Notion Button "📧 Poslať zmluvy" v Zákazníci B2C
+# Vstup: { "page_id": "..." }
+# Robi: Stiahne 4 PDF (Zmluva, Splnomocnenie, GDPR, Dotaznik) z Notion file URLs,
+#       vrati base64 + email body. Make pošle cez Outlook.
+# ============================================================
+@app.route("/webhook/email-zmluvy", methods=["POST"])
+@require_secret
+def email_zmluvy():
+    body = request.get_json(force=True, silent=True) or {}
+    page_id = body.get("page_id")
+    if not page_id:
+        return jsonify({"error": "missing page_id"}), 400
+
+    log.info("[email-zmluvy] page_id=%s", page_id)
+
+    try:
+        page = notion_get_page(page_id)
+    except Exception as e:
+        return jsonify({"error": f"notion_get failed: {e}"}), 500
+
+    flat = notion_props_to_flat(page)
+
+    # Lead udaje
+    meno_priezvisko = flat.get("Zákazník", "")
+    priezvisko = meno_priezvisko.split()[-1] if meno_priezvisko else "Klient"
+    email_zakaznika = (flat.get("Email") or "").strip()
+    if not _is_valid_email(email_zakaznika):
+        return jsonify({
+            "success": False,
+            "email_valid": "false",
+            "error": f"Neplatny email: '{email_zakaznika}'",
+        }), 200
+
+    # Obchodnik
+    from generate_from_notion import OBCHODNICI, DEFAULT_OBCHODNIK, safe_filename as _sf
+    obchodnik = OBCHODNICI.get(flat.get("Obchodník") or flat.get("Obchodnik") or "", DEFAULT_OBCHODNIK)
+
+    # ID a folder
+    id_p = flat.get("ID ponuky") or ""
+    m_id = re.search(r"\d+", str(id_p))
+    ev_id_root = f"EV-26-{int(m_id.group(0)):03d}" if m_id else "EV-XX"
+    priezvisko_safe = _sf(priezvisko) or "Klient"
+    folder_name = f"{ev_id_root}_{priezvisko_safe}"
+
+    # Stiahni 4 dokumenty z Notion file URLs
+    import base64 as _b64
+    attachments = []
+    file_props = [
+        ("Zmluva PDF", "Zmluva o dielo"),
+        ("Splnomocnenie PDF", "Splnomocnenie"),
+        ("GDPR súhlas PDF", "GDPR súhlas"),
+        ("Dotazník PDF", "Dotazník"),
+    ]
+    docs_present = []
+    for prop_name, label in file_props:
+        files_json = flat.get(prop_name) or ""
+        if not files_json:
+            continue
+        try:
+            files = json.loads(files_json)
+        except (ValueError, TypeError):
+            files = []
+        if not files:
+            continue
+        f = files[0]
+        url = f.get("url")
+        fname = f.get("name") or f"{label}_{priezvisko_safe}"
+        if not url:
+            continue
+        try:
+            r = requests.get(url, timeout=60)
+            r.raise_for_status()
+            attachments.append({
+                "filename": fname,
+                "folder_name": folder_name,
+                "data": _b64.b64encode(r.content).decode("ascii"),
+            })
+            docs_present.append(label)
+        except Exception as e:
+            log.warning(f"Stiahnutie {prop_name} zlyhalo: {e}")
+
+    if not attachments:
+        return jsonify({
+            "success": False,
+            "error": "Ziadne dokumenty na poslanie. Najprv klikni 📄 Generuj zmluvy.",
+        }), 200
+
+    # Email body
+    subject = f"Zmluvná dokumentácia — {meno_priezvisko} (Energovision)"
+    body_html = f"""
+    <p>Dobrý deň pán/pani {priezvisko},</p>
+    <p>na základe Vášho súhlasu s našou cenovou ponukou Vám zasielam zmluvnú dokumentáciu k inštalácii fotovoltickej elektrárne. V prílohe nájdete:</p>
+    <ul>
+      <li><strong>Zmluva o dielo</strong> — zmluva o dodávke a inštalácii FVE</li>
+      <li><strong>Splnomocnenie</strong> — pre komunikáciu s distribučnou spoločnosťou, SIEA a stavebným úradom</li>
+      <li><strong>Súhlas so spracovaním osobných údajov</strong> (GDPR)</li>
+      <li><strong>Dotazník pripojenia FVE</strong> — administratívne podklady pre žiadosť o pripojenie do siete</li>
+    </ul>
+    <p style="background:#FFF8E1;padding:12px;border-left:4px solid #F59E0B;font-size:14px;">
+      <strong>Postup:</strong>
+      <br>1. Vytlačte všetky 4 dokumenty.
+      <br>2. Vyplňte <strong>Dotazník</strong> (potrebujeme údaje pre žiadosť do distribučky — EIC odberného miesta, IBAN, parcelné čísla, atď.).
+      <br>3. Podpíšte všetky 4 dokumenty (3 podpisy + dotazník).
+      <br>4. Odošlite ich naskenované späť na <strong>{obchodnik.get('email', 'info@energovision.sk')}</strong>, alebo ich odovzdajte osobne pri obhliadke.
+    </p>
+    <p>Po prijatí podpísaných dokumentov Vám vystavíme zálohovú faktúru (30 % z ceny) a po jej úhrade pripravíme termín inštalácie (typicky 4–8 týždňov).</p>
+    <p>V prípade akýchkoľvek otázok ma neváhajte kontaktovať.</p>
+    <p>S pozdravom,<br>
+    <strong>{obchodnik.get('meno', 'Dominik Galaba')}</strong><br>
+    {obchodnik.get('funkcia', 'Office & Administration Manager')}<br>
+    📞 {obchodnik.get('tel', '+421 917 424 564')}<br>
+    ✉ {obchodnik.get('email', 'dominik.galaba@energovision.sk')}<br>
+    <br>
+    <em>Energovision s.r.o. — moderné energetické riešenia, ktoré nadchnú</em></p>
+    """
+
+    log.info(f"[email-zmluvy] hotovo: {len(attachments)} attachments, to={email_zakaznika}")
+
+    return jsonify({
+        "success": True,
+        "email_valid": "true",
+        "to": email_zakaznika,
+        "subject": subject,
+        "body_html": body_html,
+        "attachments": attachments,
+        "obchodnik": obchodnik,
+        "docs_sent": docs_present,
+    })
+
+
+# ============================================================
+# WEBHOOK: GENERUJ REALIZACNE DOKUMENTY (Revízna správa + Preberací protokol)
+# Trigger: Notion Button "📋 Generuj revíziu+protokol"
+# Vstup: { "page_id": "..." }
+# Robi: po Realizacii vyrobi revíznu správu (z BYTTERM templatu) +
+# preberací protokol s konfig FVE. Vrati 2 docx attachmenty.
+# ============================================================
+@app.route("/webhook/generuj-realizacne", methods=["POST"])
+@require_secret
+def generuj_realizacne():
+    body = request.get_json(force=True, silent=True) or {}
+    page_id = body.get("page_id")
+    if not page_id:
+        return jsonify({"error": "missing page_id"}), 400
+
+    log.info("[generuj-realizacne] page_id=%s", page_id)
+
+    try:
+        page = notion_get_page(page_id)
+    except Exception as e:
+        return jsonify({"error": f"notion_get failed: {e}"}), 500
+
+    flat = notion_props_to_flat(page)
+
+    from datetime import datetime
+    from generate_from_notion import safe_filename as _sf
+
+    meno_priezvisko = flat.get("Zákazník", "")
+    telefon = flat.get("Telefón", "")
+    email = flat.get("Email", "")
+
+    ulica = flat.get("Ulica číslo", "")
+    mesto = flat.get("Mesto", "")
+    psc = flat.get("PSČ", "")
+    adresa_parts = [p for p in [ulica, mesto] if p]
+    adresa = ", ".join(adresa_parts)
+    psc_mesto = f"{psc} {mesto}".strip()
+
+    # Konfig
+    pocet_panelov_raw = flat.get("Počet panelov") or "0"
+    try:
+        pocet_panelov = int(pocet_panelov_raw)
+    except (ValueError, TypeError):
+        pocet_panelov = 0
+    vykon_kwp = round(pocet_panelov * 535 / 1000, 2)
+
+    # Bateria
+    bateria_typ = flat.get("Batéria (typ)") or ""
+    pocet_baterii_raw = flat.get("Batéria počet") or "0"
+    try:
+        pocet_baterii = int(pocet_baterii_raw)
+    except (ValueError, TypeError):
+        pocet_baterii = 0
+    # Extrahuj kWh z label
+    m_bat = re.search(r"(\d+(?:[.,]\d+)?)\s*kWh", bateria_typ)
+    per_modul_kwh = float(m_bat.group(1).replace(",", ".")) if m_bat else 0
+    bateria_kwh = round(pocet_baterii * per_modul_kwh, 2)
+
+    menic = flat.get("Menič") or "Solinteg MHT-10K-25"
+    konstrukcia = flat.get("Konštrukcia (typ)") or "Škridla"
+
+    # Wallbox
+    wallbox_typ = flat.get("Wallbox (typ)") or ""
+    ma_wallbox = bool(wallbox_typ)
+
+    # Datum spustenia
+    datum_spustenia_raw = flat.get("date:Dátum spustenia:start", "")
+    datum_spustenia = ""
+    if datum_spustenia_raw:
+        try:
+            d = datetime.strptime(datum_spustenia_raw[:10], "%Y-%m-%d")
+            datum_spustenia = d.strftime("%d.%m.%Y")
+        except Exception:
+            datum_spustenia = datum_spustenia_raw
+    if not datum_spustenia:
+        datum_spustenia = datetime.now().strftime("%d.%m.%Y")
+
+    # ID ponuky
+    id_p = flat.get("ID ponuky") or ""
+    m_id = re.search(r"\d+", str(id_p))
+    ev_id_root = f"EV-26-{int(m_id.group(0)):03d}" if m_id else "EV-XX"
+
+    lead_data = {
+        "meno_priezvisko": meno_priezvisko,
+        "adresa": adresa,
+        "psc_mesto": psc_mesto,
+        "telefon": telefon,
+        "email": email,
+        "vykon_kwp": vykon_kwp,
+        "pocet_panelov": pocet_panelov,
+        "menic": menic,
+        "bateria_typ": bateria_typ,
+        "pocet_baterii": pocet_baterii,
+        "bateria_kwh": bateria_kwh,
+        "konstrukcia": konstrukcia,
+        "wallbox_typ": wallbox_typ,
+        "ma_wallbox": ma_wallbox,
+        "datum_zahajenia": datum_spustenia,
+        "datum_odovzdania": datum_spustenia,
+        "cislo_protokolu": ev_id_root,
+        "ev_id": ev_id_root,
+    }
+
+    log.info("[generuj-realizacne] %s: %.2f kWp + %.2f kWh bat",
+             meno_priezvisko, vykon_kwp, bateria_kwh)
+
+    try:
+        from generuj_dokumenty import vygeneruj_realizacne_dokumenty
+        import base64 as _b64
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            files = vygeneruj_realizacne_dokumenty(lead_data, tmpdir)
+
+            attachments = []
+            for kluc, path in files.items():
+                with open(path, "rb") as f:
+                    raw = f.read()
+                attachments.append({
+                    "kluc": kluc,
+                    "filename": Path(path).name,
+                    "data": _b64.b64encode(raw).decode("ascii"),
+                })
+
+            priezvisko_safe = _sf(meno_priezvisko.split()[-1] if meno_priezvisko else "Klient") or "Klient"
+            folder_name = f"{ev_id_root}_{priezvisko_safe}"
+
+            log.info("[generuj-realizacne] hotovo: %d dokumentov", len(attachments))
+
+            return jsonify({
+                "success": True,
+                "folder_name": folder_name,
+                "attachments": attachments,
+                "summary": {
+                    "klient": meno_priezvisko,
+                    "ev_id": ev_id_root,
+                    "vykon_kwp": vykon_kwp,
+                    "bateria_kwh": bateria_kwh,
+                },
+            })
+
+    except Exception as e:
+        log.exception("[generuj-realizacne] zlyhalo")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ============================================================
+# WEBHOOK: GENERUJ PO (Material Purchase Order)
+# Trigger: Notion automation pri Status = 💰 Faktúra
+# Vstup: { "page_id": "..." }
+# Výstup: BOM list, vytvorí rows v Materiál PO DB
+# ============================================================
+@app.route("/webhook/generuj-po", methods=["POST"])
+@require_secret
+def generuj_po():
+    body = request.get_json(force=True, silent=True) or {}
+    page_id = body.get("page_id")
+    if not page_id:
+        return jsonify({"error": "missing page_id"}), 400
+
+    log.info("[generuj-po] page_id=%s", page_id)
+
+    try:
+        page = notion_get_page(page_id)
+    except Exception as e:
+        return jsonify({"error": f"notion_get failed: {e}"}), 500
+
+    flat = notion_props_to_flat(page)
+    meno_priezvisko = flat.get("Zákazník", "")
+
+    # ID ponuky -> EV-26-XXX
+    id_p = flat.get("ID ponuky") or ""
+    m_id = re.search(r"\d+", str(id_p))
+    ev_id = f"EV-26-{int(m_id.group(0)):03d}" if m_id else "EV-XX"
+
+    # Konfig pre BOM
+    pocet_panelov_raw = flat.get("Počet panelov") or "0"
+    try:
+        pocet_panelov = int(pocet_panelov_raw)
+    except (ValueError, TypeError):
+        pocet_panelov = 0
+
+    panel_typ = flat.get("Typ panela") or flat.get("Panel") or "LONGi 535 Wp"
+
+    # Wp z typu panela
+    m_wp = re.search(r"(\d+)\s*Wp", panel_typ)
+    wp = int(m_wp.group(1)) if m_wp else 535
+    vykon_kwp = round(pocet_panelov * wp / 1000, 2)
+
+    menic = flat.get("Menič") or ""
+    bateria_typ = flat.get("Batéria (typ)") or ""
+    pocet_baterii_raw = flat.get("Batéria počet") or "0"
+    try:
+        pocet_baterii = int(pocet_baterii_raw)
+    except (ValueError, TypeError):
+        pocet_baterii = 0
+    wallbox_typ = flat.get("Wallbox (typ)") or ""
+    konstrukcia = flat.get("Konštrukcia (typ)") or "Škridla"
+    distribucka = flat.get("Distribučka") or flat.get("Distribuční") or ""
+
+    lead_data = {
+        "pocet_panelov": pocet_panelov,
+        "vykon_kwp": vykon_kwp,
+        "panel_typ": panel_typ,
+        "menic": menic,
+        "bateria_typ": bateria_typ,
+        "pocet_baterii": pocet_baterii,
+        "wallbox_typ": wallbox_typ,
+        "ma_wallbox": bool(wallbox_typ),
+        "konstrukcia": konstrukcia,
+        "distribucka": distribucka,
+    }
+
+    log.info("[generuj-po] %s: %.2f kWp, %d panelov, batéria=%s×%d, WB=%s",
+             meno_priezvisko, vykon_kwp, pocet_panelov, bateria_typ, pocet_baterii, wallbox_typ)
+
+    try:
+        from generuj_po import generuj_bom, bom_total
+
+        bom = generuj_bom(lead_data)
+        celkom_naklady = bom_total(bom)
+
+        # Vytvor rows v Notion DB Materiál PO
+        vytvorene = 0
+        zlyhane = []
+        for item in bom:
+            props = {
+                "Položka": {
+                    "title": [{"text": {"content": item["polozka"]}}]
+                },
+                "Projekt (ev_id)": {
+                    "rich_text": [{"text": {"content": ev_id}}]
+                },
+                "Klient": {
+                    "rich_text": [{"text": {"content": meno_priezvisko}}]
+                },
+                "Kategória": {
+                    "select": {"name": item["kategoria"]}
+                },
+                "Množstvo": {
+                    "number": item["mnozstvo"]
+                },
+                "Jednotka": {
+                    "select": {"name": item["jednotka"]}
+                },
+                "Dodávateľ": {
+                    "select": {"name": item["dodavatel"]}
+                },
+                "Cena/ks (€)": {
+                    "number": item["cena_ks"]
+                },
+                "Stav": {
+                    "status": {"name": "Not started"}
+                },
+            }
+            if item.get("poznamka"):
+                props["Poznámka"] = {
+                    "rich_text": [{"text": {"content": item["poznamka"]}}]
+                }
+            try:
+                notion_create_page_in_db(NOTION_MATERIAL_PO_DB_ID, props)
+                vytvorene += 1
+            except Exception as ex:
+                zlyhane.append({"polozka": item["polozka"], "error": str(ex)[:200]})
+                log.warning("[generuj-po] Failed: %s — %s", item["polozka"][:40], ex)
+
+        log.info("[generuj-po] %s: %d/%d položiek, celkom %.2f EUR (nákup)",
+                 ev_id, vytvorene, len(bom), celkom_naklady)
+
+        return jsonify({
+            "success": True,
+            "ev_id": ev_id,
+            "klient": meno_priezvisko,
+            "polozky_total": len(bom),
+            "polozky_vytvorene": vytvorene,
+            "polozky_zlyhane": zlyhane,
+            "celkom_naklady_eur": celkom_naklady,
+            "summary": {
+                "vykon_kwp": vykon_kwp,
+                "pocet_panelov": pocet_panelov,
+                "menic": menic,
+                "bateria_typ": bateria_typ if bateria_typ else None,
+                "pocet_baterii": pocet_baterii,
+                "wallbox_typ": wallbox_typ if wallbox_typ else None,
+            },
+        })
+
+    except Exception as e:
+        log.exception("[generuj-po] zlyhalo")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ============================================================
+# WEBHOOK: EMAIL AGENT — FIRST CONTACT
+# Trigger: Make scenár pri Status = 🆕 Došlý lead alebo manuálny button
+# Vstup: { "page_id": "..." }
+# Výstup: { "to_email": "...", "subject": "...", "body": "...", "extracted_info": {...} }
+# ============================================================
+@app.route("/webhook/email-agent-first", methods=["POST"])
+@require_secret
+def email_agent_first():
+    body = request.get_json(force=True, silent=True) or {}
+    page_id = body.get("page_id")
+    if not page_id:
+        return jsonify({"error": "missing page_id"}), 400
+
+    log.info("[email-agent-first] page_id=%s", page_id)
+
+    try:
+        page = notion_get_page(page_id)
+    except Exception as e:
+        return jsonify({"error": f"notion_get failed: {e}"}), 500
+
+    flat = notion_props_to_flat(page)
+
+    # Skip ak Rieši obchodník
+    if _human_handles_lead(flat):
+        log.info("[email-agent-first] preskočené — rieši obchodník")
+        return jsonify({"success": False, "skipped": True, "reason": "rieši_obchodník"}), 200
+
+    # Postavi lead pre email_agent
+    meno = flat.get("Zákazník", "")
+    email = flat.get("Email", "")
+    if not email:
+        return jsonify({"error": "lead has no email — cannot start email agent"}), 400
+
+    id_p = flat.get("ID ponuky") or ""
+    m_id = re.search(r"\d+", str(id_p))
+    ev_id = f"EV-26-{int(m_id.group(0)):03d}" if m_id else f"EV-26-{page_id[:3].upper()}"
+
+    spotreba_raw = flat.get("Spotreba (kWh/rok)")
+    try:
+        spotreba = int(spotreba_raw) if spotreba_raw else None
+    except (ValueError, TypeError):
+        spotreba = None
+
+    typ_dopytu = flat.get("Typ dopytu") or ""
+    zaujem = [typ_dopytu] if typ_dopytu else ["FVE"]
+
+    lead_data = {
+        "ev_id": ev_id,
+        "meno": meno,
+        "email": email,
+        "telefon": flat.get("Telefón", ""),
+        "mesto": flat.get("Mesto", ""),
+        "spotreba_kwh": spotreba,
+        "ma_zaujem_o": zaujem,
+        "poznamky": flat.get("Poznámky", ""),
+        "zdroj": flat.get("Zdroj", "Web"),
+    }
+
+    try:
+        from email_agent import vygeneruj_prvy_email
+        result = vygeneruj_prvy_email(lead_data)
+    except Exception as e:
+        log.exception("[email-agent-first] LLM zlyhal")
+        return jsonify({"error": f"LLM failed: {e}"}), 500
+
+    # Update Notion — status, transkript, subject
+    from datetime import datetime as _dt
+    today = _dt.now().strftime("%Y-%m-%d")
+
+    transcript_entry = (
+        f"=== {today} | AGENT (prvý kontakt) ===\n"
+        f"Subject: {result.get('subject','')}\n\n"
+        f"{result.get('body','')}\n\n"
+    )
+
+    update_props = {
+        "AI Status": {"select": {"name": "🤖 AI komunikuje"}},
+        "AI naposledy poslal": {"date": {"start": today}},
+        "AI počet follow-upov": {"number": 0},
+        "Email predmet": {"rich_text": [{"text": {"content": result.get("subject", "")[:1900]}}]},
+        "Email transkript": {"rich_text": [{"text": {"content": transcript_entry[:1900]}}]},
+    }
+    quality = result.get("lead_quality")
+    if quality:
+        update_props["AI lead quality"] = {"select": {"name": quality}}
+
+    try:
+        notion_update_page(page_id, update_props)
+    except Exception as e:
+        log.warning("[email-agent-first] Notion update failed: %s", e)
+
+    return jsonify({
+        "success": True,
+        "to_email": email,
+        "to_name": meno,
+        "subject": result.get("subject", ""),
+        "body": result.get("body_with_signature", result.get("body", "")),
+        "ev_id": ev_id,
+        "extracted_info": result.get("extracted_info", {}),
+        "tokens": result.get("tokens", 0),
+    })
+
+
+# ============================================================
+# WEBHOOK: EMAIL AGENT — REPLY HANDLER
+# Trigger: Make scenár pri prichádzajúcom emaile (subject obsahuje [EV-XX-XXX])
+# Vstup: { "page_id": "...", "incoming_email": "telo emailu", "incoming_subject": "..." }
+# Výstup: { "should_reply": bool, "subject": "...", "body": "...", "handover": bool, "to_email": "..." }
+# ============================================================
+@app.route("/webhook/email-agent-reply", methods=["POST"])
+@require_secret
+def email_agent_reply():
+    body_data = request.get_json(force=True, silent=True) or {}
+    page_id = body_data.get("page_id")
+    incoming_email = (body_data.get("incoming_email") or "").strip()
+    incoming_subject = (body_data.get("incoming_subject") or "").strip()
+
+    if not page_id or not incoming_email:
+        return jsonify({"error": "missing page_id or incoming_email"}), 400
+
+    log.info("[email-agent-reply] page_id=%s, body=%d znakov", page_id, len(incoming_email))
+
+    try:
+        page = notion_get_page(page_id)
+    except Exception as e:
+        return jsonify({"error": f"notion_get failed: {e}"}), 500
+
+    flat = notion_props_to_flat(page)
+
+    # Skip ak Rieši obchodník
+    if _human_handles_lead(flat):
+        log.info("[email-agent-reply] preskočené — rieši obchodník")
+        try:
+            notion_update_page(page_id, {"AI Status": {"select": {"name": "⏸ Pozastavené"}}})
+        except Exception:
+            pass
+        return jsonify({"should_reply": False, "skipped": True, "reason": "rieši_obchodník"}), 200
+
+    # Skontroluj AI Status
+    ai_status = flat.get("AI Status") or ""
+    if "Opt-out" in ai_status or "Pozastav" in ai_status:
+        return jsonify({"should_reply": False, "reason": f"AI paused: {ai_status}"}), 200
+
+    meno = flat.get("Zákazník", "")
+    email = flat.get("Email", "")
+    id_p = flat.get("ID ponuky") or ""
+    m_id = re.search(r"\d+", str(id_p))
+    ev_id = f"EV-26-{int(m_id.group(0)):03d}" if m_id else "EV-XX"
+
+    spotreba_raw = flat.get("Spotreba (kWh/rok)")
+    try:
+        spotreba = int(spotreba_raw) if spotreba_raw else None
+    except (ValueError, TypeError):
+        spotreba = None
+
+    follow_up_count_raw = flat.get("AI počet follow-upov") or "0"
+    try:
+        follow_up_count = int(follow_up_count_raw)
+    except (ValueError, TypeError):
+        follow_up_count = 0
+
+    lead_data = {
+        "ev_id": ev_id,
+        "meno": meno,
+        "email": email,
+        "mesto": flat.get("Mesto", ""),
+        "spotreba_kwh": spotreba,
+        "typ_strechy": flat.get("Konštrukcia (typ)", ""),
+        "ma_zaujem_o": [flat.get("Typ dopytu")] if flat.get("Typ dopytu") else [],
+        "poznamky": flat.get("Poznámky", ""),
+    }
+
+    # Načítaj transcript z Notion (rich text)
+    transcript_raw = flat.get("Email transkript") or ""
+    transcript = _parse_email_transcript(transcript_raw)
+
+    try:
+        from email_agent import spracuj_odpoved
+        result = spracuj_odpoved(lead_data, transcript, incoming_email, follow_up_count=follow_up_count)
+    except Exception as e:
+        log.exception("[email-agent-reply] LLM zlyhal")
+        return jsonify({"error": f"LLM failed: {e}"}), 500
+
+    # Opt-out detection
+    if result.get("opted_out"):
+        try:
+            notion_update_page(page_id, {
+                "AI Status": {"select": {"name": "🛑 Opt-out"}},
+            })
+        except Exception:
+            pass
+        return jsonify({
+            "should_reply": True,
+            "to_email": email,
+            "to_name": meno,
+            "subject": result.get("subject", ""),
+            "body": result.get("body", "") + "\n\n— Tím Energovision",
+            "opted_out": True,
+        })
+
+    # Update Notion — append do transkriptu, extracted info, status
+    from datetime import datetime as _dt
+    today = _dt.now().strftime("%Y-%m-%d")
+
+    new_entry = (
+        f"=== {today} | KLIENT ===\n{incoming_email[:1500]}\n\n"
+        f"=== {today} | AGENT (odpoveď) ===\nSubject: {result.get('subject','')}\n\n{result.get('body','')}\n\n"
+    )
+
+    # Append k existujúcemu transcriptu (max 1900 znakov v Notion rich_text)
+    combined = (transcript_raw + "\n" + new_entry) if transcript_raw else new_entry
+    if len(combined) > 1900:
+        combined = combined[-1900:]
+
+    update_props = {
+        "Email transkript": {"rich_text": [{"text": {"content": combined}}]},
+        "AI naposledy poslal": {"date": {"start": today}},
+        "AI počet follow-upov": {"number": 0},  # reset po reply
+    }
+
+    ext = result.get("extracted_info") or {}
+    if ext.get("spotreba_kwh") and not spotreba:
+        try:
+            update_props["Spotreba (kWh/rok)"] = {"number": int(ext["spotreba_kwh"])}
+        except (ValueError, TypeError):
+            pass
+    if ext.get("typ_strechy"):
+        ts = ext["typ_strechy"]
+        if ts in {"Škridla", "Plech kombivrut", "Falcový plech", "Plochá strecha — J 13°", "Plochá strecha — V/Z 10°"}:
+            update_props["Konštrukcia (typ)"] = {"select": {"name": ts}}
+
+    quality = result.get("lead_quality")
+    if quality:
+        update_props["AI lead quality"] = {"select": {"name": quality}}
+
+    handover = bool(result.get("handover_to_dominik"))
+    next_action = result.get("next_action", "")
+
+    if handover or next_action == "handover":
+        update_props["AI Status"] = {"select": {"name": "📞 Pripravený na hovor"}}
+        update_props["Status"] = {"select": {"name": "💼 V riešení"}}
+    elif quality == "dead" or next_action == "stop":
+        update_props["AI Status"] = {"select": {"name": "❄️ Cold"}}
+    else:
+        update_props["AI Status"] = {"select": {"name": "🤖 AI komunikuje"}}
+
+    try:
+        notion_update_page(page_id, update_props)
+    except Exception as e:
+        log.warning("[email-agent-reply] Notion update failed: %s", e)
+
+    return jsonify({
+        "should_reply": True,
+        "to_email": email,
+        "to_name": meno,
+        "subject": result.get("subject", ""),
+        "body": result.get("body_with_signature", result.get("body", "")),
+        "handover": handover,
+        "lead_quality": quality,
+        "tokens": result.get("tokens", 0),
+    })
+
+
+# ============================================================
+# WEBHOOK: EMAIL AGENT — FOLLOW-UP CRON
+# Trigger: Make cron scenár (denne)
+# Vstup: { "page_id": "...", "dni_od_poslednej": 4 }
+# Výstup: { "should_send": bool, "subject": "...", "body": "..." }
+# ============================================================
+@app.route("/webhook/email-agent-followup", methods=["POST"])
+@require_secret
+def email_agent_followup():
+    body_data = request.get_json(force=True, silent=True) or {}
+    page_id = body_data.get("page_id")
+    dni_od_poslednej = int(body_data.get("dni_od_poslednej") or 3)
+
+    if not page_id:
+        return jsonify({"error": "missing page_id"}), 400
+
+    try:
+        page = notion_get_page(page_id)
+    except Exception as e:
+        return jsonify({"error": f"notion_get failed: {e}"}), 500
+
+    flat = notion_props_to_flat(page)
+
+    # Skip ak Rieši obchodník
+    if _human_handles_lead(flat):
+        log.info("[email-agent-followup] preskočené — rieši obchodník")
+        return jsonify({"should_send": False, "skipped": True, "reason": "rieši_obchodník"}), 200
+
+    meno = flat.get("Zákazník", "")
+    email = flat.get("Email", "")
+    id_p = flat.get("ID ponuky") or ""
+    m_id = re.search(r"\d+", str(id_p))
+    ev_id = f"EV-26-{int(m_id.group(0)):03d}" if m_id else "EV-XX"
+
+    fu_raw = flat.get("AI počet follow-upov") or "0"
+    try:
+        fu_count = int(fu_raw)
+    except (ValueError, TypeError):
+        fu_count = 0
+
+    if fu_count >= 3:
+        # už sme dosiahli max → daj cold a stop
+        try:
+            notion_update_page(page_id, {
+                "AI Status": {"select": {"name": "❄️ Cold"}},
+                "AI lead quality": {"select": {"name": "cold"}},
+            })
+        except Exception:
+            pass
+        return jsonify({"should_send": False, "reason": "max_followups_reached"}), 200
+
+    lead_data = {
+        "ev_id": ev_id,
+        "meno": meno,
+        "email": email,
+        "mesto": flat.get("Mesto", ""),
+    }
+    transcript_raw = flat.get("Email transkript") or ""
+    transcript = _parse_email_transcript(transcript_raw)
+
+    try:
+        from email_agent import vygeneruj_followup
+        result = vygeneruj_followup(lead_data, transcript, fu_count, dni_od_poslednej)
+    except Exception as e:
+        log.exception("[email-agent-followup] LLM zlyhal")
+        return jsonify({"error": f"LLM failed: {e}"}), 500
+
+    from datetime import datetime as _dt
+    today = _dt.now().strftime("%Y-%m-%d")
+    new_fu_count = fu_count + 1
+
+    new_entry = (
+        f"=== {today} | AGENT (follow-up č. {new_fu_count}) ===\n"
+        f"Subject: {result.get('subject','')}\n\n{result.get('body','')}\n\n"
+    )
+    combined = (transcript_raw + "\n" + new_entry) if transcript_raw else new_entry
+    if len(combined) > 1900:
+        combined = combined[-1900:]
+
+    update_props = {
+        "Email transkript": {"rich_text": [{"text": {"content": combined}}]},
+        "AI naposledy poslal": {"date": {"start": today}},
+        "AI počet follow-upov": {"number": new_fu_count},
+    }
+    if new_fu_count >= 3 or result.get("next_action") == "stop":
+        update_props["AI Status"] = {"select": {"name": "❄️ Cold"}}
+
+    try:
+        notion_update_page(page_id, update_props)
+    except Exception as e:
+        log.warning("[email-agent-followup] Notion update failed: %s", e)
+
+    return jsonify({
+        "should_send": True,
+        "to_email": email,
+        "to_name": meno,
+        "subject": result.get("subject", ""),
+        "body": result.get("body_with_signature", result.get("body", "")),
+        "follow_up_number": new_fu_count,
+        "tokens": result.get("tokens", 0),
+    })
+
+
+def _human_handles_lead(flat: dict) -> bool:
+    """Vráti True ak je v Notion zaškrtnuté 'Rieši obchodník' — AI sa nemá miešať."""
+    val = flat.get("Rieši obchodník")
+    # Notion checkbox môže prísť ako True/False (bool) alebo "true"/"false" (string)
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, str):
+        return val.lower() in ("true", "yes", "1", "✓")
+    return False
+
+
+def _parse_email_transcript(raw: str) -> list:
+    """Z Notion rich text transcriptu vyparsuj turns pre email_agent."""
+    if not raw:
+        return []
+    turns = []
+    # split on === markers
+    blocks = re.split(r"={3,}\s*[^=]+\s*={3,}", raw)
+    headers = re.findall(r"={3,}\s*([^=]+?)\s*={3,}", raw)
+    for header, content in zip(headers, blocks[1:]):
+        h_lower = header.lower()
+        if "agent" in h_lower:
+            role = "agent"
+        elif "klient" in h_lower or "zákazník" in h_lower:
+            role = "customer"
+        else:
+            continue
+        c = content.strip()
+        if c:
+            turns.append({"role": role, "content": c[:3000]})
+    return turns[-12:]
+
+
+# ============================================================
+# WEBHOOK: CHAT (verejný chatbot widget pre energovision.sk)
+# Trigger: JS fetch z embed widgetu na webe
+# Vstup: { "history": [{"role":"user|assistant","content":"..."}], "message": "..." }
+# Výstup: { "answer": "...", "lead_ready": bool, "lead": {...|null} }
+# CORS: povolený pre všetky originy (verejný endpoint)
+# ============================================================
+@app.route("/webhook/chat", methods=["POST", "OPTIONS"])
+def webhook_chat():
+    # CORS preflight
+    if request.method == "OPTIONS":
+        resp = jsonify({"ok": True})
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        resp.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        return resp, 204
+
+    body = request.get_json(force=True, silent=True) or {}
+    history = body.get("history") or []
+    message = (body.get("message") or "").strip()
+
+    if not message:
+        resp = jsonify({"error": "empty message"})
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        return resp, 400
+
+    # Hard limits proti zneužitiu
+    if len(message) > 4000:
+        message = message[:4000]
+    if len(history) > 30:
+        history = history[-30:]
+
+    try:
+        from chatbot import odpovedz_chatbot, extrahuj_lead
+
+        result = odpovedz_chatbot(history, message)
+
+        # Ak chatbot povedal že lead je hotový, extrahujme ho a zapíšme do Notion Default Inbox
+        lead_data = None
+        lead_saved = False
+        if result.get("lead_ready"):
+            full_history = history + [
+                {"role": "user", "content": message},
+                {"role": "assistant", "content": result.get("answer", "")},
+            ]
+            lead_data = extrahuj_lead(full_history)
+
+            if lead_data:
+                # Zapíš do Notion Default Inbox alebo Zákazníci B2C
+                try:
+                    saved = _save_chatbot_lead_to_notion(lead_data, full_history)
+                    lead_saved = bool(saved)
+                except Exception as ex:
+                    log.warning("[chat] Notion save failed: %s", ex)
+
+        resp = jsonify({
+            "answer": result.get("answer", ""),
+            "lead_ready": result.get("lead_ready", False),
+            "lead": lead_data,
+            "lead_saved": lead_saved,
+            "tokens": result.get("tokens", 0),
+        })
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        return resp
+
+    except Exception as e:
+        log.exception("[chat] zlyhalo")
+        resp = jsonify({"error": str(e)[:200]})
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        return resp, 500
+
+
+def _save_chatbot_lead_to_notion(lead: dict, full_history: list):
+    """Zapis chatbot lead do Notion DB Zákazníci B2C ako nový záznam so Status = Došlý lead."""
+    if not lead:
+        return None
+
+    meno = lead.get("meno", "Chatbot lead")
+    transcript = "\n".join(
+        f"{m.get('role','?').upper()}: {m.get('content','')[:500]}"
+        for m in (full_history or [])[-20:]
+    )
+
+    props = {
+        "Zákazník": {"title": [{"text": {"content": meno}}]},
+        "Status": {"select": {"name": "🆕 Došlý lead"}},
+    }
+
+    if lead.get("email"):
+        props["Email"] = {"email": lead["email"]}
+    if lead.get("telefon"):
+        props["Telefón"] = {"phone_number": lead["telefon"]}
+    if lead.get("mesto"):
+        props["Mesto"] = {"rich_text": [{"text": {"content": lead["mesto"]}}]}
+    if lead.get("adresa"):
+        props["Ulica číslo"] = {"rich_text": [{"text": {"content": lead["adresa"]}}]}
+    if lead.get("spotreba_kwh"):
+        try:
+            props["Spotreba (kWh/rok)"] = {"number": int(lead["spotreba_kwh"])}
+        except (ValueError, TypeError):
+            pass
+
+    poznamka_parts = []
+    if lead.get("poznamka"):
+        poznamka_parts.append(f"Chatbot zhrnutie: {lead['poznamka']}")
+    if lead.get("ma_zaujem_o"):
+        zaujem = ", ".join(lead["ma_zaujem_o"]) if isinstance(lead["ma_zaujem_o"], list) else str(lead["ma_zaujem_o"])
+        poznamka_parts.append(f"Záujem o: {zaujem}")
+    if lead.get("typ_strechy"):
+        poznamka_parts.append(f"Strecha: {lead['typ_strechy']}")
+    if lead.get("orientacia"):
+        poznamka_parts.append(f"Orientácia: {lead['orientacia']}")
+    poznamka_parts.append("--- Transkript z chatu ---")
+    poznamka_parts.append(transcript[:1800])
+
+    props["Poznámky"] = {
+        "rich_text": [{"text": {"content": "\n".join(poznamka_parts)[:2000]}}]
+    }
+
+    try:
+        new_page = notion_create_page_in_db(NOTION_DATABASE_ID, props)
+        log.info("[chat] Lead saved: %s (page %s)", meno, new_page.get("id"))
+        return new_page
+    except Exception as e:
+        log.warning("[chat] notion_create_page_in_db failed: %s", e)
+        return None
+
+
+# ============================================================
 # WEBHOOK 1: PREPOČET CIEN
 # Trigger: Notion Button "🔄 Prepočítaj cenu"
 # Vstup: { "page_id": "..." }
@@ -885,8 +2024,27 @@ def prepocet():
     page = notion_get_page(page_id)
     notion_props = notion_props_to_flat(page)
 
-    # Vyrátá ceny pre A/B/C
-    ceny = predpocitaj_ceny_pre_record(notion_props)
+    # Detekuj zakliknuté varianty - filter pre prepocet
+    variants_filter = []
+    for k, v in notion_props.items():
+        k_lower = k.lower().strip()
+        if v == "__YES__":
+            if k_lower.startswith("variant a") and "A" not in variants_filter:
+                variants_filter.append("A")
+            elif k_lower.startswith("variant b") and "B" not in variants_filter:
+                variants_filter.append("B")
+            elif k_lower.startswith("variant c") and "C" not in variants_filter:
+                variants_filter.append("C")
+            elif k_lower.startswith("variant d") and "D" not in variants_filter:
+                variants_filter.append("D")
+
+    # Ak ziadny variant nezaskrtnuty, ratam vsetky (backward-compat)
+    if not variants_filter:
+        log.info("Prepocet: ziadny variant zaskrtnuty, ratam vsetky 4")
+        ceny = predpocitaj_ceny_pre_record(notion_props)
+    else:
+        log.info(f"Prepocet: ratam iba zaskrtnute varianty {variants_filter}")
+        ceny = predpocitaj_ceny_pre_record(notion_props, variants_filter=variants_filter)
 
     # Update Notion polí
     update = {}
@@ -1440,6 +2598,9 @@ def root():
             "POST /webhook/auto-konfig",
             "POST /webhook/test-rozlozenie",
             "POST /webhook/spracuj-rozlozenie",
+            "POST /webhook/generuj-dokumenty",
+            "POST /webhook/email-zmluvy",
+            "POST /webhook/generuj-realizacne",
             "POST /webhook/prepocet",
             "POST /webhook/generate-pdf",
             "POST /webhook/email-template",
