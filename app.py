@@ -445,35 +445,6 @@ def health():
 # WEBHOOK 0: PARSUJ LEADY (Multi-lead intake parser)
 # Trigger: Notion Button "🔍 Parsuj leady" v Lead Inbox DB
 # ============================================================
-def _lead_existuje(telefon: str, email: str) -> bool:
-    """Skontroluje či v DB Zákazníci B2C už existuje lead s rovnakým telefónom alebo emailom."""
-    if not telefon and not email:
-        return False
-    try:
-        # Notion API query DB s filtrom on phone alebo email
-        filters = []
-        if telefon:
-            tel_clean = re.sub(r"\s+", "", str(telefon))
-            filters.append({"property": "Telefón", "phone_number": {"equals": tel_clean}})
-        if email:
-            filters.append({"property": "Email", "email": {"equals": str(email).strip().lower()}})
-        if not filters:
-            return False
-        payload = {"filter": {"or": filters}, "page_size": 1}
-        r = requests.post(
-            f"{NOTION_API}/databases/{NOTION_DATABASE_ID}/query",
-            headers=NOTION_HEADERS,
-            json=payload,
-            timeout=15,
-        )
-        if r.status_code == 200:
-            results = r.json().get("results", [])
-            return len(results) > 0
-    except Exception as e:
-        log.warning(f"[dedup] check zlyhal: {e}")
-    return False
-
-
 @app.route("/webhook/parsuj-leady", methods=["POST"])
 @require_secret
 def parsuj_leady():
@@ -501,15 +472,6 @@ def parsuj_leady():
 
     log.info("[parsuj-leady] raw_text dlzka=%d znakov", len(raw_text))
 
-    # Skoré vyčistenie Surového leadu — zabráni duplicitnému spracovaniu pri retry
-    # (Make scenár môže retry-ovať pri timeout, alebo button dvojkliku)
-    try:
-        notion_update_page(page_id, {
-            "Status": {"select": {"name": "⚙️ Spracovávam"}},
-        })
-    except Exception:
-        pass
-
     try:
         leads = claude_extract_leads(raw_text)
     except Exception as e:
@@ -534,20 +496,7 @@ def parsuj_leady():
 
     created = []
     failed = []
-    duplicates = []
     for i, lead in enumerate(leads):
-        # Dedup check — preskoč ak telefón/email už existuje
-        tel = lead.get("telefon", "")
-        em = lead.get("email", "")
-        if _lead_existuje(tel, em):
-            log.info(f"[parsuj-leady] preskakujem duplicit #{i+1}: tel={tel} email={em}")
-            duplicates.append({
-                "index": i + 1,
-                "telefon": tel,
-                "email": em,
-                "title": (lead.get("priezvisko") or lead.get("meno") or f"Lead #{i+1}"),
-            })
-            continue
         try:
             props = lead_to_notion_properties(lead)
             new_page = notion_create_page_in_db(NOTION_DATABASE_ID, props)
