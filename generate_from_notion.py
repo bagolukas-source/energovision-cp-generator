@@ -92,12 +92,16 @@ def check_compatibility(invertor_kod, bateria_kod):
     return False, f"Neznámy menič {invertor_kod}"
 
 
-def predpocitaj_ceny_pre_record(notion_props):
-    """Pre Notion záznam vyrátaj ceny pre A/B/C BEZ generovania PDF.
-    Vráti dict {variant: {cena_s_dph, nakupna, zisk, marza_pct}}."""
+def predpocitaj_ceny_pre_record(notion_props, variants_filter=None):
+    """Pre Notion záznam vyrátaj ceny pre A/B/C/D BEZ generovania PDF.
+    Vráti dict {variant: {cena_s_dph, nakupna, zisk, marza_pct}}.
+
+    variants_filter: ak None, vyrátá vsetky kde su data. Ak list ["A", "B"], iba tieto.
+    """
     cennik = load_cennik()
     out = {}
-    for variant in ("A", "B", "C", "D"):
+    iter_variants = variants_filter if variants_filter else ("A", "B", "C", "D")
+    for variant in iter_variants:
         # Variant B/C potrebujú batériu, C/D aj wallbox — ak chýba, preskoč
         if variant in ("B", "C") and not notion_props.get("Batéria (typ)"):
             continue
