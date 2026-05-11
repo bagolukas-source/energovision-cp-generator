@@ -422,6 +422,9 @@ def lead_to_notion_properties(lead):
     poznamky_parts.append(f"[AI parsed → auto-sizing: {sizing['target_kwp']} kWp / {sizing['pocet_panelov']}× panel]")
     props["Poznámky"] = {"rich_text": [{"text": {"content": " | ".join(poznamky_parts)[:1900]}}]}
 
+    # Default Status pre nový lead — aby sa zobrazil v 1️⃣ Nové leady view
+    props["Status"] = {"select": {"name": "🆕 Došlý lead"}}
+
     return props
 
 
@@ -555,6 +558,9 @@ def auto_konfig():
         return jsonify({"error": f"notion_get failed: {e}"}), 500
 
     flat = notion_props_to_flat(page)
+
+    # Auto-sync Obchodnik zo Statusu (ak je per-obchodník variant)
+    _sync_obchodnik_zo_statusu(page_id, flat)
 
     # === SPOTREBA ===
     spotreba_raw = flat.get("Spotreba")
@@ -936,18 +942,27 @@ def generuj_dokumenty():
         except Exception:
             datum_narodenia = datum_narodenia_raw
 
-    # Cenova ponuka - vyber prvy zaskrtnuty variant (priorita: B > A > C > D)
+    # Cenova ponuka - vyber variant
+    # Prioritne čítaj "Variant do zmluvy" select (A/B/C/D)
+    # Fallback: prvý zaškrtnutý variant (priorita: B > A > C > D)
     variant_to_use = None
-    for v in ("B", "A", "C", "D"):
-        prop_name = {
-            "A": "Variant A — FVE",
-            "B": "Variant B — FVE + BESS",
-            "C": "Variant C — FVE + BESS + Wallbox",
-            "D": "Variant D — FVE + Wallbox",
-        }[v]
-        if flat.get(prop_name) == "__YES__":
-            variant_to_use = v
-            break
+    variant_select = flat.get("Variant do zmluvy") or ""
+    if variant_select:
+        # Select hodnoty: "A — FVE", "B — FVE + BESS", ...
+        m_v = re.match(r"\s*([ABCD])", variant_select)
+        if m_v:
+            variant_to_use = m_v.group(1)
+    if not variant_to_use:
+        for v in ("B", "A", "C", "D"):
+            prop_name = {
+                "A": "Variant A — FVE",
+                "B": "Variant B — FVE + BESS",
+                "C": "Variant C — FVE + BESS + Wallbox",
+                "D": "Variant D — FVE + Wallbox",
+            }[v]
+            if flat.get(prop_name) == "__YES__":
+                variant_to_use = v
+                break
 
     cena_s_dph = 0
     if variant_to_use:
@@ -1234,12 +1249,23 @@ def generuj_realizacne():
         pocet_panelov = 0
     vykon_kwp = round(pocet_panelov * 535 / 1000, 2)
 
-    # Bateria
-    bateria_typ = flat.get("Batéria (typ)") or ""
+    # Variant do zmluvy — filtruje komponenty
+    variant_select = flat.get("Variant do zmluvy") or ""
+    m_v = re.match(r"\s*([ABCD])", variant_select)
+    variant = m_v.group(1) if m_v else "B"  # fallback B
+
+    # Bateria — iba pri B alebo C
+    bateria_typ_raw = flat.get("Batéria (typ)") or ""
     pocet_baterii_raw = flat.get("Batéria počet") or "0"
     try:
-        pocet_baterii = int(pocet_baterii_raw)
+        pocet_baterii_int = int(pocet_baterii_raw)
     except (ValueError, TypeError):
+        pocet_baterii_int = 0
+    if variant in ("B", "C"):
+        bateria_typ = bateria_typ_raw
+        pocet_baterii = pocet_baterii_int
+    else:
+        bateria_typ = ""
         pocet_baterii = 0
     # Extrahuj kWh z label
     m_bat = re.search(r"(\d+(?:[.,]\d+)?)\s*kWh", bateria_typ)
@@ -1249,8 +1275,12 @@ def generuj_realizacne():
     menic = flat.get("Menič") or "Solinteg MHT-10K-25"
     konstrukcia = flat.get("Konštrukcia (typ)") or "Škridla"
 
-    # Wallbox
-    wallbox_typ = flat.get("Wallbox (typ)") or ""
+    # Wallbox — iba pri C alebo D
+    wallbox_typ_raw = flat.get("Wallbox (typ)") or ""
+    if variant in ("C", "D"):
+        wallbox_typ = wallbox_typ_raw
+    else:
+        wallbox_typ = ""
     ma_wallbox = bool(wallbox_typ)
 
     # Datum spustenia
@@ -1387,17 +1417,49 @@ def generuj_po():
     konstrukcia = flat.get("Konštrukcia (typ)") or "Škridla"
     distribucka = flat.get("Distribučka") or flat.get("Distribuční") or ""
 
+    # Variant do zmluvy filtruje BOM komponenty
+    # A = iba FVE (bez batérie, bez wallboxu)
+    # B = FVE + batéria (bez wallboxu)
+    # C = FVE + batéria + wallbox
+    # D = FVE + wallbox (bez batérie)
+    variant_select = flat.get("Variant do zmluvy") or ""
+    m_v = re.match(r"\s*([ABCD])", variant_select)
+    variant = m_v.group(1) if m_v else "B"  # default B (najčastejší kompromis)
+
+    # Filter komponentov podľa variantu
+    if variant == "A":
+        bateria_typ_eff = ""
+        pocet_baterii_eff = 0
+        wallbox_typ_eff = ""
+    elif variant == "B":
+        bateria_typ_eff = bateria_typ
+        pocet_baterii_eff = pocet_baterii
+        wallbox_typ_eff = ""
+    elif variant == "C":
+        bateria_typ_eff = bateria_typ
+        pocet_baterii_eff = pocet_baterii
+        wallbox_typ_eff = wallbox_typ
+    elif variant == "D":
+        bateria_typ_eff = ""
+        pocet_baterii_eff = 0
+        wallbox_typ_eff = wallbox_typ
+    else:
+        bateria_typ_eff = bateria_typ
+        pocet_baterii_eff = pocet_baterii
+        wallbox_typ_eff = wallbox_typ
+
     lead_data = {
         "pocet_panelov": pocet_panelov,
         "vykon_kwp": vykon_kwp,
         "panel_typ": panel_typ,
         "menic": menic,
-        "bateria_typ": bateria_typ,
-        "pocet_baterii": pocet_baterii,
-        "wallbox_typ": wallbox_typ,
-        "ma_wallbox": bool(wallbox_typ),
+        "bateria_typ": bateria_typ_eff,
+        "pocet_baterii": pocet_baterii_eff,
+        "wallbox_typ": wallbox_typ_eff,
+        "ma_wallbox": bool(wallbox_typ_eff),
         "konstrukcia": konstrukcia,
         "distribucka": distribucka,
+        "variant": variant,
     }
 
     log.info("[generuj-po] %s: %.2f kWp, %d panelov, batéria=%s×%d, WB=%s",
@@ -2012,6 +2074,40 @@ def _save_chatbot_lead_to_notion(lead: dict, full_history: list):
 # Trigger: Notion Button "🔄 Prepočítaj cenu"
 # Vstup: { "page_id": "..." }
 # ============================================================
+def _sync_obchodnik_zo_statusu(page_id, notion_props):
+    """Ak Status obsahuje meno obchodníka (V riešení — Dominik/Pavol/Andrej/Lukáš),
+    nastav property Obchodnik na celé meno."""
+    status_val = notion_props.get("Status") or ""
+    if "V rie" not in status_val or "—" not in status_val:
+        return False
+    # Extrahuj časť za pomlčkou
+    parts = status_val.split("—", 1)
+    if len(parts) != 2:
+        return False
+    krstne = parts[1].strip()
+    # Map krstného mena na full name (kompatibilné s OBCHODNICI v generate_from_notion.py)
+    mapping = {
+        "Dominik": "Dominik Galaba",
+        "Pavol": "Pavol Kaprál",
+        "Andrej": "Andrej Herman",
+        "Lukáš": "Lukáš Bago",
+    }
+    full_name = mapping.get(krstne)
+    if not full_name:
+        return False
+    # Skontroluj či už nie je rovnaký
+    current = (notion_props.get("Obchodnik") or notion_props.get("Obchodník") or "").strip()
+    if current == full_name:
+        return False
+    try:
+        notion_update_page(page_id, notion_set_select("Obchodnik", full_name))
+        log.info(f"[sync-obchodnik] {page_id}: Status='{status_val}' → Obchodnik='{full_name}'")
+        return True
+    except Exception as e:
+        log.warning(f"[sync-obchodnik] update zlyhal: {e}")
+        return False
+
+
 @app.route("/webhook/prepocet", methods=["POST"])
 @require_secret
 def prepocet():
@@ -2023,6 +2119,9 @@ def prepocet():
     log.info(f"Prepočet pre page {page_id}")
     page = notion_get_page(page_id)
     notion_props = notion_props_to_flat(page)
+
+    # Auto-sync Obchodnik zo Statusu (ak je per-obchodník variant)
+    _sync_obchodnik_zo_statusu(page_id, notion_props)
 
     # Detekuj zakliknuté varianty - filter pre prepocet
     variants_filter = []
