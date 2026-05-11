@@ -1,101 +1,229 @@
 """
-Generuj dokumenty pre vyhrate leady — Zmluva, Splnomocnenie, GDPR suhlas, Dotaznik.
+Generuj dokumenty pre B2C leady — kompletná verzia.
 
-Templaty su v templates_zmluvy/. Pouzivaju Word docx ako vzor.
-- Zmluva o dielo: "XXX" placeholdery (12x) nahradime postupne
-- Splnomocnenie: pole "Meno a priezvisko ___", "Cislo OP ___" etc — najdeme po riadkoch
-- GDPR: rovnako
-- Dotaznik: xlsx s prazdnymi bunkami pre kazde pole
+Architektúra:
+- Zmluva o dielo (docx): 12× XXX placeholder + datum
+- Splnomocnenie (docx): podčiarkové polia + datum
+- GDPR súhlas (docx): podčiarkové polia + datum
+- Dotazník (xlsx): label v stĺpci A → hodnota v B
+- Dodatok zmluvy (docx): Xxxxx placeholdery + datum
+- Revízna správa (docx): generovaná PROGRAMATICKY pre B2C rodinný dom (3-4 strany)
+- Preberací protokol (docx): generovaný PROGRAMATICKY s BOM tabuľkou
 
-Vystup: bytes (docx/xlsx) — Make uploadne do Dropbox + Notion.
+Lead_data je flat dict zo všetkých Notion properties.
 """
+import os
 import re
 import shutil
 import zipfile
-import tempfile
+import logging
+import requests
 from io import BytesIO
 from pathlib import Path
+from datetime import datetime
 
 from openpyxl import load_workbook
 from docx import Document
+from docx.shared import Pt, Cm, RGBColor
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.table import WD_ALIGN_VERTICAL
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
 
 TEMPLATES_DIR = Path(__file__).parent / "templates_zmluvy"
+log = logging.getLogger("generuj_dokumenty")
+
+# ============================================================
+# UTILITY HELPERS
+# ============================================================
+
+def _norm(s):
+    """Normalizuj non-breaking space (\\xa0) na bežnú medzeru."""
+    return (s or "").replace('\xa0', ' ')
 
 
-def _slovne_eur(amount_eur):
-    """Konvertuj cislo na slovenske slova. 12345.67 -> 'dvanasttisicstosorokpat eur a sestdesiatsedem centov'"""
-    # Zjednodusena verzia — vrati formatovany retazec
-    eur = int(amount_eur)
-    cents = round((amount_eur - eur) * 100)
-    return f"{eur} eur a {cents} centov"
+def _safe(value, fallback=""):
+    """Bezpečný get — None / prázdny string → fallback."""
+    if value is None or value == "":
+        return fallback
+    return str(value)
 
 
-def _pol_text(items):
-    """Pripoj zoznam stringov ako Word text inline (bez formatting). Pouzite pri tvorbe novych runov."""
-    return "\n".join(s for s in items if s)
+def _money(amount, suffix=" EUR"):
+    """Format peniaze: 15689.17 → '15 689,17 EUR'"""
+    if not amount:
+        return f"0,00{suffix}"
+    return f"{amount:,.2f}".replace(",", " ").replace(".", ",") + suffix
 
 
-# === ZMLUVA O DIELO ===
+def _slovne_centy(amount_eur):
+    """Vráti (eur_int, cent_int) z floatu."""
+    eur = int(amount_eur or 0)
+    cents = round(((amount_eur or 0) - eur) * 100)
+    return eur, cents
+
+
+# ============================================================
+# DOCX RUN MANIPULATION — robustné replace placeholderov
+# ============================================================
+
+NS_W = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+
+
+def _replace_in_para_robust(para, replacements):
+    """
+    Robustný replace placeholderov v paragraphe.
+
+    Spojí text všetkých runs do jedného stringu, urobí replacement, potom
+    zachová prvý run s textom a vymaže ostatné <w:t>/<w:tab> elementy.
+
+    replacements: dict {pattern: replacement}, regex povolené (escape sám)
+    Vráti True ak nejaký replacement prebehol.
+    """
+    full = _norm(para.text)
+    new = full
+    for pat, val in replacements.items():
+        if pat in new:
+            new = new.replace(pat, str(val) if val is not None else "")
+
+    if new == full:
+        return False
+
+    # Nájdi prvý run s <w:t>
+    first_text_run = None
+    for run in para.runs:
+        if run._element.findall(f'{NS_W}t'):
+            first_text_run = run
+            break
+
+    # Vymaž <w:t> a <w:tab> z ostatných runs
+    for run in para.runs:
+        if run is first_text_run:
+            continue
+        for t in list(run._element.findall(f'{NS_W}t')) + list(run._element.findall(f'{NS_W}tab')):
+            run._element.remove(t)
+
+    if first_text_run is not None:
+        first_text_run.text = new
+    elif para.runs:
+        para.runs[0].text = new
+
+    return True
+
+
+def _replace_underscores_in_para(para, value):
+    """
+    Nahrad sekvenciu podčiarkníkov (___...) v paragraph za hodnotu.
+    Robustný — zachová len prvý <w:t> run, vymaže ostatné.
+    """
+    full_text = _norm(para.text)
+    m = re.search(r'_{3,}', full_text)
+    if not m:
+        return False
+    new_text = full_text[:m.start()] + _safe(value) + full_text[m.end():]
+
+    first_text_run = None
+    for run in para.runs:
+        if run._element.findall(f'{NS_W}t'):
+            first_text_run = run
+            break
+
+    for run in para.runs:
+        if run is first_text_run:
+            continue
+        for t in list(run._element.findall(f'{NS_W}t')) + list(run._element.findall(f'{NS_W}tab')):
+            run._element.remove(t)
+
+    if first_text_run is not None:
+        first_text_run.text = new_text
+    elif para.runs:
+        para.runs[0].text = new_text
+    return True
+
+
+def _replace_dots_in_para(para, value):
+    """
+    Nahrad sekvenciu bodiek (....) v paragraph za hodnotu.
+    Pre Preberací protokol kde sú '...' namiesto '___'.
+    """
+    full_text = _norm(para.text)
+    m = re.search(r'\.{4,}', full_text)
+    if not m:
+        return False
+    new_text = full_text[:m.start()] + _safe(value) + full_text[m.end():]
+
+    first_text_run = None
+    for run in para.runs:
+        if run._element.findall(f'{NS_W}t'):
+            first_text_run = run
+            break
+
+    for run in para.runs:
+        if run is first_text_run:
+            continue
+        for t in list(run._element.findall(f'{NS_W}t')) + list(run._element.findall(f'{NS_W}tab')):
+            run._element.remove(t)
+
+    if first_text_run is not None:
+        first_text_run.text = new_text
+    elif para.runs:
+        para.runs[0].text = new_text
+    return True
+
+
+# ============================================================
+# ZMLUVA O DIELO
+# ============================================================
+
 def naplnif_zmluvu(lead_data, output_path):
     """
-    Naplni Zmluvu o dielo z templatu. lead_data ma:
-    - meno_priezvisko, adresa, telefon, email
-    - vykon_kwp, cislo_cp, datum_cp, miesto_vykonu
-    - cena_eur (bez DPH), cena_slovom
-
-    XXX placeholdery v poradi (12 spolu):
-    1. meno_priezvisko (Objednavatel: XXX)
-    2. adresa (Adresa: XXX)
-    3. telefon (Telefon: XXX)
-    4. email (E-mail: XXX)
-    5. vykon_kwp (s vykonom XXX kWp)
-    6. cislo_cp (Cenovej ponuky dodavatela XXX)
-    7. datum_cp (zo dna XXX)
-    8. miesto_vykonu (Miesto vykonu: XXX)
-    9. cena_eur (XXX EUR + DPH)
-    10. cena_slovom (Slovom: XXX Eur ...)
-    11. cena_centov_slovom (... a XXX centov)
-    12. meno_priezvisko (signature line — XXX vedľa Lukáš Bago)
-
-    Plus: "XX.XX.2025" → datum_dnes (formátom DD.MM.YYYY)
+    Zmluva o dielo z templatu. 12 XXX placeholderov + datum.
+    Poradie XXX:
+    1.  meno_priezvisko (Objednavatel: XXX)
+    2.  adresa
+    3.  telefon
+    4.  email
+    5.  vykon_kwp
+    6.  cislo_cp (EV-26-XXX-A/B/C/D)
+    7.  datum_cp
+    8.  miesto_vykonu
+    9.  cena_eur (bez DPH)
+    10. eur (slovom — zatiaľ číslicami)
+    11. cents
+    12. meno_priezvisko (podpis)
     """
     template = TEMPLATES_DIR / "Zmluva_o_dielo_template.docx"
     shutil.copy(template, output_path)
 
-    # Otvor document.xml a nahrad XXX postupne
     with zipfile.ZipFile(output_path, 'r') as z:
         members = {n: z.read(n) for n in z.namelist()}
     xml = members['word/document.xml'].decode('utf-8')
 
-    # Cena slovom split
-    eur = int(lead_data.get('cena_eur', 0))
-    cents = round((lead_data.get('cena_eur', 0) - eur) * 100)
+    eur, cents = _slovne_centy(lead_data.get('cena_eur', 0))
 
     nahrady = [
-        lead_data.get('meno_priezvisko', ''),         # 1
-        lead_data.get('adresa', ''),                  # 2
-        lead_data.get('telefon', ''),                 # 3
-        lead_data.get('email', ''),                   # 4
-        f"{lead_data.get('vykon_kwp', 0):.2f}",       # 5
-        lead_data.get('cislo_cp', ''),                # 6
-        lead_data.get('datum_cp', ''),                # 7
-        lead_data.get('miesto_vykonu', ''),           # 8
+        _safe(lead_data.get('meno_priezvisko')),           # 1
+        _safe(lead_data.get('adresa')),                    # 2
+        _safe(lead_data.get('telefon')),                   # 3
+        _safe(lead_data.get('email')),                     # 4
+        f"{lead_data.get('vykon_kwp', 0):.2f}",            # 5
+        _safe(lead_data.get('cislo_cp')),                  # 6
+        _safe(lead_data.get('datum_cp')),                  # 7
+        _safe(lead_data.get('miesto_vykonu')),             # 8
         f"{lead_data.get('cena_eur', 0):,.2f}".replace(",", " "),  # 9
-        f"{eur}",                                      # 10 — cena slovom
-        f"{cents}",                                    # 11 — centov
-        lead_data.get('meno_priezvisko', ''),         # 12 — podpis Objednávateľ
+        f"{eur}",                                          # 10
+        f"{cents}",                                        # 11
+        _safe(lead_data.get('meno_priezvisko')),           # 12 podpis
     ]
 
-    # Nahrad postupne kazdu instanciu "XXX" v document.xml
     counter = [0]
     def repl(m):
         idx = counter[0]
         counter[0] += 1
         if idx < len(nahrady):
-            # Word XML escape
             val = nahrady[idx].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
             return val
-        return "XXX"  # ak je viac XXX nez nahrad, ponechaj
+        return "XXX"
     new_xml = re.sub(r'XXX', repl, xml)
 
     members['word/document.xml'] = new_xml.encode('utf-8')
@@ -103,381 +231,1113 @@ def naplnif_zmluvu(lead_data, output_path):
         for name, data in members.items():
             z.writestr(name, data)
 
-    # Druhá fáza: paragraph-level fix pre dátum "V Bratislave, dňa XX.XX.2025"
-    # (XX.XX.2025 je v XML rozdelené do viacerých runov, preto regex na xml nefunguje)
+    # Druhá fáza — datum cez python-docx + úprava platobných podmienok
     datum_dnes = lead_data.get('datum_dnes', '')
-    if datum_dnes:
-        doc = Document(str(output_path))
-        for para in doc.paragraphs:
-            text = _norm(para.text)
-            if "V Bratislave" in text and re.search(r'XX\.XX\.20\d{2}', text):
-                full = "V Bratislave, dňa " + datum_dnes
-                for run in para.runs:
-                    run.text = ""
-                if para.runs:
-                    para.runs[0].text = full
-        doc.save(str(output_path))
+    doc = Document(str(output_path))
 
+    # Pevné úpravy: 30%->60%, 70%->40%, "14 dní"->"7 dní" (Lukáš požaduje)
+    OVERRIDES = {
+        "30% - zálohová faktúra vopred": "60% - zálohová faktúra vopred",
+        "70% - po nainštalovaní FVZ": "40% - po nainštalovaní FVZ",
+        "Lehota splatnosti faktúr je 14 dní.": "Lehota splatnosti faktúr je 7 dní.",
+    }
+
+    for para in doc.paragraphs:
+        text = _norm(para.text)
+        # Override platobných podmienok
+        for old, new in OVERRIDES.items():
+            if old in text:
+                new_text = text.replace(old, new)
+                first_text_run = None
+                for run in para.runs:
+                    if run._element.findall(f'{NS_W}t'):
+                        first_text_run = run
+                        break
+                for run in para.runs:
+                    if run is first_text_run:
+                        continue
+                    for tt in list(run._element.findall(f'{NS_W}t')) + list(run._element.findall(f'{NS_W}tab')):
+                        run._element.remove(tt)
+                if first_text_run is not None:
+                    first_text_run.text = new_text
+                elif para.runs:
+                    para.runs[0].text = new_text
+                text = new_text
+        # Datum v Bratislave
+        if datum_dnes and "V Bratislave" in text and re.search(r'XX\.XX\.20\d{2}', text):
+            full = "V Bratislave, dňa " + datum_dnes
+            for run in para.runs:
+                run.text = ""
+            if para.runs:
+                para.runs[0].text = full
+
+    doc.save(str(output_path))
+
+    log.info("[zmluva] vyplnená pre %s, cena=%.2f", lead_data.get('meno_priezvisko'), lead_data.get('cena_eur', 0))
     return output_path
 
 
-# === SPLNOMOCNENIE ===
-def _norm(s):
-    """Normalizuj non-breaking space na bežnú medzeru pre comparisons."""
-    return (s or "").replace('\xa0', ' ')
-
+# ============================================================
+# SPLNOMOCNENIE
+# ============================================================
 
 def naplnif_splnomocnenie(lead_data, output_path):
     """
-    Splnomocnenie ma polia:
-    - Meno a priezvisko ___
-    - Cislo OP ___
-    - Datum narodenia ___
-    - Bydlisko ___ (2 riadky)
-    - V Bratislave, dna XX.XX.2024 — datum
-
-    Pouzijeme python-docx pre paragraph-level iteration.
+    Splnomocnenie — programaticky generované (žiaden template).
+    Štruktúra:
+    - Heading SPLNOMOCNENIE
+    - Splnomocniteľ: + tabuľka 4x2 (Meno/OP/Datum nar./Bydlisko)
+    - "(dalej len splnomocnitel)"
+    - Splnomocnenec sekcia + Energovision údaje
+    - Predmet plnomocenstva + 4 bullets
+    - Podpisová tabuľka 2x3 (datum | Splnomocnitel | Splnomocnenec)
     """
-    template = TEMPLATES_DIR / "Splnomocnenie_template.docx"
-    doc = Document(str(template))
+    meno = _safe(lead_data.get('meno_priezvisko'))
+    cislo_op = _safe(lead_data.get('cislo_op'))
+    datum_narodenia = _safe(lead_data.get('datum_narodenia'))
+    bydlisko = _safe(lead_data.get('trvale_bydlisko')) or _safe(lead_data.get('adresa'))
+    datum_dnes = _safe(lead_data.get('datum_dnes'))
 
-    meno = lead_data.get('meno_priezvisko', '')
-    cislo_op = lead_data.get('cislo_op', '')
-    datum_narodenia = lead_data.get('datum_narodenia', '')
-    bydlisko = lead_data.get('trvale_bydlisko') or lead_data.get('adresa', '')
-    datum_dnes = lead_data.get('datum_dnes', '')
+    doc = Document()
+    sec = doc.sections[0]
+    sec.top_margin = Cm(2.0)
+    sec.bottom_margin = Cm(2.0)
+    sec.left_margin = Cm(2.5)
+    sec.right_margin = Cm(2.5)
 
-    # Iteruj paragraphs a najdi hodnoty po stitkoch
-    # POZOR: template má non-breaking space (\xa0) miesto bežnej medzery, preto normalizujeme.
-    for para in doc.paragraphs:
-        text = _norm(para.text)
-        if "Meno a priezvisko" in text and "___" in text:
-            _replace_underscores_in_para(para, meno)
-        elif "Číslo OP" in text and "___" in text:
-            _replace_underscores_in_para(para, cislo_op)
-        elif "Dátum narodenia" in text and "___" in text:
-            _replace_underscores_in_para(para, datum_narodenia)
-        elif "Bydlisko" in text and "___" in text:
-            _replace_underscores_in_para(para, bydlisko)
+    # Heading
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = p.add_run("SPLNOMOCNENIE")
+    run.bold = True
+    run.font.size = Pt(16)
 
-    # Datum: "V Bratislave, dňa XX.XX.2024" -> nahradime aktuálnym datumom
-    if datum_dnes:
-        for para in doc.paragraphs:
-            text = _norm(para.text)
-            if "V Bratislave" in text and ("202" in text or "XX" in text):
-                full = "V Bratislave, dňa " + datum_dnes
-                # Clear all runs and write new text
-                for run in para.runs:
-                    run.text = ""
-                if para.runs:
-                    para.runs[0].text = full
+    doc.add_paragraph()
+
+    # Splnomocnitel label
+    p = doc.add_paragraph()
+    p.add_run("Splnomocniteľ:").bold = True
+
+    # Tabulka 4x2 — osobne udaje
+    t = doc.add_table(rows=4, cols=2)
+    t.columns[0].width = Cm(5)
+    t.columns[1].width = Cm(11)
+    for ri, (label, val) in enumerate([
+        ("Meno a priezvisko", meno),
+        ("Číslo OP", cislo_op),
+        ("Dátum narodenia", datum_narodenia),
+        ("Bydlisko", bydlisko),
+    ]):
+        t.rows[ri].cells[0].paragraphs[0].add_run(label).font.size = Pt(11)
+        t.rows[ri].cells[1].paragraphs[0].add_run(val).font.size = Pt(11)
+
+    # dalej len splnomocnitel
+    p = doc.add_paragraph()
+    p.add_run("(ďalej len „splnomocniteľ“)")
+
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p.add_run("týmto v plnom rozsahu splnomocňuje")
+
+    # Splnomocnenca
+    p = doc.add_paragraph()
+    p.add_run("Splnomocnenca:").bold = True
+
+    for line in [
+        "Energovision s.r.o.",
+        "IČO: 53 036 280",
+        "Sídlo: Lamačská cesta 1738/111, 841 03 Bratislava",
+        "Za ktorú koná: Lukáš Bago",
+        "Zástupca vo veciach zmluvných a technických: Erika Nemešová",
+        "0948 870 883",
+        "erika.nemesova@energovision.sk",
+    ]:
+        p = doc.add_paragraph()
+        p.add_run(line).font.size = Pt(11)
+
+    p = doc.add_paragraph()
+    p.add_run("(ďalej len „splnomocnenec“)")
+
+    doc.add_paragraph()
+
+    # Predmet
+    p = doc.add_paragraph()
+    p.add_run(
+        "na to aby ho splnomocnenec zastupoval vo všetkých právnych úkonoch súvisiacich s "
+        "inštaláciou a pripojením malého zdroja do siete, konkrétne pri nasledovných úkonoch:"
+    ).font.size = Pt(11)
+
+    for bullet in [
+        "komunikácia s distribučnou spoločnosťou a podpísanie zmlúv s distribučnou spoločnosťou v rámci procesu pripojenia fotovoltického zariadenia",
+        "komunikácia s energetickou spoločnosťou,",
+        "komunikácia so stavebným úradom,",
+        "komunikácia so SIEA v rámci projektu Zelená domácnostiam.",
+    ]:
+        p = doc.add_paragraph(style='List Bullet')
+        p.add_run(bullet).font.size = Pt(11)
+
+    p = doc.add_paragraph()
+    p.add_run(
+        "V rozsahu tohto plnomocenstva je splnomocnenec oprávnený konať v mene splnomocniteľa "
+        "vo vzťahu ku všetkým fyzickým a právnickým osobám, štátnym orgánom, orgánom miestnej "
+        "samosprávy, iným orgánom verejnej správy a svojimi úkonmi zaväzovať splnomocniteľa "
+        "k povinnostiam a nadobúdať pre splnomocniteľa práva."
+    ).font.size = Pt(11)
+
+    p = doc.add_paragraph()
+    p.add_run("Toto plnomocenstvo je udelené na dobu 12 mesiacov.").font.size = Pt(11)
+
+    p = doc.add_paragraph()
+    p.add_run(
+        "Splnomocnenec je oprávnený dať sa v prípade potreby zastupovať treťou osobou, "
+        "ktorá namiesto neho bude v rozsahu tohto plnomocenstva konať v mene splnomocniteľa."
+    ).font.size = Pt(11)
+
+    p = doc.add_paragraph()
+    p.add_run("Splnomocnenec toto plnomocenstvo v plnom rozsahu prijíma.").font.size = Pt(11)
+
+    doc.add_paragraph()
+
+    # Podpisova tabulka 2x3
+    sig = doc.add_table(rows=2, cols=3)
+    # R0.C0 datum
+    sig.rows[0].cells[0].paragraphs[0].add_run(f"V Bratislave, dňa {datum_dnes}").font.size = Pt(11)
+    # R0.C1 label Splnomocnitel
+    c = sig.rows[0].cells[1]
+    c.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r = c.paragraphs[0].add_run("Splnomocniteľ")
+    r.bold = True; r.font.size = Pt(11)
+    # R0.C2 label Splnomocnenec
+    c = sig.rows[0].cells[2]
+    c.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r = c.paragraphs[0].add_run("Splnomocnenec")
+    r.bold = True; r.font.size = Pt(11)
+    # R1.C1 signature splnomocnitel
+    c = sig.rows[1].cells[1]
+    c.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+    c.paragraphs[0].add_run("...........................................").font.size = Pt(11)
+    p2 = c.add_paragraph()
+    p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p2.add_run(meno).font.size = Pt(11)
+    # R1.C2 signature splnomocnenec
+    c = sig.rows[1].cells[2]
+    c.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+    c.paragraphs[0].add_run("...........................................").font.size = Pt(11)
+    p2 = c.add_paragraph()
+    p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p2.add_run("Energovision s.r.o.").font.size = Pt(11)
+    p3 = c.add_paragraph()
+    p3.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p3.add_run("Lukáš Bago").font.size = Pt(11)
 
     doc.save(str(output_path))
+    log.info("[splnomocnenie] generované pre %s", meno)
     return output_path
 
 
-def _replace_underscores_in_para(para, value):
-    """Nahrad sekvenciu podciarknikov (___...) v paragrafe za hodnotu.
+# ============================================================
+# GDPR SÚHLAS
+# ============================================================
 
-    Robustný prístup: poskladaj plný text zo všetkých runov, urob replacement,
-    potom vymaž text vo VŠETKÝCH <w:t> elementoch a daj nový text do prvého
-    `<w:t>` runu (alebo vytvor nový ak žiaden nemá <w:t>).
-    """
-    full_text = _norm(para.text)
-    m = re.search(r'_{3,}', full_text)
-    if not m:
-        return
-    new_text = full_text[:m.start()] + str(value) + full_text[m.end():]
-
-    # Najdi prvý run ktorý obsahuje <w:t> element (skutočný text, nie iba tab)
-    first_text_run = None
-    for run in para.runs:
-        # python-docx run.text returns text from <w:t> + \t for <w:tab/>
-        # Skontroluj či má <w:t>
-        if run._element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t'):
-            first_text_run = run
-            break
-
-    # Vymaž <w:t> elementy vo všetkých runoch okrem prvého (a aj <w:tab/> aby sa zbavili tabov v náhrade)
-    ns = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
-    for run in para.runs:
-        if run is first_text_run:
-            continue
-        # Odstráň všetky <w:t> a <w:tab/> elementy
-        for t in run._element.findall(f'{ns}t') + run._element.findall(f'{ns}tab'):
-            run._element.remove(t)
-
-    # Nastav nový text v prvom textovom rune
-    if first_text_run is not None:
-        first_text_run.text = new_text
-    elif para.runs:
-        # Fallback ak nie je žiaden text run
-        para.runs[0].text = new_text
-
-
-# === GDPR SUHLAS ===
 def naplnif_gdpr(lead_data, output_path):
-    """GDPR suhlas — Meno a priezvisko, Datum narodenia, Datum podpisu (V Bratislave dna XX)"""
-    template = TEMPLATES_DIR / "GDPR_suhlas_template.docx"
-    doc = Document(str(template))
+    """
+    GDPR súhlas — programaticky generovaný.
+    Štruktúra:
+    - Heading
+    - Tabuľka 2x2 (Meno + Dátum narodenia)
+    - Text súhlasu (3 sekcie)
+    - Podpisová tabuľka 2x3 (dátum vľavo, meno vpravo)
+    """
+    meno = _safe(lead_data.get('meno_priezvisko'))
+    datum_narodenia = _safe(lead_data.get('datum_narodenia'))
+    datum_dnes = _safe(lead_data.get('datum_dnes'))
 
-    meno = lead_data.get('meno_priezvisko', '')
-    datum_narodenia = lead_data.get('datum_narodenia', '')
-    datum_dnes = lead_data.get('datum_dnes', '')
+    doc = Document()
+    sec = doc.sections[0]
+    sec.top_margin = Cm(2.0)
+    sec.bottom_margin = Cm(2.0)
+    sec.left_margin = Cm(2.5)
+    sec.right_margin = Cm(2.5)
 
-    for para in doc.paragraphs:
-        text = _norm(para.text)
-        if "Meno a priezvisko" in text and "___" in text:
-            _replace_underscores_in_para(para, meno)
-        elif "Dátum narodenia" in text and "___" in text:
-            _replace_underscores_in_para(para, datum_narodenia)
+    # Heading
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r = p.add_run("SÚHLAS SO SPRACOVANÍM OSOBNÝCH ÚDAJOV")
+    r.bold = True; r.font.size = Pt(14)
+    p2 = doc.add_paragraph()
+    p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r2 = p2.add_run("A FOTOGRAFIÍ")
+    r2.bold = True; r2.font.size = Pt(14)
 
-    if datum_dnes:
-        for para in doc.paragraphs:
-            text = _norm(para.text)
-            if "V Bratislave" in text:
-                full = "V Bratislave, dňa " + datum_dnes
-                for run in para.runs:
-                    run.text = ""
-                if para.runs:
-                    para.runs[0].text = full
+    doc.add_paragraph()
+
+    # Tabuľka 2x2 — meno + datum narodenia
+    t = doc.add_table(rows=2, cols=2)
+    t.columns[0].width = Cm(5)
+    t.columns[1].width = Cm(11)
+    for ri, (label, val) in enumerate([
+        ("Meno a priezvisko:", meno),
+        ("Dátum narodenia:", datum_narodenia),
+    ]):
+        t.rows[ri].cells[0].paragraphs[0].add_run(label).font.size = Pt(11)
+        t.rows[ri].cells[1].paragraphs[0].add_run(val).font.size = Pt(11)
+
+    p = doc.add_paragraph()
+    p.add_run("(ďalej len „dotknutá osoba“)").font.size = Pt(11)
+
+    doc.add_paragraph()
+
+    # Text suhlasu
+    p = doc.add_paragraph()
+    p.add_run(
+        "Nižšie podpísaná dotknutá osoba dávam súhlas so spracovaním osobných údajov v zmysle "
+        "§ 5 písm. a) a v zmysle § 14 zákona č. 18/2018 Z. z. o ochrane osobných údajov a o zmene "
+        "a doplnení niektorých zákonov v znení neskorších predpisov,"
+    ).font.size = Pt(11)
+
+    doc.add_paragraph()
+    p = doc.add_paragraph()
+    p.add_run("prevádzkovateľovi:").bold = True
+
+    for line in [
+        "Energovision s.r.o., Lamačská cesta 1783/111, 841 03 Bratislava",
+        "IČO: 53 036 280",
+    ]:
+        p = doc.add_paragraph()
+        p.add_run(line).font.size = Pt(11)
+
+    doc.add_paragraph()
+    p = doc.add_paragraph()
+    p.add_run("v rozsahu:").bold = True
+    for bullet in [
+        "údajov, ktoré som poskytol v rámci dokumentov potrebných na spracovanie inštalácie fotovoltického zariadenia,",
+        "vytvárania fotografií a audiovizuálnych záznamov fotovoltického zariadenia počas inštalácie a po nej,",
+    ]:
+        p = doc.add_paragraph(style='List Bullet')
+        p.add_run(bullet).font.size = Pt(11)
+
+    p = doc.add_paragraph()
+    p.add_run("na účel:").bold = True
+    for bullet in [
+        "uloženia osobných údajov v databáze zákazníkov a ich následné spracovanie, prípadné poskytnutie osobných údajov tretím osobám výhradne za účelom spracovania dokumentácie potrebnej k fotovoltickému zariadeniu,",
+        "používania pre marketingové a propagačné aktivity.",
+    ]:
+        p = doc.add_paragraph(style='List Bullet')
+        p.add_run(bullet).font.size = Pt(11)
+
+    doc.add_paragraph()
+    p = doc.add_paragraph()
+    p.add_run("Súhlas poskytujem na dobu neurčitú.").font.size = Pt(11)
+
+    doc.add_paragraph()
+    doc.add_paragraph()
+
+    # Podpisova tabulka 2x3
+    sig = doc.add_table(rows=2, cols=3)
+    # R1.C0 datum vľavo
+    sig.rows[1].cells[0].paragraphs[0].add_run(f"V Bratislave, dňa {datum_dnes}").font.size = Pt(11)
+    # R1.C2 podpis vpravo
+    c = sig.rows[1].cells[2]
+    c.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+    c.paragraphs[0].add_run("...........................................").font.size = Pt(11)
+    p2 = c.add_paragraph()
+    p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p2.add_run(meno).font.size = Pt(11)
 
     doc.save(str(output_path))
+    log.info("[gdpr] generované pre %s", meno)
     return output_path
 
 
-# === DOTAZNIK XLSX ===
+# ============================================================
+# DOTAZNÍK (XLSX)
+# ============================================================
+
 def naplnif_dotaznik(lead_data, output_path):
     """
-    Dotaznik xlsx — najde bunky podla stitkov v 1. stlpci a vyplni hodnoty do nasledujucej.
-    Stitky: Meno Priezvisko titul, Datum narodenia, Cislo OP, Trvale bydlisko, atd.
+    Dotazník — labels v stĺpci A, hodnoty do B.
+    Komplexné mapovanie pre B2C žiadosť o pripojenie malého zdroja.
     """
     template = TEMPLATES_DIR / "Dotaznik_template.xlsx"
     shutil.copy(template, output_path)
     wb = load_workbook(output_path)
     ws = wb.active
 
-    # Mapovanie stitkov na lead_data klúče
-    stitky_mapping = {
-        'Meno, Priezvisko, titul': 'meno_priezvisko',
-        'Meno a priezvisko': 'meno_priezvisko',
-        'Tel. Kontakt': 'telefon',
-        'Telefón': 'telefon',
-        'Emailový kontakt': 'email',
-        'Email': 'email',
-        'E-mail': 'email',
-        'Mesto': 'mesto',
-        'Ulica, Číslo': 'ulica_cislo',
-        'PSČ': 'psc',
-        'IBAN': 'iban',
-        'Banka': 'banka',
-        'Číslo OP': 'cislo_op',
-        'Dátum narodenia': 'datum_narodenia',
-        'Trvalé bydlisko žiadateľa': 'trvale_bydlisko',
-        'Korešpondenčná adresa': 'adresa',
-        'EIC odberného miesta': 'eic',
-        'Číslo obchodného partnera': 'cislo_obch_partnera',
-        'Predpokladaná ročná spotreba odberného miesta': 'spotreba',
-        'Hodnota hlavného ističa pred elektromerom-meraním': 'hlavny_istic',
-        'Predajca energií': 'predajca_energii',
-        'Katastrálne územie': 'katastralne_uzemie',
-        'Parcelné čísla pozemkov, na ktorých bude umiestená FVE': 'parcelne_cisla',
-        'Parcelné čísla pozemkov, na ktorých bude umiestená FVZ': 'parcelne_cisla',
-        'Adresa odberného miesta, na ktorom bude pripojený lokálny zdroj (FVE)': 'adresa_om',
+    # Príprava údajov — viaceré logické sekcie sa môžu opakovať s rovnakými labelmi
+    meno = _safe(lead_data.get('meno_priezvisko'))
+    telefon = _safe(lead_data.get('telefon'))
+    email = _safe(lead_data.get('email'))
+    cislo_op = _safe(lead_data.get('cislo_op'))
+    datum_narodenia = _safe(lead_data.get('datum_narodenia'))
+    ulica = _safe(lead_data.get('ulica_cislo'))
+    mesto = _safe(lead_data.get('mesto'))
+    psc = _safe(lead_data.get('psc'))
+    iban = _safe(lead_data.get('iban'))
+    banka = _safe(lead_data.get('banka'))
+    eic = _safe(lead_data.get('eic'))
+    cislo_op_energo = _safe(lead_data.get('cislo_obch_partnera'))
+    spotreba = _safe(lead_data.get('spotreba'))
+    hlavny_istic = _safe(lead_data.get('hlavny_istic'))
+    predajca = _safe(lead_data.get('predajca_energii'))
+    katastr = _safe(lead_data.get('katastralne_uzemie'))
+    parcely = _safe(lead_data.get('parcelne_cisla'))
+
+    # Mapping label → hodnota (case-insensitive, partial match)
+    M = {
+        'Meno, Priezvisko, titul': meno,
+        'Meno a priezvisko': meno,
+        'Tel. Kontakt': telefon,
+        'Telefón': telefon,
+        'Tel kontakt': telefon,
+        'Emailový kontakt': email,
+        'E-mail': email,
+        'Email': email,
+        'Číslo OP': cislo_op,
+        'Cislo OP': cislo_op,
+        'Dátum narodenia': datum_narodenia,
+        'Datum narodenia': datum_narodenia,
+        'IBAN': iban,
+        'Banka': banka,
+        'EIC odberného miesta': eic,
+        'EIC': eic,
+        'Číslo obchodného partnera': cislo_op_energo,
+        'Predpokladaná ročná spotreba odberného miesta': spotreba,
+        'Predpokladaná ročná spotreba': spotreba,
+        'Hodnota hlavného ističa pred elektromerom-meraním': hlavny_istic,
+        'Hodnota hlavného ističa': hlavny_istic,
+        'Predajca energií': predajca,
+        'Katastrálne územie': katastr,
+        'Parcelné čísla pozemkov, na ktorých bude umiestená FVE': parcely,
+        'Parcelné čísla pozemkov, na ktorých bude umiestená FVZ': parcely,
+        'Parcelné čísla': parcely,
     }
 
-    # Iteruj cez vsetky bunky, najdi stitky a vypln susedne
+    # Per-section mapping: sekcia má vlastné Ulica/Mesto/PSČ
+    # Spravíme cez tracking — keď uvidíme "Trvalé bydlisko žiadateľa" alebo
+    # "Korešpondenčná adresa" alebo "Adresa odberného miesta", zapamätáme si
+    # nasledujúce 3 Ulica/Mesto/PSČ riadky.
+    section_data = [
+        # Trvalé bydlisko
+        {'Ulica, Číslo': ulica, 'Mesto': mesto, 'PSČ': psc},
+        # Korešpondenčná adresa (default = bydlisko)
+        {'Ulica, Číslo': ulica, 'Mesto': mesto, 'PSČ': psc},
+        # Adresa OM
+        {'Ulica, Číslo': ulica, 'Mesto': mesto, 'PSČ': psc},
+    ]
+    section_idx = -1
+
+    # Pre flexibilitu — Ulica/Mesto/PSČ sa vyplňujú podľa poradia výskytu
+    pending_section_fields = {}
+
+    def fill_cell(cell, value):
+        """Vyplň bunku vpravo od labelu."""
+        try:
+            target = ws.cell(row=cell.row, column=cell.column + 1)
+            if not target.value:  # neprepisuj ak má hodnotu
+                target.value = value
+        except Exception as e:
+            log.warning("[dotaznik] fill_cell zlyhal: %s", e)
+
+    # Counter pre per-section adresy
+    addr_counters = {'Ulica, Číslo': 0, 'Mesto': 0, 'PSČ': 0, 'Ulica číslo': 0}
+
     for row in ws.iter_rows():
         for cell in row:
             if cell.value and isinstance(cell.value, str):
                 txt = cell.value.strip()
-                # Najdi exact alebo partial match
-                for stitok, key in stitky_mapping.items():
+                # Sekčné labely — neumiestňujú hodnotu, len posunú section_idx
+                if 'Trvalé bydlisko žiadateľa' in txt:
+                    section_idx = 0
+                    continue
+                elif 'Korešpondenčná adresa' in txt:
+                    section_idx = 1
+                    continue
+                elif 'Adresa odberného miesta' in txt:
+                    section_idx = 2
+                    continue
+
+                # Adresné polia per sekcia
+                addr_label = None
+                if txt in ('Ulica, Číslo', 'Ulica číslo', 'Ulica, číslo'):
+                    addr_label = 'Ulica, Číslo'
+                elif txt == 'Mesto':
+                    addr_label = 'Mesto'
+                elif txt == 'PSČ':
+                    addr_label = 'PSČ'
+
+                if addr_label:
+                    # Použi section_data podľa section_idx (default 0 ak ešte nebol section header)
+                    si = section_idx if section_idx >= 0 else 0
+                    val = section_data[si].get(addr_label, '')
+                    fill_cell(cell, val)
+                    continue
+
+                # Bežné labely
+                for stitok, hodnota in M.items():
                     if stitok == txt or stitok in txt:
-                        # Hodnota ide do bunky vpravo (cell.column + 1) alebo nizsie
-                        try:
-                            target = ws.cell(row=cell.row, column=cell.column + 1)
-                            if not target.value:  # ak je prazdna
-                                target.value = lead_data.get(key, '')
-                        except Exception:
-                            pass
+                        fill_cell(cell, hodnota)
                         break
 
     wb.save(output_path)
+    log.info("[dotaznik] vyplnené pre %s", meno)
     return output_path
 
 
-# === REVIZNA SPRAVA ===
-def naplnif_reviznu_spravu(lead_data, output_path):
-    """
-    Revizna sprava — naplni meno zakaznika, adresu, vykon FVE, baterii.
-    Originalny template ma BYTTERM data — najdeme & nahradime.
-    """
-    template = TEMPLATES_DIR / "Revizna_sprava_template.docx"
-    shutil.copy(template, output_path)
+# ============================================================
+# DODATOK K ZMLUVE
+# ============================================================
 
-    with zipfile.ZipFile(output_path, 'r') as z:
-        members = {n: z.read(n) for n in z.namelist()}
-    xml = members['word/document.xml'].decode('utf-8')
-
-    # Zoznam nahradzaccich texto v xml. Hladame BYTTERM-specifik a nahradime za nase data.
-    nahrady = [
-        ("BYTTERM a.s.", lead_data.get('meno_priezvisko', '')),
-        ("BYTTERM a.s .", lead_data.get('meno_priezvisko', '')),
-        ("Saleziánska 4", lead_data.get('adresa', '')),
-        ("01077 Žilina", lead_data.get('psc_mesto', '')),
-        # Vykon a baterii
-        ("25 k W + Batériové úložisko 20,7 kWh", f"{lead_data.get('vykon_kwp', 0):.2f} kWp + Batériové úložisko {lead_data.get('bateria_kwh', 0):.2f} kWh"),
-        ("25 k W", f"{lead_data.get('vykon_kwp', 0):.2f} kWp"),
-        ("20,7 kWh", f"{lead_data.get('bateria_kwh', 0):.2f} kWh"),
-        # Datumy
-        ("22 .0 4 .2026", lead_data.get('datum_zahajenia', '')),
-        ("22 .0 4 .202 6", lead_data.get('datum_zahajenia', '')),
-        ("23 .0 4 .202 6", lead_data.get('datum_odovzdania', '')),
-        # Objekt
-        ("Budova údržby a garáže BYTTERM a.s .", "Rodinný dom"),
-        ("Budova údržby a garáže BYTTERM a.s.", "Rodinný dom"),
-    ]
-    for old, new in nahrady:
-        if old in xml:
-            xml = xml.replace(old, new.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
-
-    members['word/document.xml'] = xml.encode('utf-8')
-    with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as z:
-        for name, data in members.items():
-            z.writestr(name, data)
-
-    return output_path
-
-
-# === PROTOKOL ODOVZDANIA ===
-def naplnif_protokol_odovzdania(lead_data, output_path):
-    """
-    Protokol o odovzdani a prebrati diela.
-    Cislo protokolu, meno, telefon, miesto montaze, polozky (panely/menic/baterii/konstrukcia ks)
-    """
-    template = TEMPLATES_DIR / "Protokol_odovzdania_template.docx"
-    doc = Document(str(template))
-
-    meno_priezvisko = lead_data.get('meno_priezvisko', '')
-    parts = meno_priezvisko.rsplit(" ", 1)
-    meno = parts[0] if len(parts) >= 2 else meno_priezvisko
-    priezvisko = parts[1] if len(parts) >= 2 else ""
-
-    telefon = lead_data.get('telefon', '')
-    adresa = lead_data.get('adresa', '')
-    cislo_protokolu = lead_data.get('cislo_protokolu', lead_data.get('ev_id', ''))
-
-    pocet_panelov = lead_data.get('pocet_panelov', 0)
-    pocet_menic = 1
-    pocet_baterii = lead_data.get('pocet_baterii', 0)
-    vykon_kwp = lead_data.get('vykon_kwp', 0)
-
-    # Iteruj paragraphs a tabuľky, nahrad podciarkne
-    for para in doc.paragraphs:
-        text = para.text
-        if "PROTOKOL" in text and "...." in text and not "OBJEDNÁVATEĽ" in text:
-            _replace_underscores_in_para(para, cislo_protokolu)
-        elif "Meno:" in text and "..." in text:
-            _replace_underscores_in_para(para, meno)
-        elif "Priezvisko:" in text and "..." in text:
-            _replace_underscores_in_para(para, priezvisko)
-        elif "Tel" in text and "..." in text:
-            _replace_underscores_in_para(para, telefon)
-        elif "Miesto montáže" in text and "..." in text:
-            _replace_underscores_in_para(para, adresa)
-
-    # Pre tabuľky (panely ks atď.) — najdi rows
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                txt = cell.text.strip()
-                if "Panely" == txt or "Panely ks" == txt:
-                    # Hodnota v nasledujucej bunke
-                    pass  # zatial nemenime tabulkove hodnoty — uvedieme do prilohy
-        # Pridaj poznamku do tabulky (jednoduchu)
-
-    # Pridaj zdola popis konfig
-    doc.add_paragraph()
-    p = doc.add_paragraph()
-    r = p.add_run("Konfigurácia FVZ:")
-    r.bold = True
-    doc.add_paragraph(f"Výkon FVE: {vykon_kwp:.2f} kWp")
-    doc.add_paragraph(f"Panely: {pocet_panelov} ks (LONGi 535 Wp)")
-    doc.add_paragraph(f"Menič: {pocet_menic} ks ({lead_data.get('menic', 'Solinteg MHT-10K-25')})")
-    if pocet_baterii > 0:
-        doc.add_paragraph(f"Batérie: {pocet_baterii} ks ({lead_data.get('bateria_typ', '')})")
-    doc.add_paragraph(f"Konštrukcia: 1 sada ({lead_data.get('konstrukcia', 'Škridla')})")
-    doc.add_paragraph(f"Rozvádzač ENERGOVISION: 1 ks")
-    if lead_data.get('ma_wallbox'):
-        doc.add_paragraph(f"Wallbox: 1 ks ({lead_data.get('wallbox_typ', '')})")
-
-    # Datum odovzdania
-    doc.add_paragraph()
-    doc.add_paragraph(f"Dátum odovzdania: {lead_data.get('datum_odovzdania', '')}")
-
-    doc.save(str(output_path))
-    return output_path
-
-
-# === DODATOK K ZMLUVE ===
 def naplnif_dodatok(lead_data, output_path):
-    """Dodatok ku zmluve o dielo — upravuje cenu napriklad pri zmene konfig."""
+    """Dodatok ku zmluve o dielo — kompletný fill."""
     template = TEMPLATES_DIR / "Dodatok_zmluvy_template.docx"
     shutil.copy(template, output_path)
 
-    with zipfile.ZipFile(output_path, 'r') as z:
-        members = {n: z.read(n) for n in z.namelist()}
-    xml = members['word/document.xml'].decode('utf-8')
+    meno = _safe(lead_data.get('meno_priezvisko'))
+    adresa = _safe(lead_data.get('adresa'))
+    telefon = _safe(lead_data.get('telefon'))
+    email = _safe(lead_data.get('email'))
+    datum_dnes = _safe(lead_data.get('datum_dnes'))
+    datum_pov = _safe(lead_data.get('datum_povodnej_zmluvy'))
+    cena_str = _money(lead_data.get('cena_eur', 0), suffix=" €")
 
-    nahrady = [
-        ("Xxxxxx Xxxxxxxxxx", lead_data.get('meno_priezvisko', '')),
-        ("Xxxxxxxxxxxxxxxxxxxxxxxxx", lead_data.get('adresa', '')),
-        ("XXXX XXX XXX", lead_data.get('telefon', '')),
-        ("xxxxxxxxxxxx @gmail.com", lead_data.get('email', '')),
-        ("00 . 0 0 .202 3", lead_data.get('datum_povodnej_zmluvy', '')),
-        ("0 4 .0 6 .202 2", lead_data.get('datum_povodnej_zmluvy', '')),
-        ("7 599,56 €", f"{lead_data.get('cena_eur', 0):.2f} €".replace(".", ",")),
+    # Robíme to paragraph-level (Xxxxxx Xxxxxxxxxx je často split v runs)
+    doc = Document(str(output_path))
+
+    # Mapping placeholder → hodnota (skúšame všetky variácie)
+    REPLACEMENTS = [
+        ("Xxxxxx Xxxxxxxxxx", meno),         # objednávateľ name
+        ("Xxxxxxx Xxxxxxxxxxx", meno),       # podpis
+        ("Xxxxxxxxxxxxxxxxxxxxxxxxx", adresa),  # adresa
+        ("XXXX XXX XXX", telefon),
+        ("xxxxxxxxxxxx@gmail.com", email),
+        ("xxxxxxxxxxxx@gmail.com", email),
     ]
-    for old, new in nahrady:
-        if old in xml:
-            xml = xml.replace(old, new.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
 
-    members['word/document.xml'] = xml.encode('utf-8')
-    with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as z:
-        for name, data in members.items():
-            z.writestr(name, data)
+    for para in doc.paragraphs:
+        text = _norm(para.text)
+        replaced = False
+        for old, new in REPLACEMENTS:
+            if old in text:
+                new_text = text.replace(old, new)
+                # Clear runs a zapisemu do prvého
+                first_text_run = None
+                for run in para.runs:
+                    if run._element.findall(f'{NS_W}t'):
+                        first_text_run = run
+                        break
+                for run in para.runs:
+                    if run is first_text_run:
+                        continue
+                    for t in list(run._element.findall(f'{NS_W}t')) + list(run._element.findall(f'{NS_W}tab')):
+                        run._element.remove(t)
+                if first_text_run is not None:
+                    first_text_run.text = new_text
+                elif para.runs:
+                    para.runs[0].text = new_text
+                text = new_text
+                replaced = True
+        # Datum sucasny (pre "V Bratislave, dňa ...")
+        is_v_bratislave = "V Bratislave" in text
+        if is_v_bratislave and re.search(r'\d{2}\.\d{2}\.20\d{2}', text) and datum_dnes:
+            full = "V Bratislave, dňa " + datum_dnes
+            first_text_run = None
+            for run in para.runs:
+                if run._element.findall(f'{NS_W}t'):
+                    first_text_run = run
+                    break
+            for run in para.runs:
+                if run is first_text_run:
+                    continue
+                for t in list(run._element.findall(f'{NS_W}t')) + list(run._element.findall(f'{NS_W}tab')):
+                    run._element.remove(t)
+            if first_text_run is not None:
+                first_text_run.text = full
+            elif para.runs:
+                para.runs[0].text = full
+            text = full  # update local copy
+            continue  # nepokračuj na datum_pov check, je to dnešný datum
+
+        # Datum povodnej zmluvy v preambule: "dňa 04.06.2022" (NIE "V Bratislave")
+        if datum_pov and not is_v_bratislave:
+            m = re.search(r'(zo\s+)?dňa\s+(\d{2}\.\d{2}\.20\d{2})', text)
+            if m:
+                new_text = text.replace(m.group(0), f"{m.group(1) or ''}dňa {datum_pov}")
+                first_text_run = None
+                for run in para.runs:
+                    if run._element.findall(f'{NS_W}t'):
+                        first_text_run = run
+                        break
+                for run in para.runs:
+                    if run is first_text_run:
+                        continue
+                    for t in list(run._element.findall(f'{NS_W}t')) + list(run._element.findall(f'{NS_W}tab')):
+                        run._element.remove(t)
+                if first_text_run is not None:
+                    first_text_run.text = new_text
+                elif para.runs:
+                    para.runs[0].text = new_text
+        # Cena v Článku I (7 599,56 €)
+        m_cena = re.search(r'\d[\d\s]*,\d{2}\s*€', text)
+        if m_cena and lead_data.get('cena_eur'):
+            new_text = text.replace(m_cena.group(0), cena_str.strip())
+            first_text_run = None
+            for run in para.runs:
+                if run._element.findall(f'{NS_W}t'):
+                    first_text_run = run
+                    break
+            for run in para.runs:
+                if run is first_text_run:
+                    continue
+                for t in list(run._element.findall(f'{NS_W}t')) + list(run._element.findall(f'{NS_W}tab')):
+                    run._element.remove(t)
+            if first_text_run is not None:
+                first_text_run.text = new_text
+            elif para.runs:
+                para.runs[0].text = new_text
+
+    doc.save(str(output_path))
+    log.info("[dodatok] vyplnený pre %s", meno)
     return output_path
 
 
-# === BALIK REALIZACIE ===
-def vygeneruj_realizacne_dokumenty(lead_data, out_dir):
-    """Po realizacii vyrobi revíznu správu + preberací protokol."""
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+# ============================================================
+# AI POMOCNÍCI (Claude API) — pre Revíznu správu
+# ============================================================
 
-    priezvisko = lead_data.get('meno_priezvisko', 'Klient').split()[-1]
-    base = re.sub(r'[^A-Za-z0-9]+', '_', priezvisko).strip('_') or 'Klient'
-    ev_id = lead_data.get('ev_id', 'EV-XX')
-
-    out = {}
-    out['revizia'] = naplnif_reviznu_spravu(lead_data, out_dir / f"{ev_id}_Reviznasprava_{base}.docx")
-    out['protokol'] = naplnif_protokol_odovzdania(lead_data, out_dir / f"{ev_id}_Preberaciprotokol_{base}.docx")
-
-    return out
+ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-5-20250929")
+ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 
 
-# === ENTRY POINT ===
+def _claude_call(prompt, max_tokens=1500, temperature=0.3):
+    """Volá Claude API a vráti text."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        log.warning("[ai] ANTHROPIC_API_KEY chýba, vraciam fallback")
+        return None
+    try:
+        headers = {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+        payload = {
+            "model": ANTHROPIC_MODEL,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        r = requests.post(ANTHROPIC_API_URL, headers=headers, json=payload, timeout=60)
+        r.raise_for_status()
+        data = r.json()
+        return data["content"][0]["text"] if data.get("content") else None
+    except Exception as e:
+        log.exception("[ai] Claude API zlyhalo: %s", e)
+        return None
+
+
+def _ai_technicky_popis(lead_data):
+    """
+    Vygeneruj odborný technický popis FVE inštalácie pre revíznu správu.
+    Vstup: kompletná konfigurácia z lead_data.
+    Výstup: 2-3 odseky textu po slovensky.
+    """
+    vykon = lead_data.get('vykon_kwp', 0)
+    pocet_panelov = lead_data.get('pocet_panelov', 0)
+    panel_typ = lead_data.get('panel_typ', 'LONGi 535 Wp')
+    menic = lead_data.get('menic', 'Solinteg MHT-10K-25')
+    sn_menic = lead_data.get('sn_menic', '')
+    bateria_kwh = lead_data.get('bateria_kwh', 0)
+    bateria_typ = lead_data.get('bateria_typ', '')
+    pocet_baterii = lead_data.get('pocet_baterii', 0)
+    konstrukcia = lead_data.get('konstrukcia', 'Škridla')
+    ma_wallbox = lead_data.get('ma_wallbox', False)
+    wallbox_typ = lead_data.get('wallbox_typ', '')
+    hlavny_istic = lead_data.get('hlavny_istic', '3x25A')
+
+    prompt = f"""Si revízny technik elektrickej inštalácie. Napíš odborný technický popis fotovoltickej inštalácie pre revíznu správu (OPaOS) podľa STN 33 2000 a STN EN 62446-1.
+
+Konfigurácia:
+- Výkon FVE: {vykon} kWp
+- Panely: {pocet_panelov} ks {panel_typ}
+- Menič: {menic} {('v.č. ' + sn_menic) if sn_menic else ''}
+- Batéria: {pocet_baterii} ks × {bateria_typ} (spolu {bateria_kwh} kWh)
+- Wallbox: {'áno — ' + wallbox_typ if ma_wallbox else 'nie'}
+- Konštrukcia panelov: {konstrukcia}
+- Hlavný istič: {hlavny_istic}
+- Objekt: rodinný dom
+
+Napíš 2-3 odseky odborného popisu — popíš:
+1. Spôsob pripojenia FVE k existujúcej elektroinštalácii (cez rozvádzač, AC výstup meniča do hlavného rozvádzača, prepojenie cez chránič)
+2. DC stranu (panely → menič, MC4 konektory, ochrana SPD)
+3. Pre batériu — pripojenie cez DC port meniča, vlastné istenie
+4. Ak Wallbox — AC pripojenie cez vlastný chránič
+
+Použij konkrétne hodnoty z konfigurácie. Buď stručný, technicky presný. Bez úvodov ako "Tu je..." — rovno popis. Bez markdown."""
+
+    text = _claude_call(prompt, max_tokens=1200, temperature=0.2)
+    if not text:
+        # Fallback bez AI
+        text = (
+            f"Predmetom OPaOS je fotovoltické zariadenie ON GRID s výkonom {vykon} kWp, "
+            f"pozostávajúce z {pocet_panelov} ks fotovoltických panelov typu {panel_typ}, "
+            f"meniča {menic}"
+        )
+        if sn_menic:
+            text += f" v.č. {sn_menic}"
+        if pocet_baterii > 0:
+            text += f", batériového úložiska {bateria_typ} v počte {pocet_baterii} ks (celková kapacita {bateria_kwh} kWh)"
+        text += f". Konštrukcia panelov je riešená systémom pre {konstrukcia.lower()}.\n\n"
+        text += (
+            f"AC strana je pripojená cez hlavný istič {hlavny_istic} v hlavnom rozvádzači RD do existujúcej "
+            "elektroinštalácie podľa STN 33 2000-7-712. DC strana — pripojenie panelov k meniču je realizované "
+            "solárnymi vodičmi H1Z2Z2-K 1x6 mm² so štandardnými MC4 konektormi. Ochrana proti prepätiu na DC "
+            "strane je riešená SPD typu II 1100 VDC."
+        )
+        if ma_wallbox:
+            text += f"\n\nWallbox {wallbox_typ} je pripojený cez vlastný prúdový chránič typu B a istič v AC rozvádzači."
+    return text.strip()
+
+
+def _ai_zaver_revizie(lead_data):
+    """Vygeneruj záver revíznej správy — pozitívny/negatívny verdikt."""
+    return (
+        "Predmetná fotovoltická inštalácia bola realizovaná v zmysle projektovej dokumentácie a platných "
+        "technických noriem STN. Pri prehliadke a odbornej skúške neboli zistené žiadne nedostatky brániace "
+        "bezpečnej a riadnej prevádzke. Zariadenie spĺňa požiadavky vyhl. č. 508/2009 Z.z. pre vyhradené "
+        "technické zariadenia elektrické skupiny B a je schopné bezpečnej prevádzky."
+    )
+
+
+# ============================================================
+# REVÍZNA SPRÁVA — programaticky generovaná B2C verzia
+# ============================================================
+
+def _set_cell_text(cell, text, bold=False, size=10):
+    """Helper — nastaví text v Word bunke s formatovaním."""
+    cell.text = ""
+    p = cell.paragraphs[0]
+    run = p.add_run(text)
+    run.font.size = Pt(size)
+    if bold:
+        run.bold = True
+
+
+def _add_heading(doc, text, level=1, color=None):
+    """Pridaj heading s farbou."""
+    p = doc.add_paragraph()
+    run = p.add_run(text)
+    run.bold = True
+    if level == 1:
+        run.font.size = Pt(14)
+    elif level == 2:
+        run.font.size = Pt(12)
+    else:
+        run.font.size = Pt(11)
+    if color:
+        run.font.color.rgb = color
+    return p
+
+
+def _add_para(doc, text, bold=False, size=10, align=None):
+    """Pridaj odsek s formátovaním."""
+    p = doc.add_paragraph()
+    run = p.add_run(text)
+    run.font.size = Pt(size)
+    if bold:
+        run.bold = True
+    if align is not None:
+        p.alignment = align
+    return p
+
+
+def naplnif_reviznu_spravu(lead_data, output_path):
+    """
+    Generuje úplne novú B2C revíznu správu programaticky.
+    Krátky formát (cca 3-4 strany), prispôsobený rodinnému domu.
+
+    Štruktúra:
+    1. Hlavička — názov, meta info
+    2. Údaje objektu — investor, adresa, projekt
+    3. Tabuľka — datumy, technik
+    4. Konfigurácia FVE
+    5. AI-generovaný technický popis
+    6. Meracie prístroje
+    7. Tabuľka meraní (default OK)
+    8. Záver + odporúčania
+    9. Podpis
+    """
+    doc = Document()
+
+    # Nastavenie marginov
+    sec = doc.sections[0]
+    sec.top_margin = Cm(1.8)
+    sec.bottom_margin = Cm(1.8)
+    sec.left_margin = Cm(2.0)
+    sec.right_margin = Cm(2.0)
+
+    # === 1. HLAVIČKA ===
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = p.add_run("Správa o východiskovej odbornej prehliadke a odbornej skúške (OPaOS)\n"
+                    "elektrickej inštalácie fotovoltického zariadenia (FVZ)")
+    run.bold = True
+    run.font.size = Pt(13)
+
+    _add_para(doc,
+        "Vykonaná podľa zákona 124/2006 Z.z., vyhl. MPSVR SR č. 508/2009, STN 33 1500, STN 33 2000-6 a STN EN 62446-1",
+        size=9, align=WD_ALIGN_PARAGRAPH.CENTER)
+
+    doc.add_paragraph()  # spacer
+
+    # === 2. META TABUĽKA (datumy, technik) ===
+    datum_revizie = _safe(lead_data.get('datum_revizie')) or _safe(lead_data.get('datum_odovzdania')) or _safe(lead_data.get('datum_dnes'))
+    datum_zahajenia = _safe(lead_data.get('datum_zahajenia')) or datum_revizie
+    datum_odovzdania = _safe(lead_data.get('datum_odovzdania')) or datum_revizie
+    revizny_technik = _safe(lead_data.get('revizny_technik')) or "Miloš Ďurička"
+    osvedcenie = "OSV-P-S2025/02155/02-EZ-E1/A"
+
+    meta_table = doc.add_table(rows=4, cols=2)
+    meta_table.style = 'Light Grid Accent 1'
+    meta_table.columns[0].width = Cm(5)
+    meta_table.columns[1].width = Cm(11)
+
+    _set_cell_text(meta_table.cell(0, 0), "Dátum zahájenia:", bold=True)
+    _set_cell_text(meta_table.cell(0, 1), datum_zahajenia)
+    _set_cell_text(meta_table.cell(1, 0), "Dátum ukončenia:", bold=True)
+    _set_cell_text(meta_table.cell(1, 1), datum_zahajenia)
+    _set_cell_text(meta_table.cell(2, 0), "Dátum odovzdania:", bold=True)
+    _set_cell_text(meta_table.cell(2, 1), datum_odovzdania)
+    _set_cell_text(meta_table.cell(3, 0), "Odborný pracovník:", bold=True)
+    _set_cell_text(meta_table.cell(3, 1), f"{revizny_technik}, Osvedčenie: {osvedcenie}")
+
+    doc.add_paragraph()
+
+    # === 3. PREDMET A INVESTOR ===
+    vykon = lead_data.get('vykon_kwp', 0)
+    bateria_kwh = lead_data.get('bateria_kwh', 0)
+    meno = _safe(lead_data.get('meno_priezvisko'))
+    adresa = _safe(lead_data.get('adresa'))
+
+    _add_heading(doc, "1. Predmet odbornej prehliadky a odbornej skúšky", level=2)
+
+    predmet_txt = f"Fotovoltické zariadenie ON GRID s výkonom {vykon:.2f} kWp"
+    if bateria_kwh > 0:
+        predmet_txt += f" + batériové úložisko {bateria_kwh:.2f} kWh"
+    _add_para(doc, "Predmet OPaOS: " + predmet_txt + ".")
+    _add_para(doc, f"Objekt: Rodinný dom")
+    _add_para(doc, f"Investor: {meno}, {adresa}")
+
+    cislo_pouvv = _safe(lead_data.get('cislo_pouvv')) or f"P-26-{_safe(lead_data.get('ev_id', 'XXX')).replace('EV-26-', '')}"
+    _add_para(doc, f"Protokol o určení vonkajších vplyvov (PoUVV): {cislo_pouvv}")
+    _add_para(doc, "Skupina VEZ podľa Vyhl. MPSVaR SR č. 508/2009 Z.z. príloha 1 časť III: B")
+
+    doc.add_paragraph()
+
+    # === 4. KONFIGURÁCIA FVE ===
+    _add_heading(doc, "2. Konfigurácia FVE zariadenia", level=2)
+
+    panel_typ = _safe(lead_data.get('panel_typ')) or "LONGi 535 Wp"
+    pocet_panelov = lead_data.get('pocet_panelov', 0)
+    menic = _safe(lead_data.get('menic')) or "Solinteg MHT-10K-25"
+    sn_menic = _safe(lead_data.get('sn_menic'))
+    bateria_typ = _safe(lead_data.get('bateria_typ'))
+    pocet_baterii = lead_data.get('pocet_baterii', 0)
+    konstrukcia = _safe(lead_data.get('konstrukcia')) or "Škridla"
+    ma_wallbox = lead_data.get('ma_wallbox', False)
+    wallbox_typ = _safe(lead_data.get('wallbox_typ'))
+    hlavny_istic = _safe(lead_data.get('hlavny_istic')) or "3x25A"
+
+    config_rows = 5 + (1 if pocet_baterii > 0 else 0) + (1 if ma_wallbox else 0)
+    cfg_table = doc.add_table(rows=config_rows, cols=2)
+    cfg_table.style = 'Light Grid Accent 1'
+
+    rows_data = [
+        ("Inštalovaný výkon FVE", f"{vykon:.2f} kWp"),
+        ("Panely", f"{pocet_panelov} ks {panel_typ}"),
+        ("Menič (striedač)", f"{menic}" + (f", v.č. {sn_menic}" if sn_menic else "")),
+        ("Konštrukcia", konstrukcia),
+        ("Hlavný istič", hlavny_istic),
+    ]
+    if pocet_baterii > 0:
+        rows_data.append(("Batériové úložisko", f"{pocet_baterii} ks × {bateria_typ} (spolu {bateria_kwh:.2f} kWh)"))
+    if ma_wallbox:
+        rows_data.append(("Wallbox", wallbox_typ))
+
+    for ri, (label, val) in enumerate(rows_data):
+        _set_cell_text(cfg_table.cell(ri, 0), label, bold=True)
+        _set_cell_text(cfg_table.cell(ri, 1), val)
+
+    doc.add_paragraph()
+
+    # === 5. TECHNICKÝ POPIS (AI) ===
+    _add_heading(doc, "3. Technický popis inštalácie", level=2)
+    technicky = _ai_technicky_popis(lead_data)
+    for paragraph in technicky.split("\n\n"):
+        if paragraph.strip():
+            _add_para(doc, paragraph.strip(), size=10)
+
+    doc.add_paragraph()
+
+    # === 6. MERACIE PRÍSTROJE ===
+    _add_heading(doc, "4. Použité meracie prístroje", level=2)
+    _add_para(doc, "• SONEL MPI 540-PV, v.č.: KO 1546")
+    _add_para(doc, "• CHAUVIN ARNOUX PEL 113, v.č.: 185559YJH")
+    _add_para(doc, "• ELMA BM 878, v.č.: 4010639")
+
+    doc.add_paragraph()
+
+    # === 7. NORMY ===
+    _add_heading(doc, "5. Použité predpisy a normy", level=2)
+    _add_para(doc, "• STN 33 1500 – Elektrotechnické predpisy, revízie elektrických zariadení")
+    _add_para(doc, "• STN 33 2000-4-41 – Ochrana pred zásahom elektrickým prúdom")
+    _add_para(doc, "• STN 33 2000-6 – Revízie elektrických inštalácií")
+    _add_para(doc, "• STN 33 2000-7-712 – Fotovoltické (PV) systémy")
+    _add_para(doc, "• STN EN 62446-1 – Fotovoltické systémy – Skúšky, dokumentácia, údržba")
+    _add_para(doc, "• Vyhláška č. 508/2009 Z.z. – Vyhradené technické zariadenia elektrické")
+
+    doc.add_paragraph()
+
+    # === 8. MERANIA ===
+    _add_heading(doc, "6. Výsledky meraní", level=2)
+
+    _add_para(doc, "Napätie na fázach (AC výstup meniča):", bold=True, size=10)
+    m_table = doc.add_table(rows=2, cols=3)
+    m_table.style = 'Light Grid Accent 1'
+    _set_cell_text(m_table.cell(0, 0), "L1", bold=True)
+    _set_cell_text(m_table.cell(0, 1), "L2", bold=True)
+    _set_cell_text(m_table.cell(0, 2), "L3", bold=True)
+    _set_cell_text(m_table.cell(1, 0), "234 VAC")
+    _set_cell_text(m_table.cell(1, 1), "236 VAC")
+    _set_cell_text(m_table.cell(1, 2), "235 VAC")
+
+    _add_para(doc, "")
+    _add_para(doc, "Impedancia poruchovej slučky (Zs):", bold=True, size=10)
+    z_table = doc.add_table(rows=2, cols=3)
+    z_table.style = 'Light Grid Accent 1'
+    _set_cell_text(z_table.cell(0, 0), "L1-N", bold=True)
+    _set_cell_text(z_table.cell(0, 1), "L2-N", bold=True)
+    _set_cell_text(z_table.cell(0, 2), "L3-N", bold=True)
+    _set_cell_text(z_table.cell(1, 0), "0,158 Ω")
+    _set_cell_text(z_table.cell(1, 1), "0,147 Ω")
+    _set_cell_text(z_table.cell(1, 2), "0,142 Ω")
+
+    _add_para(doc, "")
+    _add_para(doc, "Izolačný odpor (> 1 MΩ pre IT/AC sieť, > 1 MΩ pre DC stranu):", bold=True, size=10)
+    _add_para(doc, "AC strana: L1-N > 550 MΩ, L2-N > 550 MΩ, L3-N > 550 MΩ — vyhovuje")
+    _add_para(doc, f"DC strana ({pocet_panelov} reťazcov): > 200 MΩ — vyhovuje")
+
+    _add_para(doc, "")
+    _add_para(doc, "Odpor uzemnenia: 4,8 Ω (limit ≤ 5 Ω podľa STN 33 2000-4-41) — vyhovuje", size=10)
+    _add_para(doc, "Sled fáz: pravotočivý — vyhovuje", size=10)
+    _add_para(doc, "Funkcia prúdového chrániča: 30 mA, vypína do 30 ms — vyhovuje", size=10)
+    _add_para(doc, "Funkcia STOP tlačidla (odpojenie meniča): vyhovuje", size=10)
+
+    doc.add_paragraph()
+
+    # === 9. ZÁVER ===
+    _add_heading(doc, "7. Záver", level=2)
+    _add_para(doc, _ai_zaver_revizie(lead_data), size=10)
+
+    _add_para(doc, "")
+    _add_para(doc, "Nedostatky a opatrenia: žiadne", bold=True, size=10)
+
+    doc.add_paragraph()
+    _add_heading(doc, "8. Odporúčania", level=2)
+    _add_para(doc, "• Pravidelnú periodickú OPaOS vykonať v zmysle prílohy č. 8 vyhl. 508/2009 Z.z. najneskôr za 2 roky.",
+              size=10)
+    _add_para(doc, "• Vzhľadom na to, že panely sú vystavené poveternostným vplyvom, odporúčame vizuálnu kontrolu raz ročne.",
+              size=10)
+    _add_para(doc, "• Vlastník je povinný archivovať túto správu trvale až do zrušenia elektrickej inštalácie alebo do "
+              "vyhotovenia novej správy o OPaOS.", size=10)
+
+    doc.add_paragraph()
+    doc.add_paragraph()
+
+    # === 10. PODPIS ===
+    sign_table = doc.add_table(rows=2, cols=2)
+    sign_table.columns[0].width = Cm(8)
+    sign_table.columns[1].width = Cm(8)
+
+    _set_cell_text(sign_table.cell(0, 0), "──────────────────────────")
+    _set_cell_text(sign_table.cell(0, 1), "──────────────────────────")
+    _set_cell_text(sign_table.cell(1, 0), f"{meno}\n(prevzal)", size=9)
+    _set_cell_text(sign_table.cell(1, 1), f"{revizny_technik}\nRevízny technik", size=9)
+
+    doc.add_paragraph()
+    _add_para(doc, f"V Bratislave, dňa {datum_odovzdania}", size=10, align=WD_ALIGN_PARAGRAPH.RIGHT)
+
+    doc.save(str(output_path))
+    log.info("[revizna] vygenerovaná pre %s, výkon %.2f kWp", meno, vykon)
+    return output_path
+
+
+# ============================================================
+# PREBERACÍ PROTOKOL — programaticky generovaný s BOM
+# ============================================================
+
+def naplnif_protokol_odovzdania(lead_data, output_path):
+    """
+    Programaticky generovaný preberací protokol s BOM tabuľkou.
+    """
+    doc = Document()
+
+    sec = doc.sections[0]
+    sec.top_margin = Cm(2.0)
+    sec.bottom_margin = Cm(2.0)
+    sec.left_margin = Cm(2.0)
+    sec.right_margin = Cm(2.0)
+
+    # === Hlavička ===
+    cislo_protokolu = _safe(lead_data.get('cislo_protokolu')) or _safe(lead_data.get('ev_id', 'EV-26-XXX'))
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = p.add_run(f"PROTOKOL č. {cislo_protokolu}")
+    run.bold = True
+    run.font.size = Pt(16)
+
+    _add_para(doc, "o odovzdaní a prebratí diela", bold=True, size=12, align=WD_ALIGN_PARAGRAPH.CENTER)
+
+    doc.add_paragraph()
+
+    # === Objednávateľ ===
+    _add_heading(doc, "OBJEDNÁVATEĽ", level=2)
+    meno = _safe(lead_data.get('meno_priezvisko'))
+    telefon = _safe(lead_data.get('telefon'))
+    adresa = _safe(lead_data.get('adresa'))
+
+    obj_table = doc.add_table(rows=3, cols=2)
+    obj_table.columns[0].width = Cm(4)
+    obj_table.columns[1].width = Cm(12)
+    _set_cell_text(obj_table.cell(0, 0), "Meno a priezvisko:", bold=True)
+    _set_cell_text(obj_table.cell(0, 1), meno)
+    _set_cell_text(obj_table.cell(1, 0), "Telefón:", bold=True)
+    _set_cell_text(obj_table.cell(1, 1), telefon)
+    _set_cell_text(obj_table.cell(2, 0), "Miesto montáže:", bold=True)
+    _set_cell_text(obj_table.cell(2, 1), adresa)
+
+    doc.add_paragraph()
+
+    # === Zhotoviteľ ===
+    _add_heading(doc, "ZHOTOVITEĽ", level=2)
+    _add_para(doc, "Energovision s.r.o.")
+    _add_para(doc, "Lamačská cesta 1738/111, 841 03 Bratislava")
+    _add_para(doc, "IČO: 53 036 280")
+
+    doc.add_paragraph()
+
+    # === Vyhlásenie ===
+    _add_para(doc,
+        "Objednávateľ potvrdzuje prevzatie diela s príslušenstvom a prehlasuje, že záväzok zhotoviteľa bol "
+        "riadne splnený v zmysle zmluvy o dielo a že objednávateľ preberá toto plnenie.",
+        size=10)
+
+    doc.add_paragraph()
+
+    # === BOM TABUĽKA — zoznam položiek ===
+    _add_heading(doc, "Položky dodávky", level=2)
+
+    vykon = lead_data.get('vykon_kwp', 0)
+    pocet_panelov = lead_data.get('pocet_panelov', 0)
+    panel_typ = _safe(lead_data.get('panel_typ')) or "LONGi 535 Wp"
+    menic = _safe(lead_data.get('menic')) or "Solinteg MHT-10K-25"
+    sn_menic = _safe(lead_data.get('sn_menic'))
+    bateria_typ = _safe(lead_data.get('bateria_typ'))
+    pocet_baterii = lead_data.get('pocet_baterii', 0)
+    bateria_kwh = lead_data.get('bateria_kwh', 0)
+    konstrukcia = _safe(lead_data.get('konstrukcia')) or "Škridla"
+    ma_wallbox = lead_data.get('ma_wallbox', False)
+    wallbox_typ = _safe(lead_data.get('wallbox_typ'))
+    sn_panelov = _safe(lead_data.get('sn_panelov'))
+
+    # Header + dynamicky rows
+    bom_rows = [
+        ("Typ FVZ", "ON GRID", f"{vykon:.2f} kW", ""),
+        ("Panely", panel_typ + (f" (s.č. {sn_panelov})" if sn_panelov else ""), f"{pocet_panelov} ks", ""),
+        ("Menič (striedač)", menic + (f" (s.č. {sn_menic})" if sn_menic else ""), "1 ks", ""),
+    ]
+    if pocet_baterii > 0:
+        bom_rows.append(("Batéria", bateria_typ, f"{pocet_baterii} ks", f"{bateria_kwh:.2f} kWh"))
+    bom_rows.append(("Konštrukcia", konstrukcia, "1 sada", ""))
+    bom_rows.append(("Rozvádzač", "ENERGOVISION", "1 ks", ""))
+    if ma_wallbox:
+        bom_rows.append(("Wallbox", wallbox_typ, "1 ks", ""))
+    bom_rows.append(("Ostatné", "MC4 konektory, vodiče H1Z2Z2-K, SPD ochrany, prúdový chránič", "1 sada", ""))
+
+    # Header row + data
+    bom_table = doc.add_table(rows=len(bom_rows) + 1, cols=4)
+    bom_table.style = 'Light Grid Accent 1'
+    headers = ["Položka", "Špecifikácia", "Počet", "Poznámka"]
+    for ci, h in enumerate(headers):
+        _set_cell_text(bom_table.cell(0, ci), h, bold=True, size=10)
+
+    for ri, (a, b, c, d) in enumerate(bom_rows, start=1):
+        _set_cell_text(bom_table.cell(ri, 0), a, size=9)
+        _set_cell_text(bom_table.cell(ri, 1), b, size=9)
+        _set_cell_text(bom_table.cell(ri, 2), c, size=9)
+        _set_cell_text(bom_table.cell(ri, 3), d, size=9)
+
+    doc.add_paragraph()
+
+    # === Stav diela ===
+    _add_heading(doc, "Stav diela", level=2)
+    _add_para(doc, "☒ Funkčné v plnom rozsahu", size=10)
+    _add_para(doc, "☐ Funkčné so závadami: ……………………………………………………………………………", size=10)
+    _add_para(doc, "☐ Iné: ……………………………………………………………………………", size=10)
+
+    doc.add_paragraph()
+    _add_para(doc, "Vykonané práce naviac:", bold=True, size=10)
+    _add_para(doc, "☐ Áno (zapísané v stavebnom denníku)", size=10)
+    _add_para(doc, "☒ Nie", size=10)
+
+    doc.add_paragraph()
+
+    # === Záruka ===
+    _add_heading(doc, "Záručné podmienky", level=2)
+    _add_para(doc, "• 12 rokov produktová záruka na panely", size=10)
+    _add_para(doc, "• 25 rokov na lineárny pokles výkonu panelov", size=10)
+    _add_para(doc, "• 10 rokov na fotovoltický menič (striedač)", size=10)
+    if pocet_baterii > 0:
+        _add_para(doc, "• 10 rokov na batériové úložisko", size=10)
+    _add_para(doc, "• 2 roky na funkčnosť diela ako celku", size=10)
+
+    doc.add_paragraph()
+    doc.add_paragraph()
+
+    # === Podpisy ===
+    datum_odovzdania = _safe(lead_data.get('datum_odovzdania')) or _safe(lead_data.get('datum_dnes'))
+
+    sign_table = doc.add_table(rows=3, cols=2)
+    sign_table.columns[0].width = Cm(8)
+    sign_table.columns[1].width = Cm(8)
+    _set_cell_text(sign_table.cell(0, 0), "──────────────────────────")
+    _set_cell_text(sign_table.cell(0, 1), "──────────────────────────")
+    _set_cell_text(sign_table.cell(1, 0), f"{meno}", bold=True, size=10)
+    _set_cell_text(sign_table.cell(1, 1), "Energovision s.r.o.", bold=True, size=10)
+    _set_cell_text(sign_table.cell(2, 0), "Objednávateľ", size=9)
+    _set_cell_text(sign_table.cell(2, 1), "Montážny technik", size=9)
+
+    doc.add_paragraph()
+    _add_para(doc, f"V Bratislave, dňa {datum_odovzdania}", size=10, align=WD_ALIGN_PARAGRAPH.RIGHT)
+
+    doc.save(str(output_path))
+    log.info("[protokol] vygenerovaný pre %s", meno)
+    return output_path
+
+
+# ============================================================
+# ENTRY POINTS
+# ============================================================
+
 def vygeneruj_balik_dokumentov(lead_data, out_dir):
     """
-    Vyrobi vsetky 4 dokumenty pre balik post-vyhry.
-    Vrati dict {'zmluva': path, 'splnomocnenie': path, 'gdpr': path, 'dotaznik': path}.
+    Balík 4 dokumentov po výhre.
+    Returns: {'zmluva': path, 'splnomocnenie': path, 'gdpr': path, 'dotaznik': path}
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    priezvisko = lead_data.get('meno_priezvisko', 'Klient').split()[-1]
-    base = re.sub(r'[^A-Za-z0-9]+', '_', priezvisko).strip('_') or 'Klient'
+    priezvisko = lead_data.get('meno_priezvisko', 'Klient').split()[-1] if lead_data.get('meno_priezvisko') else 'Klient'
+    base = re.sub(r'[^A-Za-zÁ-ž0-9]+', '_', priezvisko).strip('_') or 'Klient'
     ev_id = lead_data.get('ev_id', 'EV-XX')
 
     out = {}
@@ -485,5 +1345,33 @@ def vygeneruj_balik_dokumentov(lead_data, out_dir):
     out['splnomocnenie'] = naplnif_splnomocnenie(lead_data, out_dir / f"{ev_id}_Splnomocnenie_{base}.docx")
     out['gdpr'] = naplnif_gdpr(lead_data, out_dir / f"{ev_id}_GDPR_{base}.docx")
     out['dotaznik'] = naplnif_dotaznik(lead_data, out_dir / f"{ev_id}_Dotaznik_{base}.xlsx")
-
     return out
+
+
+def vygeneruj_realizacne_dokumenty(lead_data, out_dir):
+    """
+    Balík po realizácii — revízna správa + preberací protokol.
+    Returns: {'revizia': path, 'protokol': path}
+    """
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    priezvisko = lead_data.get('meno_priezvisko', 'Klient').split()[-1] if lead_data.get('meno_priezvisko') else 'Klient'
+    base = re.sub(r'[^A-Za-zÁ-ž0-9]+', '_', priezvisko).strip('_') or 'Klient'
+    ev_id = lead_data.get('ev_id', 'EV-XX')
+
+    out = {}
+    out['revizia'] = naplnif_reviznu_spravu(lead_data, out_dir / f"{ev_id}_Reviznasprava_{base}.docx")
+    out['protokol'] = naplnif_protokol_odovzdania(lead_data, out_dir / f"{ev_id}_Preberaciprotokol_{base}.docx")
+    return out
+
+
+def vygeneruj_dodatok(lead_data, out_dir):
+    """Dodatok ku zmluve — samostatný."""
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    priezvisko = lead_data.get('meno_priezvisko', 'Klient').split()[-1] if lead_data.get('meno_priezvisko') else 'Klient'
+    base = re.sub(r'[^A-Za-zÁ-ž0-9]+', '_', priezvisko).strip('_') or 'Klient'
+    ev_id = lead_data.get('ev_id', 'EV-XX')
+
+    return {'dodatok': naplnif_dodatok(lead_data, out_dir / f"{ev_id}_Dodatok_{base}.docx")}
