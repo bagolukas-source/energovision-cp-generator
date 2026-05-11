@@ -50,7 +50,7 @@ DEFAULTS = {
     "degradacia_pct_rok": 0.5,      # ročná degradácia panelov %
     "vyroba_kwh_per_kwp": 1075,     # SR priemer pre J orientáciu
     "narast_cien_el_pct_rok": 3.0,  # ročný nárast ceny elektriny
-    "dotacia_flat_eur": 1500,       # Univerzálna dotácia (zjednodušený výpočet)
+    "dotacia_flat_eur": 1500,       # Dotácia Zelená domácnostiam — flat MAX 1 500 € (od 2026-05-11)
     "obchodnik": {
         "meno": "Dominik Galaba",
         "funkcia": "Office & Administration Manager",
@@ -197,9 +197,9 @@ def vyrataj_ceny(konfig, lead):
     cena_bez_dph = nakupna_spolu + rezerva_eur + marza_eur
     cena_s_dph = cena_bez_dph * (1 + dph)
 
-    # Dotácia Zelená domácnostiam — celkový strop 3 500 € na inštaláciu (FVE + BESS dokopy)
+    # Dotácia Zelená domácnostiam — flat 1 500 € (3 kW × 500 €/kW)
+    # Okresové zvýhodnenia 575/900 €/kW už NEPLATIA (update 2026-05-11)
     if lead.get("dotacia", True):
-        # Univerzálna dotácia 1500 € (zjednodušený výpočet)
         dotacia = DEFAULTS["dotacia_flat_eur"]
     else:
         dotacia = 0
