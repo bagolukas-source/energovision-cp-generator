@@ -43,7 +43,7 @@ def naplnif_zmluvu(lead_data, output_path):
     - vykon_kwp, cislo_cp, datum_cp, miesto_vykonu
     - cena_eur (bez DPH), cena_slovom
 
-    XXX placeholdery v poradi:
+    XXX placeholdery v poradi (12 spolu):
     1. meno_priezvisko (Objednavatel: XXX)
     2. adresa (Adresa: XXX)
     3. telefon (Telefon: XXX)
@@ -55,7 +55,9 @@ def naplnif_zmluvu(lead_data, output_path):
     9. cena_eur (XXX EUR + DPH)
     10. cena_slovom (Slovom: XXX Eur ...)
     11. cena_centov_slovom (... a XXX centov)
-    12. (mozno este 1 zostatkove XXX — preskocim)
+    12. meno_priezvisko (signature line — XXX vedľa Lukáš Bago)
+
+    Plus: "XX.XX.2025" → datum_dnes (formátom DD.MM.YYYY)
     """
     template = TEMPLATES_DIR / "Zmluva_o_dielo_template.docx"
     shutil.copy(template, output_path)
@@ -81,6 +83,7 @@ def naplnif_zmluvu(lead_data, output_path):
         f"{lead_data.get('cena_eur', 0):,.2f}".replace(",", " "),  # 9
         f"{eur}",                                      # 10 — cena slovom
         f"{cents}",                                    # 11 — centov
+        lead_data.get('meno_priezvisko', ''),         # 12 — podpis Objednávateľ
     ]
 
     # Nahrad postupne kazdu instanciu "XXX" v document.xml
@@ -100,10 +103,30 @@ def naplnif_zmluvu(lead_data, output_path):
         for name, data in members.items():
             z.writestr(name, data)
 
+    # Druhá fáza: paragraph-level fix pre dátum "V Bratislave, dňa XX.XX.2025"
+    # (XX.XX.2025 je v XML rozdelené do viacerých runov, preto regex na xml nefunguje)
+    datum_dnes = lead_data.get('datum_dnes', '')
+    if datum_dnes:
+        doc = Document(str(output_path))
+        for para in doc.paragraphs:
+            text = _norm(para.text)
+            if "V Bratislave" in text and re.search(r'XX\.XX\.20\d{2}', text):
+                full = "V Bratislave, dňa " + datum_dnes
+                for run in para.runs:
+                    run.text = ""
+                if para.runs:
+                    para.runs[0].text = full
+        doc.save(str(output_path))
+
     return output_path
 
 
 # === SPLNOMOCNENIE ===
+def _norm(s):
+    """Normalizuj non-breaking space na bežnú medzeru pre comparisons."""
+    return (s or "").replace('\xa0', ' ')
+
+
 def naplnif_splnomocnenie(lead_data, output_path):
     """
     Splnomocnenie ma polia:
@@ -125,11 +148,9 @@ def naplnif_splnomocnenie(lead_data, output_path):
     datum_dnes = lead_data.get('datum_dnes', '')
 
     # Iteruj paragraphs a najdi hodnoty po stitkoch
-    # Mapovanie: ak paragraph obsahuje "Meno a priezvisko", nasleduje text s ___
+    # POZOR: template má non-breaking space (\xa0) miesto bežnej medzery, preto normalizujeme.
     for para in doc.paragraphs:
-        text = para.text
-        # Replace _____ (variabilna dlzka podciarknikov) podla stitku v PREDOSLOM paragrafe
-        # Jednoduche: ak para obsahuje stitok aj ___, replace inline
+        text = _norm(para.text)
         if "Meno a priezvisko" in text and "___" in text:
             _replace_underscores_in_para(para, meno)
         elif "Číslo OP" in text and "___" in text:
@@ -139,12 +160,11 @@ def naplnif_splnomocnenie(lead_data, output_path):
         elif "Bydlisko" in text and "___" in text:
             _replace_underscores_in_para(para, bydlisko)
 
-    # Datum: "V Bratislave, dna XX. XX .2024" -> nahradime XX. XX .2024 datumom
-    # Forma datumu: "10.05.2026" -> "10. 05 . 2026"
+    # Datum: "V Bratislave, dňa XX.XX.2024" -> nahradime aktuálnym datumom
     if datum_dnes:
         for para in doc.paragraphs:
-            if "V Bratislave" in para.text and "202" in para.text:
-                # Replace celu vetu
+            text = _norm(para.text)
+            if "V Bratislave" in text and ("202" in text or "XX" in text):
                 full = "V Bratislave, dňa " + datum_dnes
                 # Clear all runs and write new text
                 for run in para.runs:
@@ -157,18 +177,41 @@ def naplnif_splnomocnenie(lead_data, output_path):
 
 
 def _replace_underscores_in_para(para, value):
-    """Nahrad sekvenciu podciarknikov (___...) v paragrafe za hodnotu."""
-    # Combinuj run.text a hladaj ___+ pattern
-    full_text = para.text
-    # Najdi prvy ___+ sekvenciu
+    """Nahrad sekvenciu podciarknikov (___...) v paragrafe za hodnotu.
+
+    Robustný prístup: poskladaj plný text zo všetkých runov, urob replacement,
+    potom vymaž text vo VŠETKÝCH <w:t> elementoch a daj nový text do prvého
+    `<w:t>` runu (alebo vytvor nový ak žiaden nemá <w:t>).
+    """
+    full_text = _norm(para.text)
     m = re.search(r'_{3,}', full_text)
     if not m:
         return
     new_text = full_text[:m.start()] + str(value) + full_text[m.end():]
-    # Clear runs a nastav prvy run na new_text
+
+    # Najdi prvý run ktorý obsahuje <w:t> element (skutočný text, nie iba tab)
+    first_text_run = None
     for run in para.runs:
-        run.text = ""
-    if para.runs:
+        # python-docx run.text returns text from <w:t> + \t for <w:tab/>
+        # Skontroluj či má <w:t>
+        if run._element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t'):
+            first_text_run = run
+            break
+
+    # Vymaž <w:t> elementy vo všetkých runoch okrem prvého (a aj <w:tab/> aby sa zbavili tabov v náhrade)
+    ns = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+    for run in para.runs:
+        if run is first_text_run:
+            continue
+        # Odstráň všetky <w:t> a <w:tab/> elementy
+        for t in run._element.findall(f'{ns}t') + run._element.findall(f'{ns}tab'):
+            run._element.remove(t)
+
+    # Nastav nový text v prvom textovom rune
+    if first_text_run is not None:
+        first_text_run.text = new_text
+    elif para.runs:
+        # Fallback ak nie je žiaden text run
         para.runs[0].text = new_text
 
 
@@ -183,7 +226,7 @@ def naplnif_gdpr(lead_data, output_path):
     datum_dnes = lead_data.get('datum_dnes', '')
 
     for para in doc.paragraphs:
-        text = para.text
+        text = _norm(para.text)
         if "Meno a priezvisko" in text and "___" in text:
             _replace_underscores_in_para(para, meno)
         elif "Dátum narodenia" in text and "___" in text:
@@ -191,7 +234,8 @@ def naplnif_gdpr(lead_data, output_path):
 
     if datum_dnes:
         for para in doc.paragraphs:
-            if "V Bratislave" in para.text:
+            text = _norm(para.text)
+            if "V Bratislave" in text:
                 full = "V Bratislave, dňa " + datum_dnes
                 for run in para.runs:
                     run.text = ""
