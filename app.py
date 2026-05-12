@@ -77,6 +77,110 @@ def require_secret(f):
     return wrapper
 
 
+# ============================================================
+# VALIDÁCIA — overuje že lead má dostatočne kvalitné dáta
+# pre generovanie dokumentov
+# ============================================================
+FAKE_DEFAULTS = {
+    "info@energovision.sk",       # firemný email — NIE klient
+    "ulica 33",                   # parser default
+    "suchohrad",                  # náhodný default
+    "topolčany",                  # náhodný default ak nesúhlasí s mestom
+}
+
+
+def _is_fake(value):
+    """Detekuje fake default hodnotu (case-insensitive, čistá medzera)."""
+    if not value:
+        return True
+    v = str(value).strip().lower()
+    if not v:
+        return True
+    return v in FAKE_DEFAULTS
+
+
+def _validate_psc(psc):
+    """SR PSČ je 5 cifier."""
+    if not psc:
+        return False
+    digits = re.sub(r'\D', '', str(psc))
+    return len(digits) == 5
+
+
+def validate_lead_for_documents(flat, doc_type="zmluvy"):
+    """
+    Skontroluje povinné polia pre generovanie dokumentov.
+    doc_type: "zmluvy" | "realizacne" | "pd"
+
+    Vráti tuple (is_valid: bool, missing: list[str]).
+    """
+    missing = []
+
+    # Spoločné pre všetky 3 dokumenty
+    meno = flat.get("Zákazník", "")
+    if not meno or len(meno.strip()) < 3:
+        missing.append("Zákazník (meno a priezvisko)")
+
+    tel = flat.get("Telefón", "")
+    if not tel:
+        missing.append("Telefón")
+
+    email = flat.get("Email", "")
+    if not email or _is_fake(email):
+        missing.append("Email (skutočný klienta, nie info@energovision.sk)")
+
+    ulica = flat.get("Ulica číslo", "")
+    if not ulica or _is_fake(ulica):
+        missing.append("Ulica číslo (skutočná adresa)")
+
+    mesto = flat.get("Mesto", "")
+    if not mesto or _is_fake(mesto):
+        missing.append("Mesto")
+
+    psc = flat.get("PSČ", "")
+    if not _validate_psc(psc):
+        missing.append(f"PSČ (musí byť 5 cifier, je: {psc!r})")
+
+    if doc_type == "zmluvy":
+        # Zmluvy potrebujú variant + cenu
+        variant = flat.get("Variant do zmluvy", "")
+        if not variant:
+            missing.append("Variant do zmluvy (A/B/C/D)")
+        pocet_p = flat.get("Počet panelov", "")
+        if not pocet_p or str(pocet_p).strip() == "0":
+            missing.append("Počet panelov")
+        # Splnomocnenie potrebuje OP + dátum narodenia
+        if not flat.get("Číslo OP"):
+            missing.append("Číslo OP")
+        if not flat.get("date:Dátum narodenia:start"):
+            missing.append("Dátum narodenia")
+        # Dotazník potrebuje IBAN, banka, EIC
+        if not flat.get("IBAN"):
+            missing.append("IBAN")
+        if not flat.get("Banka"):
+            missing.append("Banka")
+        if not flat.get("EIC odberného miesta"):
+            missing.append("EIC odberného miesta")
+
+    elif doc_type == "realizacne":
+        # Revízia + protokol potrebujú sériové čísla
+        if not flat.get("Sériové č. meniča"):
+            missing.append("Sériové č. meniča")
+        if not flat.get("date:Dátum odovzdania:start"):
+            missing.append("Dátum odovzdania")
+
+    elif doc_type == "pd":
+        # PD potrebuje distribučnú spoločnosť a parcely
+        if not flat.get("Distribučná spoločnosť"):
+            missing.append("Distribučná spoločnosť (SSD/VSD/ZSDIS)")
+        if not flat.get("Parcelné čísla"):
+            missing.append("Parcelné čísla")
+        if not flat.get("Variant do zmluvy"):
+            missing.append("Variant do zmluvy (A/B/C/D)")
+
+    return (len(missing) == 0, missing)
+
+
 def notion_get_page(page_id):
     """Stiahne Notion page properties."""
     r = requests.get(f"{NOTION_API}/pages/{page_id}", headers=NOTION_HEADERS, timeout=20)
@@ -907,6 +1011,20 @@ def generuj_dokumenty():
 
     flat = notion_props_to_flat(page)
 
+    # === VALIDÁCIA — odmietnuť ak chýbajú povinné polia ===
+    is_valid, missing = validate_lead_for_documents(flat, doc_type="zmluvy")
+    if not is_valid:
+        msg = "Lead nemá vyplnené povinné polia: " + ", ".join(missing)
+        log.warning("[generuj-dokumenty] %s", msg)
+        # Zapíš error do Notion Poznámky aby Lukáš videl
+        try:
+            notion_update_page(page_id, {
+                "Poznámky": {"rich_text": [{"text": {"content": "❌ Generovanie zmluv zlyhalo: " + msg[:200]}}]}
+            })
+        except Exception:
+            pass
+        return jsonify({"success": False, "error": msg, "missing": missing}), 400
+
     # === Zostav lead_data zo zaznamu ===
     from datetime import datetime
     from generate_from_notion import lead_from_notion as _lfn, safe_filename as _sf
@@ -1227,6 +1345,19 @@ def generuj_realizacne():
 
     flat = notion_props_to_flat(page)
 
+    # === VALIDÁCIA ===
+    is_valid, missing = validate_lead_for_documents(flat, doc_type="realizacne")
+    if not is_valid:
+        msg = "Lead nemá vyplnené povinné polia pre revíznu/protokol: " + ", ".join(missing)
+        log.warning("[generuj-realizacne] %s", msg)
+        try:
+            notion_update_page(page_id, {
+                "Poznámky": {"rich_text": [{"text": {"content": "❌ Generovanie realizacných zlyhalo: " + msg[:200]}}]}
+            })
+        except Exception:
+            pass
+        return jsonify({"success": False, "error": msg, "missing": missing}), 400
+
     from datetime import datetime
     from generate_from_notion import safe_filename as _sf
 
@@ -1417,6 +1548,19 @@ def generuj_pd():
         return jsonify({"error": f"notion_get failed: {e}"}), 500
 
     flat = notion_props_to_flat(page)
+
+    # === VALIDÁCIA ===
+    is_valid, missing = validate_lead_for_documents(flat, doc_type="pd")
+    if not is_valid:
+        msg = "Lead nemá vyplnené povinné polia pre PD: " + ", ".join(missing)
+        log.warning("[generuj-pd] %s", msg)
+        try:
+            notion_update_page(page_id, {
+                "Poznámky": {"rich_text": [{"text": {"content": "❌ Generovanie PD zlyhalo: " + msg[:200]}}]}
+            })
+        except Exception:
+            pass
+        return jsonify({"success": False, "error": msg, "missing": missing}), 400
 
     from datetime import datetime
     from generate_from_notion import safe_filename as _sf
