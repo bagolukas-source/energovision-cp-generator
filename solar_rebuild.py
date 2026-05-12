@@ -62,96 +62,11 @@ def cz(n, dec=0):
     return f"{n:,.{dec}f}".replace(",", " ").replace(".", ",")
 
 
-def _extract_via_vision_api(pdf_bytes):
-    """Pre nový SolarEdge formát (bez text layeru) — Claude Vision API."""
-    import os, json, requests, logging as _log
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        return None
-    try:
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-        page_imgs_b64 = []
-        for i in range(min(3, len(doc))):
-            page = doc[i]
-            pix = page.get_pixmap(dpi=150)
-            page_imgs_b64.append(base64.b64encode(pix.tobytes("png")).decode("ascii"))
-        prompt_lines = [
-            "Toto je SolarEdge Designer report pre fotovoltickú elektráreň.",
-            "Extrahuj LEN ČISTÝ JSON v presnej štruktúre:",
-            "{",
-            '  "klient": "Meno Priezvisko",',
-            '  "adresa": "ulica číslo, PSČ mesto, Slovensko",',
-            '  "mesto": "iba mesto",',
-            '  "datum": "DD.MM.YYYY",',
-            '  "vykon_kwp": 8.56,',
-            '  "vykon_ac_kw": 7.0,',
-            '  "rocna_vyroba_kwh": 8513,',
-            '  "rocna_spotreba_kwh": 8000,',
-            '  "co2_uspora_t": 1.12,',
-            '  "stromy_ekv": 52,',
-            '  "panely": [',
-            '    {"pocet": 8, "model": "LONGi LR7-60HVH-535M", "kwp": 4.3, "azimut": 268, "sklon": 24}',
-            '  ]',
-            "}",
-            "DÔLEŽITÉ: vykon_kwp ako float s bodkou. rocna_vyroba_kwh celé číslo. Iba surový JSON, žiadne markdown bloky.",
-        ]
-        prompt = "\n".join(prompt_lines)
-        content_msg = [{"type": "text", "text": prompt}]
-        for img_b64 in page_imgs_b64:
-            content_msg.append({
-                "type": "image",
-                "source": {"type": "base64", "media_type": "image/png", "data": img_b64}
-            })
-        r = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-5-20250929"),
-                "max_tokens": 2000,
-                "messages": [{"role": "user", "content": content_msg}],
-            },
-            timeout=120,
-        )
-        r.raise_for_status()
-        text = r.json()["content"][0]["text"].strip()
-        text = re.sub(r"^```(?:json)?\s*", "", text)
-        text = re.sub(r"\s*```$", "", text).strip()
-        return json.loads(text)
-    except Exception as e:
-        _log.warning("[solar_rebuild vision] zlyhalo: %s", e)
-        return None
-
-
-def _find_hero_image(doc):
-    """Najväčší obrázok = vizualizácia strechy (pre nový formát)."""
-    biggest = None
-    biggest_size = 0
-    for page_num in range(min(3, len(doc))):
-        page = doc[page_num]
-        for img in page.get_images(full=True):
-            try:
-                xref = img[0]
-                base = doc.extract_image(xref)
-                img_bytes = base["image"]
-                if len(img_bytes) > biggest_size:
-                    biggest_size = len(img_bytes)
-                    biggest = base64.b64encode(img_bytes).decode("ascii")
-            except Exception:
-                pass
-    return biggest
-
-
 def extract_pdf_data(pdf_bytes):
     """
     Z raw bytes PDF extrahuj obrazky a numericke data.
-    Auto-detekuje legacy (text layer) vs new (vektorová grafika → Vision API).
     Vrati dict: {imgs: {hero, orto, shading}, data: {kwp, vyroba, ...}, panely: [...]}
     """
-    import logging as _log
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     if len(doc) < 1:
         raise ValueError("PDF nema ziadne strany")
@@ -160,82 +75,19 @@ def extract_pdf_data(pdf_bytes):
     text_p1 = page1.get_text()
     text_p2 = doc[1].get_text() if len(doc) > 1 else ""
 
-    is_new_format = not text_p1.strip()
-
-    # === HERO IMAGE ===
+    # Embedded obrazky page 1 — preskoc 1. (logo) a vezmi 3 hero
+    images = page1.get_images(full=True)
     imgs_b64 = {"hero": "", "orto": "", "shading": ""}
-    if is_new_format:
-        _log.info("[solar_rebuild] NEW vector PDF — používam Vision API")
-        hero = _find_hero_image(doc)
-        if hero:
-            imgs_b64["hero"] = hero
-    else:
-        # Pôvodný formát — preskoc 1. (logo) a vezmi 3 hero
-        images = page1.get_images(full=True)
-        keys = ["hero", "orto", "shading"]
-        for idx, img in enumerate(images[1:4]):
-            try:
-                xref = img[0]
-                base = doc.extract_image(xref)
-                imgs_b64[keys[idx]] = base64.b64encode(base["image"]).decode("ascii")
-            except Exception:
-                pass
+    keys = ["hero", "orto", "shading"]
+    for idx, img in enumerate(images[1:4]):
+        try:
+            xref = img[0]
+            base = doc.extract_image(xref)
+            imgs_b64[keys[idx]] = base64.b64encode(base["image"]).decode("ascii")
+        except Exception:
+            pass
 
-    # === EXTRAKCIA DÁT — NEW vs LEGACY ===
-    klient = ""
-    adresa = ""
-    mesto = ""
-    datum = ""
-    kwp_str = "—"
-    ac_str = "—"
-    vyroba_str = "—"
-    co2_str = "—"
-    stromy_str = "—"
-    panely = []
-
-    if is_new_format:
-        vision = _extract_via_vision_api(pdf_bytes)
-        if vision:
-            klient = vision.get("klient") or ""
-            adresa = vision.get("adresa") or ""
-            mesto = vision.get("mesto") or ""
-            datum = vision.get("datum") or ""
-            if vision.get("vykon_kwp") is not None:
-                kwp_str = f"{vision['vykon_kwp']:.2f} kWp".replace(".", ",")
-            if vision.get("vykon_ac_kw") is not None:
-                ac_str = f"{vision['vykon_ac_kw']:.2f} kW".replace(".", ",")
-            if vision.get("rocna_vyroba_kwh") is not None:
-                vyroba_str = f"{int(vision['rocna_vyroba_kwh']):,} kWh".replace(",", " ")
-            if vision.get("co2_uspora_t") is not None:
-                co2_str = f"{vision['co2_uspora_t']:.2f} t".replace(".", ",")
-            if vision.get("stromy_ekv") is not None:
-                stromy_str = str(vision["stromy_ekv"])
-            for p in vision.get("panely") or []:
-                kwp_v = p.get("kwp", 0) or 0
-                panely.append({
-                    "pocet": str(p.get("pocet", "?")),
-                    "kwp": f"{kwp_v:.2f} kWp".replace(".", ","),
-                    "azimut": str(p.get("azimut", "—")),
-                    "sklon": str(p.get("sklon", "—")),
-                    "model": p.get("model", ""),
-                })
-        return {
-            "imgs": imgs_b64,
-            "klient": klient,
-            "priezvisko": klient.split()[-1] if klient else "",
-            "adresa": adresa,
-            "mesto": mesto,
-            "datum": datum,
-            "kwp_str": kwp_str,
-            "ac_str": ac_str,
-            "vyroba_str": vyroba_str,
-            "co2_str": co2_str,
-            "stromy_str": stromy_str,
-            "panely": panely,
-            "_format": "new_vector",
-        }
-
-    # === LEGACY regex parser ===
+    # Numericke data
     def grab(pattern, txt, default="—"):
         m = re.search(pattern, txt)
         return m.group(1).strip() if m else default
@@ -301,7 +153,6 @@ def extract_pdf_data(pdf_bytes):
         "co2_str": co2_str,
         "stromy_str": stromy_str,
         "panely": panely,
-        "_format": "legacy_text",
     }
 
 
