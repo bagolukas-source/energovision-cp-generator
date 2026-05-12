@@ -56,11 +56,115 @@ def _money(amount, suffix=" EUR"):
     return f"{amount:,.2f}".replace(",", " ").replace(".", ",") + suffix
 
 
+def _sk_num(value, decimals=2):
+    """Slovenský desatinný formát: 10.70 → '10,70'."""
+    try:
+        return f"{float(value):.{decimals}f}".replace(".", ",")
+    except (TypeError, ValueError):
+        return str(value)
+
+
 def _slovne_centy(amount_eur):
     """Vráti (eur_int, cent_int) z floatu."""
     eur = int(amount_eur or 0)
     cents = round(((amount_eur or 0) - eur) * 100)
     return eur, cents
+
+
+# ============================================================
+# Číslo → slovenské slová (pre právne dokumenty)
+# ============================================================
+_ONES = ["", "jeden", "dva", "tri", "štyri", "päť", "šesť", "sedem", "osem", "deväť",
+         "desať", "jedenásť", "dvanásť", "trinásť", "štrnásť", "pätnásť", "šestnásť",
+         "sedemnásť", "osemnásť", "devätnásť"]
+_TENS = ["", "", "dvadsať", "tridsať", "štyridsať", "päťdesiat", "šesťdesiat", "sedemdesiat",
+         "osemdesiat", "deväťdesiat"]
+
+
+def _below1000(n):
+    """0-999 ako slovenské slová bez medzier (stovky+desiatky+jednotky spolu)."""
+    if n == 0:
+        return ""
+    s = ""
+    if n >= 100:
+        stov = n // 100
+        n = n % 100
+        if stov == 1: s += "sto"
+        elif stov == 2: s += "dvesto"
+        elif stov == 3: s += "tristo"
+        elif stov == 4: s += "štyristo"
+        elif stov == 5: s += "päťsto"
+        elif stov == 6: s += "šesťsto"
+        elif stov == 7: s += "sedemsto"
+        elif stov == 8: s += "osemsto"
+        elif stov == 9: s += "deväťsto"
+    if n >= 20:
+        des = n // 10
+        jed = n % 10
+        s += _TENS[des]
+        if jed > 0:
+            s += _ONES[jed]
+    elif n > 0:
+        s += _ONES[n]
+    return s
+
+
+def _num_to_sk_words(n):
+    """Konvertuje celé číslo 0-999999 na slovenské slová.
+    Príklady:
+      15689 → 'pätnásťtisícšesťstoosemdesiatdeväť'
+      17 → 'sedemnásť'
+      0 → 'nula'
+      1234 → 'jedentisícdvestotridsaťštyri'
+    Slovenské pravidlo: stovky+desiatky+jednotky idú SPOLU bez medzery, tisíce sú samostatne (tiež spolu).
+    """
+    n = int(n)
+    if n == 0:
+        return "nula"
+    if n < 0:
+        return "mínus " + _num_to_sk_words(-n)
+    if n >= 1000000:
+        return str(n)  # fallback
+
+    if n < 1000:
+        return _below1000(n)
+
+    tisice = n // 1000
+    zvysok = n % 1000
+
+    if tisice == 1:
+        prefix = "jedentisíc"
+    elif tisice == 2:
+        prefix = "dvetisíc"
+    elif tisice == 3:
+        prefix = "tritisíc"
+    elif tisice == 4:
+        prefix = "štyritisíc"
+    elif tisice == 5:
+        prefix = "päťtisíc"
+    elif tisice == 6:
+        prefix = "šesťtisíc"
+    elif tisice == 7:
+        prefix = "sedemtisíc"
+    elif tisice == 8:
+        prefix = "osemtisíc"
+    elif tisice == 9:
+        prefix = "deväťtisíc"
+    elif tisice < 20:
+        prefix = _ONES[tisice] + "tisíc"
+    else:
+        prefix = _below1000(tisice) + "tisíc"
+
+    if zvysok > 0:
+        return prefix + _below1000(zvysok)
+    return prefix
+
+
+def _eur_slovom(amount_eur):
+    """Vráti tuple (eur_words, cents_words) pre právny 'Slovom:'."""
+    eur = int(amount_eur or 0)
+    cents = round(((amount_eur or 0) - eur) * 100)
+    return _num_to_sk_words(eur), _num_to_sk_words(cents)
 
 
 # ============================================================
@@ -200,19 +304,20 @@ def naplnif_zmluvu(lead_data, output_path):
     xml = members['word/document.xml'].decode('utf-8')
 
     eur, cents = _slovne_centy(lead_data.get('cena_eur', 0))
+    eur_slovom, cents_slovom = _eur_slovom(lead_data.get('cena_eur', 0))
 
     nahrady = [
         _safe(lead_data.get('meno_priezvisko')),           # 1
         _safe(lead_data.get('adresa')),                    # 2
         _safe(lead_data.get('telefon')),                   # 3
         _safe(lead_data.get('email')),                     # 4
-        f"{lead_data.get('vykon_kwp', 0):.2f}",            # 5
+        _sk_num(lead_data.get('vykon_kwp', 0)),            # 5 — 10,70 (SK)
         _safe(lead_data.get('cislo_cp')),                  # 6
         _safe(lead_data.get('datum_cp')),                  # 7
         _safe(lead_data.get('miesto_vykonu')),             # 8
-        f"{lead_data.get('cena_eur', 0):,.2f}".replace(",", " "),  # 9
-        f"{eur}",                                          # 10
-        f"{cents}",                                        # 11
+        f"{lead_data.get('cena_eur', 0):,.2f}".replace(",", " ").replace(".", ","),  # 9 — 15 689,17
+        eur_slovom,                                        # 10 — pätnásťtisícšesťstoosemdesiatdeväť
+        cents_slovom,                                      # 11 — sedemnásť
         _safe(lead_data.get('meno_priezvisko')),           # 12 podpis
     ]
 
@@ -281,16 +386,37 @@ def naplnif_zmluvu(lead_data, output_path):
 # SPLNOMOCNENIE
 # ============================================================
 
+def _fill_cell_keep_format(cell, text):
+    """Vyplň bunku — vyčistí všetky <w:t> elementy okrem prvého runu, zachová formatovanie."""
+    if not cell.paragraphs:
+        return
+    para = cell.paragraphs[0]
+    first_run = None
+    for run in para.runs:
+        if run._element.findall(f'{NS_W}t'):
+            first_run = run
+            break
+    # Vymaž text z ostatných runs (zachová ich formatting)
+    for run in para.runs:
+        if run is first_run:
+            continue
+        for tt in list(run._element.findall(f'{NS_W}t')) + list(run._element.findall(f'{NS_W}tab')):
+            run._element.remove(tt)
+    if first_run is not None:
+        first_run.text = str(text) if text else ""
+    elif para.runs:
+        para.runs[0].text = str(text) if text else ""
+    else:
+        # Bunka nemá run — vytvor nový
+        para.add_run(str(text) if text else "")
+
+
 def naplnif_splnomocnenie(lead_data, output_path):
     """
-    Splnomocnenie — programaticky generované (žiaden template).
-    Štruktúra:
-    - Heading SPLNOMOCNENIE
-    - Splnomocniteľ: + tabuľka 4x2 (Meno/OP/Datum nar./Bydlisko)
-    - "(dalej len splnomocnitel)"
-    - Splnomocnenec sekcia + Energovision údaje
-    - Predmet plnomocenstva + 4 bullets
-    - Podpisová tabuľka 2x3 (datum | Splnomocnitel | Splnomocnenec)
+    Splnomocnenie — fill Lukášovho upraveného templatu.
+    Template má:
+    - Table 0 (4×2): osobné údaje — C0 labely, C1 hodnoty
+    - Table 1 (2×3): podpisová — R0.C0 datum, R1.C1.P1 meno klienta
     """
     meno = _safe(lead_data.get('meno_priezvisko'))
     cislo_op = _safe(lead_data.get('cislo_op'))
@@ -298,140 +424,57 @@ def naplnif_splnomocnenie(lead_data, output_path):
     bydlisko = _safe(lead_data.get('trvale_bydlisko')) or _safe(lead_data.get('adresa'))
     datum_dnes = _safe(lead_data.get('datum_dnes'))
 
-    doc = Document()
-    sec = doc.sections[0]
-    sec.top_margin = Cm(2.0)
-    sec.bottom_margin = Cm(2.0)
-    sec.left_margin = Cm(2.5)
-    sec.right_margin = Cm(2.5)
+    template = TEMPLATES_DIR / "Splnomocnenie_template.docx"
+    doc = Document(str(template))
 
-    # Heading
-    p = doc.add_paragraph()
-    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = p.add_run("SPLNOMOCNENIE")
-    run.bold = True
-    run.font.size = Pt(16)
+    # Table 0 (4×2) — osobné údaje. Vyplň hodnoty do C1 (label v C0 ostáva).
+    if len(doc.tables) >= 1:
+        t = doc.tables[0]
+        labels_values = [
+            ("Meno a priezvisko", meno),
+            ("Číslo OP", cislo_op),
+            ("Dátum narodenia", datum_narodenia),
+            ("Bydlisko", bydlisko),
+        ]
+        for ri in range(min(len(t.rows), 4)):
+            label_in_cell = _norm(t.rows[ri].cells[0].text).strip().lower()
+            # nájdi value pre tento label (case-insensitive)
+            value = ""
+            for lbl, val in labels_values:
+                if lbl.lower() in label_in_cell or label_in_cell in lbl.lower():
+                    value = val
+                    break
+            _fill_cell_keep_format(t.rows[ri].cells[1], value)
 
-    doc.add_paragraph()
-
-    # Splnomocnitel label
-    p = doc.add_paragraph()
-    p.add_run("Splnomocniteľ:").bold = True
-
-    # Tabulka 4x2 — osobne udaje
-    t = doc.add_table(rows=4, cols=2)
-    t.columns[0].width = Cm(5)
-    t.columns[1].width = Cm(11)
-    for ri, (label, val) in enumerate([
-        ("Meno a priezvisko", meno),
-        ("Číslo OP", cislo_op),
-        ("Dátum narodenia", datum_narodenia),
-        ("Bydlisko", bydlisko),
-    ]):
-        t.rows[ri].cells[0].paragraphs[0].add_run(label).font.size = Pt(11)
-        t.rows[ri].cells[1].paragraphs[0].add_run(val).font.size = Pt(11)
-
-    # dalej len splnomocnitel
-    p = doc.add_paragraph()
-    p.add_run("(ďalej len „splnomocniteľ“)")
-
-    p = doc.add_paragraph()
-    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p.add_run("týmto v plnom rozsahu splnomocňuje")
-
-    # Splnomocnenca
-    p = doc.add_paragraph()
-    p.add_run("Splnomocnenca:").bold = True
-
-    for line in [
-        "Energovision s.r.o.",
-        "IČO: 53 036 280",
-        "Sídlo: Lamačská cesta 1738/111, 841 03 Bratislava",
-        "Za ktorú koná: Lukáš Bago",
-        "Zástupca vo veciach zmluvných a technických: Erika Nemešová",
-        "0948 870 883",
-        "erika.nemesova@energovision.sk",
-    ]:
-        p = doc.add_paragraph()
-        p.add_run(line).font.size = Pt(11)
-
-    p = doc.add_paragraph()
-    p.add_run("(ďalej len „splnomocnenec“)")
-
-    doc.add_paragraph()
-
-    # Predmet
-    p = doc.add_paragraph()
-    p.add_run(
-        "na to aby ho splnomocnenec zastupoval vo všetkých právnych úkonoch súvisiacich s "
-        "inštaláciou a pripojením malého zdroja do siete, konkrétne pri nasledovných úkonoch:"
-    ).font.size = Pt(11)
-
-    for bullet in [
-        "komunikácia s distribučnou spoločnosťou a podpísanie zmlúv s distribučnou spoločnosťou v rámci procesu pripojenia fotovoltického zariadenia",
-        "komunikácia s energetickou spoločnosťou,",
-        "komunikácia so stavebným úradom,",
-        "komunikácia so SIEA v rámci projektu Zelená domácnostiam.",
-    ]:
-        p = doc.add_paragraph(style='List Bullet')
-        p.add_run(bullet).font.size = Pt(11)
-
-    p = doc.add_paragraph()
-    p.add_run(
-        "V rozsahu tohto plnomocenstva je splnomocnenec oprávnený konať v mene splnomocniteľa "
-        "vo vzťahu ku všetkým fyzickým a právnickým osobám, štátnym orgánom, orgánom miestnej "
-        "samosprávy, iným orgánom verejnej správy a svojimi úkonmi zaväzovať splnomocniteľa "
-        "k povinnostiam a nadobúdať pre splnomocniteľa práva."
-    ).font.size = Pt(11)
-
-    p = doc.add_paragraph()
-    p.add_run("Toto plnomocenstvo je udelené na dobu 12 mesiacov.").font.size = Pt(11)
-
-    p = doc.add_paragraph()
-    p.add_run(
-        "Splnomocnenec je oprávnený dať sa v prípade potreby zastupovať treťou osobou, "
-        "ktorá namiesto neho bude v rozsahu tohto plnomocenstva konať v mene splnomocniteľa."
-    ).font.size = Pt(11)
-
-    p = doc.add_paragraph()
-    p.add_run("Splnomocnenec toto plnomocenstvo v plnom rozsahu prijíma.").font.size = Pt(11)
-
-    doc.add_paragraph()
-
-    # Podpisova tabulka 2x3
-    sig = doc.add_table(rows=2, cols=3)
-    # R0.C0 datum
-    sig.rows[0].cells[0].paragraphs[0].add_run(f"V Bratislave, dňa {datum_dnes}").font.size = Pt(11)
-    # R0.C1 label Splnomocnitel
-    c = sig.rows[0].cells[1]
-    c.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-    r = c.paragraphs[0].add_run("Splnomocniteľ")
-    r.bold = True; r.font.size = Pt(11)
-    # R0.C2 label Splnomocnenec
-    c = sig.rows[0].cells[2]
-    c.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-    r = c.paragraphs[0].add_run("Splnomocnenec")
-    r.bold = True; r.font.size = Pt(11)
-    # R1.C1 signature splnomocnitel
-    c = sig.rows[1].cells[1]
-    c.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-    c.paragraphs[0].add_run("...........................................").font.size = Pt(11)
-    p2 = c.add_paragraph()
-    p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p2.add_run(meno).font.size = Pt(11)
-    # R1.C2 signature splnomocnenec
-    c = sig.rows[1].cells[2]
-    c.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-    c.paragraphs[0].add_run("...........................................").font.size = Pt(11)
-    p2 = c.add_paragraph()
-    p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p2.add_run("Energovision s.r.o.").font.size = Pt(11)
-    p3 = c.add_paragraph()
-    p3.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p3.add_run("Lukáš Bago").font.size = Pt(11)
+    # Table 1 (2×3) — podpisová. R0.C0 = "V Bratislave, dňa {datum}", R1.C1.P1 = meno klienta
+    if len(doc.tables) >= 2:
+        sig = doc.tables[1]
+        # R0.C0 datum
+        _fill_cell_keep_format(sig.rows[0].cells[0], f"V Bratislave, dňa {datum_dnes}")
+        # R1.C1 (splnomocniteľ) — paragraph[1] je meno (P0 sú podčiarknky)
+        cell = sig.rows[1].cells[1]
+        if len(cell.paragraphs) > 1:
+            # P0 sú podčiarknky, P1 je meno
+            para = cell.paragraphs[1]
+            first_run = None
+            for run in para.runs:
+                if run._element.findall(f'{NS_W}t'):
+                    first_run = run
+                    break
+            for run in para.runs:
+                if run is first_run:
+                    continue
+                for tt in list(run._element.findall(f'{NS_W}t')):
+                    run._element.remove(tt)
+            if first_run is not None:
+                first_run.text = meno
+            elif para.runs:
+                para.runs[0].text = meno
+            else:
+                para.add_run(meno)
 
     doc.save(str(output_path))
-    log.info("[splnomocnenie] generované pre %s", meno)
+    log.info("[splnomocnenie] vyplnené z templatu pre %s", meno)
     return output_path
 
 
@@ -441,111 +484,55 @@ def naplnif_splnomocnenie(lead_data, output_path):
 
 def naplnif_gdpr(lead_data, output_path):
     """
-    GDPR súhlas — programaticky generovaný.
-    Štruktúra:
-    - Heading
-    - Tabuľka 2x2 (Meno + Dátum narodenia)
-    - Text súhlasu (3 sekcie)
-    - Podpisová tabuľka 2x3 (dátum vľavo, meno vpravo)
+    GDPR súhlas — fill Lukášovho upraveného templatu.
+    Template má:
+    - Paragraphs [7] "Meno a priezvisko: ___..." a [8] "Dátum narodenia: ___..." — fill cez podčiarkniky
+    - Table 0 (2×3): podpisová — R1.C0 datum, R1.C2.P1 meno klienta
     """
     meno = _safe(lead_data.get('meno_priezvisko'))
     datum_narodenia = _safe(lead_data.get('datum_narodenia'))
     datum_dnes = _safe(lead_data.get('datum_dnes'))
 
-    doc = Document()
-    sec = doc.sections[0]
-    sec.top_margin = Cm(2.0)
-    sec.bottom_margin = Cm(2.0)
-    sec.left_margin = Cm(2.5)
-    sec.right_margin = Cm(2.5)
+    template = TEMPLATES_DIR / "GDPR_suhlas_template.docx"
+    doc = Document(str(template))
 
-    # Heading
-    p = doc.add_paragraph()
-    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    r = p.add_run("SÚHLAS SO SPRACOVANÍM OSOBNÝCH ÚDAJOV")
-    r.bold = True; r.font.size = Pt(14)
-    p2 = doc.add_paragraph()
-    p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    r2 = p2.add_run("A FOTOGRAFIÍ")
-    r2.bold = True; r2.font.size = Pt(14)
+    # Paragraphs — Meno a priezvisko + Dátum narodenia (s podčiarknikmi)
+    for para in doc.paragraphs:
+        text = _norm(para.text)
+        if "Meno a priezvisko" in text and "___" in text:
+            _replace_underscores_in_para(para, meno)
+        elif "Dátum narodenia" in text and "___" in text:
+            _replace_underscores_in_para(para, datum_narodenia)
 
-    doc.add_paragraph()
-
-    # Tabuľka 2x2 — meno + datum narodenia
-    t = doc.add_table(rows=2, cols=2)
-    t.columns[0].width = Cm(5)
-    t.columns[1].width = Cm(11)
-    for ri, (label, val) in enumerate([
-        ("Meno a priezvisko:", meno),
-        ("Dátum narodenia:", datum_narodenia),
-    ]):
-        t.rows[ri].cells[0].paragraphs[0].add_run(label).font.size = Pt(11)
-        t.rows[ri].cells[1].paragraphs[0].add_run(val).font.size = Pt(11)
-
-    p = doc.add_paragraph()
-    p.add_run("(ďalej len „dotknutá osoba“)").font.size = Pt(11)
-
-    doc.add_paragraph()
-
-    # Text suhlasu
-    p = doc.add_paragraph()
-    p.add_run(
-        "Nižšie podpísaná dotknutá osoba dávam súhlas so spracovaním osobných údajov v zmysle "
-        "§ 5 písm. a) a v zmysle § 14 zákona č. 18/2018 Z. z. o ochrane osobných údajov a o zmene "
-        "a doplnení niektorých zákonov v znení neskorších predpisov,"
-    ).font.size = Pt(11)
-
-    doc.add_paragraph()
-    p = doc.add_paragraph()
-    p.add_run("prevádzkovateľovi:").bold = True
-
-    for line in [
-        "Energovision s.r.o., Lamačská cesta 1783/111, 841 03 Bratislava",
-        "IČO: 53 036 280",
-    ]:
-        p = doc.add_paragraph()
-        p.add_run(line).font.size = Pt(11)
-
-    doc.add_paragraph()
-    p = doc.add_paragraph()
-    p.add_run("v rozsahu:").bold = True
-    for bullet in [
-        "údajov, ktoré som poskytol v rámci dokumentov potrebných na spracovanie inštalácie fotovoltického zariadenia,",
-        "vytvárania fotografií a audiovizuálnych záznamov fotovoltického zariadenia počas inštalácie a po nej,",
-    ]:
-        p = doc.add_paragraph(style='List Bullet')
-        p.add_run(bullet).font.size = Pt(11)
-
-    p = doc.add_paragraph()
-    p.add_run("na účel:").bold = True
-    for bullet in [
-        "uloženia osobných údajov v databáze zákazníkov a ich následné spracovanie, prípadné poskytnutie osobných údajov tretím osobám výhradne za účelom spracovania dokumentácie potrebnej k fotovoltickému zariadeniu,",
-        "používania pre marketingové a propagačné aktivity.",
-    ]:
-        p = doc.add_paragraph(style='List Bullet')
-        p.add_run(bullet).font.size = Pt(11)
-
-    doc.add_paragraph()
-    p = doc.add_paragraph()
-    p.add_run("Súhlas poskytujem na dobu neurčitú.").font.size = Pt(11)
-
-    doc.add_paragraph()
-    doc.add_paragraph()
-
-    # Podpisova tabulka 2x3
-    sig = doc.add_table(rows=2, cols=3)
-    # R1.C0 datum vľavo
-    sig.rows[1].cells[0].paragraphs[0].add_run(f"V Bratislave, dňa {datum_dnes}").font.size = Pt(11)
-    # R1.C2 podpis vpravo
-    c = sig.rows[1].cells[2]
-    c.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-    c.paragraphs[0].add_run("...........................................").font.size = Pt(11)
-    p2 = c.add_paragraph()
-    p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p2.add_run(meno).font.size = Pt(11)
+    # Table 0 (2×3) — podpisová. R1.C0 datum, R1.C2.P1 meno (P0 sú podčiarknky)
+    if len(doc.tables) >= 1:
+        sig = doc.tables[0]
+        if len(sig.rows) >= 2:
+            # R1.C0 datum
+            _fill_cell_keep_format(sig.rows[1].cells[0], f"V Bratislave, dňa {datum_dnes}")
+            # R1.C2.P1 = meno
+            cell = sig.rows[1].cells[2]
+            if len(cell.paragraphs) > 1:
+                para = cell.paragraphs[1]
+                first_run = None
+                for run in para.runs:
+                    if run._element.findall(f'{NS_W}t'):
+                        first_run = run
+                        break
+                for run in para.runs:
+                    if run is first_run:
+                        continue
+                    for tt in list(run._element.findall(f'{NS_W}t')):
+                        run._element.remove(tt)
+                if first_run is not None:
+                    first_run.text = meno
+                elif para.runs:
+                    para.runs[0].text = meno
+                else:
+                    para.add_run(meno)
 
     doc.save(str(output_path))
-    log.info("[gdpr] generované pre %s", meno)
+    log.info("[gdpr] vyplnené z templatu pre %s", meno)
     return output_path
 
 
@@ -878,14 +865,14 @@ Použij konkrétne hodnoty z konfigurácie. Buď stručný, technicky presný. B
     if not text:
         # Fallback bez AI
         text = (
-            f"Predmetom OPaOS je fotovoltické zariadenie ON GRID s výkonom {vykon} kWp, "
+            f"Predmetom OPaOS je fotovoltické zariadenie ON GRID s výkonom {_sk_num(vykon)} kWp, "
             f"pozostávajúce z {pocet_panelov} ks fotovoltických panelov typu {panel_typ}, "
             f"meniča {menic}"
         )
         if sn_menic:
             text += f" v.č. {sn_menic}"
         if pocet_baterii > 0:
-            text += f", batériového úložiska {bateria_typ} v počte {pocet_baterii} ks (celková kapacita {bateria_kwh} kWh)"
+            text += f", batériového úložiska {bateria_typ} v počte {pocet_baterii} ks (celková kapacita {_sk_num(bateria_kwh)} kWh)"
         text += f". Konštrukcia panelov je riešená systémom pre {konstrukcia.lower()}.\n\n"
         text += (
             f"AC strana je pripojená cez hlavný istič {hlavny_istic} v hlavnom rozvádzači RD do existujúcej "
@@ -1020,9 +1007,9 @@ def naplnif_reviznu_spravu(lead_data, output_path):
 
     _add_heading(doc, "1. Predmet odbornej prehliadky a odbornej skúšky", level=2)
 
-    predmet_txt = f"Fotovoltické zariadenie ON GRID s výkonom {vykon:.2f} kWp"
+    predmet_txt = f"Fotovoltické zariadenie ON GRID s výkonom {_sk_num(vykon)} kWp"
     if bateria_kwh > 0:
-        predmet_txt += f" + batériové úložisko {bateria_kwh:.2f} kWh"
+        predmet_txt += f" + batériové úložisko {_sk_num(bateria_kwh)} kWh"
     _add_para(doc, "Predmet OPaOS: " + predmet_txt + ".")
     _add_para(doc, f"Objekt: Rodinný dom")
     _add_para(doc, f"Investor: {meno}, {adresa}")
@@ -1052,14 +1039,14 @@ def naplnif_reviznu_spravu(lead_data, output_path):
     cfg_table.style = 'Light Grid Accent 1'
 
     rows_data = [
-        ("Inštalovaný výkon FVE", f"{vykon:.2f} kWp"),
+        ("Inštalovaný výkon FVE", f"{_sk_num(vykon)} kWp"),
         ("Panely", f"{pocet_panelov} ks {panel_typ}"),
         ("Menič (striedač)", f"{menic}" + (f", v.č. {sn_menic}" if sn_menic else "")),
         ("Konštrukcia", konstrukcia),
         ("Hlavný istič", hlavny_istic),
     ]
     if pocet_baterii > 0:
-        rows_data.append(("Batériové úložisko", f"{pocet_baterii} ks × {bateria_typ} (spolu {bateria_kwh:.2f} kWh)"))
+        rows_data.append(("Batériové úložisko", f"{pocet_baterii} ks × {bateria_typ} (spolu {_sk_num(bateria_kwh)} kWh)"))
     if ma_wallbox:
         rows_data.append(("Wallbox", wallbox_typ))
 
@@ -1251,12 +1238,12 @@ def naplnif_protokol_odovzdania(lead_data, output_path):
 
     # Header + dynamicky rows
     bom_rows = [
-        ("Typ FVZ", "ON GRID", f"{vykon:.2f} kW", ""),
+        ("Typ FVZ", "ON GRID", f"{_sk_num(vykon)} kW", ""),
         ("Panely", panel_typ + (f" (s.č. {sn_panelov})" if sn_panelov else ""), f"{pocet_panelov} ks", ""),
         ("Menič (striedač)", menic + (f" (s.č. {sn_menic})" if sn_menic else ""), "1 ks", ""),
     ]
     if pocet_baterii > 0:
-        bom_rows.append(("Batéria", bateria_typ, f"{pocet_baterii} ks", f"{bateria_kwh:.2f} kWh"))
+        bom_rows.append(("Batéria", bateria_typ, f"{pocet_baterii} ks", f"{_sk_num(bateria_kwh)} kWh"))
     bom_rows.append(("Konštrukcia", konstrukcia, "1 sada", ""))
     bom_rows.append(("Rozvádzač", "ENERGOVISION", "1 ks", ""))
     if ma_wallbox:
