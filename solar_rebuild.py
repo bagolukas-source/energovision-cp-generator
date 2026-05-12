@@ -86,21 +86,64 @@ def extract_pdf_data(pdf_bytes):
             imgs_b64[keys[idx]] = base64.b64encode(base["image"]).decode("ascii")
         except Exception:
             pass
+    # Fallback: niektoré PDF (Szarka) majú iba 2 reálne vizualizácie strechy.
+    # Ak shading chýba, použij orto ako duplikát (lepšie ako prázdne miesto).
+    if not imgs_b64["shading"] and imgs_b64["orto"]:
+        imgs_b64["shading"] = imgs_b64["orto"]
+    if not imgs_b64["orto"] and imgs_b64["hero"]:
+        imgs_b64["orto"] = imgs_b64["hero"]
 
     # Numericke data
     def grab(pattern, txt, default="—"):
         m = re.search(pattern, txt)
         return m.group(1).strip() if m else default
 
-    # Klient nazov
+    # Klient nazov — skúsime viacero formátov:
+    # 1. Pôvodný: "P-XXX MENO OBH" (legacy formát)
+    # 2. Nový: "ID instalace: XXX\nMENO PRIEZVISKO\n..." (aktuálny SolarEdge)
+    # 3. Header line: "ČERVENOVA 25, BRATISLAVA - ANDREJ ŠKOTTA"
+    klient = ""
     nazov_match = re.search(r"^P-\S+\s+(.+?)(?:\n|OBH|$)", text_p1, re.M)
-    klient = nazov_match.group(1).strip().rstrip(".") if nazov_match else ""
+    if nazov_match:
+        klient = nazov_match.group(1).strip().rstrip(".")
+    if not klient:
+        # Skús: za "ID instalace: XXXX\n" nasleduje meno (uppercase, môže obsahovať P.Č. 234/99)
+        m_id = re.search(r"ID instalace:\s*\d+\s*\n+\s*([^\n]+?)\s*\n", text_p1)
+        if m_id:
+            cand = m_id.group(1).strip()
+            # Odstráň P.Č. xxx/yy (parcely)
+            cand = re.sub(r"\s+P\.?\s*Č\.?\s*\d+[/\s\d]*", "", cand, flags=re.I).strip()
+            # Z UPPERCASE → Title Case (IGOR DIKY → Igor Diky, ŠKOTTA → Škotta)
+            if cand.isupper() and len(cand) > 2:
+                # Slovak title case (zachová diakritiku)
+                parts = cand.split()
+                cand = " ".join(p[0] + p[1:].lower() for p in parts if p)
+            klient = cand
+    if not klient:
+        # Skús: hlavička "MIESTO/ADRESA - MENO" pattern (Škota-style)
+        m_h = re.search(r"\b([A-ZÁ-Ž][a-zá-ž]+\s+[A-ZÁ-Ž][a-zá-ž]+)\b", text_p1)
+        if m_h:
+            klient = m_h.group(1).strip()
+
     klient = re.sub(r"^(BC\.?|Bc\.?|Ing\.?|MUDr\.?|Mgr\.?)\s+", "", klient).strip()
     klient = re.sub(r"\s+OBH\s*$", "", klient, flags=re.I).strip()
 
-    adresa_match = re.search(r"^(\d+,\s+[^,\n]+,\s+\d{3}\s?\d{2}[^\n]+)$", text_p1, re.M)
-    adresa = adresa_match.group(1).strip() if adresa_match else ""
-    adresa = re.sub(r",\s*Slovakia\s*$", "", adresa, flags=re.I)
+    # Adresa: viacero formátov
+    #   "374, Kračúnovce, 087 01, Slovakia"             — len číslo, bez ulice
+    #   "Červeňova 25, Bratislava, 811 03, Slovakia"    — ulica + číslo
+    #   "Osloboditeľov, Krásnohorské Podhradie, 049 41, Slovakia" — len ulica bez čísla
+    adresa = ""
+    # Pattern univerzálny: niečo, mesto, PSČ 5 cifier (s alebo bez medzery), Slovakia
+    adresa_match = re.search(
+        r"^([^\n]+?,\s+[^,\n]+,\s+\d{3}\s?\d{2}[^\n]*?)(?:\n|$)",
+        text_p1, re.M
+    )
+    if adresa_match:
+        cand = adresa_match.group(1).strip()
+        # Vylúč riadky ktoré sú evidentne hlavičky (obsahujú "Stránka", "ID instalace", "VÝKON")
+        if not re.search(r"(Strán|inštal|VÝKON|kWp|kWh|Výroba|Designer)", cand, re.I):
+            adresa = cand
+    adresa = re.sub(r",\s*Slovakia\s*$", "", adresa, flags=re.I).strip()
 
     datum_match = re.search(r"(\d{1,2}\.\s*\d{1,2}\.\s*\d{4})", text_p1)
     datum = datum_match.group(1) if datum_match else ""
@@ -118,27 +161,55 @@ def extract_pdf_data(pdf_bytes):
     co2_str = grab(r"Úspora Emisí CO2[^\n]*\n?\s*([\d,]+\s*t)", text_p1)
     stromy_str = grab(r"Ekvivalent Vysazených\s*\n?\s*Stromů\s*\n?\s*(\d+)", text_p1)
 
-    # Tabulka panelov z page 2
+    # Tabulka panelov — môže byť na page 2 + page 3 (POKRAČOVAT) + page 4
     panely = []
-    panels_section = text_p2.split("FV PANELY", 1)[-1].split("Celkem:", 1)[0]
-    lines = [l.strip() for l in panels_section.split("\n") if l.strip()]
-    for i, line in enumerate(lines):
-        m_kwp = re.match(r"^([\d,]+\s*kWp)$", line)
-        if m_kwp and i + 2 < len(lines):
-            m_az = re.match(r"^(\d+)°$", lines[i+1])
-            m_sk = re.match(r"^(\d+)°$", lines[i+2])
-            if m_az and m_sk:
-                pocet = None
-                for j in range(i-1, -1, -1):
-                    if re.match(r"^\d+$", lines[j]):
-                        pocet = lines[j]
-                        break
-                panely.append({
-                    "pocet": pocet or "?",
-                    "kwp": m_kwp.group(1),
-                    "azimut": m_az.group(1),
-                    "sklon": m_sk.group(1),
-                })
+    # Spoj text zo všetkých strán od page 2 ďalej, hľadaj všetky FV PANELY sekcie
+    all_pages_text = ""
+    for pi in range(1, len(doc)):  # od page 2
+        all_pages_text += "\n" + doc[pi].get_text()
+
+    # Rozdeľ podľa FV PANELY (môže byť aj "FV PANELY (POKRAČOVAT)")
+    sections = re.split(r"FV PANELY[^\n]*\n", all_pages_text)
+    for section in sections[1:]:  # preskoč prvú (pred prvým "FV PANELY")
+        section = section.split("Celkem:", 1)[0].split("DIAGRAM", 1)[0]
+        lines = [l.strip() for l in section.split("\n") if l.strip()]
+        for i, line in enumerate(lines):
+            m_kwp = re.match(r"^([\d,]+\s*kWp)$", line)
+            if m_kwp and i + 2 < len(lines):
+                m_az = re.match(r"^(\d+)°$", lines[i+1])
+                m_sk = re.match(r"^(\d+)°$", lines[i+2])
+                if m_az and m_sk:
+                    pocet = None
+                    for j in range(i-1, -1, -1):
+                        if re.match(r"^\d+$", lines[j]):
+                            pocet = lines[j]
+                            break
+                    panely.append({
+                        "pocet": pocet or "?",
+                        "kwp": m_kwp.group(1),
+                        "azimut": m_az.group(1),
+                        "sklon": m_sk.group(1),
+                    })
+
+    # Fallback: ak chýba sekcia FV PANELY (kolega nahodil iba 1. stranu)
+    # → odhadni počet panelov z výkonu (typicky 535 Wp/panel)
+    if not panely and kwp_str != "—":
+        kwp_match = re.search(r"([\d,]+)", kwp_str)
+        if kwp_match:
+            try:
+                kwp_val = float(kwp_match.group(1).replace(",", "."))
+                # Default panel 535 Wp = 0.535 kWp
+                pocet_odhad = round(kwp_val / 0.535)
+                if pocet_odhad > 0:
+                    panely.append({
+                        "pocet": str(pocet_odhad),
+                        "kwp": kwp_str,
+                        "azimut": "—",
+                        "sklon": "—",
+                        "_odhad": True,  # marker že je to odhad
+                    })
+            except (ValueError, TypeError):
+                pass
 
     return {
         "imgs": imgs_b64,
