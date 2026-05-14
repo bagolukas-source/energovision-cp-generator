@@ -370,7 +370,7 @@ def claude_extract_leads(raw_text):
     }
     payload = {
         "model": ANTHROPIC_MODEL,
-        "max_tokens": 4096,
+        "max_tokens": 8192,
         "temperature": 0.1,
         "system": system_prompt,
         "messages": [{"role": "user", "content": user_prompt}],
