@@ -774,11 +774,11 @@ def generate_for_record(notion_props, variants_to_run=None, notion_page_id=None)
     """
     if variants_to_run is None:
         variants_to_run = []
-        if notion_props.get("Variant A — FVE") == "__YES__" or notion_props.get("Variant A — FVE") is True:
+        if notion_props.get("Variant A - FVE") == "__YES__" or notion_props.get("Variant A - FVE") is True:
             variants_to_run.append("A")
-        if notion_props.get("Variant B — FVE + BESS") == "__YES__" or notion_props.get("Variant B — FVE + BESS") is True:
+        if notion_props.get("Variant B - FVE + BESS") == "__YES__" or notion_props.get("Variant B - FVE + BESS") is True:
             variants_to_run.append("B")
-        if notion_props.get("Variant C — FVE + BESS + Wallbox") == "__YES__" or notion_props.get("Variant C — FVE + BESS + Wallbox") is True:
+        if notion_props.get("Variant C - FVE + BESS + Wallbox") == "__YES__" or notion_props.get("Variant C - FVE + BESS + Wallbox") is True:
             variants_to_run.append("C")
 
     if not variants_to_run:
@@ -991,9 +991,9 @@ if __name__ == "__main__":
         "Batéria (kWh)": 10.24,
         "Wallbox (typ)": "Solinteg 11 kW (3F)",
         "Marža %": 30,
-        "Variant A — FVE": "__YES__",
-        "Variant B — FVE + BESS": "__YES__",
-        "Variant C — FVE + BESS + Wallbox": "__YES__",
+        "Variant A - FVE": "__YES__",
+        "Variant B - FVE + BESS": "__YES__",
+        "Variant C - FVE + BESS + Wallbox": "__YES__",
         "ID ponuky": 1,
     }
     result = generate_for_record(test_record)
