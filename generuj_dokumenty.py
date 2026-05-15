@@ -18,6 +18,49 @@ import shutil
 import zipfile
 import logging
 import requests
+
+# ============================================================
+# Retry + safe Claude parsing (zdielané helpre, copy z app.py)
+# ============================================================
+import time as _time
+def _retry_request(fn, *, max_retries=3, base_delay=1.0, retry_codes=(429, 500, 502, 503, 504)):
+    last_exc = None
+    for attempt in range(max_retries + 1):
+        try:
+            r = fn()
+            if r.status_code in retry_codes and attempt < max_retries:
+                delay = base_delay * (2 ** attempt)
+                if r.status_code == 429:
+                    ra = r.headers.get("Retry-After")
+                    if ra:
+                        try:
+                            delay = max(delay, float(ra))
+                        except ValueError:
+                            pass
+                _time.sleep(min(delay, 30))
+                continue
+            return r
+        except (requests.ConnectionError, requests.Timeout) as e:
+            last_exc = e
+            if attempt < max_retries:
+                _time.sleep(base_delay * (2 ** attempt))
+                continue
+            raise
+    if last_exc:
+        raise last_exc
+    return fn()
+
+def _safe_claude_text(resp_json):
+    if not isinstance(resp_json, dict):
+        return ""
+    content = resp_json.get("content")
+    if not content or not isinstance(content, list) or len(content) == 0:
+        return ""
+    first = content[0]
+    if not isinstance(first, dict):
+        return ""
+    return first.get("text", "") or ""
+
 from io import BytesIO
 from pathlib import Path
 from datetime import datetime
@@ -813,7 +856,7 @@ def _claude_call(prompt, max_tokens=1500, temperature=0.3):
             "temperature": temperature,
             "messages": [{"role": "user", "content": prompt}],
         }
-        r = requests.post(ANTHROPIC_API_URL, headers=headers, json=payload, timeout=60)
+        r = _retry_request(lambda: requests.post(ANTHROPIC_API_URL, headers=headers, json=payload, timeout=60))
         r.raise_for_status()
         data = r.json()
         return data["content"][0]["text"] if data.get("content") else None
