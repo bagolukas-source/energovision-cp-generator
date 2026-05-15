@@ -95,8 +95,13 @@ def gen_copywriting(lead, konfig, ceny, navratnost):
     rocna_faktura = spotreba * cena_el
     vykon = konfig["vykon_kwp"]
     vyroba = navratnost["rocna_vyroba_kwh"]
-    pokrytie = min(100, vyroba / spotreba * 100)
-    nadvyroba_pct = (vyroba / spotreba * 100) - 100 if vyroba > spotreba else 0
+    # P0 FIX: div-by-zero guard pre leady bez spotreby (Ivan Gaži, Jaroslav Repáň, atď.)
+    if spotreba and spotreba > 0:
+        pokrytie = min(100, vyroba / spotreba * 100)
+        nadvyroba_pct = (vyroba / spotreba * 100) - 100 if vyroba > spotreba else 0
+    else:
+        pokrytie = 0
+        nadvyroba_pct = 0
 
     # Vek leadu — pre age-aware úvodný pozdrav
     vek_dni = lead.get("vek_dni", 0)
