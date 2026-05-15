@@ -60,7 +60,18 @@ DEFAULTS = {
 }
 
 
+_CENNIK_CACHE = None
+
 def load_cennik():
+    """Cached load — cennik sa naparsuje raz a drží sa v RAM počas životnosti workera."""
+    global _CENNIK_CACHE
+    if _CENNIK_CACHE is not None:
+        return _CENNIK_CACHE
+    _CENNIK_CACHE = _load_cennik_raw()
+    return _CENNIK_CACHE
+
+
+def _load_cennik_raw():
     """Načíta Cennik_v2.xlsx do dictu kód → {nazov, mj, cena}."""
     from openpyxl import load_workbook
     wb = load_workbook(CENNIK, data_only=True)
