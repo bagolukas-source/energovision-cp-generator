@@ -17,6 +17,49 @@ import logging
 import re
 import requests
 
+# ============================================================
+# Retry + safe Claude parsing (zdielané helpre, copy z app.py)
+# ============================================================
+import time as _time
+def _retry_request(fn, *, max_retries=3, base_delay=1.0, retry_codes=(429, 500, 502, 503, 504)):
+    last_exc = None
+    for attempt in range(max_retries + 1):
+        try:
+            r = fn()
+            if r.status_code in retry_codes and attempt < max_retries:
+                delay = base_delay * (2 ** attempt)
+                if r.status_code == 429:
+                    ra = r.headers.get("Retry-After")
+                    if ra:
+                        try:
+                            delay = max(delay, float(ra))
+                        except ValueError:
+                            pass
+                _time.sleep(min(delay, 30))
+                continue
+            return r
+        except (requests.ConnectionError, requests.Timeout) as e:
+            last_exc = e
+            if attempt < max_retries:
+                _time.sleep(base_delay * (2 ** attempt))
+                continue
+            raise
+    if last_exc:
+        raise last_exc
+    return fn()
+
+def _safe_claude_text(resp_json):
+    if not isinstance(resp_json, dict):
+        return ""
+    content = resp_json.get("content")
+    if not content or not isinstance(content, list) or len(content) == 0:
+        return ""
+    first = content[0]
+    if not isinstance(first, dict):
+        return ""
+    return first.get("text", "") or ""
+
+
 log = logging.getLogger("chatbot")
 
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-5-20250929")
@@ -109,7 +152,7 @@ def _claude_call(messages, system=None, max_tokens=MAX_TOKENS, temperature=0.7):
     if system:
         payload["system"] = system
 
-    r = requests.post(ANTHROPIC_API_URL, headers=headers, json=payload, timeout=60)
+    r = _retry_request(lambda: requests.post(ANTHROPIC_API_URL, headers=headers, json=payload, timeout=60))
     r.raise_for_status()
     return r.json()
 
@@ -141,7 +184,7 @@ def odpovedz_chatbot(history: list, user_message: str) -> dict:
 
     try:
         resp = _claude_call(messages, system=SYSTEM_PROMPT)
-        answer_raw = resp["content"][0]["text"] if resp.get("content") else ""
+        answer_raw = _safe_claude_text(resp)
         lead_ready = "[LEAD_READY]" in answer_raw
         answer = answer_raw.replace("[LEAD_READY]", "").strip()
         usage = resp.get("usage", {})
@@ -200,7 +243,7 @@ def extrahuj_lead(history: list) -> dict:
             max_tokens=600,
             temperature=0.1,
         )
-        raw = resp["content"][0]["text"] if resp.get("content") else "{}"
+        raw = (_safe_claude_text(resp) or "{}")
         raw = re.sub(r"^```(?:json)?\s*", "", raw)
         raw = re.sub(r"\s*```$", "", raw).strip()
         m = re.search(r"\{[\s\S]*\}", raw)
