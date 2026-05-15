@@ -20,6 +20,72 @@ from functools import wraps
 
 from flask import Flask, request, jsonify
 import requests
+import time as _time
+
+# ============================================================
+# FIX: Pre-import heavy moduly aby prvý request po deploye nebol pomalý
+# ============================================================
+try:
+    import weasyprint  # noqa: F401 — len pre warm-up
+    import matplotlib  # noqa: F401
+    matplotlib.use("Agg")  # threadsafe backend (musí byť pred prvým plt.* volaním)
+    import matplotlib.pyplot as _plt  # noqa: F401
+    from openpyxl import load_workbook  # noqa: F401
+    from docxtpl import DocxTemplate  # noqa: F401
+    from docx import Document  # noqa: F401
+except Exception as _e:
+    # Ak na build čase niečo chýba, neblokujeme štart — len logujeme
+    print(f"[warmup] Pre-import zlyhal pre {_e}", flush=True)
+
+
+# ============================================================
+# FIX: Notion API retry helper — handles 429/502/503/504 transient errors
+# ============================================================
+def _retry_request(fn, *, max_retries=3, base_delay=1.0, retry_codes=(429, 500, 502, 503, 504)):
+    """Volá fn() s exponential backoff pri prechodných HTTP chybách.
+    fn musi vratit requests.Response objekt."""
+    last_exc = None
+    for attempt in range(max_retries + 1):
+        try:
+            r = fn()
+            if r.status_code in retry_codes and attempt < max_retries:
+                delay = base_delay * (2 ** attempt)
+                # 429 môže mať Retry-After header
+                if r.status_code == 429:
+                    ra = r.headers.get("Retry-After")
+                    if ra:
+                        try:
+                            delay = max(delay, float(ra))
+                        except ValueError:
+                            pass
+                _time.sleep(min(delay, 30))
+                continue
+            return r
+        except (requests.ConnectionError, requests.Timeout) as e:
+            last_exc = e
+            if attempt < max_retries:
+                _time.sleep(base_delay * (2 ** attempt))
+                continue
+            raise
+    if last_exc:
+        raise last_exc
+    return fn()  # final attempt without retry
+
+
+# ============================================================
+# FIX: Defensive Claude response parser — chráni proti IndexError pri overload
+# ============================================================
+def _safe_claude_text(resp_json):
+    """Bezpečne vyextrahuje text z Claude API response. Vracia '' ak je prázdne/error."""
+    if not isinstance(resp_json, dict):
+        return ""
+    content = resp_json.get("content")
+    if not content or not isinstance(content, list) or len(content) == 0:
+        return ""
+    first = content[0]
+    if not isinstance(first, dict):
+        return ""
+    return first.get("text", "") or ""
 
 # Import existujúcich modulov z generátora
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -37,6 +103,59 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("evo")
 
 app = Flask(__name__)
+
+# ============================================================
+# H2: Request size limit — max 10 MB (chranime Render RAM)
+# ============================================================
+app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024  # 10 MB
+
+# ============================================================
+# H3: Security headers + JSON-only enforcement na ALL responses
+# ============================================================
+@app.after_request
+def _add_security_headers(response):
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
+
+
+# ============================================================
+# FIX: Global error handler — pre kazdu nezachytenu exception vrati JSON
+# Make scenare ocakavaju JSON response, nie HTML 500
+# ============================================================
+_REQUEST_COUNTER = [0]
+
+@app.before_request
+def _assign_request_id():
+    import datetime as _dt
+    _REQUEST_COUNTER[0] += 1
+    rid = f"R{_dt.datetime.utcnow().strftime('%H%M%S')}-{_REQUEST_COUNTER[0] % 10000:04d}"
+    request.environ["request_id"] = rid
+    log.info(f"[{rid}] {request.method} {request.path}")
+
+
+@app.errorhandler(Exception)
+def _handle_uncaught(e):
+    import traceback
+    tb = traceback.format_exc()
+    rid = request.environ.get("request_id", "R-?")
+    log.exception(f"[{rid}] UNCAUGHT EXCEPTION v endpointe")
+    # Pre HTTP error werkzeug exceptions zachovaj ich status code
+    from werkzeug.exceptions import HTTPException
+    if isinstance(e, HTTPException):
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "code": e.code,
+        }), e.code
+    return jsonify({
+        "success": False,
+        "error": str(e),
+        "error_type": type(e).__name__,
+        "traceback_tail": tb[-800:],
+    }), 500
 
 # === ENV ===
 NOTION_TOKEN = os.environ.get("NOTION_TOKEN", "")
@@ -182,8 +301,8 @@ def validate_lead_for_documents(flat, doc_type="zmluvy"):
 
 
 def notion_get_page(page_id):
-    """Stiahne Notion page properties."""
-    r = requests.get(f"{NOTION_API}/pages/{page_id}", headers=NOTION_HEADERS, timeout=20)
+    """Stiahne Notion page properties — s retry na 429/5xx."""
+    r = _retry_request(lambda: requests.get(f"{NOTION_API}/pages/{page_id}", headers=NOTION_HEADERS, timeout=20))
     r.raise_for_status()
     return r.json()
 
@@ -233,7 +352,7 @@ def notion_props_to_flat(page):
 def notion_update_page(page_id, properties):
     """Update Notion stránku s novými properties (Notion API v2022-06-28 formát)."""
     payload = {"properties": properties}
-    r = requests.patch(f"{NOTION_API}/pages/{page_id}", headers=NOTION_HEADERS, json=payload, timeout=20)
+    r = _retry_request(lambda: requests.patch(f"{NOTION_API}/pages/{page_id}", headers=NOTION_HEADERS, json=payload, timeout=20))
     r.raise_for_status()
     return r.json()
 
@@ -259,7 +378,7 @@ def notion_create_page_in_db(database_id, properties):
         "parent": {"database_id": database_id},
         "properties": properties,
     }
-    r = requests.post(f"{NOTION_API}/pages", headers=NOTION_HEADERS, json=payload, timeout=20)
+    r = _retry_request(lambda: requests.post(f"{NOTION_API}/pages", headers=NOTION_HEADERS, json=payload, timeout=20))
     r.raise_for_status()
     return r.json()
 
@@ -361,7 +480,7 @@ def claude_extract_leads(raw_text):
         "- Ak chýba údaj, daj null. ZIADNE markdown bloky, IBA surový JSON {...}."
     )
 
-    user_prompt = f"Tu je raw lead text \u2014 moze obsahovat 1 alebo viac leadov:\n\n{raw_text[:15000]}"
+    user_prompt = f"Tu je raw lead text — moze obsahovat 1 alebo viac leadov:\n\n{raw_text[:15000]}"
 
     headers = {
         "x-api-key": ANTHROPIC_API_KEY,
@@ -375,10 +494,14 @@ def claude_extract_leads(raw_text):
         "system": system_prompt,
         "messages": [{"role": "user", "content": user_prompt}],
     }
-    r = requests.post("https://api.anthropic.com/v1/messages", headers=headers, json=payload, timeout=90)
+    # FIX: retry pri 429/5xx Claude API (overload)
+    r = _retry_request(lambda: requests.post("https://api.anthropic.com/v1/messages", headers=headers, json=payload, timeout=90))
     r.raise_for_status()
     resp = r.json()
-    text = resp["content"][0]["text"].strip()
+    # FIX: defensive parse — pri prázdnom/malformed response neraisne IndexError
+    text = _safe_claude_text(resp).strip()
+    if not text:
+        raise RuntimeError("Claude API vratila prazdny response (mozno overloaded)")
 
     text = re.sub(r"^```(?:json)?\s*", "", text)
     text = re.sub(r"\s*```$", "", text)
@@ -387,10 +510,60 @@ def claude_extract_leads(raw_text):
     try:
         data = json.loads(text)
     except json.JSONDecodeError as e:
+        log.warning("Claude vratil ne-JSON (truncated?): %s; pokus o opravu...", str(e))
+        # Pokus o opravu truncated JSON — extrahuj kompletné leads pred prerušením
+        repaired = _repair_truncated_leads_json(text)
+        if repaired is not None:
+            log.info("JSON oprava uspesna, %d leadov zachranenych", len(repaired))
+            return repaired
         log.error("Claude vratil ne-JSON: %s", text[:500])
         raise RuntimeError(f"Claude vratil neplatny JSON: {e}")
 
     return data.get("leads", [])
+
+
+def _repair_truncated_leads_json(text):
+    """Opravi truncated JSON tak, ze najde kompletne lead objekty pred prerusenim.
+    Vrati list dictov alebo None ak sa nic neda zachranit."""
+    import json as _json
+    # Najdi otvorenie "leads": [
+    m = re.search(r'"leads"\s*:\s*\[', text)
+    if not m:
+        return None
+    start = m.end()
+    # Skenuj forward a hladaj kompletne objekty
+    leads = []
+    depth = 0
+    obj_start = None
+    in_string = False
+    escape_next = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == "\\":
+            escape_next = True
+            continue
+        if ch == '"' and not escape_next:
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            if depth == 0:
+                obj_start = i
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and obj_start is not None:
+                obj_str = text[obj_start:i+1]
+                try:
+                    leads.append(_json.loads(obj_str))
+                except Exception:
+                    pass
+                obj_start = None
+    return leads if leads else None
 
 
 KONSTRUKCIA_OPTIONS = {
@@ -451,9 +624,9 @@ def lead_to_notion_properties(lead):
         props["Mesto"] = {"rich_text": [{"text": {"content": ", ".join(mesto_parts)[:500]}}]}
 
     variant = (lead.get("variant_odporucany") or "A").upper()
-    props["Variant A — FVE"] = {"checkbox": variant == "A"}
-    props["Variant B — FVE + BESS"] = {"checkbox": variant == "B"}
-    props["Variant C — FVE + BESS + Wallbox"] = {"checkbox": variant == "C"}
+    props["Variant A - FVE"] = {"checkbox": variant == "A"}
+    props["Variant B - FVE + BESS"] = {"checkbox": variant == "B"}
+    props["Variant C - FVE + BESS + Wallbox"] = {"checkbox": variant == "C"}
 
     # SPOTREBA + AUTO-SIZING
     spotreba_raw = lead.get("spotreba_kwh_rok")
@@ -536,8 +709,35 @@ def lead_to_notion_properties(lead):
 # ============================================================
 # HEALTHCHECK
 # ============================================================
+_BOOT_TIME = None
+
 @app.route("/health")
 def health():
+    """Detailný health endpoint — uptime, env-check, Notion ping, version."""
+    global _BOOT_TIME
+    import datetime as _dt
+    if _BOOT_TIME is None:
+        _BOOT_TIME = _dt.datetime.utcnow()
+    uptime_s = (_dt.datetime.utcnow() - _BOOT_TIME).total_seconds()
+    env_ok = {
+        "NOTION_TOKEN": bool(NOTION_TOKEN),
+        "ANTHROPIC_API_KEY": bool(ANTHROPIC_API_KEY),
+        "WEBHOOK_SECRET": bool(WEBHOOK_SECRET),
+        "NOTION_DATABASE_ID": bool(os.environ.get("NOTION_DATABASE_ID", "")),
+    }
+    return jsonify({
+        "status": "ok",
+        "service": "energovision-cp-generator",
+        "uptime_seconds": round(uptime_s, 1),
+        "uptime_human": f"{int(uptime_s // 3600)}h {int((uptime_s % 3600) // 60)}m",
+        "version": "2026-05-15-v2",  # update pri každom väčšom push-i
+        "env": env_ok,
+        "env_all_set": all(env_ok.values()),
+        "model": ANTHROPIC_MODEL,
+    })
+
+
+def _health_legacy_unused():
     return jsonify({
         "status": "ok",
         "service": "energovision-cp-generator",
@@ -581,9 +781,10 @@ def parsuj_leady():
     except Exception as e:
         log.exception("Claude extraction zlyhala")
         try:
+            # NEPREPISUJ Surový lead — zachovaj pôvodný text aby user mohol skúsiť znova
             notion_update_page(page_id, {
                 "Status": {"select": {"name": "🔴 Chyba"}},
-                "Surový lead": {"rich_text": [{"text": {"content": f"Claude error: {e}"[:1900]}}]},
+                "Poznámka": {"rich_text": [{"text": {"content": f"Claude error: {e}"[:1900]}}]},
             })
         except Exception:
             pass
@@ -839,7 +1040,7 @@ def test_rozlozenie():
         try:
             files = json.loads(raw_files_json)
             if files and isinstance(files, list):
-                raw_url = files[0].get("url")
+                raw_url = files[0].get("url") if files else None
         except (ValueError, TypeError):
             pass
 
@@ -932,7 +1133,7 @@ def spracuj_rozlozenie():
         try:
             files = json.loads(raw_files_json)
             if files and isinstance(files, list):
-                raw_url = files[0].get("url")
+                raw_url = files[0].get("url") if files else None
         except (ValueError, TypeError):
             pass
 
@@ -947,8 +1148,8 @@ def spracuj_rozlozenie():
         import base64 as _b64
 
         # Variant-aware samospotreba — B/C = bateria → 90%
-        var_b = flat.get("Variant B — FVE + BESS") == "__YES__"
-        var_c = flat.get("Variant C — FVE + BESS + Wallbox") == "__YES__"
+        var_b = flat.get("Variant B - FVE + BESS") == "__YES__"
+        var_c = flat.get("Variant C - FVE + BESS + Wallbox") == "__YES__"
         ma_bateriu = var_b or var_c
 
         pdf_bytes, _pdf_priezvisko, summary = process_solaredge_pdf(raw_url, ma_bateriu=ma_bateriu)
@@ -1073,10 +1274,10 @@ def generuj_dokumenty():
     if not variant_to_use:
         for v in ("B", "A", "C", "D"):
             prop_name = {
-                "A": "Variant A — FVE",
-                "B": "Variant B — FVE + BESS",
-                "C": "Variant C — FVE + BESS + Wallbox",
-                "D": "Variant D — FVE + Wallbox",
+                "A": "Variant A - FVE",
+                "B": "Variant B - FVE + BESS",
+                "C": "Variant C - FVE + BESS + Wallbox",
+                "D": "Variant D - FVE + Wallbox",
             }[v]
             if flat.get(prop_name) == "__YES__":
                 variant_to_use = v
@@ -1255,7 +1456,7 @@ def email_zmluvy():
             files = []
         if not files:
             continue
-        f = files[0]
+        f = files[0] if files else None
         url = f.get("url")
         fname = f.get("name") or f"{label}_{priezvisko_safe}"
         if not url:
@@ -2466,12 +2667,51 @@ def _sync_obchodnik_zo_statusu(page_id, notion_props):
 @app.route("/webhook/prepocet", methods=["POST"])
 @require_secret
 def prepocet():
+    import traceback, datetime as _dt
     body = request.get_json(silent=True) or {}
     page_id = body.get("page_id")
     if not page_id:
         return jsonify({"error": "missing page_id"}), 400
 
-    log.info(f"Prepočet pre page {page_id}")
+    _ts = _dt.datetime.now().strftime("%H:%M:%S")
+    log.info(f"[{_ts}] Prepočet START page={page_id}")
+    try:
+        _result = _prepocet_inner(page_id)
+        # Diagnostický zápis do Poznámka — kolega vidí kedy a čo
+        try:
+            _ceny = _result.get("ceny", {})
+            _parts = []
+            for v in ("A", "B", "C", "D"):
+                _c = _ceny.get(v, {})
+                if isinstance(_c, dict) and _c.get("cena_s_dph"):
+                    _parts.append(f"{v}={_c['cena_s_dph']:.0f}€")
+                elif isinstance(_c, dict) and _c.get("error"):
+                    _parts.append(f"{v}=ERR")
+            _summary = ", ".join(_parts) if _parts else "nič"
+            _diag = f"[{_ts}] Prepočet ✅ {_summary} ({_result.get('fields_updated',0)} polí)"
+            _existing = notion_get_page(page_id).get("properties", {}).get("Poznámka", {}).get("rich_text", [])
+            _existing_text = "".join(t.get("plain_text","") for t in _existing)
+            # Odstráň predošlý diagnostický riadok (ak začína "[HH:MM:SS] Prepočet")
+            import re as _re
+            _existing_text = _re.sub(r"^\[\d{2}:\d{2}:\d{2}\] Prepočet[^\n]*\n?", "", _existing_text)
+            _new_pozn = _diag + ("\n" + _existing_text if _existing_text else "")
+            notion_update_page(page_id, notion_set_text("Poznámka", _new_pozn[:1900]))
+        except Exception as _e:
+            log.warning(f"[{_ts}] Diagnostický zápis zlyhal: {_e}")
+        return jsonify({"success": True, **_result})
+    except Exception as e:
+        _tb = traceback.format_exc()
+        log.error(f"[{_ts}] Prepočet FAIL page={page_id} → {e}\n{_tb}")
+        try:
+            _diag = f"[{_ts}] Prepočet ❌ {type(e).__name__}: {str(e)[:120]}"
+            notion_update_page(page_id, notion_set_text("Poznámka", _diag))
+        except Exception:
+            pass
+        return jsonify({"success": False, "error": str(e), "traceback": _tb[-500:]}), 500
+
+
+def _prepocet_inner(page_id):
+    """Pôvodná logika prepocet endpointu, vyňatá pre try/except wrapping."""
     page = notion_get_page(page_id)
     notion_props = notion_props_to_flat(page)
 
@@ -2498,6 +2738,49 @@ def prepocet():
         ceny = predpocitaj_ceny_pre_record(notion_props)
     else:
         log.info(f"Prepocet: ratam iba zaskrtnute varianty {variants_filter}")
+
+        # Auto-fill default baterie/wallboxu ak je Variant B/C/D zaskrtnuty ale prislusna polia su prazdne
+        auto_fill_props = {}
+        needs_battery = any(v in variants_filter for v in ("B", "C"))
+        if needs_battery and not notion_props.get("Batéria (typ)"):
+            menic = notion_props.get("Menič") or ""
+            try:
+                spotreba_val = float(str(notion_props.get("Spotreba") or 4000).replace(",", "."))
+            except (TypeError, ValueError):
+                spotreba_val = 4000
+            if "Solinteg" in menic:
+                bat_typ = "Solinteg EBA B5K1 — 10.24 kWh" if spotreba_val > 5000 else "Solinteg EBA B5K1 — 5.12 kWh"
+            elif "Huawei" in menic:
+                bat_typ = "Huawei LUNA2000 — 7 kWh" if spotreba_val > 5000 else "Huawei LUNA2000 — 5 kWh"
+            elif "GoodWe" in menic:
+                bat_typ = "Pylontech Force H3 — 5.12 kWh"
+            else:
+                bat_typ = "Solinteg EBA B5K1 — 5.12 kWh"
+            notion_props["Batéria (typ)"] = bat_typ
+            notion_props["Batéria počet"] = "1"
+            auto_fill_props["Batéria (typ)"] = {"select": {"name": bat_typ}}
+            auto_fill_props["Batéria počet"] = {"select": {"name": "1"}}
+            log.info(f"Prepocet auto-fill: Bateria (typ) -> {bat_typ}")
+
+        needs_wallbox = any(v in variants_filter for v in ("C", "D"))
+        if needs_wallbox and not notion_props.get("Wallbox (typ)"):
+            menic = notion_props.get("Menič") or ""
+            if "Huawei" in menic:
+                wb_typ = "Huawei AC Smart 22 kW"
+            elif "GoodWe" in menic:
+                wb_typ = "GoodWe 22 kW"
+            else:
+                wb_typ = "Solinteg 11 kW (3F)"
+            notion_props["Wallbox (typ)"] = wb_typ
+            auto_fill_props["Wallbox (typ)"] = {"select": {"name": wb_typ}}
+            log.info(f"Prepocet auto-fill: Wallbox (typ) -> {wb_typ}")
+
+        if auto_fill_props:
+            try:
+                notion_update_page(page_id, auto_fill_props)
+            except Exception as e:
+                log.warning(f"Prepocet auto-fill Notion update zlyhal: {e}")
+
         ceny = predpocitaj_ceny_pre_record(notion_props, variants_filter=variants_filter)
 
     # Update Notion polí
@@ -2553,7 +2836,7 @@ def prepocet():
         notion_update_page(page_id, update)
         log.info(f"Updatnuté {len(update)} polí")
 
-    return jsonify({"success": True, "ceny": ceny, "fields_updated": len(update)})
+    return {"ceny": ceny, "fields_updated": len(update)}
 
 
 # ============================================================
@@ -2564,6 +2847,24 @@ def prepocet():
 @app.route("/webhook/generate-pdf", methods=["POST"])
 @require_secret
 def generate_pdf():
+    """Wrap pre _generate_pdf_impl s try/except a validnym JSON pri chybe (Make scenar nepadne)."""
+    try:
+        return _generate_pdf_impl()
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        log.error(f"generate_pdf padol: {e}\n{tb}")
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "traceback_tail": tb[-500:],
+            "pdf_base64": "",  # prazdny string, NIE undefined — Make sa nezadusi
+            "filename": "",
+            "folder_name": "",
+        }), 500
+
+
+def _generate_pdf_impl():
     body = request.get_json(silent=True) or {}
     page_id = body.get("page_id")
     variant = body.get("variant", "A")
