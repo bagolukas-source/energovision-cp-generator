@@ -713,7 +713,7 @@ _BOOT_TIME = None
 
 @app.route("/health")
 def health():
-    """Detailný health endpoint — uptime, env-check, Notion ping, version."""
+    """Detailny health endpoint — uptime, env-check, version."""
     global _BOOT_TIME
     import datetime as _dt
     if _BOOT_TIME is None:
@@ -724,24 +724,122 @@ def health():
         "ANTHROPIC_API_KEY": bool(ANTHROPIC_API_KEY),
         "WEBHOOK_SECRET": bool(WEBHOOK_SECRET),
         "NOTION_DATABASE_ID": bool(os.environ.get("NOTION_DATABASE_ID", "")),
+        "GITHUB_PAT": bool(os.environ.get("GITHUB_PAT", "")),
     }
     return jsonify({
         "status": "ok",
         "service": "energovision-cp-generator",
         "uptime_seconds": round(uptime_s, 1),
         "uptime_human": f"{int(uptime_s // 3600)}h {int((uptime_s % 3600) // 60)}m",
-        "version": "2026-05-15-v2",  # update pri každom väčšom push-i
+        "version": "2026-05-18-v3",
         "env": env_ok,
         "env_all_set": all(env_ok.values()),
         "model": ANTHROPIC_MODEL,
     })
 
 
-def _health_legacy_unused():
+# ============================================================
+# ADMIN: PUSH TO GITHUB
+# Bridge endpoint — pouziva GITHUB_PAT env var na commit do GitHub via Contents API.
+# Auth: X-Admin-Secret header (musi matchnut WEBHOOK_SECRET)
+# Body: {"files": [{"filename": "app.py", "content_b64": "...", "message": "fix bug"}]}
+# ============================================================
+GITHUB_PAT = os.environ.get("GITHUB_PAT", "")
+GITHUB_OWNER = os.environ.get("GITHUB_OWNER", "bagolukas-source")
+GITHUB_REPO = os.environ.get("GITHUB_REPO", "energovision-cp-generator")
+GITHUB_BRANCH = os.environ.get("GITHUB_BRANCH", "main")
+
+
+def _gh_get_sha(filename):
+    if not GITHUB_PAT:
+        return None
+    url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/{filename}?ref={GITHUB_BRANCH}"
+    headers = {"Authorization": f"Bearer {GITHUB_PAT}", "Accept": "application/vnd.github+json"}
+    try:
+        r = requests.get(url, headers=headers, timeout=20)
+        if r.status_code == 200:
+            return r.json().get("sha")
+    except Exception as e:
+        log.warning(f"_gh_get_sha({filename}) zlyhal: {e}")
+    return None
+
+
+def _gh_put_file(filename, content_b64, message, sha=None):
+    url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/{filename}"
+    headers = {
+        "Authorization": f"Bearer {GITHUB_PAT}",
+        "Accept": "application/vnd.github+json",
+        "Content-Type": "application/json",
+    }
+    payload = {"message": message, "content": content_b64, "branch": GITHUB_BRANCH}
+    if sha:
+        payload["sha"] = sha
+    r = requests.put(url, headers=headers, json=payload, timeout=30)
+    try:
+        return r.status_code, r.json()
+    except Exception:
+        return r.status_code, {"raw": r.text[:500]}
+
+
+@app.route("/admin/push", methods=["POST"])
+def admin_push():
+    """Commit suborov do GitHub. Auth cez X-Admin-Secret = WEBHOOK_SECRET."""
+    received = request.headers.get("X-Admin-Secret", "")
+    if not WEBHOOK_SECRET or received != WEBHOOK_SECRET:
+        return jsonify({"error": "unauthorized"}), 401
+
+    if not GITHUB_PAT:
+        return jsonify({"error": "GITHUB_PAT nie je nastaveny v Render env vars"}), 500
+
+    body = request.get_json(silent=True) or {}
+    files = body.get("files", [])
+    default_msg = body.get("message", "admin push from Claude bridge")
+    if not files:
+        return jsonify({"error": "missing 'files' array"}), 400
+
+    results = []
+    for f in files:
+        filename = f.get("filename", "")
+        content_b64 = f.get("content_b64", "")
+        msg = f.get("message", default_msg)
+        if not filename or not content_b64:
+            results.append({"file": filename, "ok": False, "error": "missing filename or content_b64"})
+            continue
+        try:
+            sha = _gh_get_sha(filename)
+            status, resp = _gh_put_file(filename, content_b64, msg, sha)
+            ok = status in (200, 201)
+            results.append({
+                "file": filename,
+                "ok": ok,
+                "status": status,
+                "action": "updated" if sha else "created",
+                "commit_sha": resp.get("commit", {}).get("sha", "") if isinstance(resp, dict) else "",
+                "error": resp.get("message") if not ok and isinstance(resp, dict) else None,
+            })
+        except Exception as e:
+            results.append({"file": filename, "ok": False, "error": str(e)})
+
+    ok_count = sum(1 for r in results if r.get("ok"))
     return jsonify({
-        "status": "ok",
-        "service": "energovision-cp-generator",
-        "notion_token_set": bool(NOTION_TOKEN),
+        "success": ok_count == len(files),
+        "pushed": ok_count,
+        "total": len(files),
+        "results": results,
+    })
+
+
+@app.route("/admin/push-info", methods=["GET"])
+def admin_push_info():
+    """Diagnostika — over ci je vsetko nastavene pre /admin/push (verejne, len bool flagy)."""
+    return jsonify({
+        "github_pat_set": bool(GITHUB_PAT),
+        "github_owner": GITHUB_OWNER,
+        "github_repo": GITHUB_REPO,
+        "github_branch": GITHUB_BRANCH,
+        "webhook_secret_set": bool(WEBHOOK_SECRET),
+        "endpoint": "/admin/push",
+        "auth_header": "X-Admin-Secret = WEBHOOK_SECRET",
     })
 
 
@@ -814,6 +912,20 @@ def parsuj_leady():
             log.exception("Vytvorenie page #%d zlyhalo", i + 1)
             failed.append({"index": i + 1, "error": str(e), "lead_preview": str(lead)[:200]})
 
+    # FIX: Ak sa ŽIADNY lead nepodaril, NEZAPISUJ Spracované — nastav Chyba s diagnostikou
+    if len(created) == 0:
+        try:
+            err_summary = (failed[0].get("error", "?")[:300] if failed else "Claude nenasiel ziadne validne leady")
+            notion_update_page(page_id, {
+                "Status": {"select": {"name": "🔴 Chyba"}},
+                "Počet vyparsovaných": {"number": 0},
+                "Poznámka": {"rich_text": [{"text": {"content": f"Parsing FAILED: {len(leads)} leadov z Claude, ale všetky padli pri vytváraní v Notion DB. Prvý error: {err_summary}"[:1900]}}]},
+            })
+        except Exception as e:
+            log.warning("Error status update zlyhal: %s", e)
+        return jsonify({"ok": False, "error": "all_creates_failed", "claude_returned": len(leads), "failed": failed}), 500
+
+    # Aspoň 1 lead sa vytvoril — Spracované + clear raw
     try:
         notion_update_page(page_id, {
             "Surový lead": {"rich_text": []},
