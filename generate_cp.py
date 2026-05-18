@@ -177,6 +177,10 @@ def vyrataj_konfig(lead, cennik):
     ]
     if lead.get("bateria_kwh", 0) > 0:
         praca.append(("PRC-002", 1, "Doplnenie batérie (paušál)", "kpl", cennik["PRC-002"]["cena"]))
+    # Zemná inštalácia (uzemnenie) — pridať ak v Notion 'Áno'
+    if lead.get("zemna_instalacia_yes"):
+        if "PRC-008" in cennik:
+            praca.append(("PRC-008", 1, "Doplnenie uzemnenia vrátane materiálu", "kpl", cennik["PRC-008"]["cena"]))
     # doprava — default 100 km (typická SK trasa)
     km = lead.get("doprava_km", 100)
     praca.append(("PRC-006", km, f"Doprava materiálu ({km} km)", "km", cennik["PRC-006"]["cena"]))

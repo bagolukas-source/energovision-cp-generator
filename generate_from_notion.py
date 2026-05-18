@@ -748,6 +748,8 @@ def lead_from_notion(notion_props, variant):
         "panel_kod": panel_kod,
         "invertor_kod": inv_kod,
         "konstrukcia_kod": kon_kod,
+        # P0: Zemná inštalácia z Notion property — pri "Áno" pridá uzemnenie 250 €
+        "zemna_instalacia_yes": (notion_props.get("Zemná inštalácia") or "").startswith("Áno"),
         "bateria_kwh": bateria_kwh,
         "bateria_kod": bateria_kod,
         "wallbox": wallbox,
