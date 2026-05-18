@@ -73,6 +73,56 @@ def _retry_request(fn, *, max_retries=3, base_delay=1.0, retry_codes=(429, 500, 
 
 
 # ============================================================
+# ============================================================
+# Activity Log — automaticky audit trail pre kazdy webhook
+# DB: 📋 Activity Log (Notion), data_source: 375be89f-db6d-4b19-9766-a237d27a33ea
+# ============================================================
+ACTIVITY_LOG_DS_ID = "375be89f-db6d-4b19-9766-a237d27a33ea"
+
+def _log_activity(endpoint, status="OK", page_id=None, klient=None, variant=None,
+                  duration_ms=None, request_id=None, detail=None, error=None):
+    """Zapise aktivitu do Activity Log Notion DB. Nikdy nevyhadzuje exception."""
+    try:
+        title = f"{endpoint}"
+        if klient:
+            title += f" — {klient}"
+        elif page_id:
+            title += f" — {page_id[:8]}"
+        title += f" [{status}]"
+        
+        props = {
+            "Akcia": {"title": [{"text": {"content": title[:200]}}]},
+            "Endpoint": {"select": {"name": endpoint}},
+            "Status": {"select": {"name": status}},
+        }
+        if page_id:
+            props["Page ID"] = {"rich_text": [{"text": {"content": str(page_id)[:200]}}]}
+        if klient:
+            props["Klient"] = {"rich_text": [{"text": {"content": str(klient)[:200]}}]}
+        if variant:
+            props["Variant"] = {"select": {"name": str(variant)}}
+        if duration_ms is not None:
+            props["Duration ms"] = {"number": float(duration_ms)}
+        if request_id:
+            props["Request ID"] = {"rich_text": [{"text": {"content": str(request_id)[:100]}}]}
+        if detail:
+            props["Detail"] = {"rich_text": [{"text": {"content": str(detail)[:1900]}}]}
+        if error:
+            props["Error"] = {"rich_text": [{"text": {"content": str(error)[:1900]}}]}
+        
+        payload = {
+            "parent": {"database_id": ACTIVITY_LOG_DS_ID},
+            "properties": props,
+        }
+        r = requests.post(f"{NOTION_API}/pages", headers=NOTION_HEADERS, json=payload, timeout=10)
+        # Best-effort — neraisuje aj pri 4xx/5xx
+    except Exception as e:
+        try:
+            log.warning(f"_log_activity zlyhal: {e}")
+        except Exception:
+            pass
+
+
 # FIX: Defensive Claude response parser — chráni proti IndexError pri overload
 # ============================================================
 def _safe_claude_text(resp_json):
@@ -134,6 +184,319 @@ def _assign_request_id():
     rid = f"R{_dt.datetime.utcnow().strftime('%H%M%S')}-{_REQUEST_COUNTER[0] % 10000:04d}"
     request.environ["request_id"] = rid
     log.info(f"[{rid}] {request.method} {request.path}")
+
+
+# ============================================================
+# PUBLIC QUOTE LINK — /p/<ev_id>
+# Verejná stránka cenovky pre klienta (BEZ auth) + tlačidlo akceptovať
+# Inspired by Thermivio pattern.
+# ============================================================
+import urllib.parse as _urlparse
+
+PUBLIC_PAGE_HTML = """<!DOCTYPE html>
+<html lang="sk">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cenová ponuka {{ev_id}} — Energovision</title>
+<style>
+  * {box-sizing:border-box; margin:0; padding:0}
+  body {font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; background:#f5f7fa; color:#1a2e3f; line-height:1.5; padding:20px}
+  .wrap {max-width:780px; margin:0 auto; background:white; border-radius:16px; box-shadow:0 4px 24px rgba(0,0,0,0.08); overflow:hidden}
+  .hero {background:linear-gradient(135deg, #0f4c75 0%, #3282b8 100%); color:white; padding:48px 32px; text-align:center}
+  .hero h1 {font-size:32px; margin-bottom:8px; font-weight:600}
+  .hero .ev {opacity:0.9; font-size:14px; letter-spacing:1px}
+  .hero .klient {margin-top:24px; font-size:18px}
+  .content {padding:32px}
+  .row {display:flex; justify-content:space-between; padding:12px 0; border-bottom:1px solid #e5eaf0}
+  .row:last-child {border-bottom:none}
+  .row .label {color:#5a6b7d}
+  .row .val {font-weight:500; text-align:right}
+  .price {font-size:42px; font-weight:700; color:#0f4c75; text-align:center; margin:24px 0; letter-spacing:-1px}
+  .price small {font-size:14px; color:#5a6b7d; font-weight:400; display:block}
+  .accept-form {background:#f0f4f8; padding:24px; border-radius:12px; margin-top:24px}
+  .accept-form h3 {margin-bottom:16px; color:#0f4c75}
+  .accept-form label {display:block; font-size:14px; color:#5a6b7d; margin-bottom:6px}
+  .accept-form input {width:100%; padding:12px; border:1px solid #cdd5e0; border-radius:8px; font-size:16px; margin-bottom:12px}
+  .btn {background:#10b981; color:white; border:none; padding:14px 32px; border-radius:8px; font-size:16px; font-weight:600; cursor:pointer; width:100%}
+  .btn:hover {background:#059669}
+  .btn:disabled {background:#9ca3af; cursor:not-allowed}
+  .accepted {background:#ecfdf5; color:#065f46; padding:16px; border-radius:8px; text-align:center; margin-top:16px}
+  .footer {text-align:center; padding:24px; color:#5a6b7d; font-size:13px}
+  .err {background:#fef2f2; color:#991b1b; padding:12px; border-radius:8px; margin-bottom:12px; font-size:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hero">
+    <div class="ev">{{ev_id}}</div>
+    <h1>Cenová ponuka</h1>
+    <div class="klient">{{klient}}</div>
+  </div>
+  <div class="content">
+    <div class="row"><span class="label">Variant</span><span class="val">{{variant_label}}</span></div>
+    <div class="row"><span class="label">Výkon FVE</span><span class="val">{{vykon_kwp}} kWp ({{pocet_panelov}}× LONGi {{wp_label}})</span></div>
+    <div class="row"><span class="label">Konštrukcia</span><span class="val">{{konstrukcia}}</span></div>
+    {{bateria_row}}
+    {{wallbox_row}}
+    <div class="row"><span class="label">Mesto</span><span class="val">{{mesto}}</span></div>
+    <div class="row"><span class="label">Platnosť ponuky</span><span class="val">30 dní od {{datum}}</span></div>
+    
+    <div class="price">
+      {{cena_str}} € s DPH
+      <small>Cena obsahuje materiál, montáž, sprevádzkovanie a 25-ročnú záruku panelov</small>
+    </div>
+    
+    {{status_block}}
+  </div>
+  <div class="footer">
+    Energovision s.r.o. · IČO 50 408 921<br>
+    +421 917 424 564 · obchod@energovision.sk
+  </div>
+</div>
+{{js_block}}
+</body>
+</html>
+"""
+
+PUBLIC_FORM_HTML = """<div class="accept-form">
+  <h3>✓ Akceptujem túto ponuku</h3>
+  <form id="acceptForm" onsubmit="return submitAccept(event)">
+    <label>Vaše meno a priezvisko *</label>
+    <input type="text" id="name" required>
+    <label>Email pre potvrdenie *</label>
+    <input type="email" id="email" required>
+    <div id="err" class="err" style="display:none"></div>
+    <button type="submit" class="btn" id="btn">Akceptujem ponuku</button>
+  </form>
+</div>"""
+
+PUBLIC_ACCEPTED_HTML = """<div class="accepted">
+  <strong>✓ Ponuka bola akceptovaná</strong><br>
+  {{accepted_date}}<br>
+  Dominik Galaba (+421 917 424 564) Vás bude kontaktovať do 24 hodín.
+</div>"""
+
+PUBLIC_JS = """<script>
+async function submitAccept(e) {
+  e.preventDefault();
+  const btn = document.getElementById('btn');
+  const errEl = document.getElementById('err');
+  btn.disabled = true;
+  btn.textContent = 'Spracovávam...';
+  errEl.style.display = 'none';
+  try {
+    const r = await fetch(window.location.pathname + '/accept', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        name: document.getElementById('name').value,
+        email: document.getElementById('email').value,
+      })
+    });
+    const data = await r.json();
+    if (data.success) {
+      window.location.reload();
+    } else {
+      errEl.textContent = data.error || 'Chyba pri spracovaní. Skúste neskôr.';
+      errEl.style.display = 'block';
+      btn.disabled = false;
+      btn.textContent = 'Akceptujem ponuku';
+    }
+  } catch (err) {
+    errEl.textContent = 'Sieťová chyba: ' + err.message;
+    errEl.style.display = 'block';
+    btn.disabled = false;
+    btn.textContent = 'Akceptujem ponuku';
+  }
+  return false;
+}
+</script>"""
+
+
+def _find_lead_by_ev_id(ev_id):
+    """Najdi Notion page lead-u podla ID ponuky (napr. EV-26-221 alebo EV-221)."""
+    # Normalize: extract numerical part
+    import re as _re
+    m = _re.search(r'\d+', ev_id or "")
+    if not m:
+        return None
+    num = m.group(0)
+    # Query DB s filterom ID ponuky CONTAINS num
+    url = f"{NOTION_API}/databases/{NOTION_DATABASE_ID}/query"
+    payload = {
+        "filter": {
+            "property": "ID ponuky",
+            "rich_text": {"contains": num}
+        },
+        "page_size": 5,
+    }
+    try:
+        r = requests.post(url, headers=NOTION_HEADERS, json=payload, timeout=15)
+        r.raise_for_status()
+        results = r.json().get("results", [])
+        # Vyber prvy match
+        return results[0] if results else None
+    except Exception as e:
+        log.warning(f"_find_lead_by_ev_id({ev_id}) zlyhal: {e}")
+        return None
+
+
+@app.route("/p/<ev_id>", methods=["GET"])
+def public_quote(ev_id):
+    """Verejna stranka cenovky pre klienta. Bez auth."""
+    from datetime import datetime as _dt
+    
+    page = _find_lead_by_ev_id(ev_id)
+    if not page:
+        return ("""<html><body style="font-family:sans-serif;max-width:600px;margin:60px auto;padding:20px;text-align:center"><h2>Ponuka nenájdená</h2><p>Číslo ponuky <strong>""" + str(ev_id) + """</strong> sme v systéme nenašli. Kontaktujte prosím Dominik Galaba +421 917 424 564.</p></body></html>"""), 404
+    
+    flat = notion_props_to_flat(page)
+    
+    # Klient
+    klient = flat.get("Zákazník") or "Klient"
+    
+    # Aktívny variant (prioritne A > B > C > D)
+    variant = "A"
+    for v in ["A", "B", "C", "D"]:
+        for prop_key in [f"Variant {v} - FVE", f"Variant {v} - FVE + BESS", 
+                         f"Variant {v} - FVE + BESS + Wallbox", f"Variant {v} - FVE + Wallbox"]:
+            if flat.get(prop_key) == "__YES__":
+                variant = v
+                break
+    
+    variant_labels = {
+        "A": "Variant A — FVE",
+        "B": "Variant B — FVE + batéria",
+        "C": "Variant C — FVE + batéria + wallbox",
+        "D": "Variant D — FVE + wallbox",
+    }
+    
+    # Cena
+    cena = flat.get(f"Cena {variant} s DPH") or flat.get("Suma CP s DPH") or 0
+    try:
+        cena_num = float(cena)
+        cena_str = f"{cena_num:,.0f}".replace(",", " ")
+    except (ValueError, TypeError):
+        cena_str = "—"
+    
+    # Konfigurácia
+    pocet_panelov = flat.get("Počet panelov") or "?"
+    panel_typ = flat.get("Panel") or "LONGi 535 Wp"
+    wp_match = re.search(r"(\d{3})", str(panel_typ))
+    wp_label = wp_match.group(1) + " Wp" if wp_match else "535 Wp"
+    
+    try:
+        kwp = round(int(str(pocet_panelov)) * (int(wp_match.group(1)) if wp_match else 535) / 1000, 2)
+        vykon_kwp = f"{kwp:.2f}".replace(".", ",")
+    except (ValueError, TypeError, AttributeError):
+        vykon_kwp = "—"
+    
+    konstrukcia = flat.get("Konštrukcia (typ)") or "—"
+    mesto = flat.get("Mesto") or "—"
+    
+    # Voliteľne batéria
+    bateria_row = ""
+    if variant in ("B", "C"):
+        bat_typ = flat.get("Batéria (typ)") or ""
+        bat_pocet = flat.get("Batéria počet") or "1"
+        if bat_typ:
+            bateria_row = f'<div class="row"><span class="label">Batéria</span><span class="val">{bat_pocet}× {bat_typ}</span></div>'
+    
+    wallbox_row = ""
+    if variant in ("C", "D"):
+        wb_typ = flat.get("Wallbox (typ)") or ""
+        if wb_typ:
+            wallbox_row = f'<div class="row"><span class="label">Wallbox</span><span class="val">{wb_typ}</span></div>'
+    
+    # Status — bol uz akceptovany?
+    status = flat.get("Status") or ""
+    already_accepted = status in ("🟢 Výhra", "Podpísané", "💰 Faktúra", "🏗 Realizácia", "✅ Hotové")
+    
+    if already_accepted:
+        accepted_date = flat.get("date:Dátum prijatia podpísaných:start") or _dt.now().strftime("%d.%m.%Y")
+        status_block = PUBLIC_ACCEPTED_HTML.replace("{{accepted_date}}", accepted_date)
+        js_block = ""
+    else:
+        status_block = PUBLIC_FORM_HTML
+        js_block = PUBLIC_JS
+    
+    html = PUBLIC_PAGE_HTML
+    replacements = {
+        "{{ev_id}}": ev_id,
+        "{{klient}}": klient,
+        "{{variant_label}}": variant_labels.get(variant, variant),
+        "{{vykon_kwp}}": vykon_kwp,
+        "{{pocet_panelov}}": str(pocet_panelov),
+        "{{wp_label}}": wp_label,
+        "{{konstrukcia}}": konstrukcia,
+        "{{bateria_row}}": bateria_row,
+        "{{wallbox_row}}": wallbox_row,
+        "{{mesto}}": mesto,
+        "{{datum}}": _dt.now().strftime("%d.%m.%Y"),
+        "{{cena_str}}": cena_str,
+        "{{status_block}}": status_block,
+        "{{js_block}}": js_block,
+    }
+    for k, v in replacements.items():
+        html = html.replace(k, str(v))
+    
+    # Audit
+    try:
+        _log_activity("other", status="STARTED", page_id=page.get("id"), klient=klient,
+                      variant=variant, detail=f"Public quote view: /p/{ev_id}")
+    except Exception:
+        pass
+    
+    return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+
+
+@app.route("/p/<ev_id>/accept", methods=["POST"])
+def public_quote_accept(ev_id):
+    """Klient akceptuje ponuku. POST {name, email}."""
+    from datetime import datetime as _dt
+    
+    body = request.get_json(silent=True) or {}
+    name = (body.get("name") or "").strip()
+    email = (body.get("email") or "").strip()
+    
+    if not name or len(name) < 3:
+        return jsonify({"success": False, "error": "Meno je povinné"}), 400
+    if "@" not in email:
+        return jsonify({"success": False, "error": "Neplatný email"}), 400
+    
+    page = _find_lead_by_ev_id(ev_id)
+    if not page:
+        return jsonify({"success": False, "error": "Ponuka nenájdená"}), 404
+    
+    page_id = page.get("id")
+    flat = notion_props_to_flat(page)
+    klient = flat.get("Zákazník") or "Klient"
+    
+    # IP klienta + user agent
+    client_ip = request.headers.get("X-Forwarded-For", request.remote_addr or "?").split(",")[0].strip()
+    user_agent = request.headers.get("User-Agent", "")[:300]
+    
+    today_iso = _dt.now().strftime("%Y-%m-%d")
+    today_human = _dt.now().strftime("%d.%m.%Y %H:%M")
+    
+    accept_note = f"Klient akceptoval cenovku online dňa {today_human} z IP {client_ip}. Zadané meno: {name}, email: {email}. User-Agent: {user_agent[:100]}"
+    
+    update = {
+        "Status": {"select": {"name": "🟢 Výhra"}},
+        "Poznámka": {"rich_text": [{"text": {"content": accept_note[:1900]}}]},
+        "date:Dátum prijatia podpísaných:start": today_iso,
+    }
+    
+    try:
+        notion_update_page(page_id, update)
+        _log_activity("other", status="OK", page_id=page_id, klient=klient,
+                      detail=f"PUBLIC ACCEPT by {name} ({email}) from {client_ip}")
+        return jsonify({"success": True, "message": "Ponuka akceptovaná"})
+    except Exception as e:
+        _log_activity("other", status="ERROR", page_id=page_id, klient=klient,
+                      error=str(e), detail=f"PUBLIC ACCEPT failed for {name}")
+        return jsonify({"success": False, "error": "Chyba pri uložení. Skúste neskôr."}), 500
 
 
 @app.errorhandler(Exception)
