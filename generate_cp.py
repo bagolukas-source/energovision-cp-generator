@@ -89,10 +89,12 @@ def vyrataj_konfig(lead, cennik):
     vykon = lead["vykon_kwp"]
     panel_kod = lead.get("panel_kod", "PAN-002")  # default LONGi 540 Wp
     panel = cennik[panel_kod]
-    # počet panelov: výkon kWp / Wp panela (z názvu vyextrahuj 535-545 → 540)
+    # počet panelov: výkon kWp / Wp panela
     if "470" in panel["nazov"]: wp = 470
-    elif "535" in panel["nazov"] or "540" in panel["nazov"]: wp = 540
-    else: wp = 500
+    elif "545" in panel["nazov"]: wp = 545
+    elif "540" in panel["nazov"]: wp = 540
+    elif "535" in panel["nazov"]: wp = 535
+    else: wp = 535  # default LONGi 535 Wp
     pocet_panelov = round(vykon * 1000 / wp)
 
     # menič (default Solinteg 10K alebo Huawei podľa kWp)

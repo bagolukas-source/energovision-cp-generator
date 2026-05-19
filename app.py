@@ -3361,6 +3361,51 @@ def _generate_pdf_impl():
     cennik = load_cennik()
     konfig = vyrataj_konfig(lead, cennik)
     ceny = vyrataj_ceny(konfig, lead)
+
+    # === CRM OVERRIDE ===
+    # Ak Supabase CRM posiela vlastnú cenu (Cena X s DPH + Marža X), použijeme ju priamo.
+    # Inak by Render použil Hagard ceny bez 35% Energovision zľavy + svoju 21% maržu → mismatch.
+    crm_cena_s_dph = None
+    try:
+        for key in (f"Cena {variant} s DPH", f"Cena {variant}", "Cena s DPH"):
+            val = flat_props.get(key)
+            if val is None or val == "" or val == 0:
+                continue
+            crm_cena_s_dph = float(val)
+            if crm_cena_s_dph > 0:
+                break
+    except (TypeError, ValueError):
+        crm_cena_s_dph = None
+
+    if crm_cena_s_dph and crm_cena_s_dph > 0:
+        crm_marza = flat_props.get(f"Marža {variant}")
+        try:
+            crm_marza = float(crm_marza) if crm_marza is not None else None
+        except (TypeError, ValueError):
+            crm_marza = None
+        dph = 0.23
+        crm_cena_bez_dph = crm_cena_s_dph / (1 + dph)
+        # Dotácia + ZD logika ostáva
+        dotacia = ceny.get("dotacia", 0) if lead.get("dotacia", True) else 0
+        cena_po_dot = crm_cena_s_dph - dotacia
+        ceny = {
+            "nakupna_material": ceny.get("nakupna_material", 0),
+            "nakupna_praca": ceny.get("nakupna_praca", 0),
+            "nakupna_spolu": ceny.get("nakupna_spolu", 0),
+            "rezerva_eur": 0,
+            "marza_eur": crm_cena_bez_dph - ceny.get("nakupna_spolu", 0),
+            "cena_bez_dph": crm_cena_bez_dph,
+            "cena_s_dph": crm_cena_s_dph,
+            "dotacia": dotacia,
+            "cena_po_dotacii": cena_po_dot,
+            "zlava_eur": 0,
+            "cena_finalna": cena_po_dot,
+            "marza_pct": crm_marza if crm_marza is not None else ceny.get("marza_pct"),
+            "zisk": crm_cena_bez_dph - ceny.get("nakupna_spolu", 0),
+            "_source": "CRM_OVERRIDE",
+        }
+        log.info(f"[generate-pdf-supabase] CRM override použitý — cena s DPH = {crm_cena_s_dph}, marža = {crm_marza}%")
+
     navratnost = vyrataj_navratnost(konfig, ceny, lead)
 
     # Vyrob v dočasnom adresári
@@ -3864,6 +3909,51 @@ def _generate_pdf_supabase_impl():
     cennik = load_cennik()
     konfig = vyrataj_konfig(lead, cennik)
     ceny = vyrataj_ceny(konfig, lead)
+
+    # === CRM OVERRIDE ===
+    # Ak Supabase CRM posiela vlastnú cenu (Cena X s DPH + Marža X), použijeme ju priamo.
+    # Inak by Render použil Hagard ceny bez 35% Energovision zľavy + svoju 21% maržu → mismatch.
+    crm_cena_s_dph = None
+    try:
+        for key in (f"Cena {variant} s DPH", f"Cena {variant}", "Cena s DPH"):
+            val = flat_props.get(key)
+            if val is None or val == "" or val == 0:
+                continue
+            crm_cena_s_dph = float(val)
+            if crm_cena_s_dph > 0:
+                break
+    except (TypeError, ValueError):
+        crm_cena_s_dph = None
+
+    if crm_cena_s_dph and crm_cena_s_dph > 0:
+        crm_marza = flat_props.get(f"Marža {variant}")
+        try:
+            crm_marza = float(crm_marza) if crm_marza is not None else None
+        except (TypeError, ValueError):
+            crm_marza = None
+        dph = 0.23
+        crm_cena_bez_dph = crm_cena_s_dph / (1 + dph)
+        # Dotácia + ZD logika ostáva
+        dotacia = ceny.get("dotacia", 0) if lead.get("dotacia", True) else 0
+        cena_po_dot = crm_cena_s_dph - dotacia
+        ceny = {
+            "nakupna_material": ceny.get("nakupna_material", 0),
+            "nakupna_praca": ceny.get("nakupna_praca", 0),
+            "nakupna_spolu": ceny.get("nakupna_spolu", 0),
+            "rezerva_eur": 0,
+            "marza_eur": crm_cena_bez_dph - ceny.get("nakupna_spolu", 0),
+            "cena_bez_dph": crm_cena_bez_dph,
+            "cena_s_dph": crm_cena_s_dph,
+            "dotacia": dotacia,
+            "cena_po_dotacii": cena_po_dot,
+            "zlava_eur": 0,
+            "cena_finalna": cena_po_dot,
+            "marza_pct": crm_marza if crm_marza is not None else ceny.get("marza_pct"),
+            "zisk": crm_cena_bez_dph - ceny.get("nakupna_spolu", 0),
+            "_source": "CRM_OVERRIDE",
+        }
+        log.info(f"[generate-pdf-supabase] CRM override použitý — cena s DPH = {crm_cena_s_dph}, marža = {crm_marza}%")
+
     navratnost = vyrataj_navratnost(konfig, ceny, lead)
 
     with tempfile.TemporaryDirectory() as tmpdir:
