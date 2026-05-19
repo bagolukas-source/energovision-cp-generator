@@ -3814,6 +3814,91 @@ def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchod
     return full_html
 
 
+
+# ============================================================
+# WEBHOOK: GENERATE PDF FROM SUPABASE PAYLOAD
+# Trigger: Energovision FVE CRM (Next.js)
+# Vstup: { "flat_props": {...}, "variant": "A"|"B"|"C"|"D", "quote_id": "uuid" }
+# Výstup: rovnaký ako /webhook/generate-pdf — pdf_base64 + filename
+# Účel: CRM nemá Notion page_id, posiela rovnaký formát flat dict
+# ============================================================
+@app.route("/webhook/generate-pdf-supabase", methods=["POST"])
+@require_secret
+def generate_pdf_supabase():
+    """Adapter pre Supabase CRM — prijíma flat_props payload namiesto page_id."""
+    try:
+        return _generate_pdf_supabase_impl()
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        log.error(f"generate_pdf_supabase padol: {e}\n{tb}")
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "traceback_tail": tb[-500:],
+            "pdf_base64": "",
+            "filename": "",
+            "folder_name": "",
+        }), 500
+
+
+def _generate_pdf_supabase_impl():
+    body = request.get_json(silent=True) or {}
+    flat_props = body.get("flat_props") or {}
+    variant = body.get("variant", "A")
+
+    if not flat_props:
+        return jsonify({"error": "missing flat_props"}), 400
+
+    log.info(f"Generate PDF (Supabase) variant {variant}, klient {flat_props.get('Zákazník', '?')}")
+
+    # Reuse — lead_from_notion berie flat dict + variant (NIE Notion page)
+    from generate_from_notion import lead_from_notion
+    lead = lead_from_notion(flat_props, variant)
+
+    if variant in ("B", "C"):
+        ok, msg = check_compatibility(lead["invertor_kod"], lead.get("bateria_kod"))
+        if not ok:
+            return jsonify({"error": f"incompatible: {msg}"}), 400
+
+    cennik = load_cennik()
+    konfig = vyrataj_konfig(lead, cennik)
+    ceny = vyrataj_ceny(konfig, lead)
+    navratnost = vyrataj_navratnost(konfig, ceny, lead)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        priezvisko = safe_filename(lead["meno"].split()[-1])
+        ev_id = lead.get("cislo_ponuky", f"EV-XX-001-{variant}")
+        from datetime import datetime
+        datum = datetime.now().strftime("%Y-%m-%d")
+        base = f"{ev_id}_{priezvisko}_{datum}"
+
+        grafy = vyrob_grafy(navratnost, lead, tmpdir, base)
+        pdf_path = os.path.join(tmpdir, f"{base}.pdf")
+        vyrob_html_pdf(lead, konfig, ceny, navratnost, grafy, pdf_path)
+        pdf_size = os.path.getsize(pdf_path)
+
+        import base64
+        with open(pdf_path, "rb") as f:
+            pdf_b64 = base64.b64encode(f.read()).decode("ascii")
+
+    ev_id_root = ev_id[:-2] if len(ev_id) >= 2 and ev_id[-2] == "-" and ev_id[-1] in "ABCD" else ev_id
+    folder_name = f"{ev_id_root}_{priezvisko}"
+
+    return jsonify({
+        "success": True,
+        "ev_id": ev_id,
+        "filename": f"{base}.pdf",
+        "folder_name": folder_name,
+        "size_bytes": pdf_size,
+        "cena_s_dph": ceny["cena_s_dph"],
+        "cena_finalna": ceny["cena_finalna"],
+        "pdf_base64": pdf_b64,
+        "source": "supabase",
+        "quote_id": body.get("quote_id"),
+    })
+
+
 # ============================================================
 # ROOT — info
 # ============================================================
@@ -3834,6 +3919,7 @@ def root():
             "POST /webhook/prepocet",
             "POST /webhook/generate-pdf",
             "POST /webhook/email-template",
+            "POST /webhook/generate-pdf-supabase",
         ],
     })
 
