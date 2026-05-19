@@ -1670,6 +1670,45 @@ def spracuj_rozlozenie():
 # GDPR, Dotaznik), vráti base64 + filename + folder. Make uploadne
 # do Dropboxu + zapise do Notion property fields.
 # ============================================================
+
+@app.route("/webhook/spracuj-rozlozenie-supabase", methods=["POST"])
+@require_secret
+def spracuj_rozlozenie_supabase():
+    """Adapter pre Supabase CRM — prijíma raw_url priamo, bez Notion."""
+    body = request.get_json(silent=True) or {}
+    raw_url = body.get("raw_url")
+    ma_bateriu = bool(body.get("ma_bateriu", False))
+    ev_id = body.get("ev_id", "EV-XX")
+    priezvisko = body.get("priezvisko", "Klient")
+
+    if not raw_url:
+        return jsonify({"success": False, "error": "missing raw_url"}), 400
+
+    log.info(f"[spracuj-rozlozenie-supabase] raw_url={raw_url[:60]}... ma_bateriu={ma_bateriu}")
+
+    try:
+        from solar_rebuild import process_solaredge_pdf
+        from generate_from_notion import safe_filename as _sf
+        import base64 as _b64
+
+        pdf_bytes, _, summary = process_solaredge_pdf(raw_url, ma_bateriu=ma_bateriu)
+        priezvisko_safe = _sf(priezvisko) or "Klient"
+        filename = f"{ev_id}_Rozlozenie_{priezvisko_safe}.pdf"
+        pdf_b64 = _b64.b64encode(pdf_bytes).decode("ascii")
+
+        log.info(f"[spracuj-rozlozenie-supabase] hotovo: {filename} ({len(pdf_bytes)//1024} KB)")
+
+        return jsonify({
+            "success": True,
+            "filename": filename,
+            "data": pdf_b64,
+            "summary": summary,
+        })
+    except Exception as e:
+        log.exception("[spracuj-rozlozenie-supabase] zlyhalo")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route("/webhook/generuj-dokumenty", methods=["POST"])
 @require_secret
 def generuj_dokumenty():
