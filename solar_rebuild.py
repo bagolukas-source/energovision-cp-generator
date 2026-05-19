@@ -158,8 +158,31 @@ def extract_pdf_data(pdf_bytes):
     kwp_str = grab(r"Instalovaný DC Výkon\s*\n?\s*([\d,]+\s*kWp)", text_p1)
     ac_str = grab(r"Max Dosažitelný AC Výkon\s*\n?\s*([\d,]+\s*kW)", text_p1)
     vyroba_str = grab(r"Roční Výroba Energie\s*\n?\s*([\d\s ,]+\s*kWh)", text_p1)
-    co2_str = grab(r"Úspora Emisí CO2[^\n]*\n?\s*([\d,]+\s*t)", text_p1)
-    stromy_str = grab(r"Ekvivalent Vysazených\s*\n?\s*Stromů\s*\n?\s*(\d+)", text_p1)
+    # CO2 môže byť v 't' alebo 'kg' (Slovak PDFs typicky 'kg')
+    co2_m = re.search(r"([\d ,]+)\s*(kg|t)\b", text_p1)
+    if co2_m:
+        co2_val = float(co2_m.group(1).replace(" ", "").replace(",", "."))
+        if co2_m.group(2).lower() == "kg":
+            co2_val_t = co2_val / 1000.0
+        else:
+            co2_val_t = co2_val
+        co2_str = f"{co2_val_t:.2f} t".replace(".", ",")
+    else:
+        co2_str = "—"
+    # Stromy — hľadaj číslo medzi Stromů labelom a ďalším blokom
+    stromy_m = re.search(r"Stromů[\s\S]*?(\d+)\s*(?:\n|VÝSLEDKY|ODHADOVANÁ|$)", text_p1)
+    if not stromy_m:
+        # Fallback: lookbehind cez všetky čísla po Stromů
+        stromy_m = re.search(r"(\d+)\s*VÝSLEDKY|Stromů[\s\S]{1,200}?(\d+)", text_p1)
+    if stromy_m:
+        for g in stromy_m.groups():
+            if g and g.isdigit():
+                stromy_str = g
+                break
+        else:
+            stromy_str = "—"
+    else:
+        stromy_str = "—"
 
     # Tabulka panelov — môže byť na page 2 + page 3 (POKRAČOVAT) + page 4
     panely = []
