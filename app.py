@@ -3899,6 +3899,83 @@ def _generate_pdf_supabase_impl():
     })
 
 
+
+# ============================================================
+# WEBHOOK: EMAIL TEMPLATE FROM SUPABASE PAYLOAD
+# Trigger: Energovision FVE CRM
+# Vstup: { "flat_props": {...}, "variants": ["A","B","C","D"], "typ_ponuky": "Indikatívna"|"Exaktná" }
+# Výstup: { to, subject, body_html, obchodnik, variants_sent }
+# ============================================================
+@app.route("/webhook/email-template-supabase", methods=["POST"])
+@require_secret
+def email_template_supabase():
+    """Adapter pre CRM — generuje email subject + body_html z flat_props."""
+    try:
+        return _email_template_supabase_impl()
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        log.error(f"email_template_supabase padol: {e}\n{tb}")
+        return jsonify({"error": str(e), "traceback_tail": tb[-500:]}), 500
+
+
+def _email_template_supabase_impl():
+    body = request.get_json(silent=True) or {}
+    flat_props = body.get("flat_props") or {}
+    variants = body.get("variants") or []
+    typ_ponuky = body.get("typ_ponuky", "Indikatívna")
+    ma_rozlozenie = bool(body.get("ma_rozlozenie", False))
+
+    if not flat_props or not variants:
+        return jsonify({"error": "missing flat_props or variants"}), 400
+
+    from generate_from_notion import lead_from_notion, OBCHODNICI, DEFAULT_OBCHODNIK, safe_filename
+
+    lead_a = lead_from_notion(flat_props, variants[0] if variants else "A")
+    priezvisko = lead_a["meno"].split()[-1] if lead_a.get("meno") else "Zákazník"
+    mesto = lead_a.get("mesto", "")
+    email_zakaznika = (lead_a.get("email") or flat_props.get("Email") or "").strip()
+
+    if not _is_valid_email(email_zakaznika):
+        return jsonify({
+            "success": False,
+            "email_valid": "false",
+            "error": f"Neplatný email zákazníka: '{email_zakaznika}'",
+            "to": "", "subject": "", "body_html": "",
+        }), 200
+
+    obchodnik = OBCHODNICI.get(
+        flat_props.get("Obchodník") or flat_props.get("Obchodnik") or "",
+        DEFAULT_OBCHODNIK
+    )
+
+    vykon_kwp = lead_a.get("vykon_kwp", 0)
+    bateria_kwh = float(flat_props.get("Batéria výkon") or 0)
+
+    ceny = {
+        "A": flat_props.get("Cena A s DPH") or flat_props.get("Cena A"),
+        "B": flat_props.get("Cena B s DPH") or flat_props.get("Cena B"),
+        "C": flat_props.get("Cena C s DPH") or flat_props.get("Cena C"),
+        "D": flat_props.get("Cena D s DPH") or flat_props.get("Cena D"),
+    }
+
+    subject = build_subject(priezvisko, mesto, variants, typ_ponuky=typ_ponuky)
+    body_html = build_email_body(
+        priezvisko, mesto, vykon_kwp, bateria_kwh, ceny, variants,
+        obchodnik, typ_ponuky=typ_ponuky, ma_rozlozenie=ma_rozlozenie
+    )
+
+    return jsonify({
+        "success": True,
+        "email_valid": "true",
+        "to": email_zakaznika,
+        "subject": subject,
+        "body_html": body_html,
+        "obchodnik": obchodnik,
+        "variants_sent": variants,
+    })
+
+
 # ============================================================
 # ROOT — info
 # ============================================================
@@ -3920,6 +3997,7 @@ def root():
             "POST /webhook/generate-pdf",
             "POST /webhook/email-template",
             "POST /webhook/generate-pdf-supabase",
+            "POST /webhook/email-template-supabase",
         ],
     })
 
