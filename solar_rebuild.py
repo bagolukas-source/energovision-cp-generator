@@ -592,6 +592,6 @@ def process_solaredge_pdf(pdf_url, ma_bateriu=False):
         "mesto": data["mesto"],
         "kwp": data["kwp_str"],
         "vyroba": data["vyroba_str"],
-        "panely_count": len(data["panely"]),
+        "panely_count": sum(int(p["pocet"]) for p in data["panely"] if str(p["pocet"]).isdigit()) or len(data["panely"]),
     }
     return branded_pdf, safe, summary
