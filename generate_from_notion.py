@@ -568,6 +568,18 @@ OBCHODNICI = {
 DEFAULT_OBCHODNIK = OBCHODNICI["Dominik Galaba"]
 
 
+def _resolve_obchodnik(props: dict) -> dict:
+    """Resolve obchodnik z flat_props (Supabase CRM users) alebo fallback OBCHODNICI dict."""
+    meno = (props.get("Obchodník") or props.get("Obchodnik") or "").strip()
+    meno_key = meno.replace("Ing. ", "").strip()
+    email = (props.get("Obchodník email") or "").strip()
+    tel = (props.get("Obchodník telefón") or "").strip()
+    funkcia = (props.get("Obchodník funkcia") or "").strip()
+    if meno and email and tel:
+        return {"meno": meno, "funkcia": funkcia or "Konzultant", "tel": tel, "email": email}
+    return OBCHODNICI.get(meno_key, DEFAULT_OBCHODNIK)
+
+
 def lead_from_notion(notion_props, variant):
     """
     Z Notion properties zostaví lead.json pre konkrétny variant.
@@ -762,7 +774,7 @@ def lead_from_notion(notion_props, variant):
         "dotacia": True,
         "platby": "60 % zálohová faktúra vopred  ·  30 % po nainštalovaní elektrárne  ·  10 % po protokolárnom odovzdaní",
         "cislo_ponuky": cislo_ponuky,
-        "obchodnik": OBCHODNICI.get(notion_props.get("Obchodník") or notion_props.get("Obchodnik") or "", DEFAULT_OBCHODNIK),
+        "obchodnik": _resolve_obchodnik(notion_props),
     }
 
 
