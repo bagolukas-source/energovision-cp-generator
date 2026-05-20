@@ -4106,6 +4106,40 @@ def _email_template_supabase_impl():
 
 
 # ============================================================
+# WEBHOOK: Parsuj leady — Supabase verzia (raw_text -> JSON leads)
+# Trigger: Energovision FVE CRM (/leady modal "Parsuj")
+# Vstup: { "raw_text": "..." }
+# Výstup: { ok, count, leads: [...] }  — leads sa vytvárajú v Next.js
+# ============================================================
+@app.route("/webhook/parsuj-leady-supabase", methods=["POST"])
+@require_secret
+def parsuj_leady_supabase():
+    """CRM verzia parsera — vezme raw text, vráti pole extrahovaných leadov.
+    Bez Notion side-effects. Next.js si potom leady vytvorí v Supabase sám."""
+    body = request.get_json(force=True, silent=True) or {}
+    raw_text = (body.get("raw_text") or "").strip()
+    if not raw_text:
+        return jsonify({"ok": False, "error": "raw_text je prazdny"}), 400
+
+    if len(raw_text) > 30000:
+        return jsonify({"ok": False, "error": "raw_text prilis dlhy (max 30k znakov)"}), 400
+
+    log.info("[parsuj-leady-supabase] raw_text dlzka=%d znakov", len(raw_text))
+
+    try:
+        leads = claude_extract_leads(raw_text)
+    except Exception as e:
+        log.exception("Claude extraction zlyhala")
+        return jsonify({"ok": False, "error": f"claude failed: {e}"}), 500
+
+    if not leads:
+        return jsonify({"ok": False, "error": "Claude nenasiel ziadne leady"}), 400
+
+    log.info("[parsuj-leady-supabase] extrahovanych leadov: %d", len(leads))
+    return jsonify({"ok": True, "count": len(leads), "leads": leads})
+
+
+# ============================================================
 # ROOT — info
 # ============================================================
 @app.route("/")
@@ -4116,6 +4150,7 @@ def root():
         "endpoints": [
             "GET /health",
             "POST /webhook/parsuj-leady",
+            "POST /webhook/parsuj-leady-supabase",
             "POST /webhook/auto-konfig",
             "POST /webhook/test-rozlozenie",
             "POST /webhook/spracuj-rozlozenie",
