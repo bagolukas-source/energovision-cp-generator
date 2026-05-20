@@ -772,7 +772,12 @@ def lead_from_notion(notion_props, variant):
         "zlava_eur": 0,
         "platnost_dni": 30,
         "dotacia": True,
-        "platby": "60 % zálohová faktúra vopred  ·  30 % po nainštalovaní elektrárne  ·  10 % po protokolárnom odovzdaní",
+        "platby": (lambda pt: (
+            "60 % zálohová faktúra vopred  ·  40 % po dokončení diela" if pt == "60_40"
+            else "50 % zálohová faktúra vopred  ·  50 % po dokončení diela" if pt == "50_50"
+            else "30 % zálohová faktúra vopred  ·  70 % po dokončení diela" if pt == "30_70"
+            else "60 % zálohová faktúra vopred  ·  30 % po nainštalovaní elektrárne  ·  10 % po protokolárnom odovzdaní"
+        ))(notion_props.get("Platobné podmienky") or notion_props.get("Platby") or "60_30_10"),
         "cislo_ponuky": cislo_ponuky,
         "obchodnik": _resolve_obchodnik(notion_props),
     }
