@@ -19,6 +19,7 @@ from pathlib import Path
 from functools import wraps
 
 from flask import Flask, request, jsonify
+from sk_gender import oslovenie_pan_pani, oslovenie_plne
 import requests
 import time as _time
 
@@ -1996,7 +1997,7 @@ def email_zmluvy():
     # Email body
     subject = f"Zmluvná dokumentácia — {meno_priezvisko} (Energovision)"
     body_html = f"""
-    <p>Dobrý deň pán/pani {priezvisko},</p>
+    <p>Dobrý deň {oslovenie_pan_pani("", priezvisko)} {priezvisko},</p>
     <p>na základe Vášho súhlasu s našou cenovou ponukou Vám zasielam zmluvnú dokumentáciu k inštalácii fotovoltickej elektrárne. V prílohe nájdete:</p>
     <ul>
       <li><strong>Zmluva o dielo</strong> — zmluva o dodávke a inštalácii FVE</li>
@@ -3715,7 +3716,7 @@ def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchod
     if typ_ponuky == "Exaktná":
         # Po obhliadke — preverené data, presné ceny
         intro = f"""
-        <p>Dobrý deň pán/pani {priezvisko},</p>
+        <p>Dobrý deň {oslovenie_pan_pani("", priezvisko)} {priezvisko},</p>
         <p>v nadväznosti na našu obhliadku Vašej nehnuteľnosti v <strong>{mesto}</strong>
         Vám zasielam <strong>presnú cenovú ponuku</strong> pre fotovoltickú elektráreň.
         Údaje sú overené priamo na mieste — strecha, konštrukcia, spotreba aj umiestnenie panelov.
@@ -3724,7 +3725,7 @@ def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchod
     else:
         # Indikatívna — bez obhliadky, len odhad z dopytu
         intro = f"""
-        <p>Dobrý deň pán/pani {priezvisko},</p>
+        <p>Dobrý deň {oslovenie_pan_pani("", priezvisko)} {priezvisko},</p>
         <p>na základe údajov, ktoré ste nám poskytli, Vám zasielam <strong>indikatívnu cenovú ponuku</strong>
         pre fotovoltickú elektráreň pre Vašu domácnosť v <strong>{mesto}</strong>.
         Pripravil som {n_var_str} podľa toho, ako chcete využiť energiu zo slnka.</p>
@@ -4232,8 +4233,14 @@ def generuj_dokumenty_supabase():
     from datetime import datetime
     today = datetime.now().strftime("%d.%m.%Y")
 
+    # Oslovenie pán/pani — derivované z mena a priezviska
+    oslovenie = oslovenie_pan_pani(cust.get("first_name", ""), cust.get("last_name", ""))
+
     lead_data = {
         "meno_priezvisko": meno,
+        "first_name": cust.get("first_name", ""),
+        "last_name": cust.get("last_name", ""),
+        "oslovenie": oslovenie,  # "pán" | "pani" | "pán/pani"
         "adresa": adresa,
         "ulica": ulica,
         "psc": psc,
