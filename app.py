@@ -4236,11 +4236,24 @@ def generuj_dokumenty_supabase():
     # Oslovenie pán/pani — derivované z mena a priezviska
     oslovenie = oslovenie_pan_pani(cust.get("first_name", ""), cust.get("last_name", ""))
 
+    # Format dátum narodenia DD.MM.YYYY
+    datum_narodenia_raw = cust.get("datum_narodenia", "")
+    datum_narodenia = ""
+    if datum_narodenia_raw:
+        try:
+            from datetime import datetime as _dt2
+            d = _dt2.strptime(str(datum_narodenia_raw)[:10], "%Y-%m-%d")
+            datum_narodenia = d.strftime("%d.%m.%Y")
+        except Exception:
+            datum_narodenia = str(datum_narodenia_raw)
+
     lead_data = {
         "meno_priezvisko": meno,
         "first_name": cust.get("first_name", ""),
         "last_name": cust.get("last_name", ""),
-        "oslovenie": oslovenie,  # "pán" | "pani" | "pán/pani"
+        "oslovenie": oslovenie,
+        "cislo_op": cust.get("cislo_op", ""),
+        "datum_narodenia": datum_narodenia,
         "adresa": adresa,
         "ulica": ulica,
         "psc": psc,
