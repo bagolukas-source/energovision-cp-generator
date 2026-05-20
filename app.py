@@ -4251,6 +4251,7 @@ def generuj_dokumenty_supabase():
         "pocet_panelov": pocet_panelov,
         "cislo_cp": cislo_cp,
         "datum_cp": today,
+        "datum_dnes": today,
         "miesto_vykonu": adresa,
         "cena_eur": cena,
         "platby": platby_text,
