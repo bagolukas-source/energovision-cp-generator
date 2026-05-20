@@ -4140,6 +4140,143 @@ def parsuj_leady_supabase():
 
 
 # ============================================================
+# WEBHOOK: GENERUJ DOKUMENTY — Supabase verzia
+# Vstup: { order_id, kind: 'zmluva'|'splnomocnenie'|'gdpr' }
+# Fetchne order + customer + lead z Supabase REST API, naplní DOCX,
+# uploadne do Supabase Storage, vráti pdf_url (vlastne docx_url)
+# ============================================================
+@app.route("/webhook/generuj-dokumenty-supabase", methods=["POST"])
+@require_secret
+def generuj_dokumenty_supabase():
+    body = request.get_json(force=True, silent=True) or {}
+    order_id = body.get("order_id")
+    kind = body.get("kind", "zmluva")
+    if not order_id:
+        return jsonify({"error": "missing order_id"}), 400
+    if kind not in ("zmluva", "splnomocnenie", "gdpr"):
+        return jsonify({"error": "kind musi byt zmluva|splnomocnenie|gdpr"}), 400
+
+    SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://uzwajrpebblafuhrtuwn.supabase.co")
+    SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+    if not SUPABASE_KEY:
+        return jsonify({"error": "SUPABASE_SERVICE_ROLE_KEY not set"}), 500
+
+    headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+
+    # Fetch order + customer + lead
+    r = requests.get(
+        f"{SUPABASE_URL}/rest/v1/orders",
+        headers=headers,
+        params={"select": "*,customers(*),leads(ev_id,distribucka,assigned_to,users:users!leads_assigned_to_fkey(full_name,email,phone,funkcia))", "id": f"eq.{order_id}"},
+        timeout=30
+    )
+    if not r.ok:
+        return jsonify({"error": f"supabase fetch: {r.status_code}", "body": r.text}), 500
+    rows = r.json()
+    if not rows:
+        return jsonify({"error": "order_not_found"}), 404
+    order = rows[0]
+    cust = order.get("customers") or {}
+    lead = order.get("leads") or {}
+    obch = lead.get("users") if isinstance(lead.get("users"), dict) else {}
+
+    meno = (cust.get("company_name") or f"{cust.get('first_name','')} {cust.get('last_name','')}".strip())
+    adresa = ", ".join(filter(None, [cust.get("street"), cust.get("postal_code"), cust.get("city")]))
+    ev_id = lead.get("ev_id") or order.get("order_number", "ORD")
+    variant = order.get("accepted_variant") or "A"
+    cislo_cp = f"{ev_id}-{variant}"
+    cena = float(order.get("total_with_vat", 0))
+
+    from datetime import datetime
+    today = datetime.now().strftime("%d.%m.%Y")
+
+    lead_data = {
+        "meno_priezvisko": meno,
+        "adresa": adresa,
+        "ulica": cust.get("street", ""),
+        "psc": cust.get("postal_code", ""),
+        "mesto": cust.get("city", ""),
+        "telefon": cust.get("phone", ""),
+        "email": cust.get("email", ""),
+        "vykon_kwp": 0,  # TODO: fetch z bundle
+        "cislo_cp": cislo_cp,
+        "datum_cp": today,
+        "miesto_vykonu": adresa,
+        "cena_eur": cena,
+        "ev_id": ev_id,
+        "obchodnik_meno": (obch or {}).get("full_name", "Energovision tím"),
+        "obchodnik_email": (obch or {}).get("email", "info@energovision.sk"),
+        "obchodnik_tel": (obch or {}).get("phone", "+421 917 424 564"),
+        "obchodnik_funkcia": (obch or {}).get("funkcia", "Obchodný zástupca"),
+        "distribucka": lead.get("distribucka", "ZSD"),
+    }
+
+    # Vytvor temp file + naplň
+    import tempfile, os as _os
+    from pathlib import Path
+    tmpdir = Path(tempfile.mkdtemp())
+
+    try:
+        from generuj_dokumenty import naplnif_zmluvu, naplnif_splnomocnenie, naplnif_gdpr
+    except Exception as e:
+        return jsonify({"error": f"import generuj_dokumenty zlyhal: {e}"}), 500
+
+    out_path = tmpdir / f"{ev_id}_{kind}.docx"
+    try:
+        if kind == "zmluva":
+            naplnif_zmluvu(lead_data, str(out_path))
+        elif kind == "splnomocnenie":
+            naplnif_splnomocnenie(lead_data, str(out_path))
+        elif kind == "gdpr":
+            naplnif_gdpr(lead_data, str(out_path))
+    except Exception as e:
+        log.exception("naplnif zlyhal")
+        return jsonify({"error": f"naplnif: {e}"}), 500
+
+    # Upload do Supabase Storage
+    with open(out_path, "rb") as f:
+        file_bytes = f.read()
+
+    storage_path = f"orders/{order_id}/{kind}_{ev_id}.docx"
+    up = requests.post(
+        f"{SUPABASE_URL}/storage/v1/object/documents/{storage_path}",
+        headers={**headers, "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "x-upsert": "true"},
+        data=file_bytes,
+        timeout=30
+    )
+    if not up.ok:
+        log.warning("storage upload zlyhal: %s %s", up.status_code, up.text)
+        return jsonify({"error": "storage_upload_failed", "body": up.text}), 500
+
+    public_url = f"{SUPABASE_URL}/storage/v1/object/public/documents/{storage_path}"
+
+    # Update order admin field
+    field = f"{kind}_url"
+    if kind == "zmluva":
+        field = "zmluva_url"
+    elif kind == "gdpr":
+        field = "gdpr_url"
+    elif kind == "splnomocnenie":
+        field = "splnomocnenie_url"
+
+    requests.patch(
+        f"{SUPABASE_URL}/rest/v1/orders",
+        headers={**headers, "Content-Type": "application/json"},
+        params={"id": f"eq.{order_id}"},
+        json={field: public_url},
+        timeout=10
+    )
+
+    try:
+        out_path.unlink()
+        tmpdir.rmdir()
+    except Exception:
+        pass
+
+    return jsonify({"ok": True, "url": public_url, "kind": kind, "filename": f"{ev_id}_{kind}.docx"})
+
+
+# ============================================================
 # ROOT — info
 # ============================================================
 @app.route("/")
