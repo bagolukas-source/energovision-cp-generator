@@ -4180,8 +4180,50 @@ def generuj_dokumenty_supabase():
     lead = order.get("leads") or {}
     obch = lead.get("users") if isinstance(lead.get("users"), dict) else {}
 
+    # Fetch bundle pre vykon_kwp + payment_terms + panel info
+    bundle = {}
+    if lead.get("ev_id"):
+        # Bundle je naviazaný na lead — najdi cez quote_bundles.lead_id = leads.id (potrebujem lead.id)
+        # Skús cez order.bundle_id ak existuje, alebo cez lead.id (order má lead_id)
+        lead_id_for_bundle = order.get("lead_id")
+        if lead_id_for_bundle:
+            br = requests.get(
+                f"{SUPABASE_URL}/rest/v1/quote_bundles",
+                headers=headers,
+                params={"select": "*", "lead_id": f"eq.{lead_id_for_bundle}", "order": "created_at.desc", "limit": "1"},
+                timeout=15
+            )
+            if br.ok and br.json():
+                bundle = br.json()[0]
+
+    pocet_panelov = int(bundle.get("pocet_panelov") or 0)
+    panel_sku = bundle.get("panel_sku") or "PAN-001"
+    panel_wp = 535 if panel_sku == "PAN-002" else 470
+    vykon_kwp = round(pocet_panelov * panel_wp / 1000, 2) if pocet_panelov else 0
+
+    # Záruka podľa panela (LONGi Hi-MO X10 = 25r produktová + 30r lineárna)
+    if panel_sku == "PAN-001":  # LONGi Hi-MO X10 470 Wp
+        zaruka_panely_produkt = 25
+        zaruka_panely_linear = 30
+    else:  # PAN-002 LONGi Hi-MO 6 535 Wp
+        zaruka_panely_produkt = 15
+        zaruka_panely_linear = 25
+
+    # Platobné podmienky
+    pt = bundle.get("payment_terms") or "60_30_10"
+    platby_map = {
+        "60_40": "60% - zálohová faktúra vopred\n40% - po dokončení diela",
+        "50_50": "50% - zálohová faktúra vopred\n50% - po dokončení diela",
+        "30_70": "30% - zálohová faktúra vopred\n70% - po dokončení diela",
+        "60_30_10": "60% - zálohová faktúra vopred\n30% - po nainštalovaní elektrárne\n10% - po protokolárnom odovzdaní",
+    }
+    platby_text = platby_map.get(pt, platby_map["60_30_10"])
+
     meno = (cust.get("company_name") or f"{cust.get('first_name','')} {cust.get('last_name','')}".strip())
-    adresa = ", ".join(filter(None, [cust.get("street"), cust.get("postal_code"), cust.get("city")]))
+    ulica = cust.get("street") or ""
+    psc = cust.get("postal_code") or ""
+    mesto = cust.get("city") or ""
+    adresa = ", ".join(filter(None, [ulica, psc, mesto])) or "(adresa nedoplnená)"
     ev_id = lead.get("ev_id") or order.get("order_number", "ORD")
     variant = order.get("accepted_variant") or "A"
     cislo_cp = f"{ev_id}-{variant}"
@@ -4193,16 +4235,21 @@ def generuj_dokumenty_supabase():
     lead_data = {
         "meno_priezvisko": meno,
         "adresa": adresa,
-        "ulica": cust.get("street", ""),
-        "psc": cust.get("postal_code", ""),
-        "mesto": cust.get("city", ""),
+        "ulica": ulica,
+        "psc": psc,
+        "mesto": mesto,
         "telefon": cust.get("phone", ""),
         "email": cust.get("email", ""),
-        "vykon_kwp": 0,  # TODO: fetch z bundle
+        "vykon_kwp": vykon_kwp,
+        "pocet_panelov": pocet_panelov,
         "cislo_cp": cislo_cp,
         "datum_cp": today,
         "miesto_vykonu": adresa,
         "cena_eur": cena,
+        "platby": platby_text,
+        "payment_terms": pt,
+        "zaruka_panely_produkt": zaruka_panely_produkt,
+        "zaruka_panely_linear": zaruka_panely_linear,
         "ev_id": ev_id,
         "obchodnik_meno": (obch or {}).get("full_name", "Energovision tím"),
         "obchodnik_email": (obch or {}).get("email", "info@energovision.sk"),
