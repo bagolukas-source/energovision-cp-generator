@@ -4359,44 +4359,43 @@ def docx_to_pdf_endpoint():
     if not docx_url:
         return jsonify({"error": "missing docx_url"}), 400
 
-    import tempfile, subprocess, base64
-    from pathlib import Path
-
-    tmpdir = Path(tempfile.mkdtemp())
+    import base64
+    from io import BytesIO
     try:
+        import mammoth
+        from weasyprint import HTML
+
         # 1) Stiahni docx
         r = requests.get(docx_url, timeout=30)
         if not r.ok:
             return jsonify({"error": f"download failed: {r.status_code}"}), 500
-        docx_path = tmpdir / "input.docx"
-        docx_path.write_bytes(r.content)
 
-        # 2) Konvertuj cez LibreOffice
-        result = subprocess.run(
-            ["libreoffice", "--headless", "--convert-to", "pdf", "--outdir", str(tmpdir), str(docx_path)],
-            timeout=60,
-            capture_output=True,
-        )
-        if result.returncode != 0:
-            return jsonify({"error": f"libreoffice failed: {result.stderr.decode()[:200]}"}), 500
+        # 2) DOCX → HTML cez mammoth (bez LibreOffice, beží na 512 MB)
+        result = mammoth.convert_to_html(BytesIO(r.content))
+        html_body = result.value
 
-        pdf_path = tmpdir / "input.pdf"
-        if not pdf_path.exists():
-            return jsonify({"error": "PDF nebol vytvorený"}), 500
+        # Wrap do A4 dokumentu s minimal CSS
+        html_full = f"""<!DOCTYPE html><html lang="sk"><head>
+<meta charset="utf-8">
+<style>
+  @page {{ size: A4; margin: 18mm; }}
+  body {{ font-family: 'Helvetica', sans-serif; font-size: 10pt; color: #1a1a1a; line-height: 1.45; }}
+  h1 {{ font-size: 16pt; margin: 12pt 0 6pt; }}
+  h2 {{ font-size: 13pt; margin: 10pt 0 5pt; }}
+  h3 {{ font-size: 11pt; margin: 8pt 0 4pt; }}
+  p {{ margin: 4pt 0; }}
+  table {{ border-collapse: collapse; margin: 6pt 0; }}
+  td, th {{ border: 0.5pt solid #ccc; padding: 4pt 6pt; }}
+  strong {{ font-weight: 700; }}
+</style></head><body>{html_body}</body></html>"""
 
-        # 3) Vráť base64
-        pdf_b64 = base64.b64encode(pdf_path.read_bytes()).decode()
-        return jsonify({"ok": True, "pdf_base64": pdf_b64, "size_bytes": pdf_path.stat().st_size})
+        # 3) HTML → PDF cez WeasyPrint (už máme)
+        pdf_bytes = HTML(string=html_full).write_pdf()
+        pdf_b64 = base64.b64encode(pdf_bytes).decode()
+        return jsonify({"ok": True, "pdf_base64": pdf_b64, "size_bytes": len(pdf_bytes), "method": "mammoth+weasyprint"})
     except Exception as e:
         log.exception("docx-to-pdf failed")
         return jsonify({"error": str(e)}), 500
-    finally:
-        try:
-            for f in tmpdir.iterdir():
-                f.unlink()
-            tmpdir.rmdir()
-        except Exception:
-            pass
 
 
 # ============================================================
