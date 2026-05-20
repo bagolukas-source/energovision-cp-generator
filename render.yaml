@@ -16,3 +16,9 @@ services:
         value: ba7a1d6c-63a9-43da-b66d-2b1c7e8660da
       - key: WEBHOOK_SECRET
         generateValue: true  # auto-vygeneruje secret pre webhook autentifikáciu
+      - key: SUPABASE_URL
+        value: https://uzwajrpebblafuhrtuwn.supabase.co
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false  # MUSÍ byť nastavený v Render dashboard ako secret (zo Supabase Settings → API)
+      - key: ANTHROPIC_API_KEY
+        sync: false  # zadáš v Render dashboard ako secret
