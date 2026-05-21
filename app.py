@@ -4436,8 +4436,9 @@ def parsuj_fakturu_ele():
             import fitz  # pymupdf
             doc = fitz.open(stream=pdf_bytes, filetype="pdf")
             full_text = ""
+            pages_count = min(3, doc.page_count)
             # Stačí prvých 3 strán (obsahuje všetko podstatné)
-            for i in range(min(3, doc.page_count)):
+            for i in range(pages_count):
                 full_text += doc[i].get_text() + "\n\n"
             doc.close()
         except Exception as e:
@@ -4503,7 +4504,7 @@ TEXT FAKTÚRY:
         except json.JSONDecodeError as e:
             return jsonify({"error": f"JSON parse: {e}", "raw": m.group(0)[:500]}), 500
 
-        return jsonify({"ok": True, "parsed": parsed, "pages_extracted": min(3, len(pdf))})
+        return jsonify({"ok": True, "parsed": parsed, "pages_extracted": pages_count})
     except Exception as e:
         log.exception("parsuj-fakturu-ele failed")
         return jsonify({"error": str(e)}), 500
