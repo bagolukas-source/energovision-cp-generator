@@ -4398,6 +4398,111 @@ def docx_to_pdf_endpoint():
         return jsonify({"error": str(e)}), 500
 
 
+
+
+# ============================================================
+# WEBHOOK: AI PARSER FAKTÚRY ZA ELEKTRINU
+# Vstup: { "pdf_base64": "..." } alebo { "pdf_url": "https://..." }
+# Výstup: { ok, parsed: { meno, adresa_*, eic, kwh_rocne, distribucka, ... } }
+# Použiteľné pre B2C zákazníka — Claude Vision API parsuje PDF stranu 1-2
+# ============================================================
+@app.route("/webhook/parsuj-fakturu-ele", methods=["POST"])
+@require_secret
+def parsuj_fakturu_ele():
+    body = request.get_json(force=True, silent=True) or {}
+    pdf_url = body.get("pdf_url")
+    pdf_b64_input = body.get("pdf_base64")
+
+    if not pdf_url and not pdf_b64_input:
+        return jsonify({"error": "missing pdf_url alebo pdf_base64"}), 400
+    if not ANTHROPIC_API_KEY:
+        return jsonify({"error": "ANTHROPIC_API_KEY not set"}), 500
+
+    import base64
+    from io import BytesIO
+
+    try:
+        # Stiahni PDF
+        if pdf_url:
+            r = requests.get(pdf_url, timeout=30)
+            if not r.ok:
+                return jsonify({"error": f"download failed: {r.status_code}"}), 500
+            pdf_bytes = r.content
+        else:
+            pdf_bytes = base64.b64decode(pdf_b64_input)
+
+        # PDF → text (PyMuPDF / pypdfium2)
+        try:
+            import pypdfium2 as pdfium
+            pdf = pdfium.PdfDocument(BytesIO(pdf_bytes))
+            full_text = ""
+            # Stačí prvých 3 strán (obsahuje všetko podstatné)
+            for i in range(min(3, len(pdf))):
+                full_text += pdf[i].get_textpage().get_text_range() + "\n\n"
+        except Exception as e:
+            return jsonify({"error": f"pdf extract failed: {e}"}), 500
+
+        # Pošli text do Claude — žiadame štruktúrovaný JSON
+        from anthropic import Anthropic
+        client = Anthropic(api_key=ANTHROPIC_API_KEY)
+
+        prompt = """Z faktúry za elektrinu (text nižšie) extrahuj údaje a vráť ich ako JSON.
+
+PRAVIDLÁ:
+- Ak údaj nie je vo faktúre, vráť null (nie "" prázdny string).
+- "miesto_spotreby" = adresa kde sa elektrina spotrebúva (typicky adresa rodinného domu/inštalácie FVE)
+- "korespondencna_adresa" = adresa kde sa posiela faktúra (typicky trvalý pobyt zákazníka, ak je iná ako miesto spotreby)
+- Ak sú obe adresy rovnaké, korespondencna_adresa nech je null
+- Rozdeľ adresu na ulica/mesto/psc (PSČ = 5 číslic, mesto BEZ PSČ)
+- "kwh_rocne" = súčet NT + VT + 1T spotreby za celé zúčtovacie obdobie (typicky 1 rok). Ak je obdobie kratšie, prepočítaj na 12 mesiacov.
+- "distribucna_sadzba" = D1/D2/D3 Aktiv/D4/D5/... (z faktúry typicky "D3 aktiv" alebo "DD2")
+- "distribucna_spolocnost" = ZSD (ZSE = ZSD Západoslovenská), SSD (SSE = SSD Stredoslovenská), VSD (VSE = VSD Východoslovenská)
+- "dodavatel_elektriny" = ZSE / SSE / VSE / iný (názov dodávateľa, nie distribučky)
+
+VRÁŤ LEN JSON, žiadny iný text:
+{
+  "meno": "Meno Priezvisko alebo Firma s.r.o.",
+  "miesto_spotreby": { "ulica": "...", "mesto": "...", "psc": "..." },
+  "korespondencna_adresa": { "ulica": "...", "mesto": "...", "psc": "..." },
+  "eic": "24ZZS...",
+  "kwh_rocne": 2057,
+  "distribucna_sadzba": "D3 aktiv",
+  "distribucna_spolocnost": "ZSD",
+  "dodavatel_elektriny": "ZSE",
+  "zakaznicke_cislo": "...",
+  "cislo_miesta_spotreby": "...",
+  "zuctovacie_obdobie_od": "2025-04-01",
+  "zuctovacie_obdobie_do": "2026-03-31"
+}
+
+TEXT FAKTÚRY:
+"""
+        prompt += full_text[:15000]  # cap aby nepretiekol token limit
+
+        resp = client.messages.create(
+            model=ANTHROPIC_MODEL,
+            max_tokens=2048,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw_text = _safe_claude_text(resp)
+
+        # Parse JSON (Claude občas vráti markdown ```json...``` — odstrániť)
+        import json, re
+        raw_text = raw_text.strip()
+        m = re.search(r'\{[\s\S]*\}', raw_text)
+        if not m:
+            return jsonify({"error": "Claude nevrátil JSON", "raw": raw_text[:500]}), 500
+        try:
+            parsed = json.loads(m.group(0))
+        except json.JSONDecodeError as e:
+            return jsonify({"error": f"JSON parse: {e}", "raw": m.group(0)[:500]}), 500
+
+        return jsonify({"ok": True, "parsed": parsed, "pages_extracted": min(3, len(pdf))})
+    except Exception as e:
+        log.exception("parsuj-fakturu-ele failed")
+        return jsonify({"error": str(e)}), 500
+
+
 # ============================================================
 # ROOT — info
 # ============================================================
