@@ -4431,14 +4431,15 @@ def parsuj_fakturu_ele():
         else:
             pdf_bytes = base64.b64decode(pdf_b64_input)
 
-        # PDF → text (PyMuPDF / pypdfium2)
+        # PDF → text (PyMuPDF — už v requirements)
         try:
-            import pypdfium2 as pdfium
-            pdf = pdfium.PdfDocument(BytesIO(pdf_bytes))
+            import fitz  # pymupdf
+            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
             full_text = ""
             # Stačí prvých 3 strán (obsahuje všetko podstatné)
-            for i in range(min(3, len(pdf))):
-                full_text += pdf[i].get_textpage().get_text_range() + "\n\n"
+            for i in range(min(3, doc.page_count)):
+                full_text += doc[i].get_text() + "\n\n"
+            doc.close()
         except Exception as e:
             return jsonify({"error": f"pdf extract failed: {e}"}), 500
 
