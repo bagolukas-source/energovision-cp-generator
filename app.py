@@ -4443,10 +4443,7 @@ def parsuj_fakturu_ele():
         except Exception as e:
             return jsonify({"error": f"pdf extract failed: {e}"}), 500
 
-        # Pošli text do Claude — žiadame štruktúrovaný JSON
-        from anthropic import Anthropic
-        client = Anthropic(api_key=ANTHROPIC_API_KEY)
-
+        # Pošli text do Claude — raw requests (žiadne anthropic SDK)
         prompt = """Z faktúry za elektrinu (text nižšie) extrahuj údaje a vráť ich ako JSON.
 
 PRAVIDLÁ:
@@ -4480,11 +4477,19 @@ TEXT FAKTÚRY:
 """
         prompt += full_text[:15000]  # cap aby nepretiekol token limit
 
-        resp = client.messages.create(
-            model=ANTHROPIC_MODEL,
-            max_tokens=2048,
-            messages=[{"role": "user", "content": prompt}],
-        )
+        headers = {
+            "x-api-key": ANTHROPIC_API_KEY,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+        payload = {
+            "model": ANTHROPIC_MODEL,
+            "max_tokens": 2048,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        r = _retry_request(lambda: requests.post("https://api.anthropic.com/v1/messages", headers=headers, json=payload, timeout=90))
+        r.raise_for_status()
+        resp = r.json()
         raw_text = _safe_claude_text(resp)
 
         # Parse JSON (Claude občas vráti markdown ```json...``` — odstrániť)
