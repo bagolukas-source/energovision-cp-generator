@@ -4537,6 +4537,305 @@ def root():
     })
 
 
+
+# ============================================================
+# FIELD PROTOKOLY — obhliadkový + preberací + servisný
+# ============================================================
+from datetime import datetime, timezone
+import hashlib
+
+PROTOKOL_HTML = """
+<!DOCTYPE html>
+<html lang="sk"><head><meta charset="utf-8"/><style>
+@page { size: A4; margin: 18mm 15mm; }
+body { font-family: 'Helvetica', sans-serif; font-size: 10pt; color: #1e293b; line-height: 1.4; }
+.brand { background: #1F4E78; color: white; padding: 14px 18px; margin: -18mm -15mm 14px -15mm; }
+.brand h1 { margin: 0; font-size: 18pt; font-weight: bold; }
+.brand .sub { font-size: 9pt; opacity: 0.85; margin-top: 3px; }
+.meta { display: flex; justify-content: space-between; background: #f1f5f9; padding: 8px 12px; border-radius: 6px; margin-bottom: 14px; font-size: 9pt; }
+h2 { background: #fef3c7; border-left: 4px solid #f59e0b; padding: 4px 10px; font-size: 12pt; margin: 18px 0 8px 0; }
+h3 { color: #1F4E78; margin: 14px 0 6px 0; font-size: 11pt; }
+.row { display: flex; gap: 14px; margin: 6px 0; }
+.row .label { font-weight: bold; min-width: 140px; color: #475569; }
+.checklist li { list-style: none; margin: 3px 0; padding: 4px 8px; border-radius: 4px; }
+.checklist li.done { background: #d1fae5; color: #065f46; }
+.checklist li.todo { background: #fef2f2; color: #991b1b; }
+.checklist li .icon { font-weight: bold; margin-right: 8px; }
+.photos { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-top: 10px; }
+.photos img { width: 100%; height: 80px; object-fit: cover; border: 1px solid #e2e8f0; border-radius: 4px; }
+.notes { background: #fef9e7; border: 1px solid #fde68a; padding: 10px 12px; border-radius: 6px; font-style: italic; }
+.signature { margin-top: 20px; padding-top: 14px; border-top: 2px solid #1F4E78; display: flex; justify-content: space-between; }
+.signature .sig { width: 45%; }
+.signature img { max-width: 180px; max-height: 80px; }
+.footer { position: fixed; bottom: 8mm; left: 15mm; right: 15mm; text-align: center; font-size: 8pt; color: #94a3b8; }
+</style></head><body>
+<div class="brand">
+  <h1>{{ title }}</h1>
+  <div class="sub">{{ subtitle }}</div>
+</div>
+
+<div class="meta">
+  <div><strong>ID:</strong> {{ doc_id }}</div>
+  <div><strong>Dátum:</strong> {{ date_str }}</div>
+  <div><strong>Technik:</strong> {{ technician }}</div>
+</div>
+
+<h3>Zákazník</h3>
+<div class="row"><span class="label">Meno / firma:</span> {{ customer_name }}</div>
+{% if customer_phone %}<div class="row"><span class="label">Telefón:</span> {{ customer_phone }}</div>{% endif %}
+{% if customer_email %}<div class="row"><span class="label">E-mail:</span> {{ customer_email }}</div>{% endif %}
+<div class="row"><span class="label">Miesto inštalácie:</span> {{ installation_address }}</div>
+{% if gps %}<div class="row"><span class="label">GPS:</span> {{ gps }}</div>{% endif %}
+
+<h2>{{ section_title }}</h2>
+{% if checklist %}
+<ul class="checklist">
+{% for item in checklist %}
+  <li class="{{ 'done' if item.done else 'todo' }}"><span class="icon">{{ '✓' if item.done else '✗' }}</span>{{ item.label }}</li>
+{% endfor %}
+</ul>
+{% endif %}
+
+{% if notes %}
+<h3>Poznámka technika</h3>
+<div class="notes">{{ notes }}</div>
+{% endif %}
+
+{% if photo_urls %}
+<h3>Fotodokumentácia ({{ photo_urls|length }} fotiek)</h3>
+<div class="photos">
+{% for url in photo_urls[:9] %}
+  <img src="{{ url }}" />
+{% endfor %}
+</div>
+{% if photo_urls|length > 9 %}<p style="font-size:8pt;color:#64748b;margin-top:6px;">+ ďalších {{ photo_urls|length - 9 }} fotiek v digitálnom archíve.</p>{% endif %}
+{% endif %}
+
+<div class="signature">
+  <div class="sig">
+    <strong>Klient — podpis:</strong><br/>
+    {% if customer_signature_url %}<img src="{{ customer_signature_url }}" />{% else %}<em style="color:#94a3b8">(nepodpísané)</em>{% endif %}
+    <div style="border-top:1px solid #94a3b8;margin-top:6px;padding-top:3px;font-size:9pt;">{{ customer_name }}</div>
+  </div>
+  <div class="sig">
+    <strong>Technik — podpis:</strong><br/>
+    {% if technician_signature_url %}<img src="{{ technician_signature_url }}" />{% else %}<em style="color:#94a3b8">(elektronický záznam {{ doc_id }})</em>{% endif %}
+    <div style="border-top:1px solid #94a3b8;margin-top:6px;padding-top:3px;font-size:9pt;">{{ technician }}</div>
+  </div>
+</div>
+
+<div class="footer">
+  Energovision s.r.o. · IČO 53 036 280 · www.energovision.sk · {{ doc_id }} · vygenerované {{ generated_at }}
+</div>
+</body></html>
+"""
+
+
+@app.route("/webhook/generuj-protokol", methods=["POST"])
+def generuj_protokol():
+    """Vygeneruje PDF protokol (obhliadka / preberací / servis) zo Supabase dát.
+    Body: { kind: 'inspection'|'handover'|'service', id: uuid }
+    Vráti: { ok, pdf_base64, sha256, filename }
+    """
+    try:
+        data = request.get_json(force=True)
+        kind = data.get("kind", "inspection")
+        entity_id = data.get("id")
+        if not entity_id:
+            return jsonify({"error": "missing_id"}), 400
+
+        from jinja2 import Template
+        from weasyprint import HTML
+
+        supa_url = os.environ.get("SUPABASE_URL", "")
+        supa_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+        if not supa_url or not supa_key:
+            return jsonify({"error": "supabase_env_missing"}), 500
+        headers = {"apikey": supa_key, "Authorization": f"Bearer {supa_key}"}
+
+        ctx = {}
+        if kind == "inspection":
+            r = requests.get(
+                f"{supa_url}/rest/v1/inspections",
+                params={"id": f"eq.{entity_id}", "select": "*,customers(first_name,last_name,company_name,phone,email,city,street,postal_code,installation_same_as_billing,installation_street,installation_city,installation_postal_code),technician:users!inspections_technician_id_fkey(full_name)"},
+                headers=headers, timeout=20
+            )
+            ins = (r.json() or [{}])[0]
+            if not ins.get("id"):
+                return jsonify({"error": "inspection_not_found"}), 404
+            cust = ins.get("customers") or {}
+
+            # Foto z documents
+            r2 = requests.get(
+                f"{supa_url}/rest/v1/documents",
+                params={"inspection_id": f"eq.{entity_id}", "kind": "eq.photo", "select": "storage_url"},
+                headers=headers, timeout=10
+            )
+            photo_urls = [d.get("storage_url") for d in (r2.json() or []) if d.get("storage_url")]
+
+            checklist_data = ins.get("checklist_data") or {}
+            CL_LABELS = {
+                "strecha_typ": "Typ strechy zaznamenaný",
+                "strecha_orientacia": "Orientácia a sklon strechy zmerané",
+                "strecha_stav": "Stav krytiny OK",
+                "tienenie": "Tienenie skontrolované",
+                "miesto_panely": "Plocha pre panely vyznačená",
+                "miesto_menic": "Miesto pre menič vybraté",
+                "miesto_bateria": "Miesto pre batériu",
+                "rozvadzac": "Hlavný rozvádzač",
+                "elektromer": "Elektromer skontrolovaný",
+                "uzemnenie": "Uzemnenie objektu",
+                "pristupova_cesta": "Prístupová cesta",
+                "lesenie": "Lešenie potrebné?",
+                "suhlas_susedy": "Súhlas susedov",
+                "klient_pripravoval_dotacie": "Klient pripravuje dotácie",
+            }
+            checklist = [{"label": CL_LABELS.get(k, k), "done": bool(v)} for k, v in checklist_data.items()]
+            checklist += [{"label": CL_LABELS[k], "done": False} for k in CL_LABELS if k not in checklist_data]
+
+            # Adresa inštalácie (3-address logic)
+            if cust.get("installation_same_as_billing") is False and cust.get("installation_street"):
+                inst_addr = f"{cust.get('installation_street','')}, {cust.get('installation_postal_code','')} {cust.get('installation_city','')}".strip(", ")
+            else:
+                inst_addr = f"{cust.get('street','')}, {cust.get('postal_code','')} {cust.get('city','')}".strip(", ")
+
+            doc_id = f"OBH-{datetime.now().strftime('%Y-%m')}-{entity_id[:8]}"
+            ctx = {
+                "title": "Protokol z obhliadky",
+                "subtitle": "Záznam o technickej obhliadke pre fotovoltickú elektráreň",
+                "section_title": "Kontrolný zoznam obhliadky",
+                "doc_id": doc_id,
+                "date_str": datetime.fromisoformat((ins.get("scheduled_at") or ins.get("created_at")).replace("Z","+00:00")).strftime("%d.%m.%Y %H:%M") if ins.get("scheduled_at") else datetime.now().strftime("%d.%m.%Y"),
+                "technician": (ins.get("technician") or {}).get("full_name") or "—",
+                "customer_name": cust.get("company_name") or f"{cust.get('first_name','')} {cust.get('last_name','')}".strip() or "—",
+                "customer_phone": cust.get("phone"),
+                "customer_email": cust.get("email"),
+                "installation_address": inst_addr or "—",
+                "gps": f"{ins['gps_lat']:.5f}, {ins['gps_lng']:.5f}" if ins.get("gps_lat") else None,
+                "checklist": checklist,
+                "notes": ins.get("notes"),
+                "photo_urls": photo_urls,
+                "customer_signature_url": ins.get("customer_signature_url"),
+                "technician_signature_url": None,
+                "generated_at": datetime.now().strftime("%d.%m.%Y %H:%M"),
+            }
+
+        elif kind == "handover":
+            r = requests.get(
+                f"{supa_url}/rest/v1/handover_protocols",
+                params={"id": f"eq.{entity_id}", "select": "*,orders(order_number,ev_id,customers(first_name,last_name,company_name,phone,email,city,street,postal_code))"},
+                headers=headers, timeout=20
+            )
+            h = (r.json() or [{}])[0]
+            if not h.get("id"):
+                return jsonify({"error": "handover_not_found"}), 404
+            order = h.get("orders") or {}
+            cust = order.get("customers") or {}
+
+            r2 = requests.get(
+                f"{supa_url}/rest/v1/documents",
+                params={"order_id": f"eq.{order.get('id','none')}", "kind": "eq.photo", "select": "storage_url"},
+                headers=headers, timeout=10
+            )
+            photo_urls = [d.get("storage_url") for d in (r2.json() or []) if d.get("storage_url")]
+
+            checks = h.get("checklist_data") or {}
+            FVE_LABELS = {
+                "installation_per_project": "Inštalácia podľa projektu",
+                "konstrukcia_ukotvenie": "Nosná konštrukcia — kotvenie OK",
+                "panely_aretacia": "Aretácia panelov — moment OK",
+                "dc_polarita": "Polarita DC stringov skontrolovaná",
+                "dc_voc_isc": "Voc a Isc v limite",
+                "ac_pripojenie": "AC pripojenie — fázovanie + svorky",
+                "uzemnenie": "Uzemnenie + ekvipotenciálne prepojenie",
+                "izolacny_odpor": "Izolačný odpor DC ≥ 1 MΩ",
+                "rcd_test": "RCD test 30 mA OK",
+                "spd_typ2": "SPD typ 2 (DC + AC)",
+                "spustenie_menica": "Spustenie meniča, firmware",
+                "monitoring_app": "Monitoring aktívny",
+                "stitky_a_oznacenie": "Bezpečnostné štítky",
+                "ziadost_o_pripojenie": "Žiadosť o pripojenie",
+                "revizna_sprava": "Revízna správa",
+                "zaskolenie_klienta": "Zaškolenie zákazníka",
+                "navod_odovzdany": "Návod odovzdaný",
+                "zarucny_list": "Záručné listy",
+                "pracovisko_uprat": "Pracovisko upratané",
+            }
+            checklist = [{"label": FVE_LABELS.get(k, k), "done": bool(v)} for k, v in checks.items()]
+            checklist += [{"label": FVE_LABELS[k], "done": False} for k in FVE_LABELS if k not in checks]
+
+            doc_id = h.get("protocol_number") or f"PROT-{entity_id[:8]}"
+            ctx = {
+                "title": "Preberací protokol",
+                "subtitle": f"Záznam o ukončení inštalácie · {order.get('ev_id') or order.get('order_number','')}",
+                "section_title": "Kontrolný zoznam pri odovzdaní",
+                "doc_id": doc_id,
+                "date_str": datetime.fromisoformat(h.get("customer_signed_at","").replace("Z","+00:00")).strftime("%d.%m.%Y %H:%M") if h.get("customer_signed_at") else datetime.now().strftime("%d.%m.%Y"),
+                "technician": h.get("technician_name") or "—",
+                "customer_name": cust.get("company_name") or f"{cust.get('first_name','')} {cust.get('last_name','')}".strip() or "—",
+                "customer_phone": cust.get("phone"),
+                "customer_email": cust.get("email"),
+                "installation_address": f"{cust.get('street','')}, {cust.get('postal_code','')} {cust.get('city','')}".strip(", "),
+                "gps": h.get("signed_gps"),
+                "checklist": checklist,
+                "notes": h.get("notes"),
+                "photo_urls": photo_urls,
+                "customer_signature_url": h.get("customer_signature_url"),
+                "technician_signature_url": h.get("technician_signature_url"),
+                "generated_at": datetime.now().strftime("%d.%m.%Y %H:%M"),
+            }
+
+        elif kind == "service":
+            r = requests.get(
+                f"{supa_url}/rest/v1/service_tickets",
+                params={"id": f"eq.{entity_id}", "select": "*,customers(first_name,last_name,company_name,phone,email,city,street,postal_code),assignee:users!service_tickets_assignee_id_fkey(full_name)"},
+                headers=headers, timeout=20
+            )
+            t = (r.json() or [{}])[0]
+            if not t.get("id"):
+                return jsonify({"error": "ticket_not_found"}), 404
+            cust = t.get("customers") or {}
+
+            doc_id = t.get("ticket_number") or f"SVC-{entity_id[:8]}"
+            ctx = {
+                "title": "Servisný protokol",
+                "subtitle": f"Záznam o servisnom zásahu · {doc_id}",
+                "section_title": "Riešenie problému",
+                "doc_id": doc_id,
+                "date_str": datetime.now().strftime("%d.%m.%Y %H:%M"),
+                "technician": (t.get("assignee") or {}).get("full_name") or "—",
+                "customer_name": cust.get("company_name") or f"{cust.get('first_name','')} {cust.get('last_name','')}".strip() or "—",
+                "customer_phone": cust.get("phone"),
+                "customer_email": cust.get("email"),
+                "installation_address": f"{cust.get('street','')}, {cust.get('postal_code','')} {cust.get('city','')}".strip(", "),
+                "gps": None,
+                "checklist": [
+                    {"label": f"Popis problému: {t.get('title','—')}", "done": True},
+                    {"label": f"Priorita: {t.get('priority','normal')}", "done": True},
+                    {"label": "Servisný zásah vykonaný", "done": t.get("status") == "resolved"},
+                ],
+                "notes": t.get("resolution") or t.get("description"),
+                "photo_urls": [],
+                "customer_signature_url": t.get("customer_signature_url"),
+                "technician_signature_url": t.get("technician_signature_url"),
+                "generated_at": datetime.now().strftime("%d.%m.%Y %H:%M"),
+            }
+        else:
+            return jsonify({"error": f"unknown_kind: {kind}"}), 400
+
+        html = Template(PROTOKOL_HTML).render(**ctx)
+        pdf_bytes = HTML(string=html).write_pdf()
+        import base64
+        b64 = base64.b64encode(pdf_bytes).decode("ascii")
+        sha = hashlib.sha256(pdf_bytes).hexdigest()
+        filename = f"{ctx['doc_id'].replace('/','-')}.pdf"
+        return jsonify({"ok": True, "pdf_base64": b64, "sha256": sha, "filename": filename, "doc_id": ctx["doc_id"]})
+    except Exception as e:
+        log.exception("generuj-protokol failed")
+        return jsonify({"error": str(e)}), 500
+
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
