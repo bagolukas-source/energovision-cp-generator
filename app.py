@@ -4836,6 +4836,182 @@ def generuj_protokol():
 
 
 
+# ============================================================
+# B2B DOCUMENT GENERATORS (G2 — replace Make scenár 8299009 docx-templater modules)
+# ============================================================
+
+@app.route("/webhook/generate-b2b-zod", methods=["POST"])
+@require_secret
+def generate_b2b_zod():
+    """
+    Generuje Zmluvu o dielo B2B z templates_b2b/Nova_klasicka_ZOD.docx.
+    Vstup: { "project_id": "uuid" }
+    Výstup: { "success": True, "filename": "...", "data": "base64", "summary": {...} }
+    """
+    body = request.get_json(force=True, silent=True) or {}
+    project_id = body.get("project_id")
+    if not project_id:
+        return jsonify({"error": "missing project_id"}), 400
+
+    SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://uzwajrpebblafuhrtuwn.supabase.co")
+    SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+    if not SUPABASE_KEY:
+        return jsonify({"error": "SUPABASE_SERVICE_ROLE_KEY not set"}), 500
+    headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+
+    # Fetch project + customer
+    r = requests.get(
+        f"{SUPABASE_URL}/rest/v1/projects",
+        headers=headers,
+        params={"select": "*,customers(*)", "id": f"eq.{project_id}"},
+        timeout=30,
+    )
+    if not r.ok:
+        return jsonify({"error": f"supabase fetch projects: {r.status_code}", "body": r.text}), 500
+    rows = r.json()
+    if not rows:
+        return jsonify({"error": "project_not_found"}), 404
+    project = rows[0]
+    customer = project.get("customers") or {}
+
+    # Fetch milestones (kvôli dátumom FA1/FA2/FA3 — ZoD na ne odkazuje)
+    mr = requests.get(
+        f"{SUPABASE_URL}/rest/v1/project_milestones",
+        headers=headers,
+        params={"select": "*", "project_id": f"eq.{project_id}", "order": "fa_no.asc"},
+        timeout=15,
+    )
+    milestones = mr.json() if mr.ok else []
+
+    try:
+        from generuj_b2b import generuj_zod
+        import base64 as _b64
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            zod_path = generuj_zod(
+                project=project,
+                customer=customer,
+                milestones=milestones,
+                out_dir=tmpdir,
+            )
+            with open(zod_path, "rb") as f:
+                raw = f.read()
+            filename = Path(zod_path).name
+            log.info("[generate-b2b-zod] success project=%s file=%s (%d B)", project_id, filename, len(raw))
+            return jsonify({
+                "success": True,
+                "filename": filename,
+                "data": _b64.b64encode(raw).decode("ascii"),
+                "summary": {
+                    "project_id": project_id,
+                    "project_name": project.get("name"),
+                    "customer_name": customer.get("company_name"),
+                    "contract_value_no_vat": project.get("contract_value_no_vat"),
+                },
+            })
+    except FileNotFoundError as e:
+        return jsonify({"success": False, "error": f"template missing: {e}"}), 500
+    except Exception as e:
+        log.exception("[generate-b2b-zod] zlyhalo")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/webhook/generate-b2b-faktura", methods=["POST"])
+@require_secret
+def generate_b2b_faktura():
+    """
+    Generuje Word faktúru pre konkrétny milestone (FA1/FA2/FA3). Lukáš ju potom
+    manuálne nahodí do Flowii ako originál.
+
+    Vstup: { "project_id": "uuid", "fa_no": 1, "faktura_cislo": "2026/0042", "variabilny_symbol": "20260042" }
+    Výstup: { "success": True, "filename": "...", "data": "base64", "summary": {...} }
+    """
+    body = request.get_json(force=True, silent=True) or {}
+    project_id = body.get("project_id")
+    fa_no = body.get("fa_no")
+    faktura_cislo = body.get("faktura_cislo")
+    variabilny_symbol = body.get("variabilny_symbol") or (faktura_cislo or "").replace("/", "").replace("-", "")
+
+    if not project_id:
+        return jsonify({"error": "missing project_id"}), 400
+    if not fa_no:
+        return jsonify({"error": "missing fa_no (1/2/3)"}), 400
+    if not faktura_cislo:
+        return jsonify({"error": "missing faktura_cislo (napr. 2026/0042)"}), 400
+
+    SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://uzwajrpebblafuhrtuwn.supabase.co")
+    SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+    if not SUPABASE_KEY:
+        return jsonify({"error": "SUPABASE_SERVICE_ROLE_KEY not set"}), 500
+    headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+
+    # Fetch project + customer
+    r = requests.get(
+        f"{SUPABASE_URL}/rest/v1/projects",
+        headers=headers,
+        params={"select": "*,customers(*)", "id": f"eq.{project_id}"},
+        timeout=30,
+    )
+    if not r.ok:
+        return jsonify({"error": f"supabase fetch: {r.status_code}", "body": r.text}), 500
+    rows = r.json()
+    if not rows:
+        return jsonify({"error": "project_not_found"}), 404
+    project = rows[0]
+    customer = project.get("customers") or {}
+
+    # Fetch konkrétny milestone
+    mr = requests.get(
+        f"{SUPABASE_URL}/rest/v1/project_milestones",
+        headers=headers,
+        params={"select": "*", "project_id": f"eq.{project_id}", "fa_no": f"eq.{fa_no}"},
+        timeout=15,
+    )
+    if not mr.ok:
+        return jsonify({"error": f"milestone fetch: {mr.status_code}", "body": mr.text}), 500
+    milestones = mr.json()
+    if not milestones:
+        return jsonify({"error": f"milestone fa_no={fa_no} not found"}), 404
+    milestone = milestones[0]
+
+    try:
+        from generuj_b2b import generuj_faktura
+        import base64 as _b64
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fa_path = generuj_faktura(
+                project=project,
+                customer=customer,
+                milestone=milestone,
+                faktura_cislo=faktura_cislo,
+                variabilny_symbol=variabilny_symbol,
+                out_dir=tmpdir,
+            )
+            with open(fa_path, "rb") as f:
+                raw = f.read()
+            filename = Path(fa_path).name
+            log.info("[generate-b2b-faktura] success project=%s fa%s file=%s (%d B)",
+                     project_id, fa_no, filename, len(raw))
+            return jsonify({
+                "success": True,
+                "filename": filename,
+                "data": _b64.b64encode(raw).decode("ascii"),
+                "summary": {
+                    "project_id": project_id,
+                    "fa_no": fa_no,
+                    "faktura_cislo": faktura_cislo,
+                    "payment_amount": milestone.get("payment_amount"),
+                    "payment_pct": milestone.get("payment_pct"),
+                    "due_date": milestone.get("due_date"),
+                },
+            })
+    except FileNotFoundError as e:
+        return jsonify({"success": False, "error": f"template missing: {e}"}), 500
+    except Exception as e:
+        log.exception("[generate-b2b-faktura] zlyhalo")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
