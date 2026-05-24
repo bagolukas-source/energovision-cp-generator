@@ -5402,3 +5402,51 @@ def webhook_huawei_sync_stations():
     except Exception as e:
         log.exception("[huawei-sync-stations] failed")
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# ============================================================
+# ANALYZA OM module — Pilier FVE+BESS posudok
+# ============================================================
+try:
+    from analyza_om import engine as _aom
+except Exception as _e:
+    log.warning("analyza_om not loaded: %s", _e)
+    _aom = None
+
+
+@app.route("/webhook/aom-run-pipeline", methods=["POST"])
+def webhook_aom_run_pipeline():
+    """Spustí full pipeline (parse → sim → econ) pre danú analyza_id."""
+    if not _hs_auth_ok(request):
+        return jsonify({"error": "unauthorized"}), 401
+    if _aom is None:
+        return jsonify({"ok": False, "error": "analyza_om module not loaded"}), 500
+    body = request.get_json(silent=True) or {}
+    analyza_id = body.get("analyza_id")
+    if not analyza_id:
+        return jsonify({"ok": False, "error": "missing analyza_id"}), 400
+    try:
+        result = _aom.run_full_pipeline(analyza_id)
+        return jsonify(result)
+    except Exception as e:
+        log.exception("[aom-run-pipeline] failed")
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
+@app.route("/webhook/aom-parse-only", methods=["POST"])
+def webhook_aom_parse_only():
+    """Iba parse consumption files — pre Krok 2.5 wizard preview."""
+    if not _hs_auth_ok(request):
+        return jsonify({"error": "unauthorized"}), 401
+    if _aom is None:
+        return jsonify({"ok": False, "error": "analyza_om module not loaded"}), 500
+    body = request.get_json(silent=True) or {}
+    analyza_id = body.get("analyza_id")
+    file_paths = body.get("file_paths") or []
+    if not analyza_id or not file_paths:
+        return jsonify({"status": "error", "error": "missing analyza_id or file_paths"}), 400
+    try:
+        return jsonify(_aom.parse_consumption(analyza_id, file_paths, body.get("options")))
+    except Exception as e:
+        log.exception("[aom-parse-only] failed")
+        return jsonify({"status": "error", "error": str(e)}), 500

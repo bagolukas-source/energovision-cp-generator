@@ -10,3 +10,5 @@ python-dotenv==1.0.0
 python-docx==1.1.2
 docxtpl==0.20.2
 mammoth==1.8.0
+numpy==1.26.4
+pandas==2.2.0
