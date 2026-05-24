@@ -485,12 +485,12 @@ def import_one_content(notion_page_id: str, supabase_project_id: str) -> Dict[st
 def import_all_content(limit: Optional[int] = None) -> Dict[str, Any]:
     """Bulk import — pre všetky projekty s napárovaným notion_page_id (alebo cez fresh mapping)."""
     mapping = build_mapping()
-    matched = mapping.get("matched", []) or []
+    projects = mapping.get("projects", []) or []   # FIX: build_mapping vracia projects list (matched je int count)
     if limit:
-        matched = matched[:limit]
+        projects = projects[:limit]
 
     results = []
-    for i, m in enumerate(matched):
+    for i, m in enumerate(projects):
         np = m.get("notion_page_id")
         sp = m.get("supabase_project_id")
         if not np or not sp:
@@ -500,7 +500,7 @@ def import_all_content(limit: Optional[int] = None) -> Dict[str, Any]:
 
     return {
         "ok": True,
-        "total": len(matched),
+        "total": len(projects),
         "imported": sum(1 for r in results if r.get("ok")),
         "results": results,
     }
