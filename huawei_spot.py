@@ -78,14 +78,24 @@ def okte_fetch_day(target_day: date) -> List[Dict[str, Any]]:
 
 def okte_normalize(record: Dict[str, Any], target_day: date) -> Optional[Dict[str, Any]]:
     try:
-        period = record.get("period") or record.get("Period") or record.get("hour")
+        # Use explicit None checks — `or` operator broken for price=0 (legit zero clearing price)
+        period = record.get("period")
+        if period is None:
+            period = record.get("Period")
+        if period is None:
+            period = record.get("hour")
         if period is None:
             return None
         if isinstance(period, str):
             period = int(period)
         delivery_start = record.get("deliveryStart") or record.get("DeliveryStart") or record.get("deliveryStartUtc")
         delivery_end = record.get("deliveryEnd") or record.get("DeliveryEnd") or record.get("deliveryEndUtc")
-        price = record.get("price") or record.get("Price") or record.get("priceEurMwh")
+        # price môže byť 0 alebo záporné — NESMIE byť skrátené cez `or`
+        price = record.get("price")
+        if price is None:
+            price = record.get("Price")
+        if price is None:
+            price = record.get("priceEurMwh")
         if delivery_start is None or price is None:
             return None
         if not delivery_end:
