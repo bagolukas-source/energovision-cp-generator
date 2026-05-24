@@ -5364,3 +5364,27 @@ def webhook_huawei_test():
     token = _hs.huawei_login(force=True)
     return jsonify({"ok": bool(token), "token_present": bool(token), "token_preview": (token[:16] + "...") if token else None})
 
+
+
+@app.route("/webhook/spot-manual-command", methods=["POST"])
+def webhook_spot_manual_command():
+    """
+    Manuálny override z dashboardu:
+    POST { "site_id": "...", "target_state": "NORMAL|ZERO_EXPORT_ONLY|FULL_SHUTDOWN", "issued_by": "...", "reason": "..." }
+    """
+    if not _hs_auth_ok(request):
+        return jsonify({"error": "unauthorized"}), 401
+    if _hs is None:
+        return jsonify({"ok": False, "error": "huawei_spot module not available"}), 500
+    body = request.get_json(silent=True) or {}
+    site_id = body.get("site_id")
+    target_state = body.get("target_state")
+    issued_by = body.get("issued_by", "manual")
+    reason = body.get("reason", "Manuálny override z dashboardu")
+    if not site_id or not target_state:
+        return jsonify({"ok": False, "error": "missing site_id or target_state"}), 400
+    try:
+        return jsonify(_hs.manual_force_state(site_id, target_state, issued_by, reason))
+    except Exception as e:
+        log.exception("[spot-manual-command] failed")
+        return jsonify({"ok": False, "error": str(e)}), 500

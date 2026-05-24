@@ -443,3 +443,53 @@ def global_pause(reason: str = "Slack command") -> Dict[str, Any]:
     ok, err = sb_patch("inverter_sites?spot_control_enabled=eq.true", {"spot_dry_run": True})
     slack_notify(f":pause_button: SPOT reactor globally paused. Reason: {reason}")
     return {"ok": ok, "error": err or None}
+
+
+# ---------------- Manual command (admin override) ----------------
+def manual_force_state(site_id: str, target_state: str, issued_by: str = "manual",
+                        reason: str = "Manuálny override z dashboardu") -> Dict[str, Any]:
+    """
+    Admin tlačidlo: vynúti konkrétny stav na konkrétnu stanicu bez ohľadu na SPOT.
+    Rešpektuje per-site dry_run flag.
+    """
+    if target_state not in ("NORMAL", "ZERO_EXPORT_ONLY", "FULL_SHUTDOWN"):
+        return {"ok": False, "error": f"invalid target_state: {target_state}"}
+
+    sites = sb_get("inverter_sites", {
+        "select": "id,site_name,vendor_station_id,bess_kwh,spot_current_state,spot_dry_run,spot_bess_grid_charge_enabled",
+        "id": f"eq.{site_id}",
+    })
+    if not sites:
+        return {"ok": False, "error": "site not found"}
+    site = sites[0]
+
+    current_spot = get_current_spot() or 0.0
+    current_state = site.get("spot_current_state") or "NORMAL"
+    dry_run = bool(site.get("spot_dry_run"))
+
+    full_reason = f"{reason} (by {issued_by})"
+    result = execute_transition(site, current_state, target_state, current_spot, dry_run)
+    cmd_id = (result["details"][0].get("command_id") if result["details"] else None)
+    log_state_transition(site, current_state, target_state, current_spot, full_reason, dry_run, cmd_id)
+
+    sb_patch(f"inverter_sites?id=eq.{site_id}", {
+        "spot_current_state": target_state,
+        "spot_last_transition_at": datetime.now(timezone.utc).isoformat(),
+        "spot_last_transition_reason": full_reason,
+    })
+
+    slack_notify(
+        f":wrench: SPOT *manual override* [{'DRY' if dry_run else 'LIVE'}] `{site.get('site_name')}` "
+        f"{current_state} → *{target_state}* (by {issued_by})"
+    )
+
+    return {
+        "ok": True,
+        "site_id": site_id,
+        "site_name": site.get("site_name"),
+        "from": current_state,
+        "to": target_state,
+        "dry_run": dry_run,
+        "commands_issued": result["commands_issued"],
+        "command_id": cmd_id,
+    }
