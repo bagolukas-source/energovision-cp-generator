@@ -5612,3 +5612,59 @@ def webhook_team_chat_reply():
     except Exception as e:
         log.exception("[team-chat-reply] failed")
         return jsonify({"status": "error", "error": str(e)}), 500
+
+
+# ===================================================================
+# EVA COWORK v2 — Memory + Proactive autonomous
+# ===================================================================
+import eva_memory as _eva_memory
+import eva_proactive as _eva_proactive
+
+
+@app.route("/webhook/eva-memory-extract", methods=["POST"])
+def webhook_eva_memory_extract():
+    """Po user→AI exchange, vyextrahuj memories. Volá sa po každom Eva reply."""
+    body = request.get_json(force=True) or {}
+    try:
+        saved = _eva_memory.extract_memories(
+            _sb(),
+            user_msg=body.get("user_msg", ""),
+            ai_reply=body.get("ai_reply", ""),
+            user_id=body.get("user_id"),
+            user_name=body.get("user_name"),
+            source_msg_id=body.get("source_msg_id"),
+        )
+        return jsonify({"status": "ok", "saved_count": len(saved), "memories": saved})
+    except Exception as e:
+        log.exception("[eva-memory-extract] failed")
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
+@app.route("/webhook/eva-memory-search", methods=["POST"])
+def webhook_eva_memory_search():
+    """Vector search relevant memories pre query."""
+    body = request.get_json(force=True) or {}
+    try:
+        results = _eva_memory.search_relevant(
+            _sb(),
+            query=body.get("query", ""),
+            k=int(body.get("k", 20)),
+            filter_role=body.get("filter_role"),
+            filter_topic=body.get("filter_topic"),
+            threshold=float(body.get("threshold", 0.4)),
+        )
+        return jsonify({"status": "ok", "memories": results})
+    except Exception as e:
+        log.exception("[eva-memory-search] failed")
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
+@app.route("/webhook/eva-proactive-hourly", methods=["POST", "GET"])
+def webhook_eva_proactive_hourly():
+    """Hourly autonomous pass — Eva sama sa pozrie čo treba."""
+    try:
+        result = _eva_proactive.hourly_autonomous_pass(_sb())
+        return jsonify({"status": "ok", **result})
+    except Exception as e:
+        log.exception("[eva-proactive-hourly] failed")
+        return jsonify({"status": "error", "error": str(e)}), 500
