@@ -5713,3 +5713,17 @@ def webhook_raynet_discover():
     except Exception as e:
         log.exception("[raynet-discover] failed")
         return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/webhook/raynet-fetch-items", methods=["POST"])
+def webhook_raynet_fetch_items():
+    """Batch fetch items pre ponuky bez items. Volaj viackrát kým ostávajú."""
+    body = request.get_json(silent=True) or {}
+    if body.get("raynet_user") and body.get("raynet_key"):
+        _raynet.set_creds(body["raynet_user"], body["raynet_key"], body.get("raynet_instance", "energovision"))
+    try:
+        max_offers = int(body.get("max_offers", 100))
+        out = _raynet.fetch_offer_detail_items(_sb(), max_offers=max_offers)
+        return jsonify({"ok": True, **out})
+    except Exception as e:
+        log.exception("[raynet-fetch-items] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500

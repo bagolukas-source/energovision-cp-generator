@@ -260,3 +260,54 @@ def discover_all(sb) -> dict:
 
 def whoami() -> dict:
     return _get("whoami")
+
+def fetch_offer_detail_items(sb, batch_size: int = 50, max_offers: int = 200) -> dict:
+    """Pre každú quotation bez items stiahne detail a uloží items.
+    Volaj viackrát kým nie sú všetky items stiahnuté."""
+    # Nájdi ponuky čo ešte nemajú items
+    res = sb.table("raynet_raw_quotations").select("raynet_id").execute()
+    all_offers = [r["raynet_id"] for r in (res.data or [])]
+    
+    # Vyfiltruj tie ktoré už majú items
+    res2 = sb.table("raynet_raw_quotation_items").select("quotation_raynet_id").execute()
+    have_items = set(r["quotation_raynet_id"] for r in (res2.data or []))
+    
+    todo = [o for o in all_offers if o not in have_items][:max_offers]
+    
+    total_items = 0
+    processed = 0
+    failed = 0
+    
+    for offer_id in todo:
+        try:
+            d = _get(f"offer/{offer_id}/")
+            data = d.get("data") if isinstance(d.get("data"), dict) else d
+            items_list = (data.get("items") or data.get("offerItems") or data.get("quotationItems") or [])
+            items = []
+            for it in items_list:
+                prod = it.get("product") if isinstance(it.get("product"), dict) else None
+                items.append({
+                    "raynet_id": it.get("id"),
+                    "quotation_raynet_id": offer_id,
+                    "product_id": _gid(it.get("product")),
+                    "product_code": (prod or {}).get("code"),
+                    "product_name": it.get("name") or (prod or {}).get("name"),
+                    "qty": it.get("count") or it.get("qty") or it.get("quantity") or it.get("amount"),
+                    "unit": it.get("unit"),
+                    "unit_price": it.get("price") or it.get("unitPrice"),
+                    "total_price": it.get("totalPrice") or it.get("priceTotal"),
+                    "vat_rate": it.get("vatRate"),
+                    "discount_pct": it.get("discountPercent"),
+                    "position": it.get("rowNumber") or it.get("position"),
+                    "raw_json": it,
+                })
+            if items:
+                _sb_upsert(sb, "raynet_raw_quotation_items", items)
+                total_items += len(items)
+            processed += 1
+            time.sleep(0.15)  # gentle rate limit
+        except Exception as e:
+            log.warning(f"offer {offer_id} failed: {e}")
+            failed += 1
+            continue
+    return {"processed_offers": processed, "items_saved": total_items, "failed": failed, "remaining_todo": max(0, len(todo) - processed)}
