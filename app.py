@@ -5764,3 +5764,28 @@ def webhook_b2b_calc_save():
     except Exception as e:
         log.exception("[b2b-calc-save] failed")
         return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
+# ============================================================
+# B2B PDF generator
+# ============================================================
+import b2b_pdf as _b2b_pdf
+
+@app.route("/webhook/b2b-generate-pdf", methods=["POST"])
+def webhook_b2b_generate_pdf():
+    """Vygeneruje PDF pre b2b_quote. Body: {quote_id, mode: 'klient'|'internal'|'both'}."""
+    body = request.get_json(silent=True) or {}
+    quote_id = body.get("quote_id")
+    mode = body.get("mode", "klient")
+    if not quote_id:
+        return jsonify({"ok": False, "error": "quote_id required"}), 400
+    try:
+        results = {}
+        if mode in ("klient", "both"):
+            results["klient"] = _b2b_pdf.generate_quote_pdf(_sb(), quote_id, "klient")
+        if mode in ("internal", "both"):
+            results["internal"] = _b2b_pdf.generate_quote_pdf(_sb(), quote_id, "internal")
+        return jsonify({"ok": True, **results})
+    except Exception as e:
+        log.exception("[b2b-generate-pdf] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500

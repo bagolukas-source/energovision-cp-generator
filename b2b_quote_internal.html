@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="sk"><head><meta charset="UTF-8"><title>Interný rozpočet {{ quote.code }}</title>
+<style>
+@page { size: A4; margin: 15mm; }
+body { font-family: 'Helvetica', sans-serif; font-size: 9pt; }
+.hero { background: #fbbf24; padding: 16px; border-radius: 6px; margin-bottom: 16px; }
+.hero h1 { margin: 0; font-size: 18pt; }
+.hero .warn { color: #92400e; font-weight: 700; font-size: 9pt; margin-top: 6px; }
+.grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 12px 0; }
+.kpi { background: #f3f4f6; padding: 10px; border-radius: 4px; }
+.kpi .l { font-size: 8pt; color: #6b7280; }
+.kpi .v { font-size: 14pt; font-weight: 700; }
+table { width: 100%; border-collapse: collapse; font-size: 8pt; margin: 12px 0; }
+th { background: #1f2937; color: white; padding: 8px 6px; text-align: left; }
+th.right { text-align: right; }
+td { padding: 6px; border-bottom: 1px solid #e5e7eb; }
+td.right { text-align: right; font-variant-numeric: tabular-nums; }
+tr.cat td { background: #f9fafb; font-weight: 700; color: #047857; font-size: 8pt; text-transform: uppercase; }
+tfoot td { font-weight: 700; padding: 10px 6px; background: #d1fae5; }
+.margin-good { color: #047857; }
+.margin-bad { color: #b91c1c; }
+</style></head><body>
+
+<div class="hero">
+  <h1>🔒 INTERNÝ ROZPOČET — {{ quote.code }}</h1>
+  <div class="warn">⚠️ NEZDIEĽAŤ S KLIENTOM — obsahuje nákupné ceny + maržu</div>
+</div>
+
+<div class="grid-4">
+  <div class="kpi"><div class="l">kWp</div><div class="v">{{ quote.kwp }}</div></div>
+  <div class="kpi"><div class="l">Nákupka</div><div class="v">{{ "{:,.0f}".format(quote.total_cost).replace(",", " ") }} €</div></div>
+  <div class="kpi"><div class="l">Predaj</div><div class="v">{{ "{:,.0f}".format(quote.total_excl_vat).replace(",", " ") }} €</div></div>
+  <div class="kpi"><div class="l">Zisk</div><div class="v margin-good">{{ "{:,.0f}".format(quote.total_margin_eur).replace(",", " ") }} € ({{ quote.margin_pct }}%)</div></div>
+</div>
+
+<table>
+  <thead><tr><th>#</th><th>Kategória</th><th>Položka</th><th class="right">Mnž</th><th>Jed</th><th class="right">Nákupka</th><th class="right">Predaj</th><th class="right">Marža €</th><th class="right">Marža %</th><th class="right">Spolu pr.</th></tr></thead>
+  <tbody>
+    {% for item in items %}
+      <tr>
+        <td>{{ loop.index }}</td>
+        <td><span style="background:#e5e7eb;padding:1px 4px;border-radius:3px;font-size:7pt">{{ item.category }}</span></td>
+        <td>{{ item.product_name }}</td>
+        <td class="right">{{ "{:,.2f}".format(item.qty).replace(",", " ").replace(".00", "") }}</td>
+        <td>{{ item.unit }}</td>
+        <td class="right">{{ "{:,.2f}".format(item.cost_per_unit or 0).replace(",", " ") }} €</td>
+        <td class="right">{{ "{:,.2f}".format(item.price_per_unit).replace(",", " ") }} €</td>
+        <td class="right margin-good">{{ "{:,.2f}".format((item.price_per_unit - (item.cost_per_unit or 0)) * item.qty).replace(",", " ") }} €</td>
+        <td class="right margin-good">{% if item.cost_per_unit and item.cost_per_unit > 0 %}{{ "%.1f"|format((item.price_per_unit / item.cost_per_unit - 1) * 100) }}%{% else %}—{% endif %}</td>
+        <td class="right">{{ "{:,.2f}".format(item.total_price).replace(",", " ") }} €</td>
+      </tr>
+    {% endfor %}
+  </tbody>
+  <tfoot>
+    <tr>
+      <td colspan="5" class="right">CELKOM:</td>
+      <td class="right">{{ "{:,.2f}".format(quote.total_cost).replace(",", " ") }} €</td>
+      <td colspan="2"></td>
+      <td class="right margin-good">{{ "{:,.2f}".format(quote.total_margin_eur).replace(",", " ") }} € ({{ quote.margin_pct }}%)</td>
+      <td class="right">{{ "{:,.2f}".format(quote.total_excl_vat).replace(",", " ") }} €</td>
+    </tr>
+  </tfoot>
+</table>
+
+<div style="margin-top:20px;font-size:8pt;color:#6b7280">
+  Vygenerované {{ datum }} • Energovision interný rozpočet • Zdroj: b2b_quotes/{{ quote.id }}
+</div>
+
+</body></html>

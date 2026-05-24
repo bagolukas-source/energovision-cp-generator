@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+<meta charset="UTF-8">
+<title>Cenová ponuka {{ quote.code }}</title>
+<style>
+  @page { size: A4; margin: 20mm 15mm 25mm 15mm; @top-center { content: element(header); } @bottom-center { content: element(footer); } }
+  body { font-family: 'Helvetica', sans-serif; font-size: 10pt; color: #1f2937; }
+  .header-block { position: running(header); }
+  .footer-block { position: running(footer); }
+  .hero { background: linear-gradient(135deg, #047857 0%, #064e3b 100%); color: white; padding: 28px 24px; border-radius: 8px; margin-bottom: 20px; }
+  .hero h1 { font-size: 24pt; margin: 0 0 6px; font-weight: 700; }
+  .hero .sub { font-size: 11pt; opacity: 0.9; }
+  .hero .code { font-family: monospace; font-size: 11pt; opacity: 0.85; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0; }
+  .card { background: #f9fafb; padding: 14px; border-radius: 6px; border-left: 4px solid #047857; }
+  .card .label { font-size: 8pt; color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em; }
+  .card .val { font-size: 14pt; font-weight: 700; color: #064e3b; margin-top: 4px; }
+  table.bom { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 9pt; }
+  table.bom thead { background: #064e3b; color: white; }
+  table.bom th { padding: 10px 8px; text-align: left; font-weight: 600; font-size: 8pt; text-transform: uppercase; letter-spacing: 0.03em; }
+  table.bom th.right { text-align: right; }
+  table.bom td { padding: 8px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
+  table.bom td.right { text-align: right; font-variant-numeric: tabular-nums; }
+  table.bom tr.cat-divider td { background: #f3f4f6; font-weight: 700; color: #047857; padding: 6px 8px; text-transform: uppercase; font-size: 8pt; }
+  table.bom tfoot tr { background: #d1fae5; font-weight: 700; }
+  table.bom tfoot td { padding: 12px 8px; font-size: 11pt; color: #064e3b; }
+  .section-title { font-size: 13pt; font-weight: 700; color: #064e3b; margin: 24px 0 8px; border-bottom: 2px solid #047857; padding-bottom: 4px; }
+  .terms { background: #fffbeb; padding: 12px; border-left: 4px solid #f59e0b; font-size: 9pt; margin: 16px 0; }
+  .terms strong { color: #b45309; }
+  .footer { margin-top: 30px; padding-top: 16px; border-top: 1px solid #e5e7eb; font-size: 8pt; color: #6b7280; }
+  .signature-box { margin-top: 40px; display: grid; grid-template-columns: 1fr 1fr; gap: 30px; }
+  .signature-box .sig { border-top: 1px solid #1f2937; padding-top: 6px; font-size: 9pt; text-align: center; }
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <div class="code">{{ quote.code }}</div>
+  <h1>Cenová ponuka — Fotovoltická elektráreň</h1>
+  <div class="sub">{{ customer.name or "Vážený zákazník" }} • {{ quote.kwp }} kWp • {{ strecha_label }}</div>
+</div>
+
+<div class="grid-2">
+  <div class="card">
+    <div class="label">Zákazník</div>
+    <div class="val" style="font-size:11pt">{{ customer.name or "—" }}</div>
+    {% if customer.ico %}<div style="font-size:9pt;color:#6b7280">IČO: {{ customer.ico }}</div>{% endif %}
+    {% if customer.email %}<div style="font-size:9pt;color:#6b7280">{{ customer.email }}</div>{% endif %}
+  </div>
+  <div class="card" style="border-color:#0ea5e9">
+    <div class="label">Inštalácia</div>
+    <div class="val">{{ quote.kwp }} kWp</div>
+    <div style="font-size:9pt;color:#6b7280">{{ quote.pocet_panelov }} panelov × {{ quote.panel_wp }} Wp • {{ strecha_label }}</div>
+  </div>
+</div>
+
+<div class="section-title">Špecifikácia inštalácie</div>
+<table class="bom">
+  <thead>
+    <tr>
+      <th style="width:36px">#</th>
+      <th>Položka</th>
+      <th class="right" style="width:90px">Množstvo</th>
+      <th class="right" style="width:90px">Cena/jed.</th>
+      <th class="right" style="width:110px">Spolu</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% set current_cat = '' %}
+    {% for item in items %}
+      {% if item.category != current_cat %}
+        <tr class="cat-divider"><td colspan="5">{{ item.category }}</td></tr>
+        {% set current_cat = item.category %}
+      {% endif %}
+      <tr>
+        <td>{{ loop.index }}</td>
+        <td><strong>{{ item.product_name }}</strong></td>
+        <td class="right">{{ "{:,.2f}".format(item.qty).replace(",", " ").replace(".00", "") }} {{ item.unit }}</td>
+        <td class="right">{{ "{:,.2f}".format(item.price_per_unit).replace(",", " ") }} €</td>
+        <td class="right"><strong>{{ "{:,.2f}".format(item.total_price).replace(",", " ") }} €</strong></td>
+      </tr>
+    {% endfor %}
+  </tbody>
+  <tfoot>
+    <tr>
+      <td colspan="4" class="right">CELKOM bez DPH:</td>
+      <td class="right">{{ "{:,.2f}".format(quote.total_excl_vat).replace(",", " ") }} €</td>
+    </tr>
+    <tr>
+      <td colspan="4" class="right" style="font-size:9pt;color:#374151">DPH 23%:</td>
+      <td class="right" style="font-size:10pt;color:#374151">{{ "{:,.2f}".format(quote.total_excl_vat * 0.23).replace(",", " ") }} €</td>
+    </tr>
+    <tr style="background:#064e3b;color:white">
+      <td colspan="4" class="right" style="color:white">CELKOM s DPH:</td>
+      <td class="right" style="color:white;font-size:13pt">{{ "{:,.2f}".format(quote.total_excl_vat * 1.23).replace(",", " ") }} €</td>
+    </tr>
+  </tfoot>
+</table>
+
+<div class="terms">
+  <strong>Platobné podmienky:</strong> {{ quote.payment_terms }}<br>
+  <strong>Platnosť ponuky:</strong> do {{ quote.valid_until }}
+</div>
+
+<div class="section-title">Záruka a podmienky</div>
+<ul style="font-size:9pt;line-height:1.6">
+  <li>Záruka na FV panely: <strong>25 rokov</strong> výkonu (výrobcom)</li>
+  <li>Záruka na meniče: <strong>10 rokov</strong> (Sungrow/Huawei štandard)</li>
+  <li>Záruka na konštrukciu: <strong>15 rokov</strong></li>
+  <li>Záruka na inštaláciu (montáž): <strong>5 rokov</strong></li>
+  <li>Termín realizácie: <strong>30-60 dní</strong> od podpisu zmluvy (závisí od dostupnosti komponentov)</li>
+  <li>Cena nezahŕňa: stavebné povolenie, prípadné statické posúdenie strechy, špeciálne úpravy mimo štandardu</li>
+</ul>
+
+<div class="signature-box">
+  <div class="sig">Za Energovision s.r.o.</div>
+  <div class="sig">Za objednávateľa</div>
+</div>
+
+<div class="footer">
+  Energovision s.r.o. • Energetické riešenia • <a href="https://energovision.sk">energovision.sk</a> • IČO 51 234 567 • DIČ SK2120567890<br>
+  Vystavil: Lukáš Bago • bago.lukas@energovision.sk • +421 905 123 456 • {{ datum }}
+</div>
+
+</body>
+</html>
