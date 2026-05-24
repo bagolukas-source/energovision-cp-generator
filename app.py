@@ -5256,3 +5256,30 @@ def transcribe_audio():
         "audio_url": audio_url,
     }), 501
 
+@app.route("/webhook/import-notion-content", methods=["POST"])
+@require_secret
+def import_notion_content():
+    """Import full Notion page content (blocks + comments) → projects.notion_mirror_md.
+    
+    Body:
+      { "all": true, "limit": 5 }     # bulk for first 5 projects
+      { "all": true }                  # bulk for ALL projects
+      { "notion_page_id": "X", "supabase_project_id": "Y" }   # single
+    """
+    body = request.get_json(silent=True) or {}
+    try:
+        if body.get("all"):
+            limit = int(body.get("limit", 0)) or None
+            result = _mnb.import_all_content(limit=limit)
+            return jsonify(result)
+        else:
+            np = body.get("notion_page_id")
+            sp = body.get("supabase_project_id")
+            if not np or not sp:
+                return jsonify({"ok": False, "error": "missing notion_page_id or supabase_project_id"}), 400
+            result = _mnb.import_one_content(np, sp)
+            return jsonify(result)
+    except Exception as e:
+        log.exception("[import-notion-content] zlyhalo")
+        return jsonify({"ok": False, "error": str(e)}), 500
+

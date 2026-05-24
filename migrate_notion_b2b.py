@@ -306,3 +306,202 @@ def migrate_one(notion_page_id: str, supabase_project_id: str, ds: Optional[str]
         "total_bytes": total_bytes,
         "files": results,
     }
+
+
+# ============================================================
+# CONTENT IMPORT — fetch Notion page blocks → markdown
+# ============================================================
+
+def _block_to_md(block: Dict[str, Any], depth: int = 0) -> str:
+    """Convert Notion block to markdown. Recursively for children blocks."""
+    btype = block.get("type", "")
+    data = block.get(btype, {})
+    indent = "  " * depth
+    rich = data.get("rich_text", [])
+    text = "".join(rt.get("plain_text", "") for rt in rich)
+
+    md = ""
+    if btype == "paragraph":
+        md = f"{indent}{text}\n"
+    elif btype == "heading_1":
+        md = f"# {text}\n"
+    elif btype == "heading_2":
+        md = f"## {text}\n"
+    elif btype == "heading_3":
+        md = f"### {text}\n"
+    elif btype == "bulleted_list_item":
+        md = f"{indent}- {text}\n"
+    elif btype == "numbered_list_item":
+        md = f"{indent}1. {text}\n"
+    elif btype == "to_do":
+        checked = "[x]" if data.get("checked") else "[ ]"
+        md = f"{indent}- {checked} {text}\n"
+    elif btype == "toggle":
+        md = f"{indent}<details><summary>{text}</summary>\n"
+    elif btype == "quote":
+        md = f"{indent}> {text}\n"
+    elif btype == "callout":
+        icon = (data.get("icon", {}) or {}).get("emoji", "💡")
+        md = f"{indent}{icon} {text}\n"
+    elif btype == "code":
+        lang = data.get("language", "")
+        md = f"```{lang}\n{text}\n```\n"
+    elif btype == "divider":
+        md = "---\n"
+    elif btype == "child_page":
+        md = f"{indent}📄 {data.get('title', 'Sub-page')}\n"
+    elif btype == "table":
+        md = ""  # tables sa fetchnu separátne
+    elif btype == "image":
+        url = data.get("file", {}).get("url") or data.get("external", {}).get("url", "")
+        md = f"![]({url})\n" if url else ""
+    elif btype == "file":
+        url = data.get("file", {}).get("url") or data.get("external", {}).get("url", "")
+        name = data.get("name", "súbor")
+        md = f"📎 [{name}]({url})\n" if url else ""
+    elif btype == "bookmark":
+        url = data.get("url", "")
+        md = f"🔗 {url}\n"
+    else:
+        md = f"{indent}_({btype}: {text[:80]})_\n" if text else ""
+    return md
+
+
+def fetch_page_blocks(page_id: str, depth: int = 0, max_depth: int = 3) -> str:
+    """Recursively fetch Notion page blocks → markdown. Max depth=3 to avoid runaway."""
+    if depth > max_depth:
+        return ""
+    md_parts: List[str] = []
+    cursor: Optional[str] = None
+    while True:
+        url = f"{NOTION_API}/blocks/{page_id}/children?page_size=100"
+        if cursor:
+            url += f"&start_cursor={cursor}"
+        try:
+            r = requests.get(url, headers=NOTION_HEADERS, timeout=30)
+            if r.status_code != 200:
+                log.warning(f"fetch_page_blocks {page_id}: {r.status_code}")
+                break
+            j = r.json()
+        except Exception as e:
+            log.warning(f"fetch_page_blocks exception: {e}")
+            break
+
+        for block in j.get("results", []):
+            md_parts.append(_block_to_md(block, depth=depth))
+            if block.get("has_children") and block.get("type") not in ("child_page", "child_database"):
+                child_md = fetch_page_blocks(block["id"], depth=depth + 1, max_depth=max_depth)
+                if child_md:
+                    md_parts.append(child_md)
+
+        if not j.get("has_more"):
+            break
+        cursor = j.get("next_cursor")
+
+    return "".join(md_parts)
+
+
+def fetch_page_comments(page_id: str) -> str:
+    """Fetch comments on a Notion page."""
+    md = []
+    cursor: Optional[str] = None
+    while True:
+        url = f"{NOTION_API}/comments?block_id={page_id}&page_size=100"
+        if cursor:
+            url += f"&start_cursor={cursor}"
+        try:
+            r = requests.get(url, headers=NOTION_HEADERS, timeout=30)
+            if r.status_code != 200:
+                break
+            j = r.json()
+        except Exception:
+            break
+        for c in j.get("results", []):
+            rich = c.get("rich_text", [])
+            text = "".join(rt.get("plain_text", "") for rt in rich)
+            author = c.get("created_by", {}).get("id", "?")
+            ts = c.get("created_time", "")
+            md.append(f"**💬 {author} ({ts[:10]}):** {text}")
+        if not j.get("has_more"):
+            break
+        cursor = j.get("next_cursor")
+    return "\n\n".join(md)
+
+
+def import_one_content(notion_page_id: str, supabase_project_id: str) -> Dict[str, Any]:
+    """Fetch + save Notion page content (blocks + comments) to projects.notion_mirror_md."""
+    page = notion_get_page(notion_page_id)
+    if not page:
+        return {"ok": False, "error": "Page not found"}
+
+    title = "(bez názvu)"
+    props = page.get("properties", {})
+    for k, v in props.items():
+        if v.get("type") == "title":
+            title = "".join(rt.get("plain_text", "") for rt in v.get("title", [])) or title
+            break
+
+    blocks_md = fetch_page_blocks(notion_page_id)
+    comments_md = fetch_page_comments(notion_page_id)
+    last_edited = page.get("last_edited_time", "")
+    notion_url = page.get("url", "")
+
+    full_md = f"""# {title}
+
+> 🔗 Notion: {notion_url}
+> Posledná editácia: {last_edited}
+
+## Obsah stránky
+
+{blocks_md or "_(prázdna stránka)_"}
+
+## Komentáre
+
+{comments_md or "_(žiadne komentáre)_"}
+"""
+
+    # Save do Supabase
+    url = f"{SUPABASE_URL}/rest/v1/projects?id=eq.{supabase_project_id}"
+    headers = _sb_headers()
+    headers["Prefer"] = "return=minimal"
+    payload = {
+        "notion_page_id": notion_page_id,
+        "notion_mirror_md": full_md,
+        "notion_imported_at": datetime.utcnow().isoformat() + "Z",
+    }
+    r = requests.patch(url, headers=headers, json=payload, timeout=30)
+    if r.status_code not in (200, 204):
+        return {"ok": False, "error": f"Supabase update failed: {r.status_code} {r.text[:200]}"}
+
+    return {
+        "ok": True,
+        "title": title,
+        "md_chars": len(full_md),
+        "has_blocks": bool(blocks_md),
+        "has_comments": bool(comments_md),
+    }
+
+
+def import_all_content(limit: Optional[int] = None) -> Dict[str, Any]:
+    """Bulk import — pre všetky projekty s napárovaným notion_page_id (alebo cez fresh mapping)."""
+    mapping = build_mapping()
+    matched = mapping.get("matched", []) or []
+    if limit:
+        matched = matched[:limit]
+
+    results = []
+    for i, m in enumerate(matched):
+        np = m.get("notion_page_id")
+        sp = m.get("supabase_project_id")
+        if not np or not sp:
+            continue
+        out = import_one_content(np, sp)
+        results.append({"i": i + 1, "code": m.get("project_code"), **out})
+
+    return {
+        "ok": True,
+        "total": len(matched),
+        "imported": sum(1 for r in results if r.get("ok")),
+        "results": results,
+    }
+
