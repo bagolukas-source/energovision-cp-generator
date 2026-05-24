@@ -5283,3 +5283,84 @@ def import_notion_content():
         log.exception("[import-notion-content] zlyhalo")
         return jsonify({"ok": False, "error": str(e)}), 500
 
+
+
+# ============================================================
+# HUAWEI / SPOT 3-state — Pilier 4
+# ============================================================
+try:
+    import huawei_spot as _hs
+except Exception as _e:
+    log.warning("huawei_spot module not loaded: %s", _e)
+    _hs = None
+
+
+def _hs_auth_ok(req) -> bool:
+    secret = req.headers.get("X-Webhook-Secret") or req.args.get("secret")
+    expected = os.environ.get("WEBHOOK_SECRET")
+    return bool(expected) and secret == expected
+
+
+@app.route("/webhook/okte-ingest", methods=["POST", "GET"])
+def webhook_okte_ingest():
+    if not _hs_auth_ok(request):
+        return jsonify({"error": "unauthorized"}), 401
+    if _hs is None:
+        return jsonify({"ok": False, "error": "huawei_spot module not available"}), 500
+    body = request.get_json(silent=True) or {}
+    backfill = int(body.get("backfill_days", 0) or request.args.get("backfill_days", 0))
+    target_day_str = body.get("day") or request.args.get("day")
+    target_day = None
+    if target_day_str:
+        from datetime import date as _date
+        try:
+            target_day = _date.fromisoformat(target_day_str)
+        except Exception:
+            return jsonify({"ok": False, "error": "invalid day format YYYY-MM-DD"}), 400
+    try:
+        result = _hs.okte_ingest(target_day=target_day, backfill_days=backfill)
+        return jsonify(result)
+    except Exception as e:
+        log.exception("[okte-ingest] failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/webhook/spot-reactor", methods=["POST", "GET"])
+def webhook_spot_reactor():
+    if not _hs_auth_ok(request):
+        return jsonify({"error": "unauthorized"}), 401
+    if _hs is None:
+        return jsonify({"ok": False, "error": "huawei_spot module not available"}), 500
+    body = request.get_json(silent=True) or {}
+    dry_override = body.get("dry_run_override")
+    if dry_override is None and "dry_run" in request.args:
+        dry_override = request.args.get("dry_run") in ("1", "true", "yes")
+    try:
+        result = _hs.spot_reactor(dry_run_override=dry_override)
+        return jsonify(result)
+    except Exception as e:
+        log.exception("[spot-reactor] failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/webhook/spot-pause", methods=["POST"])
+def webhook_spot_pause():
+    if not _hs_auth_ok(request):
+        return jsonify({"error": "unauthorized"}), 401
+    if _hs is None:
+        return jsonify({"ok": False, "error": "huawei_spot module not available"}), 500
+    body = request.get_json(silent=True) or {}
+    reason = body.get("reason", "API call")
+    return jsonify(_hs.global_pause(reason=reason))
+
+
+@app.route("/webhook/huawei-test", methods=["GET"])
+def webhook_huawei_test():
+    """Smoke test: login + check token."""
+    if not _hs_auth_ok(request):
+        return jsonify({"error": "unauthorized"}), 401
+    if _hs is None:
+        return jsonify({"ok": False, "error": "huawei_spot module not available"}), 500
+    token = _hs.huawei_login(force=True)
+    return jsonify({"ok": bool(token), "token_present": bool(token), "token_preview": (token[:16] + "...") if token else None})
+
