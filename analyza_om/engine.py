@@ -66,6 +66,31 @@ def sb_insert(table: str, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return []
 
 
+
+
+def _job_create(analyza_id: str, kind: str) -> Optional[str]:
+    """Insert new job row, return job_id."""
+    rows = sb_insert("analyza_om_jobs", [{
+        "analyza_id": analyza_id,
+        "kind": kind,
+        "status": "running",
+        "progress_pct": 0,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    }])
+    return rows[0]["id"] if rows else None
+
+
+def _job_update(job_id: str, **patch) -> None:
+    if not job_id:
+        return
+    if patch.get("status") in ("done", "error"):
+        patch["finished_at"] = datetime.now(timezone.utc).isoformat()
+    sb_patch("analyza_om_jobs", job_id, patch)
+
+
+def _bump_analyza_status(analyza_id: str, status: str) -> None:
+    sb_patch("analyza_om", analyza_id, {"status": status, "updated_at": datetime.now(timezone.utc).isoformat()})
+
 # ---------------- Consumption parsing ----------------
 def parse_consumption(analyza_id: str, file_paths: List[str], options: Optional[Dict] = None) -> Dict[str, Any]:
     """
@@ -287,20 +312,25 @@ def run_full_pipeline(analyza_id: str) -> Dict[str, Any]:
     if not variants:
         return {"status": "error", "error": "no variants"}
 
-    sb_patch("analyza_om", analyza_id, {"status": "running"})
+    _bump_analyza_status(analyza_id, "running")
 
     # 3. Parse consumption if not done
     profile_path = analyza.get("consumption_profile_path")
     if not profile_path:
+        parse_job = _job_create(analyza_id, "parse_consumption")
         raw_files = analyza.get("consumption_raw_files") or []
         file_paths = [f.get("storage_path") for f in raw_files if f.get("storage_path")]
         if not file_paths:
-            sb_patch("analyza_om", analyza_id, {"status": "error"})
+            _job_update(parse_job, status="error", error_message="no consumption files")
+            _bump_analyza_status(analyza_id, "error")
             return {"status": "error", "error": "no consumption files"}
+        _job_update(parse_job, progress_pct=30)
         parse_result = parse_consumption(analyza_id, file_paths)
         if parse_result.get("status") != "ok":
-            sb_patch("analyza_om", analyza_id, {"status": "error"})
+            _job_update(parse_job, status="error", error_message=str(parse_result.get("error","")))
+            _bump_analyza_status(analyza_id, "error")
             return parse_result
+        _job_update(parse_job, progress_pct=100, status="done")
         profile_path = parse_result["outputs"]["profile_hourly_path"]
         sb_patch("analyza_om", analyza_id, {
             "consumption_profile_path": profile_path,
@@ -327,15 +357,21 @@ def run_full_pipeline(analyza_id: str) -> Dict[str, Any]:
     } for v in variants]
 
     # 5. Run simulation
+    sim_job = _job_create(analyza_id, "sim_run")
+    _job_update(sim_job, progress_pct=20)
     om = {"lat": analyza.get("om_lat"), "lon": analyza.get("om_lon")}
     sim_result = run_simulation(analyza_id, profile_path, om, sim_variants, analyza.get("pvgis_yield_kwh_per_kwp"))
+    _job_update(sim_job, progress_pct=100, status="done")
 
     # 6. Calc economics
+    econ_job = _job_create(analyza_id, "econ_calc")
+    _job_update(econ_job, progress_pct=50)
     tarif_buy = float(analyza.get("tarif_buy") or 0.146)
     tarif_sell = float(analyza.get("tarif_sell") or 0.06)
     variants_capex = [{"id": str(v["id"]), "capex_eur": v.get("capex_eur") or 0,
                         "dotacia_eur": min(50000, 0.45 * (v.get("capex_eur") or 0))} for v in variants]
     econ_result = calc_economics(sim_result, tarif_buy, tarif_sell, variants_capex)
+    _job_update(econ_job, progress_pct=100, status="done")
 
     # 7. Update DB
     sb_patch("analyza_om", analyza_id, {
