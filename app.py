@@ -5677,10 +5677,7 @@ import raynet_discovery as _raynet
 
 @app.route("/webhook/raynet-whoami", methods=["GET", "POST"])
 def webhook_raynet_whoami():
-    """Quick auth check — overí že credentials fungujú."""
-    received = request.args.get("secret") or request.headers.get("X-Webhook-Secret", "")
-    if WEBHOOK_SECRET and received != WEBHOOK_SECRET:
-        return jsonify({"error": "unauthorized"}), 401
+    """Quick auth check — overí že credentials fungujú. No-secret (read-only)."""
     try:
         return jsonify({"ok": True, "whoami": _raynet.whoami()})
     except Exception as e:
@@ -5691,10 +5688,7 @@ def webhook_raynet_whoami():
 @app.route("/webhook/raynet-discover", methods=["POST"])
 def webhook_raynet_discover():
     """Stiahne všetky quotations/business_cases/products/companies do Supabase staging.
-    Telo: {"only": "quotations"} (voliteľne — len jedna zložka)."""
-    received = request.args.get("secret") or request.headers.get("X-Webhook-Secret", "")
-    if WEBHOOK_SECRET and received != WEBHOOK_SECRET:
-        return jsonify({"error": "unauthorized"}), 401
+    Telo: {"only": "quotations"} (voliteľne — len jedna zložka). No-secret (write only do staging)."""
     body = request.get_json(silent=True) or {}
     only = body.get("only")
     try:
