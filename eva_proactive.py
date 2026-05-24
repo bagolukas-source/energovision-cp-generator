@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional
 
 import anthropic
 from supabase import Client
+import eva_data_lens as _lens
 
 log = logging.getLogger(__name__)
 
@@ -127,7 +128,8 @@ def post_chat_message(supabase: Client, content: str, action_type: str = "task_p
 # =========================================
 
 def hourly_autonomous_pass(supabase: Client) -> Dict[str, Any]:
-    """
+    """360° autonomous pass — Eva má prístup ku všetkým DB tabuľkám.
+    
     Eva sa pozrie na stav firmy a SAMA rozhodne čo treba urobiť TERAZ.
     
     Pozrie:
@@ -140,6 +142,14 @@ def hourly_autonomous_pass(supabase: Client) -> Dict[str, Any]:
     now = datetime.now(timezone.utc)
     today = now.date()
     actions_taken = []
+    
+    # Načítaj 360° kontext pre awareness (zalogujeme dôležité metriky)
+    try:
+        full_ctx = _lens.collect_full_context(supabase)
+        log.info(f"[Eva pass] B2B={full_ctx.get('b2b',{}).get('total')} overdue_FA={len(full_ctx.get('cashflow',{}).get('fa_overdue',[]))} alarms={len(full_ctx.get('operations',{}).get('active_alarms',[]))} low_stock={full_ctx.get('material',{}).get('low_stock_count',0)} unread_notif={full_ctx.get('notifications',{}).get('unread_count',0)}")
+    except Exception:
+        pass
+
 
     # 1) FA splatné <7 dní + UŽ OVERDUE — use b2b_invoices_overview view
     try:

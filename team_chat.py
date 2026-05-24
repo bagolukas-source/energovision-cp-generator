@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Optional
 
 import anthropic
 from supabase import Client
+import eva_data_lens as _lens
 
 log = logging.getLogger(__name__)
 
@@ -85,7 +86,7 @@ Výstup IBA validný JSON:
 Vráť IBA JSON, žiadny iný text."""
 
 
-REPLY_SYSTEM = """Si Eva — AI kolegyňa v CRM firmy Energovision.
+REPLY_SYSTEM = """Si Eva — AI kolegyňa v CRM firmy Energovision. Si plne autonómna a vidíš celú firmu.
 
 Reaguješ na správu od kolegu v tímovom chate. Máš prístup k:
 - Stav firmy (projekty, leady, tasks, faktúry)
@@ -325,25 +326,32 @@ def handle_reply(supabase: Client, user_message: str, user_id: Optional[str] = N
         for h in history
     ])
 
-    # 3) Načítaj kontext firmy (zjednodušený)
-    ctx_summary = collect_upcoming_events(supabase)
-    ctx_short = {
-        "active_projects_count": len(ctx_summary.get("active_projects", [])),
-        "overdue_invoices_count": len(ctx_summary.get("overdue_invoices", [])),
-        "upcoming_tasks_count": len(ctx_summary.get("upcoming_tasks", [])),
-        "stalled_b2c_count": len(ctx_summary.get("stalled_b2c_leads", [])),
-    }
+    # 3) FULL 360° context (vidí všetky DB tabuľky — aj to čo CRM UI nezobrazuje)
+    try:
+        full_ctx = _lens.collect_full_context(supabase)
+        company_state = _lens.format_for_system_prompt(full_ctx)
+    except Exception as e:
+        log.warning(f"data_lens failed: {e}")
+        company_state = "(stav firmy nedostupný)"
+
+    # 3b) Memory recall (self-skilling)
+    try:
+        import eva_memory as _em
+        memory_context = _em.build_context_for_reply(supabase, user_message, user_name)
+    except Exception:
+        memory_context = ""
 
     prompt = f"""História chatu:
 {history_text}
 
-Kontext firmy:
-{json.dumps(ctx_short, ensure_ascii=False)}
+{company_state}
+
+{memory_context}
 
 Posledná správa od {user_name or 'kolegu'}:
 "{user_message}"
 
-Odpovedz."""
+Odpovedz vecne, s konkrétnymi číslami z aktuálneho stavu firmy."""
 
     resp = _ai().messages.create(
         model=MODEL, max_tokens=1200,
