@@ -5605,7 +5605,8 @@ def webhook_team_chat_reply():
         return jsonify({"status": "error", "error": "Prázdna správa"}), 400
     try:
         result = _team_chat.handle_reply(
-            _sb(), msg, body.get("user_id"), body.get("user_name")
+            _sb(), msg, body.get("user_id"), body.get("user_name"),
+            skip_insert_user=bool(body.get("skip_insert_user", False))
         )
         return jsonify({"status": "ok", **result})
     except Exception as e:
