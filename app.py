@@ -5543,3 +5543,22 @@ def webhook_doc_package():
     except Exception as e:
         log.exception("[doc-package] failed")
         return jsonify({"status": "error", "error": str(e)}), 500
+
+
+# ===================================================================
+# AI Strategic Manager — manažérsky brief na dashboard
+# ===================================================================
+import strategic_agent as _strategic
+
+
+@app.route("/webhook/ai-strategic-brief", methods=["POST", "GET"])
+def webhook_strategic_brief():
+    """Vygeneruje strategický brief a uloží do ai_strategic_briefs."""
+    body = request.get_json(silent=True) or {}
+    scope = body.get("scope") or request.args.get("scope") or "daily"
+    try:
+        brief = _strategic.generate_strategic_brief(supabase, scope=scope, save=True)
+        return jsonify({"status": "ok", "brief": brief})
+    except Exception as e:
+        log.exception("[strategic-brief] failed")
+        return jsonify({"status": "error", "error": str(e)}), 500
