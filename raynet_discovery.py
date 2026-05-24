@@ -26,12 +26,22 @@ log = logging.getLogger(__name__)
 RAYNET_BASE = "https://app.raynet.cz/api/v2"
 
 
+_RUNTIME_CREDS = {}  # set per-request via set_creds(user, key, inst)
+
+
+def set_creds(user: str, key: str, inst: str = "energovision"):
+    """Override env vars for single request (used by webhook body)."""
+    _RUNTIME_CREDS["user"] = user
+    _RUNTIME_CREDS["key"] = key
+    _RUNTIME_CREDS["inst"] = inst or "energovision"
+
+
 def _creds():
-    user = os.environ.get("RAYNET_USERNAME", "")
-    key = os.environ.get("RAYNET_API_KEY", "")
-    inst = os.environ.get("RAYNET_INSTANCE", "energovision")
+    user = _RUNTIME_CREDS.get("user") or os.environ.get("RAYNET_USERNAME", "")
+    key = _RUNTIME_CREDS.get("key") or os.environ.get("RAYNET_API_KEY", "")
+    inst = _RUNTIME_CREDS.get("inst") or os.environ.get("RAYNET_INSTANCE", "energovision")
     if not user or not key:
-        raise RuntimeError("Missing RAYNET_USERNAME / RAYNET_API_KEY env vars")
+        raise RuntimeError("Missing RAYNET_USERNAME / RAYNET_API_KEY (env or body)")
     return user, key, inst
 
 

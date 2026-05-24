@@ -5677,7 +5677,11 @@ import raynet_discovery as _raynet
 
 @app.route("/webhook/raynet-whoami", methods=["GET", "POST"])
 def webhook_raynet_whoami():
-    """Quick auth check — overí že credentials fungujú. No-secret (read-only)."""
+    """Quick auth check — overí že credentials fungujú. No-secret (read-only).
+    Body môže obsahovať: {raynet_user, raynet_key, raynet_instance}."""
+    body = request.get_json(silent=True) or {}
+    if body.get("raynet_user") and body.get("raynet_key"):
+        _raynet.set_creds(body["raynet_user"], body["raynet_key"], body.get("raynet_instance", "energovision"))
     try:
         return jsonify({"ok": True, "whoami": _raynet.whoami()})
     except Exception as e:
@@ -5688,8 +5692,10 @@ def webhook_raynet_whoami():
 @app.route("/webhook/raynet-discover", methods=["POST"])
 def webhook_raynet_discover():
     """Stiahne všetky quotations/business_cases/products/companies do Supabase staging.
-    Telo: {"only": "quotations"} (voliteľne — len jedna zložka). No-secret (write only do staging)."""
+    Telo: {only?, raynet_user?, raynet_key?, raynet_instance?}. No-secret (write only do staging)."""
     body = request.get_json(silent=True) or {}
+    if body.get("raynet_user") and body.get("raynet_key"):
+        _raynet.set_creds(body["raynet_user"], body["raynet_key"], body.get("raynet_instance", "energovision"))
     only = body.get("only")
     try:
         sb = _sb()
