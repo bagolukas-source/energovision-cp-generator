@@ -297,17 +297,17 @@ def _pre_generate(supabase: Client, action: str, params: Dict[str, Any]) -> Opti
 
 
 def handle_reply(supabase: Client, user_message: str, user_id: Optional[str] = None,
-                 user_name: Optional[str] = None) -> Dict[str, Any]:
+                 user_name: Optional[str] = None, skip_insert_user: bool = False) -> Dict[str, Any]:
     """Reaguje na user správu v chate."""
 
-    # 1) Vlož user správu
-    user_row = {
-        "role": "user",
-        "user_id": user_id,
-        "user_name": user_name or "Užívateľ",
-        "content": user_message,
-    }
-    supabase.table("team_chat_messages").insert(user_row).execute()
+    if not skip_insert_user:
+        user_row = {
+            "role": "user",
+            "user_id": user_id,
+            "user_name": user_name or "Užívateľ",
+            "content": user_message,
+        }
+        supabase.table("team_chat_messages").insert(user_row).execute()
 
     # 2) Načítaj posledných 20 správ pre kontext
     history = supabase.table("team_chat_messages") \
