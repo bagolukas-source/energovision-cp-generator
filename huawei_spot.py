@@ -280,8 +280,28 @@ def slack_notify(text: str) -> None:
         pass
 
 
+def estimate_savings_eur(site: Dict[str, Any], to_state: str, spot_eur_mwh: float) -> float:
+    """
+    Odhad € ušetrených touto transition. Placeholder do času keď bude k dispozícii realtime production.
+    Vzorec: ratio_blocked × 0.25h × ac_kw × predpoklad_30pct_solar × |spot|/1000
+    Aplikujeme len ak SPOT < 0.
+    """
+    if spot_eur_mwh >= 0:
+        return 0.0
+    ac_kw = float(site.get("ac_kw") or 0)
+    if ac_kw <= 0:
+        return 0.0
+    # ZE only blokuje len export; FULL_SHUTDOWN blokuje aj self-consumption
+    # Predpokladáme že záporné ceny sú zvyčajne v slnečnom čase (12-16h) — produkcia ~30% nominálu
+    ratio_blocked = 1.0 if to_state == "FULL_SHUTDOWN" else 0.7
+    period_kwh = 0.25 * ac_kw * 0.30 * ratio_blocked  # 15-min perióda
+    savings = (period_kwh / 1000.0) * abs(spot_eur_mwh)
+    return round(savings, 2)
+
+
 def log_state_transition(site: Dict[str, Any], from_state: str, to_state: str, spot: float,
-                          reason: str, dry_run: bool, command_id: Optional[int]) -> None:
+                          reason: str, dry_run: bool, command_id: Optional[str]) -> None:
+    savings = estimate_savings_eur(site, to_state, spot)
     payload = [{
         "site_id": site["id"],
         "from_state": from_state,
@@ -293,6 +313,7 @@ def log_state_transition(site: Dict[str, Any], from_state: str, to_state: str, s
         "reason": reason,
         "dry_run": dry_run,
         "command_id": command_id,
+        "customer_savings_eur": savings,
     }]
     sb_post("spot_state_transitions", payload)
 
