@@ -5012,6 +5012,230 @@ def generate_b2b_faktura():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+# ============================================================
+# B2B NOTION → SUPABASE MIGRATION (N6 — autonomous from Chrome)
+# Trigger: Claude (Cowork mode) cez Chrome browser fetch
+# ============================================================
+import migrate_notion_b2b as _mnb
+
+
+@app.route("/webhook/migrate-notion-build-mapping", methods=["POST", "GET"])
+@require_secret
+def migrate_notion_build_mapping():
+    """Vyrobí mapping Supabase project -> Notion page. Vráti JSON pre orchestráciu."""
+    try:
+        result = _mnb.build_mapping()
+        return jsonify({"success": True, **result})
+    except Exception as e:
+        log.exception("[migrate-notion-build-mapping] zlyhalo")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/webhook/migrate-notion-project", methods=["POST"])
+@require_secret
+def migrate_notion_project():
+    """Migruje 1 projekt — 9 file properties z Notion -> Supabase Storage + project_documents."""
+    body = request.get_json(silent=True) or {}
+    notion_page_id = body.get("notion_page_id")
+    supabase_project_id = body.get("supabase_project_id")
+    ds = body.get("ds")
+    dry_run = bool(body.get("dry_run", False))
+    if not notion_page_id or not supabase_project_id:
+        return jsonify({"success": False, "error": "missing notion_page_id or supabase_project_id"}), 400
+    try:
+        result = _mnb.migrate_one(notion_page_id, supabase_project_id, ds, dry_run)
+        return jsonify({"success": result.get("ok", False), **result})
+    except Exception as e:
+        log.exception("[migrate-notion-project] zlyhalo")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+
+# ============================================================
+# AI DOCUMENT CLASSIFIER — analyzuje uploadnutý PDF, určí kind/folder/state
+# Trigger: CRM Server Action po file upload (drag-drop v hero/per-task)
+# ============================================================
+B2B_DOC_KINDS = {
+    "zod": ("02_Administrativa/03_Zmluva_o_dielo/02_Zmluva_s_IFT", "signed"),
+    "splnomocnenie": ("02_Administrativa/02_Dokumenty_01", "signed"),
+    "dotaznik": ("02_Administrativa/02_Dokumenty_01", "draft"),
+    "lv": ("01_Podklady/03_Podklady_od_zakaznika", "draft"),
+    "zop_signed": ("02_Administrativa/05_DIS-DS", "signed"),
+    "zopad_signed": ("02_Administrativa/05_DIS-DS", "signed"),
+    "stanovisko_zop": ("02_Administrativa/05_DIS-DS", "approved"),
+    "stanovisko_rp": ("02_Administrativa/05_DIS-DS", "approved"),
+    "opaos": ("04_Realizacia/05_Revizie", "approved"),
+    "faktura": ("02_Administrativa/04_Fakturacia", "issued"),
+    "preberaci_protokol": ("04_Realizacia/03_Protokoly", "signed"),
+    "dsv": ("03_Projekcia/02_DSV", "draft"),
+    "mpp": ("03_Projekcia/03_MPP", "draft"),
+    "pbs": ("03_Projekcia/04_PBS", "draft"),
+    "statika": ("03_Projekcia/05_Statika", "draft"),
+    "iny": ("01_Podklady", "draft"),
+}
+
+DS_FOLDER_MAP = {"SSD": "05_DIS-SSD", "VSD": "05_DIS-VSD", "ZSDIS": "05_DIS-ZSDIS"}
+
+
+@app.route("/webhook/classify-document", methods=["POST"])
+@require_secret
+def classify_document():
+    """Klasifikuje uploadnutý dokument cez Claude API.
+
+    Body: { project_id, file_url (storage path), filename, project_ds, project_code }
+    Vráti: { kind, folder, state, confidence, suggested_task_no, reasoning }
+    """
+    body = request.get_json(silent=True) or {}
+    project_id = body.get("project_id")
+    file_url = body.get("file_url")
+    filename = body.get("filename", "")
+    project_ds = body.get("project_ds", "")
+    project_code = body.get("project_code", "")
+    if not project_id or not file_url:
+        return jsonify({"error": "missing project_id or file_url"}), 400
+
+    # 1) Stiahni súbor zo Supabase Storage
+    SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://uzwajrpebblafuhrtuwn.supabase.co")
+    SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+    if not SUPABASE_KEY:
+        return jsonify({"error": "SUPABASE_SERVICE_ROLE_KEY not set"}), 500
+
+    from urllib.parse import quote
+    storage_url = f"{SUPABASE_URL}/storage/v1/object/b2b-documents/{quote(file_url, safe='/')}"
+    try:
+        r = requests.get(storage_url, headers={"Authorization": f"Bearer {SUPABASE_KEY}", "apikey": SUPABASE_KEY}, timeout=60)
+        if r.status_code != 200:
+            return jsonify({"error": f"Storage fetch {r.status_code}", "detail": r.text[:200]}), 500
+        file_bytes = r.content
+    except Exception as e:
+        return jsonify({"error": f"Storage fetch exception: {e}"}), 500
+
+    # 2) Extrahuj text z PDF (max 3 strany)
+    text_excerpt = ""
+    ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
+    if ext in ("pdf",):
+        try:
+            import fitz  # pymupdf
+            doc = fitz.open(stream=file_bytes, filetype="pdf")
+            for i in range(min(3, doc.page_count)):
+                text_excerpt += doc[i].get_text() + "\n"
+            doc.close()
+            text_excerpt = text_excerpt[:6000]
+        except Exception as e:
+            text_excerpt = f"[PDF extract failed: {e}]"
+    elif ext in ("docx", "doc"):
+        try:
+            from io import BytesIO
+            import docx
+            d = docx.Document(BytesIO(file_bytes))
+            text_excerpt = "\n".join([p.text for p in d.paragraphs])[:6000]
+        except Exception as e:
+            text_excerpt = f"[DOCX extract failed: {e}]"
+    elif ext in ("jpg", "jpeg", "png"):
+        text_excerpt = "[Obrazový súbor — klasifikuj z filename]"
+    else:
+        text_excerpt = "[Neznámy formát]"
+
+    # 3) Claude prompt
+    prompt = f"""Klasifikuj tento dokument pre Energovision B2B FVE projekt.
+
+KONTEXT PROJEKTU:
+- Project code: {project_code}
+- Distribučná spoločnosť: {project_ds}
+- Filename: {filename}
+
+OBSAH (prvé strany):
+{text_excerpt}
+
+KATEGÓRIE (vráť len jeden):
+- zod = Zmluva o dielo (Energovision_ZoD.pdf, podpisaná zmluva s klientom)
+- splnomocnenie = Splnomocnenie/Plnomocenstvo na úkony s DS
+- dotaznik = Dotazník k pripojeniu lokálneho zdroja FVE
+- lv = List vlastníctva (z katastra)
+- zop_signed = Podpísaná Zmluva o pripojení (od DS)
+- zopad_signed = Zmluva o prístupe a distribúcii (od DS)
+- stanovisko_zop = Stanovisko/Vyjadrenie ku žiadosti o pripojenie (od DS)
+- stanovisko_rp = Stanovisko/Vyjadrenie k technickej dokumentácii / k PD (od DS)
+- opaos = OPaOS revízna správa (FVZ revízia)
+- faktura = Faktúra (Energovision vystavená klientovi)
+- preberaci_protokol = Preberací protokol diela
+- dsv = DSV / dielenská PD
+- mpp = MPP (montážno-prevádzkový predpis)
+- pbs = PBS (požiarno-bezpečnostné stanovisko)
+- statika = Statický posudok
+- iny = nič z vyššie uvedeného
+
+VRÁŤ LEN JSON (žiadny iný text):
+{{
+  "kind": "stanovisko_rp",
+  "confidence": 0.95,
+  "reasoning": "Krátko prečo (1 veta)",
+  "document_number": "číslo dokumentu ak je v texte (napr. 202511-C06-0049-1 alebo 2026/0042), inak null",
+  "is_signed": true,
+  "is_approved": true
+}}
+"""
+
+    headers = {
+        "x-api-key": os.environ.get("ANTHROPIC_API_KEY", ""),
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+    payload = {
+        "model": "claude-sonnet-4-5-20250929",
+        "max_tokens": 1024,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    try:
+        rr = requests.post("https://api.anthropic.com/v1/messages", headers=headers, json=payload, timeout=60)
+        rr.raise_for_status()
+        resp = rr.json()
+        raw_text = ""
+        for block in resp.get("content", []):
+            if block.get("type") == "text":
+                raw_text += block.get("text", "")
+    except Exception as e:
+        return jsonify({"error": f"Claude API: {e}"}), 500
+
+    # 4) Parse JSON response
+    import json, re
+    m = re.search(r"\{[\s\S]*\}", raw_text)
+    if not m:
+        return jsonify({"error": "Claude did not return JSON", "raw": raw_text[:300]}), 500
+    try:
+        parsed = json.loads(m.group(0))
+    except Exception as e:
+        return jsonify({"error": f"JSON parse: {e}", "raw": raw_text[:300]}), 500
+
+    kind = parsed.get("kind", "iny")
+    if kind not in B2B_DOC_KINDS:
+        kind = "iny"
+    folder, default_state = B2B_DOC_KINDS[kind]
+
+    # DIS folder resolution
+    if folder == "02_Administrativa/05_DIS-DS":
+        ds_folder = DS_FOLDER_MAP.get(project_ds, "05_DIS-DS")
+        folder = f"02_Administrativa/{ds_folder}"
+
+    state = default_state
+    if parsed.get("is_approved"):
+        state = "approved"
+    elif parsed.get("is_signed"):
+        state = "signed"
+
+    return jsonify({
+        "ok": True,
+        "kind": kind,
+        "folder": folder,
+        "state": state,
+        "confidence": float(parsed.get("confidence", 0.0)),
+        "reasoning": parsed.get("reasoning", ""),
+        "document_number": parsed.get("document_number"),
+        "filename": filename,
+    })
+
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
