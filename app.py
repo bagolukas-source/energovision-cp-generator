@@ -5450,3 +5450,96 @@ def webhook_aom_parse_only():
     except Exception as e:
         log.exception("[aom-parse-only] failed")
         return jsonify({"status": "error", "error": str(e)}), 500
+
+
+# ===================================================================
+# AUTOMATION TOP-5 — quick win endpointy
+# ===================================================================
+import automation as _automation
+
+
+@app.route("/webhook/ai-next-actions", methods=["POST"])
+def webhook_ai_next_actions():
+    """Vygeneruje 3 next-action návrhy pre lead/project. Uloží do ai_next_actions."""
+    body = request.get_json(force=True) or {}
+    target_type = body.get("target_type")
+    target_id = body.get("target_id")
+    if not target_type or not target_id:
+        return jsonify({"status": "error", "error": "target_type a target_id sú povinné"}), 400
+    try:
+        actions = _automation.suggest_next_actions(supabase, target_type, target_id, save=True)
+        return jsonify({"status": "ok", "actions": actions})
+    except Exception as e:
+        log.exception("[ai-next-actions] failed")
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
+@app.route("/webhook/draft-email", methods=["POST"])
+def webhook_draft_email():
+    """Vygeneruje AI draft emailu pre lead/project/customer. Uloží do email_drafts."""
+    body = request.get_json(force=True) or {}
+    try:
+        result = _automation.draft_email(
+            supabase,
+            body.get("target_type", "lead"),
+            body["target_id"],
+            body.get("purpose", "kontakt s klientom"),
+            body.get("employee_name", "Dominik Galaba"),
+            body.get("incoming_email"),
+        )
+        return jsonify({"status": "ok", **result})
+    except Exception as e:
+        log.exception("[draft-email] failed")
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
+@app.route("/webhook/order-external", methods=["POST"])
+def webhook_order_external():
+    """Vytvorí draft objednávky externistu (PBS/statika/geodet/...)."""
+    body = request.get_json(force=True) or {}
+    project_id = body.get("project_id")
+    service_type = body.get("service_type")
+    if not project_id or not service_type:
+        return jsonify({"status": "error", "error": "project_id a service_type sú povinné"}), 400
+    try:
+        result = _automation.order_external_service(
+            supabase, project_id, service_type, body.get("provider_id")
+        )
+        if "error" in result:
+            return jsonify({"status": "error", **result}), 400
+        return jsonify({"status": "ok", **result})
+    except Exception as e:
+        log.exception("[order-external] failed")
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
+@app.route("/webhook/doc-prefill", methods=["POST"])
+def webhook_doc_prefill():
+    """AI klasifikuje + extrahuje dáta z dokumentu, predvyplní polia v DB."""
+    body = request.get_json(force=True) or {}
+    target_type = body.get("target_type")
+    target_id = body.get("target_id")
+    text = body.get("text_content")
+    if not target_type or not target_id or not text:
+        return jsonify({"status": "error", "error": "target_type, target_id, text_content sú povinné"}), 400
+    try:
+        result = _automation.classify_and_prefill(supabase, target_type, target_id, text)
+        return jsonify({"status": "ok", **result})
+    except Exception as e:
+        log.exception("[doc-prefill] failed")
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
+@app.route("/webhook/doc-package", methods=["POST"])
+def webhook_doc_package():
+    """1-klik: AI draftne email pre balík dokumentov. (PDF generuje existujúci endpoint.)"""
+    body = request.get_json(force=True) or {}
+    lead_id = body.get("lead_id")
+    if not lead_id:
+        return jsonify({"status": "error", "error": "lead_id povinné"}), 400
+    try:
+        result = _automation.generate_doc_package(supabase, lead_id, body.get("employee_name", "Dominik Galaba"))
+        return jsonify({"status": "ok", **result})
+    except Exception as e:
+        log.exception("[doc-package] failed")
+        return jsonify({"status": "error", "error": str(e)}), 500
