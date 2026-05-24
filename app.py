@@ -5239,3 +5239,20 @@ VRÁŤ LEN JSON (žiadny iný text):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
+
+@app.route("/webhook/transcribe-audio", methods=["POST"])
+@require_secret
+def transcribe_audio():
+    """Stub — TODO napojiť na Whisper API alebo Anthropic audio.
+    Zatiaľ vráti error a user musí použiť 'paste mode' v MeetingRecorder.
+    """
+    body = request.get_json(silent=True) or {}
+    audio_url = body.get("audio_url")
+    if not audio_url:
+        return jsonify({"ok": False, "error": "audio_url missing"}), 400
+    return jsonify({
+        "ok": False,
+        "error": "transcribe not implemented yet — use paste mode v CRM s vloženým prepisom z Granola/Otter/Whisper",
+        "audio_url": audio_url,
+    }), 501
+
