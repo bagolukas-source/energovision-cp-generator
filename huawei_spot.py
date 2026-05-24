@@ -493,3 +493,92 @@ def manual_force_state(site_id: str, target_state: str, issued_by: str = "manual
         "commands_issued": result["commands_issued"],
         "command_id": cmd_id,
     }
+
+
+# ---------------- Sync stations from Huawei ----------------
+def huawei_get_station_list() -> List[Dict[str, Any]]:
+    """Fetch list of all stations from Huawei /getStationList endpoint."""
+    token = huawei_login()
+    if not token:
+        return []
+    base = _huawei_session.get("base") or HUAWEI_BASE
+    url = f"{base}/stations"
+    headers = {"XSRF-TOKEN": token, "Content-Type": "application/json"}
+    body = {"pageNo": 1, "pageSize": 100}
+    try:
+        r = requests.post(url, headers=headers, json=body, timeout=60)
+        if r.status_code != 200:
+            log.error("[huawei_get_station_list] %s %s", r.status_code, r.text[:300])
+            return []
+        data = r.json() or {}
+        # v6 returns {"data": {"list": [...]}}, v2 returns {"list": [...]}
+        if isinstance(data.get("data"), dict):
+            return data["data"].get("list", []) or []
+        return data.get("list", []) or []
+    except Exception as e:
+        log.exception("[huawei_get_station_list] failed")
+        return []
+
+
+def sync_huawei_stations() -> Dict[str, Any]:
+    """
+    Pull station list from Huawei, upsert do inverter_sites.
+    Returns {added: N, updated: N, skipped: N}.
+    """
+    stations = huawei_get_station_list()
+    if not stations:
+        return {"ok": False, "error": "no stations returned (login fail alebo prázdny zoznam)"}
+
+    existing = sb_get("inverter_sites", {
+        "select": "id,vendor_station_id",
+        "vendor": "eq.huawei",
+    })
+    existing_map = {s["vendor_station_id"]: s["id"] for s in existing if s.get("vendor_station_id")}
+
+    added, updated, skipped = 0, 0, 0
+    details = []
+
+    for st in stations:
+        code = st.get("stationCode") or st.get("plantCode")
+        if not code:
+            skipped += 1
+            continue
+        name = st.get("stationName") or st.get("plantName") or code
+        ac_kw = float(st.get("capacity") or st.get("aidType") or 0)
+        addr = st.get("stationAddr") or st.get("plantAddress") or ""
+
+        row = {
+            "vendor": "huawei",
+            "vendor_station_id": code,
+            "site_name": name,
+            "ac_kw": ac_kw,
+            "address": addr,
+            "monitoring_enabled": True,
+        }
+
+        if code in existing_map:
+            sb_patch(f"inverter_sites?id=eq.{existing_map[code]}", {
+                "site_name": name,
+                "ac_kw": ac_kw,
+                "address": addr,
+                "last_sync_at": datetime.now(timezone.utc).isoformat(),
+            })
+            updated += 1
+            details.append({"action": "updated", "code": code, "name": name})
+        else:
+            ok, err = sb_post("inverter_sites", [row])
+            if ok:
+                added += 1
+                details.append({"action": "added", "code": code, "name": name})
+            else:
+                skipped += 1
+                details.append({"action": "skipped", "code": code, "name": name, "error": err})
+
+    return {
+        "ok": True,
+        "total_huawei": len(stations),
+        "added": added,
+        "updated": updated,
+        "skipped": skipped,
+        "details": details[:30],
+    }

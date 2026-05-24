@@ -5388,3 +5388,17 @@ def webhook_spot_manual_command():
     except Exception as e:
         log.exception("[spot-manual-command] failed")
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/webhook/huawei-sync-stations", methods=["POST", "GET"])
+def webhook_huawei_sync_stations():
+    """Pull station list from Huawei → upsert do inverter_sites. Pre prípad keď kolega nainštaluje novú FVE."""
+    if not _hs_auth_ok(request):
+        return jsonify({"error": "unauthorized"}), 401
+    if _hs is None:
+        return jsonify({"ok": False, "error": "huawei_spot module not available"}), 500
+    try:
+        return jsonify(_hs.sync_huawei_stations())
+    except Exception as e:
+        log.exception("[huawei-sync-stations] failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
