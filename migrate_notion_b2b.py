@@ -428,8 +428,54 @@ def fetch_page_comments(page_id: str) -> str:
     return "\n\n".join(md)
 
 
+TEXT_PROPERTIES_TO_MIGRATE = [
+    "Poznámky",
+    "Poznámky ",  # trailing space variant
+    "Poznámky ADMINISTRATÍVA",
+    "Poznámky výroba",
+    "Poznámky k fakturácii",
+    "To do / na čo čakáme ?",
+    "AI summary",
+    "Predrealizačné podmienky",
+    "Realizačné / porealizačné podmienky",
+    "Dotknuté orgány a subjekty",
+    "Parcelné čísla a kataster",
+]
+
+
+def _extract_rich_text(prop_value: Dict[str, Any]) -> str:
+    ptype = prop_value.get("type", "")
+    rich = prop_value.get(ptype, [])
+    if not isinstance(rich, list):
+        return ""
+    parts = []
+    for rt in rich:
+        text = rt.get("plain_text", "")
+        if text:
+            parts.append(text)
+    return "".join(parts).strip()
+
+
+def extract_text_properties_md(props: Dict[str, Any]) -> str:
+    lines = []
+    seen_names = set()
+    for prop_name in TEXT_PROPERTIES_TO_MIGRATE:
+        if prop_name not in props:
+            continue
+        display = prop_name.strip()
+        if display in seen_names:
+            continue
+        text = _extract_rich_text(props[prop_name])
+        if not text:
+            continue
+        text = text.replace("<br>", "\n")
+        lines.append(f"### {display}\n\n{text}\n")
+        seen_names.add(display)
+    return "\n".join(lines)
+
+
 def import_one_content(notion_page_id: str, supabase_project_id: str) -> Dict[str, Any]:
-    """Fetch + save Notion page content (blocks + comments) to projects.notion_mirror_md."""
+    """Fetch + save Notion page content (blocks + comments + text props) to projects.notion_mirror_md."""
     page = notion_get_page(notion_page_id)
     if not page:
         return {"ok": False, "error": "Page not found"}
@@ -443,6 +489,7 @@ def import_one_content(notion_page_id: str, supabase_project_id: str) -> Dict[st
 
     blocks_md = fetch_page_blocks(notion_page_id)
     comments_md = fetch_page_comments(notion_page_id)
+    text_props_md = extract_text_properties_md(props)
     last_edited = page.get("last_edited_time", "")
     notion_url = page.get("url", "")
 
@@ -450,6 +497,10 @@ def import_one_content(notion_page_id: str, supabase_project_id: str) -> Dict[st
 
 > 🔗 Notion: {notion_url}
 > Posledná editácia: {last_edited}
+
+## Notion poznámky a úlohy
+
+{text_props_md or "_(žiadne text properties)_"}
 
 ## Obsah stránky
 
