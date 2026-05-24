@@ -5458,6 +5458,21 @@ def webhook_aom_parse_only():
 import automation as _automation
 
 
+# Lazy supabase client pre nové AI moduly (automation/team_chat/strategic)
+_sb_client = None
+def _sb():
+    global _sb_client
+    if _sb_client is None:
+        from supabase import create_client
+        import os as _os
+        _sb_client = create_client(
+            _os.environ.get("SUPABASE_URL", "https://uzwajrpebblafuhrtuwn.supabase.co"),
+            _os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+        )
+    return _sb_client
+
+
+
 @app.route("/webhook/ai-next-actions", methods=["POST"])
 def webhook_ai_next_actions():
     """Vygeneruje 3 next-action návrhy pre lead/project. Uloží do ai_next_actions."""
@@ -5467,7 +5482,7 @@ def webhook_ai_next_actions():
     if not target_type or not target_id:
         return jsonify({"status": "error", "error": "target_type a target_id sú povinné"}), 400
     try:
-        actions = _automation.suggest_next_actions(supabase, target_type, target_id, save=True)
+        actions = _automation.suggest_next_actions(_sb(), target_type, target_id, save=True)
         return jsonify({"status": "ok", "actions": actions})
     except Exception as e:
         log.exception("[ai-next-actions] failed")
@@ -5480,7 +5495,7 @@ def webhook_draft_email():
     body = request.get_json(force=True) or {}
     try:
         result = _automation.draft_email(
-            supabase,
+            _sb(),
             body.get("target_type", "lead"),
             body["target_id"],
             body.get("purpose", "kontakt s klientom"),
@@ -5503,7 +5518,7 @@ def webhook_order_external():
         return jsonify({"status": "error", "error": "project_id a service_type sú povinné"}), 400
     try:
         result = _automation.order_external_service(
-            supabase, project_id, service_type, body.get("provider_id")
+            _sb(), project_id, service_type, body.get("provider_id")
         )
         if "error" in result:
             return jsonify({"status": "error", **result}), 400
@@ -5523,7 +5538,7 @@ def webhook_doc_prefill():
     if not target_type or not target_id or not text:
         return jsonify({"status": "error", "error": "target_type, target_id, text_content sú povinné"}), 400
     try:
-        result = _automation.classify_and_prefill(supabase, target_type, target_id, text)
+        result = _automation.classify_and_prefill(_sb(), target_type, target_id, text)
         return jsonify({"status": "ok", **result})
     except Exception as e:
         log.exception("[doc-prefill] failed")
@@ -5538,7 +5553,7 @@ def webhook_doc_package():
     if not lead_id:
         return jsonify({"status": "error", "error": "lead_id povinné"}), 400
     try:
-        result = _automation.generate_doc_package(supabase, lead_id, body.get("employee_name", "Dominik Galaba"))
+        result = _automation.generate_doc_package(_sb(), lead_id, body.get("employee_name", "Dominik Galaba"))
         return jsonify({"status": "ok", **result})
     except Exception as e:
         log.exception("[doc-package] failed")
@@ -5557,7 +5572,7 @@ def webhook_strategic_brief():
     body = request.get_json(silent=True) or {}
     scope = body.get("scope") or request.args.get("scope") or "daily"
     try:
-        brief = _strategic.generate_strategic_brief(supabase, scope=scope, save=True)
+        brief = _strategic.generate_strategic_brief(_sb(), scope=scope, save=True)
         return jsonify({"status": "ok", "brief": brief})
     except Exception as e:
         log.exception("[strategic-brief] failed")
@@ -5574,7 +5589,7 @@ import team_chat as _team_chat
 def webhook_team_chat_proactive():
     """Cron: AI Kolega prejde stav firmy a napíše 1-3 proaktívne správy + predpripraví drafty."""
     try:
-        result = _team_chat.proactive_pass(supabase)
+        result = _team_chat.proactive_pass(_sb())
         return jsonify({"status": "ok", **result})
     except Exception as e:
         log.exception("[team-chat-proactive] failed")
@@ -5590,7 +5605,7 @@ def webhook_team_chat_reply():
         return jsonify({"status": "error", "error": "Prázdna správa"}), 400
     try:
         result = _team_chat.handle_reply(
-            supabase, msg, body.get("user_id"), body.get("user_name")
+            _sb(), msg, body.get("user_id"), body.get("user_name")
         )
         return jsonify({"status": "ok", **result})
     except Exception as e:
