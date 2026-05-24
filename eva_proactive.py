@@ -141,21 +141,20 @@ def hourly_autonomous_pass(supabase: Client) -> Dict[str, Any]:
     today = now.date()
     actions_taken = []
 
-    # 1) FA splatné <7 dní
+    # 1) FA splatné <7 dní + UŽ OVERDUE — use b2b_invoices_overview view
     try:
         in_7 = (today + timedelta(days=7)).isoformat()
-        ms = supabase.table("project_milestones") \
-            .select("id, project_id, milestone_key, fa_no, due_date, payment_amount, projects(project_code, name)") \
-            .gte("due_date", today.isoformat()) \
+        ms = supabase.table("b2b_invoices_overview") \
+            .select("project_id, project_code, customer_name, fa_no, due_date, payment_amount, computed_status") \
             .lte("due_date", in_7) \
-            .in_("status", ["issued","sent"]).limit(10).execute().data or []
+            .in_("computed_status", ["overdue","sent","issued","ready_to_issue"]) \
+            .limit(15).execute().data or []
         for m in ms:
             related_id = m["project_id"]
             if not check_silence(supabase, "invoice_due", "project", related_id, silence_hours=24):
                 continue
             days_left = (datetime.fromisoformat(m["due_date"]).date() - today).days
-            project = m.get("projects") or {}
-            code = project.get("project_code", "?")
+            code = m.get("project_code", "?")
             amount = float(m.get("payment_amount") or 0)
             content = f"Pre projekt {code} je splatná FA {m.get('fa_no','?')} o {days_left} dní ({amount:,.0f} €). Pripravila som draft pripomienky klientovi — pošlite jedným klikom."
 

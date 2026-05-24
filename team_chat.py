@@ -125,25 +125,29 @@ def collect_upcoming_events(supabase: Client) -> Dict[str, Any]:
 
     ctx: Dict[str, Any] = {}
 
-    # B2B projects with upcoming milestones
+    # B2B projects with upcoming milestones — use b2b_invoices_overview view
     try:
-        ms = supabase.table("project_milestones") \
-            .select("id, project_id, milestone_key, fa_no, due_date, payment_amount, status, projects(project_code, name)") \
+        ms = supabase.table("b2b_invoices_overview") \
+            .select("project_id, project_code, customer_name, fa_no, due_date, payment_amount, computed_status") \
             .lte("due_date", in_14).gte("due_date", today.isoformat()) \
-            .neq("status", "paid").limit(30).execute().data or []
+            .neq("computed_status", "paid").limit(30).execute().data or []
         ctx["upcoming_milestones"] = ms
+        ctx["upcoming_milestones_count"] = len(ms)
     except Exception as e:
         ctx["upcoming_milestones_error"] = str(e)
 
-    # Overdue invoices
+    # Overdue invoices — used b2b_invoices_overview view (rovnaké ako dashboard)
     try:
-        from postgrest import APIError  # noqa
-        ms_overdue = supabase.table("project_milestones") \
-            .select("id, project_id, milestone_key, fa_no, due_date, payment_amount, status, projects(project_code, name)") \
-            .lt("due_date", today.isoformat()).in_("status", ["issued","sent"]).limit(20).execute().data or []
+        ms_overdue = supabase.table("b2b_invoices_overview") \
+            .select("project_id, project_code, customer_name, fa_no, due_date, payment_amount, computed_status") \
+            .eq("computed_status", "overdue").limit(20).execute().data or []
         ctx["overdue_invoices"] = ms_overdue
-    except Exception:
-        pass
+        ctx["overdue_invoices_count"] = len(ms_overdue)
+        ctx["overdue_invoices_total"] = sum(float(i.get("payment_amount") or 0) for i in ms_overdue)
+    except Exception as e:
+        log.warning(f"overdue_invoices fetch failed: {e}")
+        ctx["overdue_invoices"] = []
+        ctx["overdue_invoices_count"] = 0
 
     # Project tasks due within 14 days
     try:
