@@ -47,7 +47,10 @@ def _creds():
 
 def _get(path: str, params: dict | None = None) -> dict:
     user, key, inst = _creds()
-    url = f"{RAYNET_BASE}/{path.lstrip('/')}"
+    p = path.lstrip('/')
+    if not p.endswith('/'):
+        p = p + '/'
+    url = f"{RAYNET_BASE}/{p}"
     headers = {"X-Instance-Name": inst, "Accept": "application/json"}
     r = requests.get(url, auth=(user, key), headers=headers, params=params or {}, timeout=30)
     if r.status_code == 429:
@@ -109,9 +112,9 @@ def discover_quotations(sb, max_records: int = 2000) -> dict:
     item_count = 0
     rows = []
     items = []
-    for q in paginate("quotation", limit=50):
+    for q in paginate("offer", limit=50):
         count += 1
-        q_items = q.get("quotationItems") or q.get("items") or []
+        q_items = q.get("offerItems") or q.get("quotationItems") or q.get("items") or []
         item_count += len(q_items)
         ri = q.get("rowInfo") or {}
         rows.append({
