@@ -146,16 +146,45 @@ def okte_ingest(target_day: Optional[date] = None, backfill_days: int = 0) -> Di
 
 
 # ---------------- Huawei FusionSolar API ----------------
+def _load_huawei_credentials_from_db() -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """Load Huawei credentials from inverter_vendor_credentials table."""
+    try:
+        rows = sb_get("inverter_vendor_credentials", {
+            "select": "base_url,username,encrypted_password,is_active",
+            "vendor": "eq.huawei",
+            "is_active": "eq.true",
+            "limit": "1",
+        })
+        if rows:
+            r = rows[0]
+            return r.get("base_url"), r.get("username"), r.get("encrypted_password")
+    except Exception as e:
+        log.warning("[_load_huawei_credentials_from_db] %s", e)
+    return None, None, None
+
+
 def huawei_login(force: bool = False) -> Optional[str]:
     global _huawei_session
     now = time.time()
     if not force and _huawei_session["token"] and _huawei_session["expires_at"] > now + 60:
         return _huawei_session["token"]
-    if not HUAWEI_PASS:
-        log.warning("[huawei_login] HUAWEI_PASS env not set")
+
+    # Priority: env vars first, fallback to Supabase inverter_vendor_credentials
+    base = HUAWEI_BASE
+    user = HUAWEI_USER
+    pwd = HUAWEI_PASS
+    if not pwd:
+        db_base, db_user, db_pwd = _load_huawei_credentials_from_db()
+        base = db_base or base
+        user = db_user or user
+        pwd = db_pwd or pwd
+
+    if not pwd:
+        log.warning("[huawei_login] no password — env HUAWEI_PASS empty and no row in inverter_vendor_credentials")
         return None
-    url = f"{HUAWEI_BASE}/login"
-    payload = {"userName": HUAWEI_USER, "systemCode": HUAWEI_PASS}
+
+    url = f"{base}/login"
+    payload = {"userName": user, "systemCode": pwd}
     try:
         r = requests.post(url, json=payload, timeout=30)
         if r.status_code != 200:
@@ -163,10 +192,11 @@ def huawei_login(force: bool = False) -> Optional[str]:
             return None
         token = r.headers.get("XSRF-TOKEN") or r.headers.get("xsrf-token")
         if not token:
-            log.error("[huawei_login] no XSRF-TOKEN in response")
+            log.error("[huawei_login] no XSRF-TOKEN in response (body=%s)", r.text[:300])
             return None
         _huawei_session["token"] = token
         _huawei_session["expires_at"] = now + 25 * 60
+        _huawei_session["base"] = base
         return token
     except Exception as e:
         log.exception("[huawei_login] failed: %s", e)
@@ -177,6 +207,7 @@ def huawei_send_command(station_code: str, command_type: str, params: Dict[str, 
     token = huawei_login()
     if not token:
         return False, {"error": "no XSRF token"}
+    base = _huawei_session.get("base") or HUAWEI_BASE
 
     huawei_command_codes = {
         "enable_zero_export":      {"code": "PCS_REVERSE_POWER_FLOW", "value": "1"},
@@ -189,7 +220,7 @@ def huawei_send_command(station_code: str, command_type: str, params: Dict[str, 
     if not cmd:
         return False, {"error": f"unknown command_type: {command_type}"}
 
-    url = f"{HUAWEI_BASE}/sendCommand"
+    url = f"{base}/sendCommand"
     headers = {"XSRF-TOKEN": token, "Content-Type": "application/json"}
     payload = {
         "stationCode": station_code,
