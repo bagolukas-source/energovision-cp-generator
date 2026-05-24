@@ -5562,3 +5562,37 @@ def webhook_strategic_brief():
     except Exception as e:
         log.exception("[strategic-brief] failed")
         return jsonify({"status": "error", "error": str(e)}), 500
+
+
+# ===================================================================
+# AI Kolega Eva + Team Chat
+# ===================================================================
+import team_chat as _team_chat
+
+
+@app.route("/webhook/team-chat-proactive", methods=["POST", "GET"])
+def webhook_team_chat_proactive():
+    """Cron: AI Kolega prejde stav firmy a napíše 1-3 proaktívne správy + predpripraví drafty."""
+    try:
+        result = _team_chat.proactive_pass(supabase)
+        return jsonify({"status": "ok", **result})
+    except Exception as e:
+        log.exception("[team-chat-proactive] failed")
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
+@app.route("/webhook/team-chat-reply", methods=["POST"])
+def webhook_team_chat_reply():
+    """User píše do chat-u → AI reaguje (s context-om)."""
+    body = request.get_json(force=True) or {}
+    msg = (body.get("message") or "").strip()
+    if not msg:
+        return jsonify({"status": "error", "error": "Prázdna správa"}), 400
+    try:
+        result = _team_chat.handle_reply(
+            supabase, msg, body.get("user_id"), body.get("user_name")
+        )
+        return jsonify({"status": "ok", **result})
+    except Exception as e:
+        log.exception("[team-chat-reply] failed")
+        return jsonify({"status": "error", "error": str(e)}), 500
