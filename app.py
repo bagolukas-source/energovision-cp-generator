@@ -5727,3 +5727,40 @@ def webhook_raynet_fetch_items():
     except Exception as e:
         log.exception("[raynet-fetch-items] failed")
         return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
+# ============================================================
+# B2B KALKULAČKA — generovanie BOM + uloženie cenovky
+# ============================================================
+import b2b_calculator as _b2b_calc
+
+@app.route("/webhook/b2b-calc-preview", methods=["POST"])
+def webhook_b2b_calc_preview():
+    """Vygeneruje BOM bez uloženia (live preview v UI)."""
+    body = request.get_json(silent=True) or {}
+    try:
+        result = _b2b_calc.calculate_bom(_sb(), body)
+        return jsonify({"ok": True, **result})
+    except Exception as e:
+        log.exception("[b2b-calc-preview] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
+@app.route("/webhook/b2b-calc-save", methods=["POST"])
+def webhook_b2b_calc_save():
+    """Vygeneruje BOM a uloží do b2b_quotes + b2b_quote_items."""
+    body = request.get_json(silent=True) or {}
+    try:
+        config = body.get("config", {})
+        result = _b2b_calc.calculate_bom(_sb(), config)
+        quote = _b2b_calc.save_quote(
+            _sb(), config, result["items"], result["totals"],
+            customer_id=body.get("customer_id"),
+            lead_id=body.get("lead_id"),
+            project_id=body.get("project_id"),
+            user_id=body.get("user_id"),
+        )
+        return jsonify({"ok": True, "quote": quote, **result})
+    except Exception as e:
+        log.exception("[b2b-calc-save] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
