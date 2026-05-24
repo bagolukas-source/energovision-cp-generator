@@ -5668,3 +5668,48 @@ def webhook_eva_proactive_hourly():
     except Exception as e:
         log.exception("[eva-proactive-hourly] failed")
         return jsonify({"status": "error", "error": str(e)}), 500
+
+
+# ============================================================
+# RAYNET DISCOVERY — pull cenoviek/firiem/produktov pre offline analýzu
+# ============================================================
+import raynet_discovery as _raynet
+
+@app.route("/webhook/raynet-whoami", methods=["GET", "POST"])
+def webhook_raynet_whoami():
+    """Quick auth check — overí že credentials fungujú."""
+    received = request.args.get("secret") or request.headers.get("X-Webhook-Secret", "")
+    if WEBHOOK_SECRET and received != WEBHOOK_SECRET:
+        return jsonify({"error": "unauthorized"}), 401
+    try:
+        return jsonify({"ok": True, "whoami": _raynet.whoami()})
+    except Exception as e:
+        log.exception("[raynet-whoami] failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/webhook/raynet-discover", methods=["POST"])
+def webhook_raynet_discover():
+    """Stiahne všetky quotations/business_cases/products/companies do Supabase staging.
+    Telo: {"only": "quotations"} (voliteľne — len jedna zložka)."""
+    received = request.args.get("secret") or request.headers.get("X-Webhook-Secret", "")
+    if WEBHOOK_SECRET and received != WEBHOOK_SECRET:
+        return jsonify({"error": "unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    only = body.get("only")
+    try:
+        sb = _sb()
+        if only == "products":
+            out = {"products": _raynet.discover_products(sb)}
+        elif only == "companies":
+            out = {"companies": _raynet.discover_companies(sb)}
+        elif only == "business_cases":
+            out = {"business_cases": _raynet.discover_business_cases(sb)}
+        elif only == "quotations":
+            out = {"quotations": _raynet.discover_quotations(sb)}
+        else:
+            out = _raynet.discover_all(sb)
+        return jsonify({"ok": True, **out})
+    except Exception as e:
+        log.exception("[raynet-discover] failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
