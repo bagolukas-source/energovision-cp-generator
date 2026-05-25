@@ -258,3 +258,74 @@ def render_posudok_premium(sb, analyza_id: str) -> dict:
     sb.table("analyza_om").update({"docx_path": public_url}).eq("id", analyza_id).execute()
     
     return {"ok": True, "docx_url": public_url, "storage_path": storage_path}
+
+
+def auto_fill_site_from_psc(psc: str, rocna_spotreba_kwh: float = 30000, rk_kw: float = 25) -> dict:
+    """PSČ → distribútor + GPS + odporúčaný profil. Wrapper okolo engine."""
+    from energovision_analytics.data.auto_fill import auto_fill_site
+    try:
+        site = auto_fill_site(
+            nazov="Auto-fill",
+            psc=psc,
+            rocna_spotreba_kwh=rocna_spotreba_kwh,
+            rk_kw=rk_kw,
+        )
+        return {
+            "ok": True,
+            "distribuutor": site.distribuutor.value if hasattr(site.distribuutor, "value") else str(site.distribuutor),
+            "lat": site.lat,
+            "lon": site.lon,
+            "sadzba": site.sadzba.value if hasattr(site.sadzba, "value") else str(site.sadzba),
+            "mrk_kw": site.mrk_kw,
+            "city": getattr(site, "city", None),
+        }
+    except Exception as e:
+        log.exception(f"[auto-fill-site] failed for psc={psc}")
+        return {"ok": False, "error": str(e)}
+
+
+def quick_estimate(payload: dict) -> dict:
+    """Rýchla kalkulácia bez 15-min dát. Vstupy: kwp, annual_kwh, tarif_buy, psc."""
+    kwp = float(payload.get("kwp", 0))
+    annual_kwh = float(payload.get("annual_kwh", 0))
+    tarif_buy = float(payload.get("tarif_buy", 0.18))  # €/kWh default
+    capex_per_kwp = float(payload.get("capex_per_kwp", 800))
+    bess_kwh = float(payload.get("bess_kwh", 0))
+    capex_per_bess_kwh = float(payload.get("capex_per_bess_kwh", 480))
+    discount_rate = float(payload.get("discount_rate", 0.06))
+    
+    # Heuristics z reálnych ponúk + spot 2025
+    yield_per_kwp = 1050  # kWh/kWp/rok pre SK
+    self_consumption = 0.65 if bess_kwh > 0 else 0.40  # samospotreba %
+    
+    pv_production_kwh = kwp * yield_per_kwp
+    self_used_kwh = min(pv_production_kwh * self_consumption, annual_kwh * 0.85)
+    export_kwh = pv_production_kwh - self_used_kwh
+    
+    # Úspora = nahradené nákupy + (export × spot priemer ~80 €/MWh)
+    saved_buy_eur = self_used_kwh * tarif_buy
+    export_revenue_eur = export_kwh * 0.08  # 80 €/MWh
+    annual_savings = saved_buy_eur + export_revenue_eur
+    
+    capex_total = kwp * capex_per_kwp + bess_kwh * capex_per_bess_kwh
+    payback_years = capex_total / annual_savings if annual_savings > 0 else 999
+    
+    # Simplified NPV — 15 rokov, discount rate 6%
+    horizon = 15
+    cashflows = [-capex_total] + [annual_savings * (0.992 ** y) for y in range(1, horizon + 1)]
+    npv = sum(cf / ((1 + discount_rate) ** y) for y, cf in enumerate(cashflows))
+    
+    return {
+        "ok": True,
+        "kwp": kwp,
+        "bess_kwh": bess_kwh,
+        "pv_production_kwh": round(pv_production_kwh),
+        "self_used_kwh": round(self_used_kwh),
+        "export_kwh": round(export_kwh),
+        "self_consumption_pct": round(self_consumption * 100),
+        "annual_savings_eur": round(annual_savings),
+        "capex_eur": round(capex_total),
+        "payback_years": round(payback_years, 1),
+        "npv_eur": round(npv),
+        "co2_saved_tons_per_year": round(pv_production_kwh * 0.000236, 2),  # 236 g CO2/kWh SK mix
+    }

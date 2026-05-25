@@ -5833,3 +5833,28 @@ def webhook_aom_render_premium_docx():
     except Exception as e:
         log.exception("[aom-render-premium-docx] failed")
         return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
+@app.route("/webhook/analyza-om-auto-fill", methods=["POST"])
+def webhook_aom_auto_fill():
+    """PSČ → distribútor + GPS + sadzba."""
+    if not _aom_v2:
+        return jsonify({"ok": False, "error": "analyza_om_v2 not loaded"}), 500
+    body = request.get_json(silent=True) or {}
+    psc = body.get("psc", "").strip()
+    if not psc:
+        return jsonify({"ok": False, "error": "psc required"}), 400
+    return jsonify(_aom_v2.auto_fill_site_from_psc(
+        psc=psc,
+        rocna_spotreba_kwh=float(body.get("rocna_spotreba_kwh", 30000) or 30000),
+        rk_kw=float(body.get("rk_kw", 25) or 25),
+    ))
+
+
+@app.route("/webhook/analyza-om-quick-estimate", methods=["POST"])
+def webhook_aom_quick_estimate():
+    """Rýchla kalkulácia úspor bez 15-min dát."""
+    if not _aom_v2:
+        return jsonify({"ok": False, "error": "analyza_om_v2 not loaded"}), 500
+    body = request.get_json(silent=True) or {}
+    return jsonify(_aom_v2.quick_estimate(body))
