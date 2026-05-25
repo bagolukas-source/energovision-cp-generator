@@ -322,11 +322,16 @@ class RuleBasedEMS:
         # 4) Arbitráž (BAT vybíja v drahej hodine = ušetríš drahý nákup, kúpila z lacného)
         arb_net = bat_to_load_arb_kwh * tarif_buy - grid_to_bat_kwh * spot_eur_mwh / 1000
 
-        # 5) Peak shaving (každé ušetrené kW pod MRK target = úspora ¼-h max fakturácie)
-        # Aproximácia: € per kW = mrk_kapacita_eur_mw_mes / 12 / 1000 / dt_h
-        # Pre VN klienta sa to projektuje na mesačnú fakturáciu
-        peak_kwh_eur = self.tariff.mrk_kapacita_eur_mw_mes / 12 / 1000 / 1000  # very approx
-        sav_peak = bat_to_load_peak_kwh * peak_kwh_eur * 100  # multiplier pre realistic kapacitnu uvolnenie
+        # 5) Peak shaving — znižuje 15-min monthly peak → znižuje fakturovanú MRK kapacitu
+        # Real fakturácia: monthly_peak_kw × mrk_kapacita_eur_mw_mes / 1000
+        # Approximation: bat_to_load_peak_kwh je len v hodinách kedy load > target.
+        # Predpokladajme priemerný peak shave event trvá ~1 hour, takže
+        # kWh/hour ≈ kW redukcia. Pre mesačnú fakturáciu:
+        #   eur_per_kwh_peak ≈ mrk_kapacita_eur_mw_mes × 12 / 1000 / peak_hours_per_year
+        #   peak_hours_per_year ≈ 200 (B2B prevádzka, prevažne pracovné dni 8-16h × ~80 dní peak)
+        peak_hours_per_year = 200.0
+        eur_per_kwh_peak = (self.tariff.mrk_kapacita_eur_mw_mes * 12 / 1000) / peak_hours_per_year
+        sav_peak = bat_to_load_peak_kwh * eur_per_kwh_peak
 
         # 6) MRK export penalty avoidance (nová SK 2026)
         sav_mrk_avoid = mrk_overflow_kwh * self.tariff.mrk_export_penalty_eur_kwh

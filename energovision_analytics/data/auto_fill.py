@@ -266,10 +266,29 @@ def synthetic_load_profile(
     )
     hours = np.array([t.hour for t in timestamps])
     months = np.array([t.month for t in timestamps])
+    weekdays = np.array([t.weekday() for t in timestamps])  # 0=Mon ... 6=Sun
 
-    load_kw = np.full(len(timestamps), base_kw)
-    load_kw[(hours >= peak_hours[0]) & (hours <= peak_hours[1])] += peak_kw_extra
+    # Base profile s realistic peak/base ratio (priemysel ~3-4×)
+    # Cez deň base + peak; cez noc base; víkend base × 0.4 (priemysel zatvorené)
+    load_kw = np.full(len(timestamps), float(base_kw))
+    peak_mask = (hours >= peak_hours[0]) & (hours <= peak_hours[1])
+    load_kw[peak_mask] += peak_kw_extra * 3.5  # peak je teraz 3-4× base namiesto 1.33×
+
+    # Víkend redukcia
+    weekend_mask = weekdays >= 5  # Sa, Ne
+    load_kw[weekend_mask] *= 0.4
+
+    # Winter factor
     load_kw[(months <= 3) | (months >= 11)] *= winter_factor
+
+    # Hodinová random variability ±15 % pre realistic peak distribution
+    rng = np.random.default_rng(year)  # deterministicky pre reprodukovateľnosť
+    noise = rng.uniform(0.85, 1.15, size=len(timestamps))
+    load_kw *= noise
+
+    # Pridať občasné špičky (3-5 dní v roku špička 1.3× normal — sezónne peaky)
+    spike_hours = rng.choice(len(timestamps), size=24 * 5, replace=False)  # 5 hodín × 24h
+    load_kw[spike_hours] *= 1.3
 
     # Scale na expected
     total_kwh = load_kw.sum() * (granularity_min / 60.0)
