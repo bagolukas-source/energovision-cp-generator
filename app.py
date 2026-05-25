@@ -5911,8 +5911,9 @@ def webhook_aom_ai_analyze():
     aid = body.get("analyza_id")
     if not aid:
         return jsonify({"ok": False, "error": "analyza_id required"}), 400
+    capex_overrides = body.get("capex_overrides") or None
     try:
-        return jsonify(_aom_ai.run_full_analysis(_sb(), aid))
+        return jsonify(_aom_ai.run_full_analysis(_sb(), aid, capex_overrides=capex_overrides))
     except Exception as e:
         log.exception("[aom-ai-analyze] failed")
         return jsonify({"ok": False, "error": str(e)[:500]}), 500

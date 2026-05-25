@@ -95,7 +95,7 @@ def classify_client_profile(analyza: dict, consumption_profile: list[float] = No
 # VRSTVA B — Smart variant generation (5 archetypov)
 # ============================================================
 
-def generate_smart_variants(sb, analyza: dict, profile: dict) -> list[dict]:
+def generate_smart_variants(sb, analyza: dict, profile: dict, capex_overrides: dict = None) -> list[dict]:
     """Vygeneruje 5 archetypov a spustí engine na výpočet metrík.
     
     Archetypes:
@@ -225,14 +225,14 @@ def generate_smart_variants(sb, analyza: dict, profile: dict) -> list[dict]:
                 arch["capex_total_eur"] = float(match.get("capex_total_eur", 0) or 0)
                 arch["dotacia_eur"] = float(match.get("dotacia_eur", 0) or 0)
             else:
-                _apply_economic_fallback(arch, annual_kwh, annual_estimated)
+                _apply_economic_fallback(arch, annual_kwh, annual_estimated, capex_overrides)
             # Ak engine match má 0 NPV/payback (zlyhal výpočet) — fallback
             if (arch.get("npv_eur") or 0) <= 0 or (arch.get("payback_years") or 0) <= 0:
-                _apply_economic_fallback(arch, annual_kwh, annual_estimated)
+                _apply_economic_fallback(arch, annual_kwh, annual_estimated, capex_overrides)
     except Exception as e:
         log.warning(f"Engine call failed, using estimates: {e}")
         for arch in archetypes:
-            _apply_economic_fallback(arch, annual_kwh, annual_estimated)
+            _apply_economic_fallback(arch, annual_kwh, annual_estimated, capex_overrides)
     
     # Mark all archetypes if estimated
     if annual_estimated:
@@ -302,6 +302,14 @@ def _apply_economic_fallback(arch: dict, annual_kwh: float, estimated: bool):
     arch["irr_pct"] = round((saving_y1 * 0.79 / net_capex * 100) if net_capex > 0 else 0, 1)
     arch["saving_y1_eur"] = round(saving_y1, 0)
     arch["fallback_estimate"] = True
+    arch["assumptions"] = {
+        "capex_per_kwp": capex_per_kwp,
+        "capex_per_kwh_bess": capex_per_kwh,
+        "cena_nakup_eur_kwh": cena_nakup,
+        "cena_predaj_eur_kwh": cena_predaj,
+        "samospotreba_pct": round(samospotreba * 100, 0),
+        "dotacia_eur": dotacia,
+    }
 
 
 def _detect_profile_template(profile: dict) -> str:
@@ -594,8 +602,10 @@ KLIENT TEJTO ANALÝZY:
 # ORCHESTRÁTOR — full analýza (Vrstvy A → G)
 # ============================================================
 
-def run_full_analysis(sb, analyza_id: str) -> dict:
-    """Spustí celú AI Strategist analýzu pre analyza_id."""
+def run_full_analysis(sb, analyza_id: str, capex_overrides: dict = None) -> dict:
+    """Spustí celú AI Strategist analýzu pre analyza_id.
+    capex_overrides: { capex_per_kwp, capex_per_kwh_bess, cena_nakup_eur_kwh, cena_predaj_eur_kwh }
+    """
     t0 = time.time()
     
     # 1. Načítaj analyzu
@@ -607,8 +617,8 @@ def run_full_analysis(sb, analyza_id: str) -> dict:
     # Vrstva A: classify
     profile = classify_client_profile(analyza)
     
-    # Vrstva B: smart variants (spustí engine)
-    variants = generate_smart_variants(sb, analyza, profile)
+    # Vrstva B: smart variants (spustí engine + fallback ak treba)
+    variants = generate_smart_variants(sb, analyza, profile, capex_overrides=capex_overrides)
     
     # Vrstva C: constraints
     constraints = check_constraints(analyza, variants)
@@ -629,9 +639,19 @@ def run_full_analysis(sb, analyza_id: str) -> dict:
     eligible = [v for v in variants_with_reasoning if v.get("npv_eur", 0) > 0]
     top_pick = max(eligible, key=lambda v: v["npv_eur"])["label"] if eligible else (variants_with_reasoning[1]["label"] if len(variants_with_reasoning) > 1 else None)
     
+    # Default assumptions (ak overrides nezadané, ukáž defaults pre UI)
+    overrides = capex_overrides or {}
+    default_assumptions = {
+        "capex_per_kwp": float(overrides.get("capex_per_kwp") or 760.0),  # tier mid
+        "capex_per_kwh_bess": float(overrides.get("capex_per_kwh_bess") or 430.0),
+        "cena_nakup_eur_kwh": float(overrides.get("cena_nakup_eur_kwh") or 0.15),
+        "cena_predaj_eur_kwh": float(overrides.get("cena_predaj_eur_kwh") or 0.02),
+    }
+    
     payload = {
         "analyza_id": analyza_id,
         "client_classification": profile["classification"],
+        "assumptions_used": default_assumptions,
         "patterns_detected": profile["patterns_detected"],
         "constraints": constraints,
         "variants": variants_with_reasoning,
