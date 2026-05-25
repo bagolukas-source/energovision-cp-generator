@@ -5459,6 +5459,17 @@ def webhook_aom_run_pipeline():
         return jsonify({"ok": False, "error": "missing analyza_id"}), 400
     try:
         result = _aom.run_full_pipeline(analyza_id)
+        # Po OLD pipeline obohati econ_results.full_response (carbon/energy_flow/value_streams/monthly)
+        # pre posudok view - bez prepisu UI variantov.
+        enriched = None
+        if _aom_v2 is not None:
+            try:
+                enriched = _aom_v2.enrich_econ_full_response(_sb(), analyza_id)
+                log.info("[aom-run-pipeline] enriched=%s", enriched)
+            except Exception as enrich_err:
+                log.warning("[aom-run-pipeline] enrich_econ_full_response failed (non-fatal): %s", enrich_err)
+        if isinstance(result, dict):
+            result["enriched"] = enriched
         return jsonify(result)
     except Exception as e:
         log.exception("[aom-run-pipeline] failed")

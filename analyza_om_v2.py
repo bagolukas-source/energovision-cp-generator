@@ -505,3 +505,105 @@ def quick_estimate(payload: dict) -> dict:
         "npv_eur": round(npv),
         "co2_saved_tons_per_year": round(pv_production_kwh * 0.000236, 2),  # 236 g CO2/kWh SK mix
     }
+
+
+# ============================================================
+# enrich_econ_full_response — obohatí econ_results.full_response
+# po OLD pipeline (analyza_om/engine.py run_full_pipeline) bez
+# prepisu analyza_om_variants. Volá NEW engine cez svoj auto-sizing
+# z _build_request_from_analyza a posunie len full_response field.
+# ============================================================
+def enrich_econ_full_response(sb, analyza_id: str) -> dict:
+    """
+    Po starom run_full_pipeline pridá full_response (carbon, energy_flow,
+    value_streams, monthly_summary, cashflow_array) do econ_results.
+    NESAHA analyza_om_variants — len obohaí JSONB.
+
+    Vracia: {"ok": True, "enriched": True, "winner": {...}} alebo {"ok": False, ...}
+    """
+    from energovision_analytics.api.services.engine_service import (
+        run_variants_pipeline, build_run_variants_response
+    )
+    
+    a_res = sb.table("analyza_om").select("id,name,om_psc,om_rk_kw,om_mrk_kw,max_export_kw,consumption_annual_mwh,consumption_peak_kw_hourly,econ_results").eq("id", analyza_id).single().execute()
+    analyza = a_res.data
+    if not analyza:
+        return {"ok": False, "error": "analyza not found"}
+    
+    # Vyrob request_dict (rovnaký path ako run_variants_premium)
+    try:
+        request_dict = _build_request_from_analyza(analyza)
+    except Exception as e:
+        log.exception("[enrich-full-response] build_request failed for %s", analyza_id)
+        return {"ok": False, "error": f"build_request: {e}"}
+    
+    # Spusti NEW engine pipeline (chunked auto-matrix)
+    try:
+        raw_result = run_variants_pipeline(request_dict)
+        result = build_run_variants_response(raw_result)
+    except Exception as engine_err:
+        log.exception("[enrich-full-response] engine pipeline failed for %s", analyza_id)
+        return {"ok": False, "error": f"engine: {engine_err}"}
+    
+    # Vyber winner (top NPV variant) — to budú dáta pre posudok
+    variants = result.get("variants") or []
+    if not variants:
+        return {"ok": False, "error": "no variants from engine"}
+    
+    # Najvyšší NPV s aspoň FVE > 0
+    winner = max(
+        (v for v in variants if (v.get("pv_kwp") or 0) > 0),
+        key=lambda v: v.get("npv_eur") or 0,
+        default=variants[0]
+    )
+    
+    # Vytvor top_picks štruktúru aká je očakávaná v UI:
+    # top_picks[0].results.{carbon, energy_flow, value_streams, monthly_summary, ...}
+    top_picks_synth = [{
+        "rank": 1,
+        "topology": winner.get("label", "auto"),
+        "pv_kwp": winner.get("pv_kwp"),
+        "bess_kwh": winner.get("bess_kwh"),
+        "bess_kw": winner.get("bess_kw"),
+        "results": {
+            "savings_eur_y1": winner.get("annual_save_eur") or winner.get("savings_eur_y1") or 0,
+            "npv_eur": winner.get("npv_eur"),
+            "irr_pct": winner.get("irr_pct"),
+            "payback_y": winner.get("payback_simple_y") or winner.get("payback_y"),
+            "carbon": winner.get("carbon") or {},
+            "energy_flow": winner.get("energy_flow") or {},
+            "value_streams": winner.get("value_streams") or {},
+            "monthly_summary": winner.get("monthly_summary") or [],
+            "cashflow_array": winner.get("cashflow_array") or [],
+            "samospotreba_pct": winner.get("samospotreba_pct"),
+            "samostatnost_pct": winner.get("samostatnost_pct"),
+            "capex_total_eur": winner.get("capex_total_eur"),
+        }
+    }]
+    
+    # Mergni do existing econ_results (preserve old "variants" key z OLD enginu)
+    existing_econ = analyza.get("econ_results") or {}
+    new_econ = {
+        **existing_econ,
+        "top_picks": top_picks_synth,
+        "full_response": result,
+        "engine_enriched_at": datetime.now().isoformat(),
+        "engine_version": result.get("engine_version", "0.9.5"),
+    }
+    
+    sb.table("analyza_om").update({
+        "econ_results": new_econ,
+        "updated_at": datetime.now().isoformat(),
+    }).eq("id", analyza_id).execute()
+    
+    return {
+        "ok": True,
+        "enriched": True,
+        "winner": {
+            "pv_kwp": winner.get("pv_kwp"),
+            "bess_kwh": winner.get("bess_kwh"),
+            "savings_eur_y1": top_picks_synth[0]["results"]["savings_eur_y1"],
+            "co2_t": (winner.get("carbon") or {}).get("co2_avoided_t_per_year"),
+            "bat_discharge_mwh": ((winner.get("energy_flow") or {}).get("bat_to_load_mwh") or 0),
+        }
+    }
