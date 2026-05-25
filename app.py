@@ -6190,3 +6190,178 @@ def webhook_b2b_calc_v2_save():
     except Exception as e:
         log.exception("[b2b-calc-v2-save] failed")
         return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
+# ============================================================
+# PRICING REFRESH — bundle (B2C + B2B) + addon
+# ============================================================
+
+def _refresh_bom_items(bom: list, products_map: dict, keep_margin: bool = True) -> tuple[list, list]:
+    """Match BOM items by SKU → use new product prices.
+    Returns (updated_bom, diff_log).
+    Ak položka v BOM nemá SKU alebo SKU nie je v products_map, ostáva nezmenená.
+    keep_margin: ak True a sale_price v produkte chýba, zachová pôvodnú maržu (purchase × (sale/purchase)).
+    """
+    if not isinstance(bom, list):
+        return bom, []
+    updated = []
+    diff = []
+    for it in bom:
+        if not isinstance(it, dict):
+            updated.append(it)
+            continue
+        sku = (it.get("sku") or "").strip()
+        prod = products_map.get(sku) if sku else None
+        if not prod or prod.get("purchase_price") is None:
+            updated.append(it)
+            continue
+        old_purchase = float(it.get("unit_purchase") or 0)
+        old_sale = float(it.get("unit_sale") or 0)
+        new_purchase = float(prod["purchase_price"])
+        new_sale = float(prod.get("sale_price") or 0)
+        # Ak sale nie je v produkte alebo je 0, zachovaj pôvodnú maržu
+        if new_sale <= 0 and old_purchase > 0 and old_sale > 0:
+            margin_factor = old_sale / old_purchase
+            new_sale = round(new_purchase * margin_factor, 2)
+        qty = float(it.get("qty") or 0)
+        new_item = dict(it)
+        new_item["unit_purchase"] = new_purchase
+        new_item["unit_sale"] = new_sale
+        new_item["total_purchase"] = round(new_purchase * qty, 2)
+        new_item["total_sale"] = round(new_sale * qty, 2)
+        updated.append(new_item)
+        if abs(new_purchase - old_purchase) > 0.01 or abs(new_sale - old_sale) > 0.01:
+            diff.append({
+                "sku": sku,
+                "name": it.get("name") or prod.get("name", ""),
+                "qty": qty,
+                "old_purchase": old_purchase, "new_purchase": new_purchase,
+                "old_sale": old_sale, "new_sale": new_sale,
+                "delta_total_sale": round((new_sale - old_sale) * qty, 2),
+            })
+    return updated, diff
+
+
+@app.route("/webhook/bundle-refresh-prices", methods=["POST"])
+def webhook_bundle_refresh_prices():
+    """Aktualizuje ceny v quote_bundles podľa aktuálnych products.
+    Body: { bundle_id, mode: "preview" | "apply" }
+    Vráti diff per variant + nové total ceny."""
+    body = request.get_json(silent=True) or {}
+    bundle_id = body.get("bundle_id")
+    mode = body.get("mode", "preview")
+    if not bundle_id:
+        return jsonify({"ok": False, "error": "bundle_id required"}), 400
+    try:
+        sb = _sb()
+        bres = sb.table("quote_bundles").select("*").eq("id", bundle_id).single().execute()
+        if not bres.data:
+            return jsonify({"ok": False, "error": "bundle not found"}), 404
+        bundle = bres.data
+
+        # Načítaj všetky SKUs z BOMov
+        all_skus = set()
+        for v in ("a", "b", "c", "d"):
+            bom = bundle.get(f"variant_{v}_bom") or []
+            if isinstance(bom, list):
+                for it in bom:
+                    if isinstance(it, dict) and it.get("sku"):
+                        all_skus.add(it["sku"].strip())
+        if not all_skus:
+            return jsonify({"ok": True, "diff_count": 0, "message": "BOM nemá žiadne SKU"})
+
+        pres = sb.table("products").select("sku, name, purchase_price, sale_price").in_("sku", list(all_skus)).execute()
+        products_map = {p["sku"]: p for p in (pres.data or [])}
+
+        # Refresh per variant
+        result = {"variants": {}, "totals": {}, "missing_skus": []}
+        update_payload = {}
+        all_diffs = []
+        for v in ("a", "b", "c", "d"):
+            bom = bundle.get(f"variant_{v}_bom") or []
+            if not isinstance(bom, list) or len(bom) == 0:
+                continue
+            new_bom, diff = _refresh_bom_items(bom, products_map)
+            new_cost = round(sum((float(it.get("total_purchase") or 0)) for it in new_bom), 2)
+            new_no_vat = round(sum((float(it.get("total_sale") or 0)) for it in new_bom), 2)
+            new_with_vat = round(new_no_vat * 1.23, 2)
+            old_cost = float(bundle.get(f"variant_{v}_cost") or 0)
+            old_no_vat = float(bundle.get(f"variant_{v}_price_no_vat") or 0)
+            result["variants"][v] = {
+                "diff": diff,
+                "old_cost": old_cost, "new_cost": new_cost,
+                "old_price_no_vat": old_no_vat, "new_price_no_vat": new_no_vat,
+                "delta_cost": round(new_cost - old_cost, 2),
+                "delta_price": round(new_no_vat - old_no_vat, 2),
+            }
+            all_diffs.extend(diff)
+            if mode == "apply":
+                update_payload[f"variant_{v}_bom"] = new_bom
+                update_payload[f"variant_{v}_cost"] = new_cost
+                update_payload[f"variant_{v}_price_no_vat"] = new_no_vat
+                update_payload[f"variant_{v}_price_with_vat"] = new_with_vat
+
+        # Chýbajúce SKU v products
+        result["missing_skus"] = sorted(all_skus - set(products_map.keys()))
+        result["diff_count"] = len(all_diffs)
+        result["applied"] = False
+
+        if mode == "apply" and update_payload:
+            sb.table("quote_bundles").update(update_payload).eq("id", bundle_id).execute()
+            result["applied"] = True
+
+        return jsonify({"ok": True, **result})
+    except Exception as e:
+        log.exception("[bundle-refresh-prices] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
+@app.route("/webhook/addon-refresh-prices", methods=["POST"])
+def webhook_addon_refresh_prices():
+    """Refresh cien pre addon_quotes (B2C doplnenie inštalácie)."""
+    body = request.get_json(silent=True) or {}
+    addon_id = body.get("addon_id")
+    mode = body.get("mode", "preview")
+    if not addon_id:
+        return jsonify({"ok": False, "error": "addon_id required"}), 400
+    try:
+        sb = _sb()
+        ares = sb.table("addon_quotes").select("*").eq("id", addon_id).single().execute()
+        if not ares.data:
+            return jsonify({"ok": False, "error": "addon not found"}), 404
+        addon = ares.data
+        items = addon.get("items") or []
+        if not isinstance(items, list) or not items:
+            return jsonify({"ok": True, "diff_count": 0, "message": "addon nemá items"})
+
+        all_skus = {it["sku"].strip() for it in items if isinstance(it, dict) and it.get("sku")}
+        pres = sb.table("products").select("sku, name, purchase_price, sale_price").in_("sku", list(all_skus)).execute() if all_skus else None
+        products_map = {p["sku"]: p for p in (pres.data if pres else [])}
+
+        new_items, diff = _refresh_bom_items(items, products_map)
+        new_cost = round(sum((float(it.get("total_purchase") or 0)) for it in new_items), 2)
+        new_no_vat = round(sum((float(it.get("total_sale") or 0)) for it in new_items), 2)
+        new_with_vat = round(new_no_vat * 1.23, 2)
+
+        result = {
+            "diff": diff,
+            "diff_count": len(diff),
+            "old_cost": float(addon.get("total_cost") or 0),
+            "new_cost": new_cost,
+            "old_no_vat": float(addon.get("total_no_vat") or 0),
+            "new_no_vat": new_no_vat,
+            "missing_skus": sorted(all_skus - set(products_map.keys())),
+            "applied": False,
+        }
+        if mode == "apply":
+            sb.table("addon_quotes").update({
+                "items": new_items,
+                "total_cost": new_cost,
+                "total_no_vat": new_no_vat,
+                "total_with_vat": new_with_vat,
+            }).eq("id", addon_id).execute()
+            result["applied"] = True
+        return jsonify({"ok": True, **result})
+    except Exception as e:
+        log.exception("[addon-refresh-prices] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
