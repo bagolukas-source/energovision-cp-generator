@@ -103,13 +103,26 @@ def _build_request_from_analyza(analyza: dict) -> dict:
     elif annual_kwh <= 15000:
         profile_template = "domacnost"
     
+    # Engine semantika: rk_kw = max IMPORT zo siete, mrk_kw = max EXPORT do siete.
+    # SK terminológia: om_mrk_kw / om_rk_kw oboje hovoria o IMPORTNEJ kapacite (rezervovanej).
+    # max_export_kw je samostatný field z pripojovacej zmluvy distribútora.
+    # Fallback: ak chýba export, default = rovnaké ako import (so safety max).
+    sk_import_kw = (
+        float(analyza["om_mrk_kw"]) if analyza.get("om_mrk_kw")
+        else float(analyza["om_rk_kw"]) if analyza.get("om_rk_kw")
+        else base_kwp  # last-resort fallback
+    )
+    sk_export_kw = float(analyza["max_export_kw"]) if analyza.get("max_export_kw") else sk_import_kw
+    engine_rk_kw = sk_import_kw
+    engine_mrk_kw = max(sk_export_kw, sk_import_kw)  # engine validates mrk >= rk
+
     return {
         "site": {
             "nazov": analyza.get("name", "OM"),
             "psc": analyza.get("om_psc") or "010 01",
             "rocna_spotreba_kwh": annual_kwh,
-            "rk_kw": float(analyza.get("om_rk_kw") or base_kwp),
-            "mrk_kw": float(analyza["om_mrk_kw"]) if analyza.get("om_mrk_kw") else None,
+            "rk_kw": engine_rk_kw,
+            "mrk_kw": engine_mrk_kw,
             "typ_tarify": "spot",
             "bilancna_skupina": "Energie2",
             "eic_kod": None,
