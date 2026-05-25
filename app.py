@@ -6365,3 +6365,833 @@ def webhook_addon_refresh_prices():
     except Exception as e:
         log.exception("[addon-refresh-prices] failed")
         return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
+# ============================================================
+# OM-Share — Organizátor zdieľania elektriny
+# ============================================================
+# /webhook/omshare-monthly-billing    — cron 1. v mesiaci, vystaví draft mesačné faktúry
+# /webhook/omshare-invoice-pdf        — generuje PDF pre 1 faktúru
+# /webhook/omshare-send-invoice       — odošle email s PDF prílohou
+# /webhook/omshare-monthly-report     — cron 20. v mesiaci, mesačný report klientovi
+# /webhook/omshare-edc-sync           — sync dát z OKTE EDC (mock)
+# /webhook/omshare-edc-register       — registrácia novej skupiny v OKTE EDC
+
+@app.route("/webhook/omshare-monthly-billing", methods=["POST"])
+def webhook_omshare_monthly_billing():
+    """
+    Cron 1. dňa v mesiaci — vystaví draft mesačné faktúry pre všetky aktívne OM-Share skupiny.
+    Kalkulácia: monthly_flat + monthly_per_om*active_om_count + usage_per_mwh*shared_mwh_last_month
+    Bundle zľava sa aplikuje ak plan_snapshot.bundle_discount_pct > 0.
+    """
+    body = request.get_json(silent=True) or {}
+    target_month = body.get("month")
+    target_year = body.get("year")
+
+    today = datetime.now(timezone.utc).date()
+    if not target_month or not target_year:
+        # default: fakturujeme za predchádzajúci mesiac
+        if today.month == 1:
+            target_month = 12
+            target_year = today.year - 1
+        else:
+            target_month = today.month - 1
+            target_year = today.year
+    target_month = int(target_month)
+    target_year = int(target_year)
+
+    try:
+        sb = _sb()
+        groups_res = sb.table("sharing_groups").select("*").eq("status", "active").execute()
+        groups = groups_res.data or []
+        log.info("[omshare-billing] generujem faktúry za %d/%d pre %d aktívnych skupín", target_month, target_year, len(groups))
+
+        created = []
+        skipped = []
+
+        for g in groups:
+            # check duplicate
+            dup = sb.table("sharing_invoices").select("id").eq("group_id", g["id"]).eq("invoice_type", "monthly").eq("billing_period_year", target_year).eq("billing_period_month", target_month).execute()
+            if dup.data:
+                skipped.append({"group_id": g["id"], "reason": "already_billed"})
+                continue
+
+            plan = g.get("plan_snapshot") or {}
+            monthly_flat = float(plan.get("monthly_flat_eur") or 0)
+            monthly_per_om = float(plan.get("monthly_per_om_eur") or 0)
+            usage_per_mwh = float(plan.get("usage_per_mwh_eur") or 0)
+            bundle_pct = float(plan.get("bundle_discount_pct") or 0)
+            vat_rate = float(plan.get("vat_rate") or 23)
+
+            # active OM count
+            mem = sb.table("sharing_members").select("id", count="exact").eq("group_id", g["id"]).eq("status", "active").execute()
+            om_count = mem.count or 0
+
+            # shared mwh last month (pre USAGE plán)
+            shared_mwh = 0.0
+            if usage_per_mwh > 0:
+                edc = sb.table("sharing_edc_data").select("shared_in_kwh,shared_out_kwh").eq("group_id", g["id"]).eq("period_year", target_year).eq("period_month", target_month).execute()
+                total_kwh = sum(float(r.get("shared_out_kwh") or 0) for r in (edc.data or []))
+                shared_mwh = total_kwh / 1000.0
+
+            monthly_fee = monthly_flat + monthly_per_om * om_count
+            usage_fee = usage_per_mwh * shared_mwh
+            subtotal = monthly_fee + usage_fee
+            if bundle_pct > 0:
+                subtotal = subtotal * (1.0 - bundle_pct / 100.0)
+            total_with_vat = subtotal * (1.0 + vat_rate / 100.0)
+
+            issued_date = today
+            due_date = today + timedelta(days=14)
+
+            insert_res = sb.table("sharing_invoices").insert({
+                "group_id": g["id"],
+                "customer_id": g.get("organizator_customer_id"),
+                "invoice_type": "monthly",
+                "billing_period_year": target_year,
+                "billing_period_month": target_month,
+                "setup_fee": 0,
+                "monthly_fee": round(monthly_fee, 2),
+                "usage_fee": round(usage_fee, 2),
+                "om_count_at_billing": om_count,
+                "shared_mwh": round(shared_mwh, 3),
+                "total_no_vat": round(subtotal, 2),
+                "vat_rate": vat_rate,
+                "total_with_vat": round(total_with_vat, 2),
+                "status": "draft",
+                "issued_at": issued_date.isoformat(),
+                "due_at": due_date.isoformat(),
+            }).execute()
+
+            created.append({"group_id": g["id"], "total_with_vat": round(total_with_vat, 2)})
+
+        return jsonify({"ok": True, "period": f"{target_month}/{target_year}", "created": len(created), "skipped": len(skipped), "details": {"created": created, "skipped": skipped}})
+    except Exception as e:
+        log.exception("[omshare-monthly-billing] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
+@app.route("/webhook/omshare-invoice-pdf", methods=["POST"])
+def webhook_omshare_invoice_pdf():
+    """
+    Vygeneruje PDF pre 1 sharing_invoice a upload do Supabase Storage.
+    Body: { invoice_id }
+    """
+    body = request.get_json(silent=True) or {}
+    invoice_id = body.get("invoice_id")
+    if not invoice_id:
+        return jsonify({"ok": False, "error": "invoice_id required"}), 400
+
+    try:
+        sb = _sb()
+        inv_res = sb.table("sharing_invoices").select("*").eq("id", invoice_id).single().execute()
+        inv = inv_res.data
+        if not inv:
+            return jsonify({"ok": False, "error": "invoice not found"}), 404
+
+        grp_res = sb.table("sharing_groups").select("*").eq("id", inv["group_id"]).single().execute()
+        grp = grp_res.data or {}
+
+        cust = None
+        if inv.get("customer_id"):
+            c = sb.table("customers").select("*").eq("id", inv["customer_id"]).single().execute()
+            cust = c.data
+
+        # Generate PDF via reportlab (simple invoice layout)
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import getSampleStyleSheet
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+        from reportlab.lib import colors
+        from reportlab.lib.units import cm
+        import io
+
+        buf = io.BytesIO()
+        doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=2*cm, bottomMargin=2*cm, leftMargin=2*cm, rightMargin=2*cm)
+        styles = getSampleStyleSheet()
+        story = []
+
+        # Hlavička
+        story.append(Paragraph(f"<b>Faktúra č. {inv.get('invoice_number','')}</b>", styles["Title"]))
+        story.append(Paragraph(f"OM-Share — Organizátor zdieľania elektriny", styles["Heading3"]))
+        story.append(Spacer(1, 0.5*cm))
+
+        # Dodávateľ + Odberateľ
+        cust_name = (cust or {}).get("name") or "—"
+        cust_addr = (cust or {}).get("address") or ""
+        cust_ico = (cust or {}).get("ico") or ""
+        info_table = Table([
+            ["Dodávateľ", "Odberateľ"],
+            ["Energovision, s. r. o.", cust_name],
+            ["IČO: 53 036 280", cust_addr],
+            ["DIČ: 2121270486", f"IČO: {cust_ico}"],
+            ["IČ DPH: SK2121270486", ""],
+        ], colWidths=[8*cm, 8*cm])
+        info_table.setStyle(TableStyle([
+            ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
+            ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#1F4E78")),
+            ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+            ("VALIGN", (0,0), (-1,-1), "TOP"),
+            ("FONTSIZE", (0,0), (-1,-1), 9),
+            ("PADDING", (0,0), (-1,-1), 6),
+        ]))
+        story.append(info_table)
+        story.append(Spacer(1, 0.5*cm))
+
+        # Obdobie
+        period_str = f"{inv.get('billing_period_month','')}/{inv.get('billing_period_year','')}" if inv.get("invoice_type") == "monthly" else "Jednorazové"
+        meta = Table([
+            ["Skupina", grp.get("name", "—")],
+            ["Plán", grp.get("plan_code", "—")],
+            ["Typ", "Mesačná" if inv.get("invoice_type") == "monthly" else ("Zriadenie" if inv.get("invoice_type") == "setup" else inv.get("invoice_type"))],
+            ["Obdobie", period_str],
+            ["Vystavené", inv.get("issued_at") or ""],
+            ["Splatnosť", inv.get("due_at") or ""],
+        ], colWidths=[5*cm, 11*cm])
+        meta.setStyle(TableStyle([
+            ("FONTSIZE", (0,0), (-1,-1), 9),
+            ("PADDING", (0,0), (-1,-1), 4),
+            ("LINEBELOW", (0,0), (-1,-1), 0.25, colors.lightgrey),
+        ]))
+        story.append(meta)
+        story.append(Spacer(1, 0.7*cm))
+
+        # Položky
+        rows = [["Položka", "Počet", "Cena", "Spolu"]]
+        if float(inv.get("setup_fee") or 0) > 0:
+            rows.append(["Zriaďovací poplatok OM-Share", "1", f"{float(inv['setup_fee']):.2f} €", f"{float(inv['setup_fee']):.2f} €"])
+        if float(inv.get("monthly_fee") or 0) > 0:
+            rows.append([f"Mesačný poplatok (správa {inv.get('om_count_at_billing','—')} OM)", "1 mes.", f"{float(inv['monthly_fee']):.2f} €", f"{float(inv['monthly_fee']):.2f} €"])
+        if float(inv.get("usage_fee") or 0) > 0:
+            rows.append([f"Poplatok za zdieľanú elektrinu ({float(inv.get('shared_mwh') or 0):.3f} MWh)", "—", "—", f"{float(inv['usage_fee']):.2f} €"])
+
+        items_table = Table(rows, colWidths=[8*cm, 2.5*cm, 2.5*cm, 3*cm])
+        items_table.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#1F4E78")),
+            ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+            ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
+            ("ALIGN", (1,0), (-1,-1), "RIGHT"),
+            ("FONTSIZE", (0,0), (-1,-1), 9),
+            ("PADDING", (0,0), (-1,-1), 6),
+            ("LINEBELOW", (0,0), (-1,-1), 0.25, colors.lightgrey),
+        ]))
+        story.append(items_table)
+        story.append(Spacer(1, 0.5*cm))
+
+        # Totály
+        no_vat = float(inv.get("total_no_vat") or 0)
+        vat_pct = float(inv.get("vat_rate") or 23)
+        vat_amount = no_vat * vat_pct / 100.0
+        with_vat = float(inv.get("total_with_vat") or 0)
+        totals = Table([
+            ["Spolu bez DPH", f"{no_vat:.2f} €"],
+            [f"DPH {vat_pct:.0f}%", f"{vat_amount:.2f} €"],
+            ["Spolu s DPH", f"{with_vat:.2f} €"],
+        ], colWidths=[13*cm, 3*cm])
+        totals.setStyle(TableStyle([
+            ("ALIGN", (0,0), (-1,-1), "RIGHT"),
+            ("FONTSIZE", (0,0), (-1,-1), 10),
+            ("PADDING", (0,0), (-1,-1), 4),
+            ("FONTNAME", (0,-1), (-1,-1), "Helvetica-Bold"),
+            ("LINEABOVE", (0,-1), (-1,-1), 1, colors.HexColor("#1F4E78")),
+        ]))
+        story.append(totals)
+        story.append(Spacer(1, 1*cm))
+
+        story.append(Paragraph(
+            "Faktúra je vystavená v zmysle zákona č. 222/2004 Z. z. o DPH. "
+            "Energovision je organizátor zdieľania elektriny zapísaný u ÚRSO. "
+            "Platba bankovým prevodom na IBAN: SK00 0000 0000 0000 0000 0000.",
+            styles["Normal"]
+        ))
+
+        doc.build(story)
+        pdf_bytes = buf.getvalue()
+        buf.close()
+
+        # Upload do storage
+        filename = f"{inv.get('invoice_number', invoice_id)}.pdf"
+        storage_path = f"omshare/invoices/{inv['group_id']}/{filename}"
+
+        try:
+            sb.storage.from_("documents").upload(
+                path=storage_path,
+                file=pdf_bytes,
+                file_options={"content-type": "application/pdf", "upsert": "true", "cache-control": "0"},
+            )
+        except Exception as up_e:
+            log.warning("[omshare-invoice-pdf] upload retry: %s", up_e)
+            # remove + upload
+            try:
+                sb.storage.from_("documents").remove([storage_path])
+            except Exception:
+                pass
+            sb.storage.from_("documents").upload(
+                path=storage_path,
+                file=pdf_bytes,
+                file_options={"content-type": "application/pdf"},
+            )
+
+        pub = sb.storage.from_("documents").get_public_url(storage_path)
+        pdf_url = f"{pub}?v={int(datetime.now().timestamp())}"
+
+        sb.table("sharing_invoices").update({
+            "pdf_url": pdf_url,
+            "storage_path": storage_path,
+        }).eq("id", invoice_id).execute()
+
+        return jsonify({"ok": True, "pdf_url": pdf_url, "filename": filename})
+    except Exception as e:
+        log.exception("[omshare-invoice-pdf] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
+@app.route("/webhook/omshare-send-invoice", methods=["POST"])
+def webhook_omshare_send_invoice():
+    """
+    Pošle email s PDF faktúry klientovi (organizátorovi skupiny) cez M365.
+    Body: { invoice_id, recipient_email? }
+    """
+    body = request.get_json(silent=True) or {}
+    invoice_id = body.get("invoice_id")
+    if not invoice_id:
+        return jsonify({"ok": False, "error": "invoice_id required"}), 400
+
+    try:
+        sb = _sb()
+        inv = sb.table("sharing_invoices").select("*").eq("id", invoice_id).single().execute().data
+        if not inv:
+            return jsonify({"ok": False, "error": "invoice not found"}), 404
+
+        if not inv.get("pdf_url"):
+            return jsonify({"ok": False, "error": "PDF not generated yet — call /webhook/omshare-invoice-pdf first"}), 400
+
+        grp = sb.table("sharing_groups").select("name, group_number").eq("id", inv["group_id"]).single().execute().data or {}
+
+        recipient = body.get("recipient_email")
+        if not recipient and inv.get("customer_id"):
+            cust = sb.table("customers").select("email").eq("id", inv["customer_id"]).single().execute().data
+            recipient = (cust or {}).get("email")
+
+        if not recipient:
+            return jsonify({"ok": False, "error": "no recipient email — pass recipient_email or set customer.email"}), 400
+
+        period_str = f"{inv.get('billing_period_month','')}/{inv.get('billing_period_year','')}" if inv.get("invoice_type") == "monthly" else "zriadenie"
+        subject = f"Faktúra {inv.get('invoice_number')} — OM-Share {period_str}"
+        body_html = f"""
+        <p>Dobrý deň,</p>
+        <p>Posielame Vám faktúru za službu <strong>OM-Share — Správa zdieľania elektriny</strong> pre skupinu
+        <strong>{grp.get('name','')}</strong> ({grp.get('group_number','')}).</p>
+        <p>
+          Číslo faktúry: <strong>{inv.get('invoice_number')}</strong><br>
+          Obdobie: {period_str}<br>
+          Suma na úhradu: <strong>{float(inv.get('total_with_vat') or 0):.2f} €</strong><br>
+          Splatnosť: {inv.get('due_at')}
+        </p>
+        <p>Faktúru nájdete v prílohe. Platbu prosím poukážte na IBAN uvedený vo faktúre s variabilným symbolom {inv.get('invoice_number','').replace('-','')}.</p>
+        <p>V prípade otázok nás neváhajte kontaktovať.</p>
+        <p>S pozdravom,<br>Tím Energovision<br><a href="https://www.energovision.sk">www.energovision.sk</a></p>
+        """
+
+        # Fetch PDF bytes
+        import requests as rq
+        r = rq.get(inv["pdf_url"], timeout=30)
+        if r.status_code != 200:
+            return jsonify({"ok": False, "error": f"PDF fetch failed: {r.status_code}"}), 500
+        import base64
+        pdf_b64 = base64.b64encode(r.content).decode()
+
+        # Send via M365 (call our own endpoint or M365 directly)
+        # Reuse existing M365 send logic from email_agent or similar
+        # Here use direct Graph API call via stored M365 credentials
+        cred = sb.table("m365_credentials").select("*").eq("id", "singleton").single().execute().data
+        if not cred:
+            return jsonify({"ok": False, "error": "M365 nie je pripojený. Choď na /admin/email-setup"}), 400
+
+        # Refresh access token if expired
+        from datetime import datetime as dt
+        access_token = cred.get("access_token")
+        exp = cred.get("access_token_expires_at")
+        if not access_token or (exp and dt.fromisoformat(exp.replace("Z","+00:00")) < dt.now(timezone.utc)):
+            # refresh
+            tok_url = f"https://login.microsoftonline.com/{cred.get('tenant_id')}/oauth2/v2.0/token"
+            tok_body = {
+                "client_id": cred.get("client_id"),
+                "client_secret": os.environ.get("AZURE_CLIENT_SECRET", ""),
+                "grant_type": "refresh_token",
+                "refresh_token": cred.get("refresh_token"),
+                "scope": "https://graph.microsoft.com/Mail.Send https://graph.microsoft.com/User.Read offline_access",
+            }
+            tr = rq.post(tok_url, data=tok_body, timeout=30)
+            if not tr.ok:
+                return jsonify({"ok": False, "error": f"M365 refresh: {tr.status_code} {tr.text[:200]}"}), 500
+            tokens = tr.json()
+            access_token = tokens["access_token"]
+            new_exp = (dt.now(timezone.utc) + timedelta(seconds=tokens.get("expires_in", 3600))).isoformat()
+            sb.table("m365_credentials").update({
+                "access_token": access_token,
+                "access_token_expires_at": new_exp,
+                "refresh_token": tokens.get("refresh_token", cred.get("refresh_token")),
+                "last_used_at": dt.now(timezone.utc).isoformat(),
+            }).eq("id", "singleton").execute()
+
+        filename = (inv.get("storage_path") or "").split("/")[-1] or f"{inv.get('invoice_number')}.pdf"
+        gr = rq.post(
+            "https://graph.microsoft.com/v1.0/me/sendMail",
+            headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+            json={
+                "message": {
+                    "subject": subject,
+                    "body": {"contentType": "HTML", "content": body_html},
+                    "toRecipients": [{"emailAddress": {"address": recipient}}],
+                    "attachments": [{
+                        "@odata.type": "#microsoft.graph.fileAttachment",
+                        "name": filename,
+                        "contentType": "application/pdf",
+                        "contentBytes": pdf_b64,
+                    }],
+                },
+                "saveToSentItems": True,
+            },
+            timeout=60,
+        )
+        if gr.status_code != 202:
+            return jsonify({"ok": False, "error": f"Graph send: {gr.status_code} {gr.text[:300]}"}), 500
+
+        # Mark invoice as sent
+        sb.table("sharing_invoices").update({
+            "status": "sent",
+            "updated_at": dt.now(timezone.utc).isoformat(),
+        }).eq("id", invoice_id).execute()
+
+        sb.table("activities").insert({
+            "entity_type": "sharing_group",
+            "entity_id": inv["group_id"],
+            "action": "invoice_sent",
+            "changes": {"invoice_number": inv.get("invoice_number"), "to": recipient, "total": inv.get("total_with_vat")},
+        }).execute()
+
+        return jsonify({"ok": True, "sent_to": recipient})
+    except Exception as e:
+        log.exception("[omshare-send-invoice] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
+# ============================================================
+# OM-Share — Mesačný report klientovi (P3)
+# ============================================================
+
+@app.route("/webhook/omshare-monthly-report", methods=["POST"])
+def webhook_omshare_monthly_report():
+    """
+    Cron 20. dňa v mesiaci — generuje a posiela mesačný report pre každú aktívnu skupinu.
+    Report obsahuje per-OM rozpis zdieľanej elektriny, celkový objem, odhadovaná úspora.
+    """
+    body = request.get_json(silent=True) or {}
+    target_month = body.get("month")
+    target_year = body.get("year")
+
+    today = datetime.now(timezone.utc).date()
+    if not target_month or not target_year:
+        if today.month == 1:
+            target_month = 12
+            target_year = today.year - 1
+        else:
+            target_month = today.month - 1
+            target_year = today.year
+    target_month = int(target_month)
+    target_year = int(target_year)
+
+    try:
+        sb = _sb()
+        groups = sb.table("sharing_groups").select("*").eq("status", "active").execute().data or []
+        log.info("[omshare-report] generujem reporty za %d/%d pre %d skupín", target_month, target_year, len(groups))
+
+        results = []
+        for g in groups:
+            try:
+                # check duplicate
+                dup = sb.table("sharing_reports").select("id").eq("group_id", g["id"]).eq("period_year", target_year).eq("period_month", target_month).execute()
+                if dup.data:
+                    results.append({"group_id": g["id"], "skipped": "exists"})
+                    continue
+
+                # fetch edc
+                edc = sb.table("sharing_edc_data").select("*").eq("group_id", g["id"]).eq("period_year", target_year).eq("period_month", target_month).execute()
+                edc_rows = edc.data or []
+                members = sb.table("sharing_members").select("id, member_name, role").eq("group_id", g["id"]).execute().data or []
+                mname = {m["id"]: m for m in members}
+
+                total_kwh = sum(float(r.get("shared_out_kwh") or 0) for r in edc_rows)
+                # Odhad úspory: priemerná cena elektriny SK pre koncového odberateľa ~ 0.18 €/kWh
+                est_savings = total_kwh * 0.18
+
+                # Generate PDF
+                from reportlab.lib.pagesizes import A4
+                from reportlab.lib.styles import getSampleStyleSheet
+                from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+                from reportlab.lib import colors
+                from reportlab.lib.units import cm
+                import io
+
+                buf = io.BytesIO()
+                doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=2*cm, bottomMargin=2*cm, leftMargin=2*cm, rightMargin=2*cm)
+                styles = getSampleStyleSheet()
+                story = []
+                story.append(Paragraph(f"<b>Mesačný report zdieľania elektriny</b>", styles["Title"]))
+                story.append(Paragraph(f"Skupina: <b>{g.get('name','')}</b> ({g.get('group_number','')})", styles["Heading3"]))
+                story.append(Paragraph(f"Obdobie: {target_month}/{target_year}", styles["Normal"]))
+                story.append(Spacer(1, 0.5*cm))
+
+                summary = Table([
+                    ["Celkový objem zdieľanej elektriny", f"{total_kwh:.2f} kWh"],
+                    ["Počet aktívnych odberných miest", str(len(members))],
+                    ["Odhadovaná úspora skupiny", f"{est_savings:.2f} €"],
+                    ["Plán", g.get("plan_code","—")],
+                ], colWidths=[10*cm, 6*cm])
+                summary.setStyle(TableStyle([
+                    ("FONTSIZE", (0,0), (-1,-1), 10),
+                    ("PADDING", (0,0), (-1,-1), 6),
+                    ("BACKGROUND", (0,0), (-1,-1), colors.HexColor("#F0FDF4")),
+                    ("LINEBELOW", (0,0), (-1,-1), 0.25, colors.lightgrey),
+                ]))
+                story.append(summary)
+                story.append(Spacer(1, 0.7*cm))
+
+                # Per OM rozpis
+                story.append(Paragraph("<b>Rozpis podľa odberného miesta</b>", styles["Heading4"]))
+                rows = [["Odberné miesto", "Rola", "Prijal (kWh)", "Poskytol (kWh)"]]
+                for r in edc_rows:
+                    m = mname.get(r.get("member_id"), {})
+                    rows.append([
+                        m.get("member_name", "—"),
+                        "Zdroj" if m.get("role") == "producer" else "Spotrebič" if m.get("role") == "consumer" else "Oboje",
+                        f"{float(r.get('shared_in_kwh') or 0):.2f}",
+                        f"{float(r.get('shared_out_kwh') or 0):.2f}",
+                    ])
+                if len(rows) > 1:
+                    tbl = Table(rows, colWidths=[7*cm, 3*cm, 3*cm, 3*cm])
+                    tbl.setStyle(TableStyle([
+                        ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#1F4E78")),
+                        ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+                        ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
+                        ("ALIGN", (2,0), (-1,-1), "RIGHT"),
+                        ("FONTSIZE", (0,0), (-1,-1), 9),
+                        ("PADDING", (0,0), (-1,-1), 5),
+                        ("LINEBELOW", (0,0), (-1,-1), 0.25, colors.lightgrey),
+                    ]))
+                    story.append(tbl)
+                else:
+                    story.append(Paragraph("Žiadne dáta pre toto obdobie.", styles["Normal"]))
+
+                story.append(Spacer(1, 1*cm))
+                story.append(Paragraph("Energovision, s. r. o. · OM-Share organizátor zdieľania elektriny · ÚRSO potvrdenie [____]", styles["Italic"]))
+
+                doc.build(story)
+                pdf_bytes = buf.getvalue()
+                buf.close()
+
+                filename = f"OMShare_report_{g.get('group_number')}_{target_year}-{target_month:02d}.pdf"
+                storage_path = f"omshare/reports/{g['id']}/{filename}"
+                try:
+                    sb.storage.from_("documents").upload(
+                        path=storage_path,
+                        file=pdf_bytes,
+                        file_options={"content-type": "application/pdf", "upsert": "true", "cache-control": "0"},
+                    )
+                except Exception:
+                    try:
+                        sb.storage.from_("documents").remove([storage_path])
+                    except Exception:
+                        pass
+                    sb.storage.from_("documents").upload(
+                        path=storage_path,
+                        file=pdf_bytes,
+                        file_options={"content-type": "application/pdf"},
+                    )
+
+                pub = sb.storage.from_("documents").get_public_url(storage_path)
+                pdf_url = f"{pub}?v={int(datetime.now().timestamp())}"
+
+                sb.table("sharing_reports").insert({
+                    "group_id": g["id"],
+                    "period_month": target_month,
+                    "period_year": target_year,
+                    "total_shared_kwh": round(total_kwh, 3),
+                    "total_savings_eur": round(est_savings, 2),
+                    "member_count": len(members),
+                    "pdf_url": pdf_url,
+                    "storage_path": storage_path,
+                }).execute()
+
+                results.append({"group_id": g["id"], "total_kwh": total_kwh, "savings": est_savings, "pdf": pdf_url})
+            except Exception as inner:
+                log.exception("[omshare-report] group %s failed", g.get("id"))
+                results.append({"group_id": g.get("id"), "error": str(inner)[:200]})
+
+        return jsonify({"ok": True, "period": f"{target_month}/{target_year}", "count": len(results), "details": results})
+    except Exception as e:
+        log.exception("[omshare-monthly-report] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
+# ============================================================
+# OM-Share — OKTE EDC client (P4 — mock + skeleton pre real)
+# ============================================================
+
+def _okte_edc_mock_data(group_id, members, target_year, target_month):
+    """Mock EDC dáta — generuje pseudonáhodné kWh hodnoty pre testing."""
+    import random
+    rng = random.Random(f"{group_id}-{target_year}-{target_month}")
+    results = []
+    producers = [m for m in members if m.get("role") in ("producer", "both") and m.get("status") == "active"]
+    consumers = [m for m in members if m.get("role") in ("consumer", "both") and m.get("status") == "active"]
+    if not producers or not consumers:
+        return []
+    # Producer produkuje 200-600 kWh mesačne, consumer spotreba 150-450 kWh
+    total_produced = sum(rng.uniform(200, 600) for _ in producers)
+    for p in producers:
+        out_kwh = total_produced / len(producers)
+        results.append({
+            "group_id": group_id,
+            "member_id": p["id"],
+            "period_month": target_month,
+            "period_year": target_year,
+            "shared_in_kwh": 0,
+            "shared_out_kwh": round(out_kwh, 2),
+            "production_kwh": round(out_kwh * 1.3, 2),  # produkoval viac, len časť zdieľal
+            "consumption_kwh": 0,
+            "source": "mock",
+        })
+    per_consumer = total_produced / len(consumers)
+    for c in consumers:
+        in_kwh = per_consumer * rng.uniform(0.7, 1.1)
+        results.append({
+            "group_id": group_id,
+            "member_id": c["id"],
+            "period_month": target_month,
+            "period_year": target_year,
+            "shared_in_kwh": round(in_kwh, 2),
+            "shared_out_kwh": 0,
+            "consumption_kwh": round(in_kwh * 2.5, 2),
+            "production_kwh": 0,
+            "source": "mock",
+        })
+    return results
+
+
+@app.route("/webhook/omshare-edc-sync", methods=["POST"])
+def webhook_omshare_edc_sync():
+    """
+    Sync dát z OKTE EDC za zvolený mesiac. Ak nemáme certifikát/credentials → mock mode.
+    Body: { group_id?, month?, year? }
+    """
+    body = request.get_json(silent=True) or {}
+    group_id = body.get("group_id")
+    target_month = body.get("month")
+    target_year = body.get("year")
+
+    today = datetime.now(timezone.utc).date()
+    if not target_month or not target_year:
+        if today.month == 1:
+            target_month, target_year = 12, today.year - 1
+        else:
+            target_month, target_year = today.month - 1, today.year
+    target_month, target_year = int(target_month), int(target_year)
+
+    use_mock = not bool(os.environ.get("OKTE_EDC_CERT_PATH"))
+
+    try:
+        sb = _sb()
+        groups_q = sb.table("sharing_groups").select("*").eq("status", "active")
+        if group_id:
+            groups_q = groups_q.eq("id", group_id)
+        groups = groups_q.execute().data or []
+
+        synced = []
+        for g in groups:
+            members = sb.table("sharing_members").select("*").eq("group_id", g["id"]).execute().data or []
+            if use_mock:
+                rows = _okte_edc_mock_data(g["id"], members, target_year, target_month)
+            else:
+                # TODO: real OKTE EDC API call when certificate is available
+                # rows = okte_edc_client.fetch_monthly_data(g["edc_group_id"], target_year, target_month)
+                rows = []
+
+            if not rows:
+                continue
+
+            for r in rows:
+                # upsert per (member_id, year, month)
+                sb.table("sharing_edc_data").upsert(r, on_conflict="member_id,period_year,period_month").execute()
+            synced.append({"group_id": g["id"], "rows": len(rows)})
+
+        return jsonify({"ok": True, "mode": "mock" if use_mock else "real", "period": f"{target_month}/{target_year}", "groups": len(synced), "details": synced})
+    except Exception as e:
+        log.exception("[omshare-edc-sync] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
+@app.route("/webhook/omshare-edc-register", methods=["POST"])
+def webhook_omshare_edc_register():
+    """
+    Registrácia novej skupiny v OKTE EDC. Mock alebo real podľa certifikátu.
+    Body: { group_id }
+    """
+    body = request.get_json(silent=True) or {}
+    group_id = body.get("group_id")
+    if not group_id:
+        return jsonify({"ok": False, "error": "group_id required"}), 400
+
+    use_mock = not bool(os.environ.get("OKTE_EDC_CERT_PATH"))
+
+    try:
+        sb = _sb()
+        if use_mock:
+            # Mock — assign fake EDC ID
+            import secrets
+            edc_id = f"EDC-MOCK-{secrets.token_hex(4).upper()}"
+        else:
+            # TODO: real OKTE EDC call
+            edc_id = "TODO_REAL_EDC"
+
+        sb.table("sharing_groups").update({
+            "edc_group_id": edc_id,
+            "registered_at": datetime.now(timezone.utc).isoformat(),
+            "status": "pending_okte",
+        }).eq("id", group_id).execute()
+
+        sb.table("activities").insert({
+            "entity_type": "sharing_group",
+            "entity_id": group_id,
+            "action": "edc_registered",
+            "changes": {"edc_group_id": edc_id, "mode": "mock" if use_mock else "real"},
+        }).execute()
+
+        return jsonify({"ok": True, "edc_group_id": edc_id, "mode": "mock" if use_mock else "real"})
+    except Exception as e:
+        log.exception("[omshare-edc-register] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
+# ============================================================
+# OM-Share — One-pager generator (P5)
+# ============================================================
+
+@app.route("/webhook/omshare-onepager", methods=["POST"])
+def webhook_omshare_onepager():
+    """
+    Generuje personalizovaný one-pager (PDF) pre konkrétneho zákazníka.
+    Body: { type: 'b2c'|'b2b'|'bundle', customer_id?, customer_name? }
+    """
+    body = request.get_json(silent=True) or {}
+    onepager_type = body.get("type", "b2c")
+    customer_id = body.get("customer_id")
+    customer_name = body.get("customer_name", "")
+
+    try:
+        sb = _sb()
+        if customer_id and not customer_name:
+            c = sb.table("customers").select("name").eq("id", customer_id).single().execute().data
+            if c:
+                customer_name = c.get("name", "")
+
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+        from reportlab.lib import colors
+        from reportlab.lib.units import cm
+        from reportlab.lib.enums import TA_CENTER
+        import io
+
+        buf = io.BytesIO()
+        doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=1.5*cm, bottomMargin=1.5*cm, leftMargin=2*cm, rightMargin=2*cm)
+        styles = getSampleStyleSheet()
+        big = ParagraphStyle("big", parent=styles["Title"], fontSize=24, leading=28, alignment=TA_CENTER)
+        story = []
+
+        if onepager_type == "b2c":
+            title = "OM-Share START — Zdieľajte elektrinu v rodine"
+            tagline = "Zdieľajte prebytky z vašej FVE so susedmi alebo rodinou. Šetríte za elektrinu, my sa staráme o administratívu."
+            features = [
+                "Zriadenie skupiny zdieľania na ÚRSO + OKTE EDC",
+                "Mesačné vyúčtovanie a report o zdieľanej elektrine",
+                "Komunikácia s distribúciou a OKTE",
+                "2–4 odberné miesta v skupine",
+                "Pre domácnosti — 49 € zriadenie + 4 €/mes.",
+            ]
+        elif onepager_type == "b2b":
+            title = "OM-Share BUSINESS — Zdieľanie pre firmy"
+            tagline = "Firma s viacerými prevádzkami? Zdieľaním elektriny ušetríte tisíce € ročne. Komplexná správa od Energovision."
+            features = [
+                "Až 10 odberných miest v skupine (centrála, pobočky, parkoviská)",
+                "Optimalizácia metódy zdieľania — statická, dynamická, prioritná",
+                "Detailné mesačné reporty pre účtovníctvo",
+                "Cross-sell: FVE/BESS/EMS pre Vaše prevádzky",
+                "199 € zriadenie + 2 €/OM/mes.",
+            ]
+        else:  # bundle
+            title = "OM-Share + EMS Bundle — Najvyššia hodnota"
+            tagline = "Pre klientov s FVE/BESS od Energovision: 30% zľava na zdieľanie + integrácia s EMS (spotová arbitráž)."
+            features = [
+                "30% zľava na OM-Share službu",
+                "Integrácia s Energovision EMS — automatická arbitráž",
+                "Optimalizácia nabíjania batérie podľa hodinových cien OKTE",
+                "Pre FVE klientov nad 10 kWp s BESS",
+                "Zriadenie 34,30 € + 1,40 €/OM/mes.",
+            ]
+
+        story.append(Paragraph(title, big))
+        if customer_name:
+            story.append(Paragraph(f"<i>Personalizovaná ponuka pre: <b>{customer_name}</b></i>", styles["Italic"]))
+        story.append(Spacer(1, 0.5*cm))
+        story.append(Paragraph(tagline, styles["Heading4"]))
+        story.append(Spacer(1, 0.7*cm))
+
+        story.append(Paragraph("<b>Čo všetko zahŕňa služba:</b>", styles["Heading4"]))
+        for f in features:
+            story.append(Paragraph(f"• {f}", styles["Normal"]))
+        story.append(Spacer(1, 0.7*cm))
+
+        story.append(Paragraph("<b>Prečo Energovision?</b>", styles["Heading4"]))
+        story.append(Paragraph(
+            "Energovision je jediná firma, ktorá ponúka <b>komplexný balík FVE + BESS + EMS + zdieľanie</b> pod jednou strechou. "
+            "Sme vendor-neutrálni (nepredávame elektrinu) — klient si ponechá svojho dodávateľa. "
+            "Reálna technická expertíza (revízie, servis trafostaníc) a regionálna prítomnosť.",
+            styles["Normal"]
+        ))
+        story.append(Spacer(1, 1*cm))
+
+        story.append(Paragraph("<b>Kontakt:</b> Energovision, s. r. o. · sales@energovision.sk · www.energovision.sk", styles["Italic"]))
+
+        doc.build(story)
+        pdf_bytes = buf.getvalue()
+        buf.close()
+
+        # Upload
+        safe_name = (customer_name or "klient").replace(" ", "_").lower()[:40]
+        filename = f"OMShare_{onepager_type}_{safe_name}.pdf"
+        storage_path = f"omshare/onepagers/{filename}"
+        try:
+            sb.storage.from_("documents").upload(
+                path=storage_path,
+                file=pdf_bytes,
+                file_options={"content-type": "application/pdf", "upsert": "true", "cache-control": "0"},
+            )
+        except Exception:
+            try:
+                sb.storage.from_("documents").remove([storage_path])
+            except Exception:
+                pass
+            sb.storage.from_("documents").upload(
+                path=storage_path,
+                file=pdf_bytes,
+                file_options={"content-type": "application/pdf"},
+            )
+
+        pub = sb.storage.from_("documents").get_public_url(storage_path)
+        pdf_url = f"{pub}?v={int(datetime.now().timestamp())}"
+
+        return jsonify({"ok": True, "pdf_url": pdf_url, "filename": filename, "type": onepager_type})
+    except Exception as e:
+        log.exception("[omshare-onepager] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
