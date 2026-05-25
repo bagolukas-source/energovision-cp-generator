@@ -205,8 +205,98 @@ def build_run_variants_response(
     for label, v in top_picks:
         rank_map.setdefault(v.variant_id, []).append(label)
 
+    # PVGIS Slovakia mesačné váhy (% z ročnej výroby) — Bratislava 48.15°N
+    # Zdroj: PVGIS-SARAH2, sklon 35°, juh
+    PVGIS_SK_MONTHLY_WEIGHTS = [
+        0.038, 0.057, 0.088, 0.108, 0.119, 0.124,
+        0.124, 0.116, 0.091, 0.067, 0.040, 0.028,
+    ]
+    # SK B2B mesačné distribúcie spotreby (rovnomerné s miernym profilom Z/L)
+    SK_LOAD_MONTHLY_WEIGHTS = [
+        0.092, 0.088, 0.086, 0.080, 0.076, 0.078,
+        0.080, 0.080, 0.082, 0.086, 0.088, 0.084,
+    ]
+
     variants_out = []
     for r in results:
+        # === CASHFLOW ARRAY ===
+        # rok 0 = -net capex + dotácia, rok 1..N = revenue - opex (+ tax shield 1-6)
+        cf_array = []
+        for cy in r.financial.yearly_cashflows:
+            cf_array.append(cy.net_cashflow)
+        # Zaisti že máme aspoň 21 hodnôt (rok 0..20)
+        while len(cf_array) < 21:
+            cf_array.append(cf_array[-1] if cf_array else 0.0)
+        cf_array = cf_array[:25]  # max 25 rokov
+
+        # === VALUE STREAMS BREAKDOWN (annual €) ===
+        s = r.summary
+        value_streams = {
+            "solar_self_consumption_eur": float(s.sav_solar_self_cons_eur),
+            "solar_export_eur": float(s.sav_solar_export_eur),
+            "bess_self_consumption_eur": float(s.sav_bess_self_cons_eur),
+            "arbitrage_eur": float(s.sav_arbitrage_eur),
+            "peak_shaving_eur": float(s.sav_peak_shaving_eur),
+            "mrk_penalty_avoided_eur": float(s.sav_mrk_penalty_avoided_eur),
+            "total_eur": float(s.sav_total_eur),
+        }
+
+        # === MONTHLY SUMMARY (12) — odhad z PVGIS SK distribúcie ===
+        # Engine spočíta annual; mesačný breakdown derivovaný z PVGIS váh + load profilu.
+        # Real per-hour breakdown by vyžadoval engine refactor (track per-month).
+        annual_pv = float(s.pv_total_kwh)
+        annual_load = float(s.load_total_kwh)
+        annual_export = float(s.pv_to_grid_kwh)
+        annual_import = float(s.grid_import_kwh)
+        annual_savings = float(s.sav_total_eur)
+        monthly_summary = []
+        for m in range(12):
+            pv_w = PVGIS_SK_MONTHLY_WEIGHTS[m]
+            load_w = SK_LOAD_MONTHLY_WEIGHTS[m]
+            monthly_summary.append({
+                "month": m + 1,
+                "pv_kwh": annual_pv * pv_w,
+                "load_kwh": annual_load * load_w,
+                "export_kwh": annual_export * pv_w,
+                "import_kwh": annual_import * load_w,
+                "solar_to_load_eur": value_streams["solar_self_consumption_eur"] * pv_w,
+                "solar_export_eur": value_streams["solar_export_eur"] * pv_w,
+                "arbitrage_eur": value_streams["arbitrage_eur"] / 12.0,
+                "peak_shaving_eur": value_streams["peak_shaving_eur"] * load_w,
+                "total_eur": annual_savings * ((pv_w + load_w) / 2),
+            })
+
+        # === ENERGY FLOW (Sankey-style — pre 4-circle diagram) ===
+        energy_flow = {
+            "pv_total_mwh": annual_pv / 1000.0,
+            "pv_to_load_mwh": float(s.pv_to_load_kwh) / 1000.0,
+            "pv_to_grid_mwh": float(s.pv_to_grid_kwh) / 1000.0,
+            "pv_to_bat_mwh": float(s.pv_to_bat_kwh) / 1000.0,
+            "grid_to_load_mwh": float(s.grid_import_kwh) / 1000.0,
+            "bat_to_load_mwh": float(s.bat_discharge_total_kwh) / 1000.0,
+            "grid_to_bat_mwh": 0.0,  # rule_based dispatch netýje grid→bat zvlášť
+            "load_total_mwh": annual_load / 1000.0,
+            "grid_export_mwh": float(s.grid_export_kwh) / 1000.0,
+        }
+
+        # === SOLAR CONSUMPTION BREAKDOWN (pre donut) ===
+        if annual_pv > 0:
+            solar_consumption_pct = {
+                "direct_to_load": (float(s.pv_to_load_kwh) / annual_pv) * 100,
+                "charging_battery": (float(s.pv_to_bat_kwh) / annual_pv) * 100,
+                "exported": (float(s.pv_to_grid_kwh) / annual_pv) * 100,
+                "curtailed": (float(s.pv_clipped_kwh) / annual_pv) * 100,
+            }
+        else:
+            solar_consumption_pct = {"direct_to_load": 0, "charging_battery": 0, "exported": 0, "curtailed": 0}
+
+        # === CARBON ===
+        carbon = {
+            "co2_avoided_t_per_year": float(s.co2_avoided_t),
+            "trees_equivalent": int(s.co2_avoided_t * 1000 / 21),  # 21 kg CO2/tree/year
+            "barrels_oil_avoided": int(s.co2_avoided_t * 2.32),     # 1 t CO2 ≈ 2.32 barrels
+        }
+
         variants_out.append({
             "variant_id": r.variant_id,
             "pv_kwp": r.pv_kwp,
@@ -230,6 +320,13 @@ def build_run_variants_response(
             "lcos_eur_mwh": r.financial.lcos_eur_mwh,
             "label": r.label(),
             "rank_labels": rank_map.get(r.variant_id, []),
+            # === NEW: real data pre charts ===
+            "cashflow_array": cf_array,
+            "value_streams": value_streams,
+            "monthly_summary": monthly_summary,
+            "energy_flow": energy_flow,
+            "solar_consumption_pct": solar_consumption_pct,
+            "carbon": carbon,
         })
 
     return {
