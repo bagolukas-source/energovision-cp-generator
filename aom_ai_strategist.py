@@ -111,53 +111,65 @@ def generate_smart_variants(sb, analyza: dict, profile: dict) -> list[dict]:
     max_export = float(analyza.get("max_export_kw") or 0)
 
     # Fallback: ak chýba 15-min profil + faktúra → odhad z MRK
-    # Typický B2B load factor 35–45 % (priemerné využitie MRK počas roka)
+    # B2B load factor: realisticky 20-35 % (priemyselný 35-50 %, kancelária 15-25 %)
     annual_estimated = False
     if annual_kwh <= 0 and mrk_kw > 0:
-        annual_kwh = mrk_kw * 8760 * 0.40  # 40 % load factor
-        peak_kw = mrk_kw * 0.85
+        annual_kwh = mrk_kw * 8760 * 0.25  # 25 % load factor (konzervatívny B2B priemer)
+        peak_kw = mrk_kw * 0.70
         annual_estimated = True
-        log.info(f"[smart_variants] annual_kwh odhadnuté z MRK {mrk_kw} kW → {annual_kwh:.0f} kWh/rok")
+        log.info(f"[smart_variants] annual_kwh odhadnuté z MRK {mrk_kw} kW (25%LF) → {annual_kwh:.0f} kWh/rok")
+
+    # Max FVE limit — primárne podľa max_export (DC/AC ratio 1.20), sekundárne MRK
+    if max_export > 0:
+        max_fve_kwp = max_export * 1.20    # napr. 550 kW max_export → 660 kWp
+    elif mrk_kw > 0:
+        max_fve_kwp = mrk_kw * 1.10        # nemá max_export → konzervatívne MRK × 1.10
+    else:
+        max_fve_kwp = 9999
+
+    # Base kWp = 80% pokrytie ročnej spotreby (PVGIS yield 1050 kWh/kWp), ALE cap max_fve_kwp
+    if annual_kwh > 0:
+        base_kwp = round(min(annual_kwh * 0.8 / 1050, max_fve_kwp), 0)
+    else:
+        base_kwp = round(min(20, max_fve_kwp), 0)
+    base_kwp = max(5, base_kwp)
     
-    # Base kWp = 80% pokrytie ročnej spotreby (PVGIS yield 1050 kWh/kWp)
-    base_kwp = round(annual_kwh * 0.8 / 1050, 0) if annual_kwh > 0 else max(20, mrk_kw * 0.8)
-    base_kwp = max(5, min(base_kwp, mrk_kw * 1.5)) if mrk_kw > 0 else base_kwp
-    
+    # Archetype multipliery — Optimal blízko base_kwp, Stretch len mierne nad max_fve_kwp
     archetypes = [
         {
             "label": "Konzervatívny",
             "archetype": "conservative",
-            "fve_kwp": round(base_kwp * 0.5, 0),
+            "fve_kwp": round(min(base_kwp * 0.35, max_fve_kwp * 0.4), 0),
             "bess_kwh": 0,
-            "rationale_hint": "Iba na samospotrebu, žiadny export, žiadne BESS — najnižší risk, najnižší NPV",
+            "rationale_hint": "Iba samospotreba, žiadne BESS, žiadne riziko prebytkov — bezpečný štart",
         },
         {
             "label": "Optimálny NPV",
             "archetype": "optimal_npv",
-            "fve_kwp": base_kwp,
-            "bess_kwh": round(min(annual_kwh / 365 * 0.3, 100), 0),  # ~30% denného priemeru
-            "rationale_hint": "Engine-optimized podľa tohto profilu",
+            "fve_kwp": round(min(base_kwp * 0.70, max_fve_kwp * 0.80), 0),
+            "bess_kwh": round(min(annual_kwh / 365 * 0.30, 100), 0) if annual_kwh > 0 else 0,
+            "rationale_hint": "Optimálny pomer cena/výkon — pokryje ~70% spotreby s minimálnym BESS",
         },
         {
             "label": "Energy independence",
             "archetype": "independence",
-            "fve_kwp": round(base_kwp * 1.3, 0),
-            "bess_kwh": round(min(annual_kwh / 365 * 0.6, 250), 0),  # 60% denného priemeru
-            "rationale_hint": "Max samostatnosť (cieľ >85%) — pre stabilný outage comfort a hedging proti zdraženiu",
+            "fve_kwp": round(min(base_kwp, max_fve_kwp), 0),
+            "bess_kwh": round(min(annual_kwh / 365 * 0.50, 200), 0) if annual_kwh > 0 else 0,
+            "rationale_hint": "Maximálna samostatnosť — väčší BESS, ale ostáva pod max_export",
         },
         {
             "label": "Spot arbitráž",
             "archetype": "spot_arbitrage",
-            "fve_kwp": round(base_kwp * 0.7, 0),
-            "bess_kwh": round(min(annual_kwh / 365 * 0.8, 300), 0),
-            "rationale_hint": "Menšie PV, väčšie BESS — primary cieľ spot arbitráž medzi nočnou a poludňajším oknom",
+            "fve_kwp": round(min(base_kwp * 0.50, max_fve_kwp * 0.6), 0),
+            "bess_kwh": round(min(annual_kwh / 365 * 0.80, 300), 0) if annual_kwh > 0 else 0,
+            "rationale_hint": "Menšie PV, väčšie BESS — primárny cieľ spot arbitráž (nákup nočný/predaj poludnie)",
         },
         {
             "label": "Stretch (over-spec)",
             "archetype": "stretch",
-            "fve_kwp": round(base_kwp * 1.8, 0),
-            "bess_kwh": round(min(annual_kwh / 365 * 1.0, 500), 0),
-            "rationale_hint": "Over-specifikovaný — ukáže, že väčšie nie je lepšie (NPV bude horší)",
+            "fve_kwp": round(max_fve_kwp, 0),
+            "bess_kwh": round(min(annual_kwh / 365 * 0.60, 400), 0) if annual_kwh > 0 else 0,
+            "rationale_hint": "Max FVE pod max_export limit — pre porovnanie hornej hranice (prebytky idú na predaj)",
         },
     ]
     
@@ -242,26 +254,34 @@ def _apply_economic_fallback(arch: dict, annual_kwh: float, estimated: bool):
     capex_bess = bess * 480
     capex_total = capex_pv + capex_bess
 
-    # Samospotreba podľa archetype
+    # Samospotreba podľa archetype + BESS bonus
     archetype_key = arch.get("archetype", "")
-    samospotreba_map = {
-        "conservative":   0.95,  # malé PV, takmer všetko sa spotrebuje
-        "optimal_npv":    0.75,
-        "independence":   0.85,  # veľký BESS dvíha samospotrebu
-        "spot_arbitrage": 0.70,
-        "stretch":        0.50,  # over-spec → veľa prebytkov
+    samospotreba_base = {
+        "conservative":   0.85,  # malé PV → väčšina sa spotrebuje (ale nie 95% — strieda denného profilu)
+        "optimal_npv":    0.55,  # base PV → bez BESS ide ~55% (slnečné poludnia = prebytok)
+        "independence":   0.55,
+        "spot_arbitrage": 0.50,
+        "stretch":        0.35,  # over-spec → veľa prebytkov
     }
-    samospotreba = samospotreba_map.get(archetype_key, 0.65)
+    samospotreba = samospotreba_base.get(archetype_key, 0.50)
+    # BESS bonus: každých 10 kWh batérie pridá ~3-5% samospotreby (cap na 90%)
+    if bess > 0 and kwp > 0:
+        bess_per_kwp = bess / kwp
+        bess_bonus = min(0.30, bess_per_kwp * 0.3)
+        samospotreba = min(0.90, samospotreba + bess_bonus)
     if annual_kwh > 0 and kwp > 0:
-        # Cap samospotrebou: nemôže byť viac ako annual_kwh / (kwp * 1050)
+        # Cap: nemôže byť viac ako annual_kwh / production
         max_sams = min(1.0, annual_kwh / (kwp * 1050))
         samospotreba = min(samospotreba, max_sams)
 
-    # Výroba a úspora
+    # Výroba a úspora — realistickejšie ceny pre SK B2B
+    # Nákup elektriny: 0.15 €/kWh (komodita + distribúcia + tarif), Predaj prebytkov: 0.02 €/kWh
     annual_production = kwp * 1050  # kWh/rok
     self_consumed = annual_production * samospotreba
     exported = annual_production - self_consumed
-    saving_y1 = self_consumed * 0.18 + exported * 0.04  # €/rok
+    cena_nakup = 0.15  # €/kWh — SK B2B priemerná
+    cena_predaj = 0.02  # €/kWh — typický feed-in pre prebytky
+    saving_y1 = self_consumed * cena_nakup + exported * cena_predaj  # €/rok
 
     # Dotácia (Zelená podnikom 30 % intenzita, max 200 000 €)
     dotacia = min(capex_total * 0.30, 200000) if kwp <= 500 else 0
