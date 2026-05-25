@@ -1,0 +1,80 @@
+# Energovision Analyzer — Slovenské dotačné schémy 2026
+# Zdroj truth pre výpočet dotácie v Streamlit UI + CashflowBuilder.
+# Aktualizácia: 2026-05-24. Pred použitím na klientske posudky overiť aktuálne výzvy.
+
+zelena_podnikom:
+  nazov: "Zelená podnikom"
+  vyhlasovatel: "SIEA / MH SR"
+  status: "active"          # active | upcoming | closed
+  max_eur: 50000
+  intensity_pct: 45         # max 45 % oprávnených nákladov
+  min_samospotreba_pct: 80  # kritérium — najmenej 80 % vyrobenej energie na samospotrebu
+  applicable_to:
+    - "FVE"
+    - "FVE+BESS"
+  applicable_capex:
+    - "panely"
+    - "menice"
+    - "konstrukcia"
+    - "bess"
+    - "instalacia"
+  exclusions:
+    - "pripojenie_VN"
+  source_url: "https://www.siea.sk/zelena-podnikom"
+  last_verified: "2026-05-24"
+
+modernizacny_fond:
+  nazov: "Modernizačný fond"
+  vyhlasovatel: "MH SR / EÚ ETS"
+  status: "active"
+  max_eur: 1500000          # pre veľké projekty
+  intensity_pct: 60         # OZE výroba — vyššia intenzita
+  min_samospotreba_pct: 0   # bez kritéria samospotreby
+  applicable_to:
+    - "FVE"
+    - "FVE+BESS"
+    - "BESS_solo"
+  applicable_capex:
+    - "panely"
+    - "menice"
+    - "konstrukcia"
+    - "bess"
+    - "instalacia"
+    - "pripojenie_VN"
+  notes: "Pre projekty >100 kWp, vhodný pre VN OM"
+  source_url: "https://www.modernizacnyfond.sk"
+  last_verified: "2026-05-24"
+
+komunitne_oze:
+  nazov: "Komunitné OZE"
+  vyhlasovatel: "SIEA"
+  status: "upcoming"
+  max_eur: 200000
+  intensity_pct: 50
+  min_samospotreba_pct: 60
+  applicable_to:
+    - "FVE+BESS_komunitne"
+  notes: "Pre energetické spoločenstvá a samosprávy"
+  last_verified: "2026-05-24"
+
+plan_obnovy_k17_bess:
+  nazov: "Plán obnovy K17 — BESS"
+  vyhlasovatel: "MIRRI / MH SR"
+  status: "closed"
+  max_eur: 800000
+  intensity_pct: 50
+  min_samospotreba_pct: 0
+  applicable_to:
+    - "BESS_solo"
+  notes: "Výzva uzavretá Q4 2025, čaká sa na ďalšie kolo 2026 H2"
+  last_verified: "2026-05-24"
+
+ziadna:
+  nazov: "Bez dotácie"
+  vyhlasovatel: "—"
+  status: "n/a"
+  max_eur: 0
+  intensity_pct: 0
+  min_samospotreba_pct: 0
+  applicable_to: ["FVE", "FVE+BESS", "BESS_solo"]
+  notes: "Klient nepoužije žiadnu dotáciu (cash-flow z vlastných prostriedkov / úver)"

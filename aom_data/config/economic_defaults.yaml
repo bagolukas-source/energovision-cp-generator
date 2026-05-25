@@ -1,0 +1,48 @@
+# Energovision Analyzer — Centrálne ekonomické defaulty
+# Zdroj truth pre VariantGenerator, CashflowBuilder, Streamlit UI.
+# Aktualizácia: 2026-05-24
+
+# === DPPO — daň z príjmov právnických osôb (SK) ===
+# Platné od 2025-01-01 podľa zákona 595/2003 Z.z. v znení 2024 novely
+dppo:
+  small_co_pct: 0.10        # do 60 000 € zdaniteľný obrat
+  standard_pct: 0.22        # 60 000 € – 50 mil. €
+  large_co_pct: 0.24        # nad 50 mil. €
+  default_pct: 0.22         # default pre väčšinu Energovision klientov (MSP)
+
+# === DAŇOVÉ ODPISY ===
+depreciation:
+  pv_years: 6               # FVE — odpisová skupina 2 (6 rokov), §27 ZDP
+  bess_years: 6             # BESS — rovnaká skupina (energetické zariadenia)
+  monitoring_years: 4       # IT/monitoring SW — skupina 1
+
+# === DISKONT + HORIZONT ===
+financial:
+  discount_rate_default: 0.06   # 6 % p.a. (priemer WACC SK MSP 2026)
+  horizon_years_default: 20     # 20r (zhruba životnosť BESS s 1 výmenou meniča)
+  inflation_pct_default: 0.025  # 2.5 % p.a. (ECB target)
+
+# === OPEX ===
+opex:
+  pv_pct_per_year: 0.015        # 1.5 % CAPEX/rok (cleaning, monitoring, drobné servisy)
+  bess_pct_per_year: 0.020      # 2.0 % CAPEX/rok (vyššie kvôli HVAC + battery management)
+  insurance_pct_per_year: 0.003 # 0.3 % CAPEX/rok
+  monitoring_eur_per_year: 300  # SCADA monitoring služba
+
+# === BESS LIFECYCLE ===
+bess_lifecycle:
+  inverter_replacement_year: 12       # PCS výmena v 12. roku
+  inverter_replacement_pct: 0.10      # 10 % z BESS CAPEX
+  cells_replacement_year: null        # nepredpokladá sa do horizontu 20r
+  c_rate_default: 0.5                 # 0.5C (50 kW pre 100 kWh) — Huawei/Solinteg štandard
+
+# === DEGRADÁCIA ===
+degradation:
+  pv_pct_per_year: 0.005       # 0.5 %/rok (Tier 1 TOPCon datasheet)
+  bess_pct_per_year: 0.020     # 2.0 %/rok (LFP 1 cyklus/deň, sweet-spot DoD)
+
+# === RETAIL / SALES CONTRACT ===
+contract:
+  spot_markup_eur_mwh: 8       # +8 €/MWh marža Energie2/iný spot dodávateľ
+  export_buyback_eur_mwh: 60   # priemerná výkupná cena 2026
+  fix_baseline_eur_mwh: 145    # fix kontrakt 2026 (priemer SK B2B)

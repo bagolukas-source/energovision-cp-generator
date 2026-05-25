@@ -1,0 +1,134 @@
+# Tarifné sadzby pre rok 2026
+# Zdroj: ÚRSO cenové rozhodnutia 0077/2026/E (distribúcia), 0113/2026/E (TPS, SOL)
+# Publikácia: 11.12.2025 (distribúcia), 31.12.2025 (TPS)
+#
+# DÔLEŽITÉ: Hodnoty distribučných poplatkov sú referenčné — overiť pred použitím
+# pre konkrétny projekt. ÚRSO publikuje finálne cenníky každoročne, distribútori
+# môžu mať mierne odlišné sadzby pre rôzne tarif skupiny (NN-D1/D2/D3, VN-D1/D2).
+#
+# JEDNOTKY: EUR / MWh (zaužívaná konvencia ÚRSO)
+#           Pre EUR/kWh deliť 1000.
+
+rok: 2026
+mena: EUR
+zdroj: "ÚRSO 2026/E + distribučné cenníky SSE/ZSD/VSD"
+poznamka: "Hodnoty platné od 1.1.2026, MRK export penalty nová podľa § 24/11 vyhlášky 154/2024"
+
+distribuutori:
+  SSE:
+    nazov: "Stredoslovenská distribučná, a.s."
+    web: "https://www.ssd.sk"
+    NN:
+      tps_eur_mwh: 28.50
+      distrib_eur_mwh: 35.20         # priemer NN-D2 (priemyselný odber)
+      straty_eur_mwh: 5.80
+      njf_eur_mwh: 3.27
+      spotrebna_dan_eur_mwh: 1.32
+      tss_eur_mwh: 4.55
+      mrk_kapacita_eur_mw_mes: 0     # NN nemá MRK fakturáciu
+      rk_kapacita_eur_mw_mes: 0
+      mrk_export_penalty_eur_kwh: 0.0  # NN nemá export penalty (zatiaľ)
+      fix_silova_eur_mwh: 124.0      # priemer fix kontraktov pre NN 2026
+      obchodnik_aditiv_eur_mwh: 22.0
+      obchodnik_prirazka_eur_mwh: 6.0
+    VN:
+      tps_eur_mwh: 8.50              # najnižšie pásmo TPS pre veľkých odberateľov
+      distrib_eur_mwh: 12.30
+      straty_eur_mwh: 5.20
+      njf_eur_mwh: 3.27
+      spotrebna_dan_eur_mwh: 1.32
+      tss_eur_mwh: 4.55
+      mrk_kapacita_eur_mw_mes: 6900  # €/MW/mes — VN MRK kapacitná zložka
+      rk_kapacita_eur_mw_mes: 2300
+      # NOVÉ od 1.1.2026 — SSD spoplatňuje prekročenie MRK pri dodávke do DS
+      mrk_export_penalty_eur_kwh: 0.0125  # 12.5 €/MWh nad MRK v 15-min agregáte
+      fix_silova_eur_mwh: 114.0
+      obchodnik_aditiv_eur_mwh: 20.0
+      obchodnik_prirazka_eur_mwh: 5.0
+
+  ZSD:
+    nazov: "Západoslovenská distribučná, a.s."
+    web: "https://www.zsdis.sk"
+    NN:
+      tps_eur_mwh: 28.50
+      distrib_eur_mwh: 36.10
+      straty_eur_mwh: 6.20
+      njf_eur_mwh: 3.27
+      spotrebna_dan_eur_mwh: 1.32
+      tss_eur_mwh: 4.55
+      mrk_kapacita_eur_mw_mes: 0
+      rk_kapacita_eur_mw_mes: 0
+      mrk_export_penalty_eur_kwh: 0.0
+      fix_silova_eur_mwh: 122.0
+      obchodnik_aditiv_eur_mwh: 22.0
+      obchodnik_prirazka_eur_mwh: 6.0
+    VN:
+      tps_eur_mwh: 8.50
+      distrib_eur_mwh: 11.80
+      straty_eur_mwh: 4.95
+      njf_eur_mwh: 3.27
+      spotrebna_dan_eur_mwh: 1.32
+      tss_eur_mwh: 4.55
+      mrk_kapacita_eur_mw_mes: 6750
+      rk_kapacita_eur_mw_mes: 2250
+      mrk_export_penalty_eur_kwh: 0.0    # ZSD zatiaľ neaplikuje (potvrdiť 2026)
+      fix_silova_eur_mwh: 114.0
+      obchodnik_aditiv_eur_mwh: 20.0
+      obchodnik_prirazka_eur_mwh: 5.0
+
+  VSD:
+    nazov: "Východoslovenská distribučná, a.s."
+    web: "https://www.vsds.sk"
+    NN:
+      tps_eur_mwh: 28.50
+      distrib_eur_mwh: 34.80
+      straty_eur_mwh: 5.50
+      njf_eur_mwh: 3.27
+      spotrebna_dan_eur_mwh: 1.32
+      tss_eur_mwh: 4.55
+      mrk_kapacita_eur_mw_mes: 0
+      rk_kapacita_eur_mw_mes: 0
+      mrk_export_penalty_eur_kwh: 0.0
+      fix_silova_eur_mwh: 123.0
+      obchodnik_aditiv_eur_mwh: 22.0
+      obchodnik_prirazka_eur_mwh: 6.0
+    VN:
+      tps_eur_mwh: 8.50
+      distrib_eur_mwh: 12.10
+      straty_eur_mwh: 5.05
+      njf_eur_mwh: 3.27
+      spotrebna_dan_eur_mwh: 1.32
+      tss_eur_mwh: 4.55
+      mrk_kapacita_eur_mw_mes: 6850
+      rk_kapacita_eur_mw_mes: 2280
+      mrk_export_penalty_eur_kwh: 0.0    # VSD zatiaľ neaplikuje (potvrdiť 2026)
+      fix_silova_eur_mwh: 114.0
+      obchodnik_aditiv_eur_mwh: 20.0
+      obchodnik_prirazka_eur_mwh: 5.0
+
+# Bilančné skupiny — výkupné modely pre prebytky FVE
+bilancne_skupiny:
+  Energie2:
+    fix_klient:
+      vykupna_eur_kwh: 0.060          # pevná výkupná cena
+      threshold_eur_mwh: 20.0         # pod spot 20 €/MWh → výkup = 0
+      negative_floor_eur_mwh: 0.0     # negatívne hodiny → 0
+    spot_klient:
+      vykupna_formula: "spot * 0.95 - 5"  # spot × 0.95 - 5 €/MWh marža
+      negative_floor_eur_mwh: 0.0
+  SlovakiaEnergy:
+    fix_klient:
+      vykupna_eur_kwh: 0.058
+      threshold_eur_mwh: 25.0
+      negative_floor_eur_mwh: 0.0
+    spot_klient:
+      vykupna_formula: "spot * 0.93 - 4"
+      negative_floor_eur_mwh: 0.0
+  Greenlogy:
+    fix_klient:
+      vykupna_eur_kwh: 0.062
+      threshold_eur_mwh: 20.0
+      negative_floor_eur_mwh: 0.0
+    spot_klient:
+      vykupna_formula: "spot * 0.96 - 6"
+      negative_floor_eur_mwh: 0.0
