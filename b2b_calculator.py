@@ -374,3 +374,104 @@ def save_quote(sb, config: dict, items: list, totals: dict, customer_id: str = N
         sb.table("b2b_quote_items").insert(items_data).execute()
     
     return quote
+
+
+# ============================================================
+# REFACTOR — zápis do quote_bundles (B2C-zdieľaná architektúra)
+# Namiesto separátnych b2b_quotes generuje 1 bundle so 4 variantmi A/B/C/D.
+# ============================================================
+
+ARCHETYPES_B2B = [
+    {"key": "A", "label": "Konzervatívny", "fve_factor": 0.70, "bess_factor": 0.0,
+     "description": "Iba samospotreba, žiadne BESS. Low risk."},
+    {"key": "B", "label": "Optimal NPV", "fve_factor": 1.00, "bess_factor": 0.30,
+     "description": "Engine-optimal NPV pri tomto profile."},
+    {"key": "C", "label": "Energy Independence", "fve_factor": 1.30, "bess_factor": 0.60,
+     "description": "Max samostatnosť ≥85% pre stabilný outage comfort."},
+    {"key": "D", "label": "Spot arbitráž", "fve_factor": 0.70, "bess_factor": 0.80,
+     "description": "Menšie FVE, väčšie BESS — arbitráž medzi nočnou a poludňajšou cenou."},
+]
+
+
+def build_4_variants(base_config: dict) -> list[dict]:
+    """Z 1 user config (kwp, typ_strechy, ...) vygeneruj 4 archetypy-config."""
+    base_kwp = float(base_config.get("kwp", 30))
+    annual_kwh_estimate = base_kwp * 1000  # heuristika ~1000 kWh/kWp
+    
+    variants = []
+    for arch in ARCHETYPES_B2B:
+        v_kwp = round(base_kwp * arch["fve_factor"], 0)
+        v_bess = round(annual_kwh_estimate / 365 * arch["bess_factor"], 0)  # ~30/60/80% denného priemeru
+        v_bess = min(v_bess, 500)  # cap
+        
+        v_config = {**base_config, "kwp": v_kwp, "has_bess": v_bess > 0, "bess_kwh": v_bess}
+        v_config["_archetype_key"] = arch["key"]
+        v_config["_archetype_label"] = arch["label"]
+        v_config["_archetype_desc"] = arch["description"]
+        variants.append(v_config)
+    
+    return variants
+
+
+def save_quote_as_bundle(sb, base_config: dict, customer_id: str = None,
+                          lead_id: str = None, user_id: str = None) -> dict:
+    """Generuje 4-varianty bundle do quote_bundles (workspace='b2b')."""
+    # Zostav 4 varianty
+    variants = build_4_variants(base_config)
+    
+    # Spustí BOM kalkuláciu pre každý
+    bundle_data = {
+        "vykon_kwp": float(base_config.get("kwp", 0)),
+        "typ_ponuky": "b2b_konfigurator",
+        "lead_id": lead_id,
+        "customer_id": customer_id,
+        "created_by": user_id,
+        "status": "draft",
+        "payment_terms": base_config.get("payment_terms", "30% pri objednávke / 30% pri dodávke / 40% pri odovzdaní"),
+        "workspace": "b2b",
+    }
+    
+    margin_pct = float(base_config.get("margin_pct", 25))
+    
+    for v_config in variants:
+        key = v_config["_archetype_key"].lower()  # a, b, c, d
+        v_config_for_calc = {**v_config, "margin_pct": margin_pct}
+        
+        try:
+            result = calculate_bom(sb, v_config_for_calc)
+        except Exception as e:
+            import logging
+            logging.warning(f"BOM calc failed for variant {key}: {e}")
+            continue
+        
+        items = result.get("items") or []
+        totals = result.get("totals") or {}
+        
+        # Mapovať items do bundle BOM JSON formátu (zhoda s B2C variant_X_bom)
+        bom_array = []
+        for it in items:
+            bom_array.append({
+                "sku": it.get("rule_id", ""),
+                "name": it.get("product_name", ""),
+                "category": it.get("category", ""),
+                "qty": float(it.get("qty", 0)),
+                "unit": it.get("unit", ""),
+                "unit_purchase": float(it.get("cost_per_unit") or 0),
+                "unit_sale": float(it.get("price_per_unit") or 0),
+                "total_purchase": float(it.get("cost_per_unit") or 0) * float(it.get("qty") or 0),
+                "total_sale": float(it.get("total_price") or 0),
+            })
+        
+        bundle_data[f"variant_{key}_active"] = True
+        bundle_data[f"variant_{key}_marza_pct"] = margin_pct
+        bundle_data[f"variant_{key}_cost"] = totals.get("total_cost", 0)
+        bundle_data[f"variant_{key}_price_no_vat"] = totals.get("total_price", 0)
+        bundle_data[f"variant_{key}_price_with_vat"] = round(totals.get("total_price", 0) * 1.23, 2)
+        bundle_data[f"variant_{key}_bom"] = bom_array
+    
+    # Insert do quote_bundles (DB má auto-numbering trigger pre bundle_number)
+    res = sb.table("quote_bundles").insert(bundle_data).execute()
+    if not res.data:
+        raise RuntimeError("Bundle insert failed")
+    
+    return res.data[0]

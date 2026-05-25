@@ -5748,19 +5748,19 @@ def webhook_b2b_calc_preview():
 
 @app.route("/webhook/b2b-calc-save", methods=["POST"])
 def webhook_b2b_calc_save():
-    """Vygeneruje BOM a uloží do b2b_quotes + b2b_quote_items."""
+    """Vygeneruje 4 archetypy variantov a uloží ako jeden quote_bundles záznam (workspace='b2b').
+    Zdieľa lifecycle s B2C — bundle editor / PDF / public link / accept flow."""
     body = request.get_json(silent=True) or {}
     try:
         config = body.get("config", {})
-        result = _b2b_calc.calculate_bom(_sb(), config)
-        quote = _b2b_calc.save_quote(
-            _sb(), config, result["items"], result["totals"],
+        bundle = _b2b_calc.save_quote_as_bundle(
+            _sb(),
+            base_config=config,
             customer_id=body.get("customer_id"),
             lead_id=body.get("lead_id"),
-            project_id=body.get("project_id"),
             user_id=body.get("user_id"),
         )
-        return jsonify({"ok": True, "quote": quote, **result})
+        return jsonify({"ok": True, "bundle_id": bundle.get("id"), "bundle_number": bundle.get("bundle_number"), "bundle": bundle})
     except Exception as e:
         log.exception("[b2b-calc-save] failed")
         return jsonify({"ok": False, "error": str(e)[:500]}), 500
