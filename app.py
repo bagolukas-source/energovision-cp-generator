@@ -5987,3 +5987,43 @@ def webhook_aom_parse_public():
     except Exception as e:
         log.exception("[aom-parse-public] failed")
         return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
+# ============================================================
+# B2B Kalkulačka V2 — panels-driven + vendor stacks + AI
+# ============================================================
+import b2b_calculator_v2 as _b2b_v2
+
+
+@app.route("/webhook/b2b-calc-v2-preview", methods=["POST"])
+def webhook_b2b_calc_v2_preview():
+    body = request.get_json(silent=True) or {}
+    try:
+        return jsonify(_b2b_v2.calculate_bom_v2(_sb(), body))
+    except Exception as e:
+        log.exception("[b2b-calc-v2-preview] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
+@app.route("/webhook/b2b-vendor-stacks", methods=["GET"])
+def webhook_b2b_vendor_stacks():
+    try:
+        res = _sb().table("b2b_vendor_stacks").select("vendor_key, display_name, preferred_panels, inverters, batteries, raynet_share_pct, notes").execute()
+        return jsonify({"ok": True, "stacks": res.data or []})
+    except Exception as e:
+        log.exception("[b2b-vendor-stacks] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
+@app.route("/webhook/b2b-ai-configurator", methods=["POST"])
+def webhook_b2b_ai_configurator():
+    """Smart Configurator — text → form fill."""
+    body = request.get_json(silent=True) or {}
+    text = (body.get("text") or "").strip()
+    if not text:
+        return jsonify({"ok": False, "error": "text required"}), 400
+    try:
+        return jsonify(_b2b_v2.ai_smart_configurator(_sb(), text))
+    except Exception as e:
+        log.exception("[b2b-ai-configurator] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
