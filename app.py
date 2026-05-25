@@ -5984,6 +5984,26 @@ def webhook_aom_parse_public():
             return jsonify({"ok": False, "error": "no valid storage_path"}), 400
         
         result = _aom.parse_consumption(analyza_id, file_paths, None)
+        # Zapíš výsledky parsovania do analyza_om aby AI Strategist mal annual_mwh + peak_kw
+        if isinstance(result, dict) and result.get("status") == "ok":
+            summary = result.get("summary") or {}
+            outputs = result.get("outputs") or {}
+            try:
+                sb.table("analyza_om").update({
+                    "consumption_annual_mwh": summary.get("annual_mwh"),
+                    "consumption_peak_kw_15min": summary.get("peak_kw_15min"),
+                    "consumption_peak_kw_hourly": summary.get("peak_kw_hourly"),
+                    "consumption_avg_kw": summary.get("avg_kw"),
+                    "consumption_coverage_pct": summary.get("coverage_pct"),
+                    "consumption_detected_format": (result.get("detected_formats") or [None])[0],
+                    "consumption_parse_warnings": result.get("warnings") or [],
+                    "consumption_profile_path": outputs.get("profile_hourly_path") or (str(analyza_id) + "/consumption_profile.csv"),
+                    "consumption_15min_path": outputs.get("profile_15min_path") or (str(analyza_id) + "/consumption_15min.csv"),
+                    "consumption_method": "auto_parse",
+                    "updated_at": "now()",
+                }).eq("id", analyza_id).execute()
+            except Exception as upd_err:
+                log.warning(f"[aom-parse-public] DB update failed: {upd_err}")
         return jsonify({"ok": True, **(result if isinstance(result, dict) else {})})
     except Exception as e:
         log.exception("[aom-parse-public] failed")
