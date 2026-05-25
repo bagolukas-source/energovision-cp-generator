@@ -270,14 +270,16 @@ def auto_fill_site_from_psc(psc: str, rocna_spotreba_kwh: float = 30000, rk_kw: 
             rocna_spotreba_kwh=rocna_spotreba_kwh,
             rk_kw=rk_kw,
         )
+        # SiteInput používa gps_lat/gps_lon, nie lat/lon
         return {
             "ok": True,
             "distribuutor": site.distribuutor.value if hasattr(site.distribuutor, "value") else str(site.distribuutor),
-            "lat": site.lat,
-            "lon": site.lon,
+            "lat": getattr(site, "gps_lat", None) or getattr(site, "lat", None),
+            "lon": getattr(site, "gps_lon", None) or getattr(site, "lon", None),
             "sadzba": site.sadzba.value if hasattr(site.sadzba, "value") else str(site.sadzba),
             "mrk_kw": site.mrk_kw,
-            "city": getattr(site, "city", None),
+            "rk_kw": site.rk_kw,
+            "fakturacny_psc": getattr(site, "fakturacny_psc", None),
         }
     except Exception as e:
         log.exception(f"[auto-fill-site] failed for psc={psc}")
