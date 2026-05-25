@@ -260,9 +260,56 @@ def render_posudok_premium(sb, analyza_id: str) -> dict:
     return {"ok": True, "docx_url": public_url, "storage_path": storage_path}
 
 
+def _nominatim_geocode_psc(psc: str) -> dict | None:
+    """Geocoduje SK PSČ cez OpenStreetMap Nominatim (free, no key).
+    Vráti {lat, lon, city, region} alebo None pri chybe.
+    User-Agent header POVINNÝ — Nominatim ban policy."""
+    import requests
+    psc_clean = psc.strip().replace(" ", "")
+    if not psc_clean or len(psc_clean) != 5:
+        return None
+    psc_formatted = f"{psc_clean[:3]} {psc_clean[3:]}"  # "95605" → "956 05"
+    try:
+        r = requests.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={
+                "postalcode": psc_formatted,
+                "country": "Slovakia",
+                "format": "json",
+                "limit": 1,
+            },
+            headers={"User-Agent": "Energovision-CRM/1.0 (lukas.bago@energovision.sk)"},
+            timeout=8,
+        )
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        if not data:
+            return None
+        hit = data[0]
+        # Display name format: "956 05, Radošina, okres Topoľčany, Nitriansky kraj, Slovensko"
+        display = hit.get("display_name", "")
+        parts = [p.strip() for p in display.split(",")]
+        city = parts[1] if len(parts) > 1 else None
+        return {
+            "lat": float(hit["lat"]),
+            "lon": float(hit["lon"]),
+            "city": city,
+            "display_name": display,
+        }
+    except Exception as e:
+        log.warning(f"[nominatim] geocode failed for psc={psc}: {e}")
+        return None
+
+
 def auto_fill_site_from_psc(psc: str, rocna_spotreba_kwh: float = 30000, rk_kw: float = 25) -> dict:
-    """PSČ → distribútor + GPS + odporúčaný profil. Wrapper okolo engine."""
+    """PSČ → distribútor + GPS + odporúčaný profil.
+    GPS: primárne Nominatim (OSM, presné), fallback engine psc_to_gps (hrubé)."""
     from energovision_analytics.data.auto_fill import auto_fill_site
+    
+    # 1) Nominatim — presné GPS podľa PSČ centra
+    nominatim = _nominatim_geocode_psc(psc)
+    
     try:
         site = auto_fill_site(
             nazov="Auto-fill",
@@ -270,12 +317,29 @@ def auto_fill_site_from_psc(psc: str, rocna_spotreba_kwh: float = 30000, rk_kw: 
             rocna_spotreba_kwh=rocna_spotreba_kwh,
             rk_kw=rk_kw,
         )
-        # SiteInput používa gps_lat/gps_lon, nie lat/lon
+        # SiteInput používa gps_lat/gps_lon, nie lat/lon — ale preferujeme Nominatim
+        engine_lat = getattr(site, "gps_lat", None) or getattr(site, "lat", None)
+        engine_lon = getattr(site, "gps_lon", None) or getattr(site, "lon", None)
+        
+        # Použiť Nominatim ak je dostupný, inak engine fallback
+        if nominatim:
+            final_lat = nominatim["lat"]
+            final_lon = nominatim["lon"]
+            gps_source = "nominatim"
+            city = nominatim.get("city")
+        else:
+            final_lat = engine_lat
+            final_lon = engine_lon
+            gps_source = "engine_fallback"
+            city = None
+        
         return {
             "ok": True,
             "distribuutor": site.distribuutor.value if hasattr(site.distribuutor, "value") else str(site.distribuutor),
-            "lat": getattr(site, "gps_lat", None) or getattr(site, "lat", None),
-            "lon": getattr(site, "gps_lon", None) or getattr(site, "lon", None),
+            "lat": final_lat,
+            "lon": final_lon,
+            "gps_source": gps_source,
+            "city": city,
             "sadzba": site.sadzba.value if hasattr(site.sadzba, "value") else str(site.sadzba),
             "mrk_kw": site.mrk_kw,
             "rk_kw": site.rk_kw,
