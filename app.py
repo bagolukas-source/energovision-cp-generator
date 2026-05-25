@@ -5789,3 +5789,47 @@ def webhook_b2b_generate_pdf():
     except Exception as e:
         log.exception("[b2b-generate-pdf] failed")
         return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
+# ============================================================
+# ANALYZA OM v2 — engine v0.9.5 premium
+# ============================================================
+try:
+    import analyza_om_v2 as _aom_v2
+except Exception as _e:
+    _aom_v2 = None
+    log.warning("analyza_om_v2 not loaded: %s", _e)
+
+
+@app.route("/webhook/analyza-om-run-premium", methods=["POST"])
+def webhook_aom_run_premium():
+    """Spustí engine v0.9.5 VariantGenerator → top-6 variantov uložených do analyza_om_variants."""
+    if not _aom_v2:
+        return jsonify({"ok": False, "error": "analyza_om_v2 not loaded"}), 500
+    body = request.get_json(silent=True) or {}
+    aid = body.get("analyza_id")
+    if not aid:
+        return jsonify({"ok": False, "error": "analyza_id required"}), 400
+    try:
+        result = _aom_v2.run_variants_premium(_sb(), aid)
+        return jsonify(result)
+    except Exception as e:
+        log.exception("[aom-run-premium] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
+@app.route("/webhook/analyza-om-render-premium-docx", methods=["POST"])
+def webhook_aom_render_premium_docx():
+    """Vygeneruje premium DOCX posudok (engine v0.9.5)."""
+    if not _aom_v2:
+        return jsonify({"ok": False, "error": "analyza_om_v2 not loaded"}), 500
+    body = request.get_json(silent=True) or {}
+    aid = body.get("analyza_id")
+    if not aid:
+        return jsonify({"ok": False, "error": "analyza_id required"}), 400
+    try:
+        result = _aom_v2.render_posudok_premium(_sb(), aid)
+        return jsonify(result)
+    except Exception as e:
+        log.exception("[aom-render-premium-docx] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
