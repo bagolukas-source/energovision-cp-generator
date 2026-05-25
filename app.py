@@ -343,6 +343,38 @@ def _find_lead_by_ev_id(ev_id):
         return None
 
 
+
+# ============================================================
+# CORS — globálne pre všetky /webhook/* (cross-origin z crm.energovision.sk, app.energovision.sk)
+# ============================================================
+ALLOWED_ORIGINS = {
+    "https://crm.energovision.sk",
+    "https://app.energovision.sk",
+    "https://energovision-fve-os.vercel.app",
+    "http://localhost:3000",
+    "http://localhost:3001",
+}
+
+@app.after_request
+def _apply_cors(response):
+    origin = request.headers.get("Origin", "")
+    # Allow all Vercel preview deploys + production origins
+    if origin in ALLOWED_ORIGINS or origin.endswith(".vercel.app") or origin == "":
+        response.headers["Access-Control-Allow-Origin"] = origin or "*"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS, PUT, DELETE"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Webhook-Secret, X-Admin-Secret"
+        response.headers["Access-Control-Max-Age"] = "86400"
+    return response
+
+
+@app.before_request
+def _handle_options():
+    # Pre OPTIONS preflight vráť 204 priamo
+    if request.method == "OPTIONS":
+        from flask import make_response
+        resp = make_response("", 204)
+        return resp
+
 @app.route("/p/<ev_id>", methods=["GET"])
 def public_quote(ev_id):
     """Verejna stranka cenovky pre klienta. Bez auth."""
