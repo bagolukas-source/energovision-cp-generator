@@ -6027,3 +6027,79 @@ def webhook_b2b_ai_configurator():
     except Exception as e:
         log.exception("[b2b-ai-configurator] failed")
         return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
+# ============================================================
+# B2B Kalkulačka V2 — AI features (Vendor Reco / Compat / Sanity / Validator)
+# ============================================================
+
+@app.route("/webhook/b2b-vendor-recommender", methods=["POST"])
+def webhook_b2b_vendor_recommender():
+    body = request.get_json(silent=True) or {}
+    try:
+        return jsonify(_b2b_v2.ai_vendor_recommender(
+            _sb(),
+            kwp=float(body.get("kwp") or 0),
+            client_type_hint=body.get("client_type_hint"),
+            has_bess=bool(body.get("has_bess")),
+            has_optimizery=bool(body.get("has_optimizery")),
+            has_rapid_shutdown=bool(body.get("has_rapid_shutdown")),
+        ))
+    except Exception as e:
+        log.exception("[b2b-vendor-recommender] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
+@app.route("/webhook/b2b-compatibility-checker", methods=["POST"])
+def webhook_b2b_compatibility_checker():
+    body = request.get_json(silent=True) or {}
+    try:
+        return jsonify(_b2b_v2.ai_compatibility_checker(_sb(), body.get("config", body) or {}))
+    except Exception as e:
+        log.exception("[b2b-compatibility-checker] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
+@app.route("/webhook/b2b-price-sanity", methods=["POST"])
+def webhook_b2b_price_sanity():
+    body = request.get_json(silent=True) or {}
+    try:
+        return jsonify(_b2b_v2.ai_price_sanity_check(
+            _sb(),
+            items=body.get("items") or [],
+            kwp=float(body.get("kwp") or 0),
+        ))
+    except Exception as e:
+        log.exception("[b2b-price-sanity] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
+@app.route("/webhook/b2b-bom-validator", methods=["POST"])
+def webhook_b2b_bom_validator():
+    body = request.get_json(silent=True) or {}
+    try:
+        return jsonify(_b2b_v2.ai_bom_validator(
+            _sb(),
+            items=body.get("items") or [],
+            config=body.get("config") or {},
+        ))
+    except Exception as e:
+        log.exception("[b2b-bom-validator] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
+@app.route("/webhook/b2b-calc-v2-save", methods=["POST"])
+def webhook_b2b_calc_v2_save():
+    """Uloží V2 ponuku ako quote_bundles (workspace=b2b) s final BOM po user editoch."""
+    body = request.get_json(silent=True) or {}
+    try:
+        bundle = _b2b_v2.save_bundle_v2(_sb(), body)
+        return jsonify({
+            "ok": True,
+            "bundle_id": bundle.get("id"),
+            "bundle_number": bundle.get("bundle_number"),
+            "bundle": bundle,
+        })
+    except Exception as e:
+        log.exception("[b2b-calc-v2-save] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500

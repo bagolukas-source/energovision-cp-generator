@@ -513,3 +513,343 @@ Vysvetli 1-vetou (max 20 slov) prečo je táto položka v cenovke. Slovenčina, 
         return resp.content[0].text if resp.content else ""
     except Exception:
         return ""
+
+
+# ============================================================
+# AI FEATURES — Vendor Recommender / Compatibility / Sanity / Validator
+# ============================================================
+
+# Raynet patterns (z analýzy 2000 ponúk) — fallback heuristics
+RAYNET_VENDOR_DISTRIBUTION = {
+    "sungrow": 0.65,   # dominantný pri >30 kWp, hala/priemysel
+    "huawei":  0.20,   # < 15 kWp, prémiové projekty, FusionSolar
+    "goodwe":  0.10,   # menšie residential/komerčné
+    "solinteg": 0.05,  # výnimočne, tieto starty
+}
+
+# Priemerné €/kWp z Raynet ponúk (predaj bez DPH)
+RAYNET_AVG_EUR_PER_KWP = {
+    "do_30":    1150.0,   # do 30 kWp
+    "30_60":     950.0,   # 30-60 kWp
+    "60_100":    830.0,
+    "nad_100":   720.0,
+}
+
+# Toleranica per kategória (±%) — mimo = warning
+RAYNET_PRICE_TOLERANCE = {
+    "Konštrukcia": 0.20,
+    "Menič": 0.15,
+    "Batéria": 0.18,
+    "Panel": 0.10,
+    "Káble": 0.30,
+    "Práca": 0.25,
+    "Projektová dokumentácia": 0.30,
+}
+
+# Povinné kategórie pre kompletnú FVE
+ESSENTIAL_CATEGORIES = [
+    "Panel", "Menič", "Konštrukcia",
+    "Káble - DC", "Káble - AC",
+    "Práca - montáž", "Projektová dokumentácia",
+]
+
+
+def _eur_per_kwp_bucket(kwp: float) -> str:
+    if kwp <= 30:
+        return "do_30"
+    if kwp <= 60:
+        return "30_60"
+    if kwp <= 100:
+        return "60_100"
+    return "nad_100"
+
+
+def ai_vendor_recommender(sb, kwp: float, client_type_hint: Optional[str] = None,
+                            has_bess: bool = False, has_optimizery: bool = False,
+                            has_rapid_shutdown: bool = False) -> dict:
+    """
+    Odporučí vendor stack na základe kWp + projektových atribútov.
+    Vracia ranked list (top 3) s vysvetlením a Raynet share %.
+    """
+    scored = {}
+    for v, share in RAYNET_VENDOR_DISTRIBUTION.items():
+        scored[v] = {"vendor_key": v, "score": share * 100, "reasons": [f"{int(share*100)}% historický podiel v Raynet ponukách"]}
+
+    # Pravidlá z Raynet patterns
+    if kwp >= 100:
+        scored["sungrow"]["score"] += 25; scored["sungrow"]["reasons"].append(f"Priemysel {kwp:.0f} kWp — Sungrow SG110CX/SG125CX dominuje")
+        scored["huawei"]["score"] += 5
+        scored["goodwe"]["score"] -= 10
+        scored["solinteg"]["score"] -= 15
+    elif kwp >= 30:
+        scored["sungrow"]["score"] += 20; scored["sungrow"]["reasons"].append(f"Komerčný projekt {kwp:.0f} kWp — Sungrow SG33CX/SG50CX štandard")
+        scored["huawei"]["score"] += 10
+    elif kwp >= 15:
+        scored["sungrow"]["score"] += 5
+        scored["huawei"]["score"] += 15; scored["huawei"]["reasons"].append("Stredné projekty — Huawei SUN2000 vhodný")
+        scored["goodwe"]["score"] += 10
+    else:
+        scored["huawei"]["score"] += 20; scored["huawei"]["reasons"].append(f"Malé {kwp:.0f} kWp — Huawei SUN2000-10/15KTL prémium")
+        scored["goodwe"]["score"] += 15
+
+    if has_bess:
+        scored["sungrow"]["score"] += 10; scored["sungrow"]["reasons"].append("BESS — Sungrow SBR HV battery preferovaná")
+        scored["huawei"]["score"] += 8;  scored["huawei"]["reasons"].append("BESS — Huawei LUNA2000 series kompatibilná")
+        scored["solinteg"]["score"] -= 5
+
+    if has_optimizery and not has_rapid_shutdown:
+        scored["huawei"]["score"] += 15; scored["huawei"]["reasons"].append("Optimizéry — Huawei MERC-1300W native (lepšie ako Tigo)")
+        scored["sungrow"]["score"] += 0  # vyžaduje Tigo external
+
+    if has_rapid_shutdown:
+        scored["sungrow"]["score"] += 5; scored["sungrow"]["reasons"].append("Rapid Shutdown — Sungrow + Tigo MLPE")
+
+    if client_type_hint == "priemysel":
+        scored["sungrow"]["score"] += 15
+    elif client_type_hint == "obchod":
+        scored["sungrow"]["score"] += 8
+        scored["huawei"]["score"] += 5
+
+    ranked = sorted(scored.values(), key=lambda x: -x["score"])
+    # normalizuj confidence na 0–100
+    total = sum(max(0, r["score"]) for r in ranked) or 1
+    for r in ranked:
+        r["confidence_pct"] = round(max(0, r["score"]) / total * 100, 1)
+
+    return {
+        "ok": True,
+        "ranked": ranked[:3],
+        "recommended": ranked[0]["vendor_key"],
+        "rationale": "; ".join(ranked[0]["reasons"][:3]),
+    }
+
+
+def ai_compatibility_checker(sb, config: dict) -> dict:
+    """
+    Real-time compatibility check pre vybraný vendor + komponenty.
+    Vracia warnings (severity: error/warning/info) ešte pred preview.
+    """
+    vendor = (config.get("vendor_stack") or "").lower()
+    typ_strechy = config.get("typ_strechy") or ""
+    has_bess = bool(config.get("has_bess"))
+    bess_kwh = float(config.get("bess_kwh") or 0)
+    has_optim = bool(config.get("has_optimizery"))
+    has_rs = bool(config.get("has_rapid_shutdown"))
+    has_wb = bool(config.get("has_wallbox"))
+    pocet_panelov = int(config.get("pocet_panelov") or 0)
+    panel_sku = config.get("panel_sku") or "LONGI_430"
+
+    issues = []
+
+    # Vendor × optimizer
+    if vendor == "huawei" and has_optim:
+        issues.append({"severity": "info", "kind": "vendor_match",
+                       "message": "Huawei + optimizéry → použijem HUAWEI MERC-1300W (native), nie Tigo."})
+    if vendor in ("sungrow", "goodwe", "solinteg") and has_optim:
+        issues.append({"severity": "info", "kind": "vendor_match",
+                       "message": f"{vendor.title()} + optimizéry → external Tigo TS4-A-O (Huawei MERC inkompatibilný)."})
+
+    # BESS sanity
+    if has_bess and bess_kwh <= 0:
+        issues.append({"severity": "warning", "kind": "bess_missing_kwh",
+                       "message": "Označená batéria ale 0 kWh — nastavte kapacitu (default 10 kWh)."})
+    if has_bess and bess_kwh > 0:
+        if vendor == "solinteg" and bess_kwh < 5:
+            issues.append({"severity": "warning", "kind": "vendor_bess",
+                           "message": "Solinteg HV: minimum 5 kWh. Pre menšie použite Sungrow alebo Huawei."})
+        if vendor == "huawei" and (bess_kwh < 5 or bess_kwh > 30):
+            issues.append({"severity": "info", "kind": "vendor_bess",
+                           "message": "Huawei LUNA2000: optimal 5–30 kWh modulárne (5/10/15)."})
+
+    # Pre flat (E-W) rapid_shutdown býva povinný pre verejné budovy
+    if typ_strechy == "vychod_zapad" and not has_rs and pocet_panelov > 100:
+        issues.append({"severity": "info", "kind": "code_check",
+                       "message": "Veľká E-W hala (>100 panelov) — zvážte Rapid Shutdown ak je to verejná budova (norma)."})
+
+    # Panel sanity
+    if pocet_panelov > 0 and (pocet_panelov % 2 == 1 and typ_strechy == "vychod_zapad"):
+        issues.append({"severity": "info", "kind": "panel_count",
+                       "message": "Nepárny počet panelov na E-W streche — symetrické rozloženie odporúčam zaokrúhliť hore."})
+
+    # Wallbox
+    if has_wb and int(config.get("wallbox_pocet") or 0) <= 0:
+        issues.append({"severity": "warning", "kind": "wb_qty",
+                       "message": "Wallbox označený ale počet 0 — nastavte aspoň 1 ks."})
+
+    severity_rank = {"error": 0, "warning": 1, "info": 2}
+    issues.sort(key=lambda x: severity_rank.get(x["severity"], 9))
+
+    return {"ok": True, "issues": issues, "count": len(issues)}
+
+
+def ai_price_sanity_check(sb, items: list[dict], kwp: float) -> dict:
+    """
+    Porovná predajné ceny per kategória voči Raynet histórii.
+    Flag-uje extrémne odchýlky (>tolerance%).
+    """
+    if not items or kwp <= 0:
+        return {"ok": True, "flags": [], "total_eur_per_kwp": 0, "raynet_avg_eur_per_kwp": 0}
+
+    total_sell = sum((it.get("price_per_unit") or 0) * (it.get("qty") or 0) for it in items)
+    eur_per_kwp = total_sell / kwp
+    bucket = _eur_per_kwp_bucket(kwp)
+    avg = RAYNET_AVG_EUR_PER_KWP[bucket]
+    dev = (eur_per_kwp - avg) / avg
+
+    flags = []
+    if dev > 0.25:
+        flags.append({"severity": "warning", "kind": "overall_high",
+                      "message": f"Cena {eur_per_kwp:.0f} €/kWp je o {dev*100:+.0f}% nad Raynet priemerom ({avg:.0f} €/kWp pre {bucket.replace('_', '–')} kWp).",
+                      "metric": "eur_per_kwp"})
+    elif dev < -0.25:
+        flags.append({"severity": "warning", "kind": "overall_low",
+                      "message": f"Cena {eur_per_kwp:.0f} €/kWp je o {dev*100:+.0f}% pod Raynet priemerom ({avg:.0f} €/kWp) — overiť maržu.",
+                      "metric": "eur_per_kwp"})
+
+    # Per item: výrazne anomálne ceny
+    for it in items:
+        cat = (it.get("category") or "").strip()
+        price = it.get("price_per_unit") or 0
+        cost = it.get("cost_per_unit") or 0
+        margin = (price - cost) / cost if cost > 0 else 0
+        # Negatívna marža = error
+        if cost > 0 and price < cost:
+            flags.append({"severity": "error", "kind": "negative_margin",
+                          "message": f"{it.get('product_name','?')} — predaj {price:.2f}€ < nákup {cost:.2f}€ (strata).",
+                          "position": it.get("position")})
+        # Extrémne nízka marža (<5%) v komponentoch
+        elif cost > 0 and margin < 0.05 and cat not in ("Doprava", "Spotrebný materiál"):
+            flags.append({"severity": "info", "kind": "low_margin",
+                          "message": f"{it.get('product_name','?')} — marža {margin*100:.1f}% (málo).",
+                          "position": it.get("position")})
+
+    return {
+        "ok": True,
+        "flags": flags,
+        "total_eur_per_kwp": round(eur_per_kwp, 1),
+        "raynet_avg_eur_per_kwp": round(avg, 1),
+        "deviation_pct": round(dev * 100, 1),
+        "bucket": bucket,
+    }
+
+
+def ai_bom_validator(sb, items: list[dict], config: dict) -> dict:
+    """
+    Skontroluje či BOM obsahuje všetky podstatné kategórie.
+    Flag-uje chýbajúce komponenty (Panel/Menič/Konštrukcia/Káble/Práca/PD).
+    """
+    if not items:
+        return {"ok": True, "missing": [], "warnings": [{"severity": "warning", "message": "BOM je prázdny."}]}
+
+    present_cats = {(it.get("category") or "").strip() for it in items}
+    missing = []
+    warnings = []
+
+    # Skupiny ktoré sú "OK ak existuje aspoň jeden"
+    grouped = {
+        "Panel": ["Panel", "Fotovoltický panel"],
+        "Menič": ["Menič", "Striedač", "Invertor"],
+        "Konštrukcia": ["Konštrukcia"],
+        "Káble - DC": ["Káble - DC", "DC kábel", "Solárny kábel"],
+        "Káble - AC": ["Káble - AC", "AC kábel", "CYKY"],
+        "Práca - montáž": ["Práca - montáž", "Práca", "Montáž"],
+        "Projektová dokumentácia": ["Projektová dokumentácia", "PD", "Projekt"],
+    }
+    for label, aliases in grouped.items():
+        if not any(a in present_cats for a in aliases):
+            missing.append(label)
+
+    if missing:
+        warnings.append({
+            "severity": "warning",
+            "kind": "missing_categories",
+            "message": "Chýba(jú): " + ", ".join(missing),
+            "items": missing,
+        })
+
+    # BESS check ak je v configu zapnutý
+    if config.get("has_bess") and not any("Batéria" in (it.get("category") or "") for it in items):
+        warnings.append({"severity": "error", "kind": "bess_in_config_not_bom",
+                         "message": "Config má has_bess=true ale BOM neobsahuje batériu."})
+
+    # Wallbox check
+    if config.get("has_wallbox") and not any("Wallbox" in (it.get("category") or "") for it in items):
+        warnings.append({"severity": "warning", "kind": "wallbox_missing",
+                         "message": "Wallbox označený v configu ale chýba v BOM."})
+
+    # Konzistencia: počet meničov vs počet panelov
+    pocet_p = int(config.get("pocet_panelov") or 0)
+    if pocet_p > 0:
+        menic_qty = sum((it.get("qty") or 0) for it in items if "Menič" in (it.get("category") or "") or "Striedač" in (it.get("category") or ""))
+        if menic_qty == 0:
+            warnings.append({"severity": "error", "kind": "no_inverter",
+                             "message": "BOM neobsahuje menič / striedač."})
+
+    return {"ok": True, "missing": missing, "warnings": warnings, "present_categories": sorted(present_cats)}
+
+
+# ============================================================
+# SAVE V2 — perzistujeme final items (incl. inline edits + custom items)
+# ============================================================
+
+def save_bundle_v2(sb, payload: dict) -> dict:
+    """
+    payload:
+      config: { vendor_stack, typ_strechy, pocet_panelov, panel_sku, has_bess, bess_kwh, has_wallbox, wallbox_pocet, has_optimizery, has_rapid_shutdown, margin_pct, kwp_actual }
+      final_items: list[item]  (output BOM rows AFTER user edits + custom items)
+      customer_id, lead_id, user_id
+      payment_terms (optional)
+    """
+    config = payload.get("config") or {}
+    items = payload.get("final_items") or []
+
+    if not items:
+        raise RuntimeError("save_bundle_v2: final_items je prázdne — uložiť nemôžem.")
+
+    total_cost = sum((it.get("cost_per_unit") or 0) * (it.get("qty") or 0) for it in items)
+    total_sell = sum((it.get("price_per_unit") or 0) * (it.get("qty") or 0) for it in items)
+    margin_pct = float(config.get("margin_pct") or 25)
+    kwp = float(config.get("kwp_actual") or 0)
+
+    bom_array = []
+    for it in items:
+        qty = float(it.get("qty") or 0)
+        cost = float(it.get("cost_per_unit") or 0)
+        sell = float(it.get("price_per_unit") or 0)
+        bom_array.append({
+            "sku": it.get("rule_id") or it.get("sku") or "",
+            "name": it.get("product_name") or "",
+            "category": it.get("category") or "",
+            "qty": qty,
+            "unit": it.get("unit") or "ks",
+            "unit_purchase": cost,
+            "unit_sale": sell,
+            "total_purchase": cost * qty,
+            "total_sale": sell * qty,
+            "is_custom": bool(it.get("is_custom")),
+        })
+
+    bundle_data = {
+        "vykon_kwp": kwp,
+        "typ_ponuky": "b2b_kalkulator_v2",
+        "lead_id": payload.get("lead_id"),
+        "customer_id": payload.get("customer_id"),
+        "created_by": payload.get("user_id"),
+        "status": "draft",
+        "payment_terms": payload.get("payment_terms") or "30% pri objednávke / 30% pri dodávke / 40% pri odovzdaní",
+        "workspace": "b2b",
+        # Variant A = vypočítaný BOM s editmi
+        "variant_a_active": True,
+        "variant_a_marza_pct": margin_pct,
+        "variant_a_cost": round(total_cost, 2),
+        "variant_a_price_no_vat": round(total_sell, 2),
+        "variant_a_price_with_vat": round(total_sell * 1.23, 2),
+        "variant_a_bom": bom_array,
+        # Meta — config snapshot pre re-open editora
+        "b2b_v2_config": config,
+    }
+
+    res = sb.table("quote_bundles").insert(bundle_data).execute()
+    if not res.data:
+        raise RuntimeError("Bundle insert failed")
+    return res.data[0]
