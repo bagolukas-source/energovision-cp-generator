@@ -233,9 +233,8 @@ def run_simulation(analyza_id: str, profile_path: str, om: Dict[str, Any], varia
         else:
             pv_per = np.array([sim_mod.pv_per_kWp(ts, lat, lon, tilt, az, mf) for ts in timestamps])
 
-        # Calibrate to target yield
-        scale = sim_mod.calibrate(pv_per, target_yield)
-        pv_per_calibrated = pv_per * scale
+        # Calibrate to target yield — calibrate() vracia kalibrované pole (nie scalar!)
+        pv_per_calibrated = sim_mod.calibrate(pv_per, target_yield)
 
         fve_kwp = float(v.get("fve_kwp", 0))
         bess_kwh = float(v.get("bess_kwh", 0))
@@ -244,6 +243,8 @@ def run_simulation(analyza_id: str, profile_path: str, om: Dict[str, Any], varia
         pv_arr = pv_per_calibrated * fve_kwp
         sim_result = sim_mod.simulate(load_arr, pv_arr, bess_kwh=bess_kwh, bess_kw=bess_kw)
 
+        # simulate() vracia: fve_prod, self_use_direct, bess_charge, bess_discharge,
+        #                   grid_export, grid_import, self_use, self_use_ratio, coverage, total_load (všetko MWh okrem ratio/coverage)
         results.append({
             "id": v.get("id", v.get("name", "?")),
             "name": v.get("name", "?"),
@@ -251,12 +252,12 @@ def run_simulation(analyza_id: str, profile_path: str, om: Dict[str, Any], varia
             "bess_kwh": bess_kwh,
             "bess_kw": bess_kw,
             "annual_yield_kwh": round(float(pv_arr.sum()), 0),
-            "samosp_pct": round(sim_result["samosp"] * 100, 1),
-            "samostat_pct": round(sim_result["samostat"] * 100, 1),
-            "export_mwh": round(sim_result["export_kwh"] / 1000, 2),
-            "import_mwh": round(sim_result["import_kwh"] / 1000, 2),
-            "load_mwh": round(sim_result["load_kwh"] / 1000, 2),
-            "selfuse_mwh": round(sim_result["selfuse_kwh"] / 1000, 2),
+            "samosp_pct": round(sim_result.get("self_use_ratio", 0) * 100, 1),
+            "samostat_pct": round(sim_result.get("coverage", 0) * 100, 1),
+            "export_mwh": round(sim_result.get("grid_export", 0), 2),
+            "import_mwh": round(sim_result.get("grid_import", 0), 2),
+            "load_mwh": round(sim_result.get("total_load", 0), 2),
+            "selfuse_mwh": round(sim_result.get("self_use", 0), 2),
             "peak_export_kw": round(float(np.max(np.maximum(0, pv_arr - load_arr))), 1),
         })
 

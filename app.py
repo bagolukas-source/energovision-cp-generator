@@ -5953,6 +5953,72 @@ def webhook_aom_ai_accept_variant():
         return jsonify({"ok": False, "error": str(e)[:500]}), 500
 
 
+@app.route("/webhook/aom-custom-variant", methods=["POST"])
+def webhook_aom_custom_variant():
+    """Vyrobí user-defined custom variant + uloží priamo do analyza_om_variants.
+    Body: { analyza_id, name, fve_kwp, bess_kwh, bess_kw?, capex_per_kwp?, capex_per_kwh_bess?, samospotreba_pct?, note? }
+    """
+    if not _aom_ai:
+        return jsonify({"ok": False, "error": "aom_ai_strategist not loaded"}), 500
+    body = request.get_json(silent=True) or {}
+    aid = body.get("analyza_id")
+    if not aid:
+        return jsonify({"ok": False, "error": "analyza_id required"}), 400
+    if not body.get("fve_kwp") and not body.get("bess_kwh"):
+        return jsonify({"ok": False, "error": "fve_kwp alebo bess_kwh musí byť > 0"}), 400
+    try:
+        sb = _sb()
+        # Load analyza row
+        a_res = sb.table("analyza_om").select("*").eq("id", aid).single().execute()
+        if not a_res.data:
+            return jsonify({"ok": False, "error": "analyza not found"}), 404
+        analyza = a_res.data
+
+        custom_input = {
+            "name": body.get("name") or "Vlastný variant",
+            "fve_kwp": float(body.get("fve_kwp") or 0),
+            "bess_kwh": float(body.get("bess_kwh") or 0),
+            "bess_kw": float(body.get("bess_kw") or (float(body.get("bess_kwh") or 0) * 0.5)),
+            "capex_per_kwp": body.get("capex_per_kwp"),
+            "capex_per_kwh_bess": body.get("capex_per_kwh_bess"),
+            "samospotreba_pct": body.get("samospotreba_pct"),
+            "note": body.get("note"),
+        }
+        capex_overrides = body.get("capex_overrides") or None
+
+        arch = _aom_ai.compute_custom_variant(analyza, custom_input, capex_overrides)
+
+        # Insert do analyza_om_variants
+        pos_res = sb.table("analyza_om_variants").select("position").eq("analyza_id", aid).order("position", desc=True).limit(1).execute()
+        next_pos = (pos_res.data[0]["position"] + 1) if pos_res.data else 1
+
+        sb.table("analyza_om_variants").insert({
+            "analyza_id": aid,
+            "name": custom_input["name"],
+            "position": next_pos,
+            "fve_kwp": custom_input["fve_kwp"],
+            "fve_tilt_deg": 25,
+            "fve_azimuth_deg": 180,
+            "fve_topology": "south",
+            "bess_kwh": custom_input["bess_kwh"],
+            "bess_kw": custom_input["bess_kw"],
+            "bess_arbitrage_enabled": False,
+            "capex_eur": arch.get("capex_total_eur", 0),
+            "capex_source": "ai_strategist",
+            "result_samosp_pct": arch.get("self_consumption_pct", 0),
+            "result_samostat_pct": arch.get("self_sufficiency_pct", 0),
+            "result_npv_eur_base": arch.get("npv_eur", 0),
+            "result_irr_pct_base": arch.get("irr_pct", 0),
+            "result_payback_y_base": arch.get("payback_years", 0),
+            "result_dotacia_eur": arch.get("dotacia_eur", 0),
+        }).execute()
+
+        return jsonify({"ok": True, "variant": arch, "position": next_pos})
+    except Exception as e:
+        log.exception("[aom-custom-variant] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
 @app.route("/webhook/aom-parse-public", methods=["POST"])
 def webhook_aom_parse_public():
     """Verejný parse endpoint — frontend volá hneď po uploade CSV/XLS.

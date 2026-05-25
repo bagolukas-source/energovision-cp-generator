@@ -242,56 +242,55 @@ def generate_smart_variants(sb, analyza: dict, profile: dict, capex_overrides: d
     return archetypes
 
 
-def _apply_economic_fallback(arch: dict, annual_kwh: float, estimated: bool):
-    """Jednoduchý ekonomický odhad — pre prípady keď engine nemá 15-min profil.
-    Predpokladá: PVGIS 1050 kWh/kWp, samospotreba per archetype,
-    cena el. 0.18 €/kWh fix + 0.04 € predaj prebytkov."""
+def _apply_economic_fallback(arch: dict, annual_kwh: float, estimated: bool, capex_overrides: dict = None):
+    """Jednoduchý ekonomický odhad — pre prípady keď engine nemá 15-min profil
+    alebo engine zlyhá. Rešpektuje capex_overrides z UI.
+    """
+    overrides = capex_overrides or {}
+    capex_per_kwp = float(overrides.get("capex_per_kwp") or 760.0)
+    capex_per_kwh = float(overrides.get("capex_per_kwh_bess") or 430.0)
+    cena_nakup = float(overrides.get("cena_nakup_eur_kwh") or 0.15)
+    cena_predaj = float(overrides.get("cena_predaj_eur_kwh") or 0.02)
+
     kwp = float(arch.get("fve_kwp") or 0)
     bess = float(arch.get("bess_kwh") or 0)
 
-    # CAPEX (mode quick z engine config: 800 €/kWp PV, 480 €/kWh BESS)
-    capex_pv = kwp * 800
-    capex_bess = bess * 480
+    capex_pv = kwp * capex_per_kwp
+    capex_bess = bess * capex_per_kwh
     capex_total = capex_pv + capex_bess
 
-    # Samospotreba podľa archetype + BESS bonus
     archetype_key = arch.get("archetype", "")
     samospotreba_base = {
-        "conservative":   0.85,  # malé PV → väčšina sa spotrebuje (ale nie 95% — strieda denného profilu)
-        "optimal_npv":    0.55,  # base PV → bez BESS ide ~55% (slnečné poludnia = prebytok)
+        "conservative":   0.85,
+        "optimal_npv":    0.55,
         "independence":   0.55,
         "spot_arbitrage": 0.50,
-        "stretch":        0.35,  # over-spec → veľa prebytkov
+        "stretch":        0.35,
+        "custom":         0.55,
     }
     samospotreba = samospotreba_base.get(archetype_key, 0.50)
-    # BESS bonus: každých 10 kWh batérie pridá ~3-5% samospotreby (cap na 90%)
-    if bess > 0 and kwp > 0:
+    # User override samospotreby (z custom variantu)
+    if arch.get("samospotreba_override_pct") is not None:
+        samospotreba = float(arch["samospotreba_override_pct"]) / 100.0
+    elif bess > 0 and kwp > 0:
         bess_per_kwp = bess / kwp
         bess_bonus = min(0.30, bess_per_kwp * 0.3)
         samospotreba = min(0.90, samospotreba + bess_bonus)
     if annual_kwh > 0 and kwp > 0:
-        # Cap: nemôže byť viac ako annual_kwh / production
         max_sams = min(1.0, annual_kwh / (kwp * 1050))
         samospotreba = min(samospotreba, max_sams)
 
-    # Výroba a úspora — realistickejšie ceny pre SK B2B
-    # Nákup elektriny: 0.15 €/kWh (komodita + distribúcia + tarif), Predaj prebytkov: 0.02 €/kWh
-    annual_production = kwp * 1050  # kWh/rok
+    annual_production = kwp * 1050
     self_consumed = annual_production * samospotreba
-    exported = annual_production - self_consumed
-    cena_nakup = 0.15  # €/kWh — SK B2B priemerná
-    cena_predaj = 0.02  # €/kWh — typický feed-in pre prebytky
-    saving_y1 = self_consumed * cena_nakup + exported * cena_predaj  # €/rok
+    exported = max(0.0, annual_production - self_consumed)
+    saving_y1 = self_consumed * cena_nakup + exported * cena_predaj
 
-    # Dotácia (Zelená podnikom 30 % intenzita, max 200 000 €)
     dotacia = min(capex_total * 0.30, 200000) if kwp <= 500 else 0
-    net_capex = capex_total - dotacia
+    net_capex = max(1.0, capex_total - dotacia)
 
-    # NPV: 20r horizont, 6 % diskont, 21 % DPPO, daňové výhody odpisu
     payback_simple = net_capex / saving_y1 if saving_y1 > 0 else 99.0
-    # NPV cez perpetuity-like approx: saving × annuity_factor(20y, 6%) - net_capex
-    annuity_factor = 11.47  # (1-(1+0.06)^-20)/0.06
-    npv = saving_y1 * 0.79 * annuity_factor - net_capex  # 79 % po DPPO
+    annuity_factor = 11.47  # (1-(1+0.06)^-20)/0.06 @ 6 %
+    npv = saving_y1 * 0.79 * annuity_factor - net_capex  # 79 % po DPPO 21 %
 
     arch["npv_eur"] = round(npv, 0)
     arch["payback_years"] = round(min(payback_simple, 25.0), 1)
@@ -310,6 +309,41 @@ def _apply_economic_fallback(arch: dict, annual_kwh: float, estimated: bool):
         "samospotreba_pct": round(samospotreba * 100, 0),
         "dotacia_eur": dotacia,
     }
+
+
+
+
+def compute_custom_variant(analyza: dict, custom_input: dict, capex_overrides: dict = None) -> dict:
+    """Vyrobí jeden custom variant podľa user-zadaných parametrov.
+    Volá _apply_economic_fallback (rýchly odhad). Engine sa nevolá lebo by zbytočne
+    bežal pre 1 variant a nezohľadnil by user samospotrebu override.
+    """
+    profile_data = classify_client_profile(analyza)
+    annual_kwh = profile_data["annual_kwh"]
+    annual_estimated = annual_kwh <= 0
+
+    overrides = dict(capex_overrides or {})
+    # custom_input môže obsahovať custom_capex_per_kwp ktorý prebije override default
+    if custom_input.get("capex_per_kwp"):
+        overrides["capex_per_kwp"] = float(custom_input["capex_per_kwp"])
+    if custom_input.get("capex_per_kwh_bess"):
+        overrides["capex_per_kwh_bess"] = float(custom_input["capex_per_kwh_bess"])
+
+    arch = {
+        "label": custom_input.get("name") or "Vlastný variant",
+        "archetype": "custom",
+        "fve_kwp": float(custom_input.get("fve_kwp") or 0),
+        "bess_kwh": float(custom_input.get("bess_kwh") or 0),
+        "bess_kw": float(custom_input.get("bess_kw") or 0),
+        "rationale_hint": custom_input.get("note") or "User-defined konfigurácia",
+    }
+    if custom_input.get("samospotreba_pct") is not None:
+        arch["samospotreba_override_pct"] = float(custom_input["samospotreba_pct"])
+
+    _apply_economic_fallback(arch, annual_kwh, annual_estimated, overrides)
+    if annual_estimated:
+        arch["estimated_from_mrk"] = True
+    return arch
 
 
 def _detect_profile_template(profile: dict) -> str:

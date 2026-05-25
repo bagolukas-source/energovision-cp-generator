@@ -97,8 +97,9 @@ def simulate(load_arr, pv_arr, bess_kwh=0, bess_kw=0):
     cap_min = bess_kwh * 0.05
     cap_max = bess_kwh * 0.95
     soc = bess_kwh * 0.5
-    L = load_arr.values
-    PV = pv_arr
+    # load_arr môže prísť ako pd.Series alebo np.ndarray — handle both
+    L = load_arr.values if hasattr(load_arr, "values") else load_arr
+    PV = pv_arr.values if hasattr(pv_arr, "values") else pv_arr
     n = len(L)
     sud = bch = bdis = exp_ = imp_ = 0.0
     for i in range(n):
