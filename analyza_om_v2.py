@@ -40,31 +40,43 @@ def _build_request_from_analyza(analyza: dict) -> dict:
     mrk_kw = float(analyza["om_mrk_kw"]) if analyza.get("om_mrk_kw") else None
     rk_kw = float(analyza["om_rk_kw"]) if analyza.get("om_rk_kw") else None
     
+    # MAX_FVE_KWP — distribučný limit: FVE AC výkon ≤ MRK (zmluva s distribútorom).
+    # FVE DC kWp môže byť o ~20 % vyššie (DC:AC pomer 1.2, klasický over-sizing menica),
+    # ale viac je nezmysel — energia by sa orezala alebo by porušilo MRK.
+    max_export = float(analyza["max_export_kw"]) if analyza.get("max_export_kw") else None
+    hard_cap_kwp = None
+    if mrk_kw:
+        # FVE DC ≤ MRK × 1.2 (DC over-sizing pomer)
+        hard_cap_kwp = mrk_kw * 1.2
+    if max_export and (not hard_cap_kwp or max_export * 1.2 < hard_cap_kwp):
+        hard_cap_kwp = max_export * 1.2
+    
     # Optimal FVE size — preferuj realny annual spotreba ak existuje
     if annual_kwh > 1000:
         # 100% self-consumption target = annual_MWh × 1000 / 1050 kWh/kWp
         optimal_kwp = annual_kwh / 1050
-        # Cap na MRK × 2 ak je MRK known (nech engine nevracia obrovsky over-sized)
-        if mrk_kw and optimal_kwp > mrk_kw * 2:
-            optimal_kwp = mrk_kw * 1.5
     elif mrk_kw:
-        # B2B without consumption history — sizuj na MRK
-        optimal_kwp = mrk_kw * 0.8
+        # B2B without consumption history — sizuj na MRK (DC:AC 1.0)
+        optimal_kwp = mrk_kw
     elif rk_kw:
         optimal_kwp = rk_kw
     else:
         optimal_kwp = 30  # small residential default
     
-    # 4 PV varianty: 50%/80%/100%/130% optima
+    # CAP na MRK distribučný limit
+    if hard_cap_kwp and optimal_kwp > hard_cap_kwp:
+        optimal_kwp = hard_cap_kwp
+    
+    # 4 PV varianty: 40%/65%/85%/100% (max = MRK × 1.2 = hard_cap)
     pv_options = [
-        round(optimal_kwp * 0.5, 0),
-        round(optimal_kwp * 0.8, 0),
+        round(optimal_kwp * 0.4, 0),
+        round(optimal_kwp * 0.65, 0),
+        round(optimal_kwp * 0.85, 0),
         round(optimal_kwp, 0),
-        round(optimal_kwp * 1.3, 0),
     ]
-    # Cap na MRK × 2 (over 200% MRK je nezmysel pre väčšinu OM)
-    if mrk_kw:
-        pv_options = [min(p, mrk_kw * 2) for p in pv_options]
+    # Hard cap — žiadny variant nesmie prekročiť MRK × 1.2
+    if hard_cap_kwp:
+        pv_options = [min(p, hard_cap_kwp) for p in pv_options]
     pv_options = [p for p in pv_options if p >= 5]
     pv_options = sorted(set(pv_options))  # dedup + sort
     
