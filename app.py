@@ -5950,3 +5950,40 @@ def webhook_aom_ai_accept_variant():
     except Exception as e:
         log.exception("[aom-ai-accept-variant] failed")
         return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
+@app.route("/webhook/aom-parse-public", methods=["POST"])
+def webhook_aom_parse_public():
+    """Verejný parse endpoint — frontend volá hneď po uploade CSV/XLS.
+    Bez secretu (CORS + read-only zo storage)."""
+    if _aom is None:
+        return jsonify({"ok": False, "error": "analyza_om module not loaded"}), 500
+    body = request.get_json(silent=True) or {}
+    analyza_id = body.get("analyza_id")
+    if not analyza_id:
+        return jsonify({"ok": False, "error": "missing analyza_id"}), 400
+    
+    try:
+        # Načítaj raw_files z DB
+        sb = _sb()
+        a_res = sb.table("analyza_om").select("consumption_raw_files").eq("id", analyza_id).single().execute()
+        if not a_res.data:
+            return jsonify({"ok": False, "error": "analyza not found"}), 404
+        raw_files = a_res.data.get("consumption_raw_files") or []
+        if not raw_files:
+            return jsonify({"ok": False, "error": "no files uploaded"}), 400
+        
+        # Extract storage_path z každého súboru
+        file_paths = []
+        for f in raw_files:
+            if isinstance(f, dict) and f.get("storage_path"):
+                file_paths.append(f["storage_path"])
+        
+        if not file_paths:
+            return jsonify({"ok": False, "error": "no valid storage_path"}), 400
+        
+        result = _aom.parse_consumption(analyza_id, file_paths, None)
+        return jsonify({"ok": True, **(result if isinstance(result, dict) else {})})
+    except Exception as e:
+        log.exception("[aom-parse-public] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
