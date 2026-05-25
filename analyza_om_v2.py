@@ -333,6 +333,8 @@ def auto_fill_site_from_psc(psc: str, rocna_spotreba_kwh: float = 30000, rk_kw: 
             gps_source = "engine_fallback"
             city = None
         
+        # MRK + sadzba sú IBA NÁVRHY (heuristika z PSČ + 1.2×RK)
+        # Skutočná hodnota MRK musí prísť z faktúry alebo distribučnej zmluvy klienta
         return {
             "ok": True,
             "distribuutor": site.distribuutor.value if hasattr(site.distribuutor, "value") else str(site.distribuutor),
@@ -340,9 +342,10 @@ def auto_fill_site_from_psc(psc: str, rocna_spotreba_kwh: float = 30000, rk_kw: 
             "lon": final_lon,
             "gps_source": gps_source,
             "city": city,
-            "sadzba": site.sadzba.value if hasattr(site.sadzba, "value") else str(site.sadzba),
-            "mrk_kw": site.mrk_kw,
-            "rk_kw": site.rk_kw,
+            # Sadzba a MRK sú IBA orientačné — UI ich má použiť len ak používateľ nemá vlastné
+            "suggested_sadzba": site.sadzba.value if hasattr(site.sadzba, "value") else str(site.sadzba),
+            "suggested_mrk_kw_heuristic": site.mrk_kw,
+            "note": "MRK je orientačná hodnota (engine heuristika 1.2×RK). Reálne MRK príde z faktúry / distribučnej zmluvy klienta.",
             "fakturacny_psc": getattr(site, "fakturacny_psc", None),
         }
     except Exception as e:
