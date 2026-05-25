@@ -28,24 +28,62 @@ log = logging.getLogger(__name__)
 
 
 def _build_request_from_analyza(analyza: dict) -> dict:
-    """Konvertuje DB záznam analyza_om na engine RunVariantsRequest dict."""
-    # PV variants: ak je single kWp v rk_kw alebo z prilinkovaného bundle, generuj 4 varianty okolo
-    base_kwp = float(analyza.get("om_rk_kw") or 30)
-    pv_options = [base_kwp * 0.5, base_kwp * 0.75, base_kwp, base_kwp * 1.25]
-    pv_options = [round(p, 0) for p in pv_options if p >= 5]
+    """Konvertuje DB záznam analyza_om na engine RunVariantsRequest dict.
     
-    # BESS variants: 0 + 2 ne-nulové podľa veľkosti
-    if base_kwp <= 30:
-        bess_options = [0, 10, 30]
-    elif base_kwp <= 100:
-        bess_options = [0, 50, 100]
-    else:
-        bess_options = [0, 100, 250]
-    
-    # Profil spotreby
+    Sizing logika (priority order):
+    1. annual MWh known → optimal kWp = annual_MWh × 1000 / 1050 (PV yield SK)
+    2. MRK known → siz okolo MRK (50%/80%/100%/150%)
+    3. RK known → siz okolo RK
+    4. fallback 30 kWp (small residential)
+    """
     annual_kwh = float(analyza.get("consumption_annual_mwh", 0) or 0) * 1000
+    mrk_kw = float(analyza["om_mrk_kw"]) if analyza.get("om_mrk_kw") else None
+    rk_kw = float(analyza["om_rk_kw"]) if analyza.get("om_rk_kw") else None
+    
+    # Optimal FVE size — preferuj realny annual spotreba ak existuje
+    if annual_kwh > 1000:
+        # 100% self-consumption target = annual_MWh × 1000 / 1050 kWh/kWp
+        optimal_kwp = annual_kwh / 1050
+        # Cap na MRK × 2 ak je MRK known (nech engine nevracia obrovsky over-sized)
+        if mrk_kw and optimal_kwp > mrk_kw * 2:
+            optimal_kwp = mrk_kw * 1.5
+    elif mrk_kw:
+        # B2B without consumption history — sizuj na MRK
+        optimal_kwp = mrk_kw * 0.8
+    elif rk_kw:
+        optimal_kwp = rk_kw
+    else:
+        optimal_kwp = 30  # small residential default
+    
+    # 4 PV varianty: 50%/80%/100%/130% optima
+    pv_options = [
+        round(optimal_kwp * 0.5, 0),
+        round(optimal_kwp * 0.8, 0),
+        round(optimal_kwp, 0),
+        round(optimal_kwp * 1.3, 0),
+    ]
+    # Cap na MRK × 2 (over 200% MRK je nezmysel pre väčšinu OM)
+    if mrk_kw:
+        pv_options = [min(p, mrk_kw * 2) for p in pv_options]
+    pv_options = [p for p in pv_options if p >= 5]
+    pv_options = sorted(set(pv_options))  # dedup + sort
+    
+    # BESS variants — scaling podľa PV size
+    if optimal_kwp <= 30:
+        bess_options = [0, 10, 30]
+    elif optimal_kwp <= 100:
+        bess_options = [0, 50, 100]
+    elif optimal_kwp <= 300:
+        bess_options = [0, 100, 250]
+    elif optimal_kwp <= 800:
+        bess_options = [0, 200, 500]
+    else:
+        bess_options = [0, 500, 1000]
+    
     if annual_kwh <= 0:
-        annual_kwh = base_kwp * 1000  # ~1000 kWh/kWp rule of thumb
+        annual_kwh = optimal_kwp * 1000  # ~1000 kWh/kWp rule of thumb
+    
+    base_kwp = optimal_kwp  # legacy compat
     
     profile_template = "kancelaria"
     if base_kwp >= 100:
