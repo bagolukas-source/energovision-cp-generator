@@ -5858,3 +5858,63 @@ def webhook_aom_quick_estimate():
         return jsonify({"ok": False, "error": "analyza_om_v2 not loaded"}), 500
     body = request.get_json(silent=True) or {}
     return jsonify(_aom_v2.quick_estimate(body))
+
+
+# ============================================================
+# AOM AI STRATEGIST — 7-vrstvový AI poradca
+# ============================================================
+try:
+    import aom_ai_strategist as _aom_ai
+except Exception as _e:
+    _aom_ai = None
+    log.warning("aom_ai_strategist not loaded: %s", _e)
+
+
+@app.route("/webhook/aom-ai-analyze", methods=["POST"])
+def webhook_aom_ai_analyze():
+    """Spustí AI Strategist full analysis (Vrstvy A → G)."""
+    if not _aom_ai:
+        return jsonify({"ok": False, "error": "aom_ai_strategist not loaded"}), 500
+    body = request.get_json(silent=True) or {}
+    aid = body.get("analyza_id")
+    if not aid:
+        return jsonify({"ok": False, "error": "analyza_id required"}), 400
+    try:
+        return jsonify(_aom_ai.run_full_analysis(_sb(), aid))
+    except Exception as e:
+        log.exception("[aom-ai-analyze] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
+@app.route("/webhook/aom-ai-chat-reply", methods=["POST"])
+def webhook_aom_ai_chat_reply():
+    """DB trigger volá tento endpoint po INSERT user msg do analyza_om_ai_chat."""
+    if not _aom_ai:
+        return jsonify({"ok": False, "error": "aom_ai_strategist not loaded"}), 500
+    body = request.get_json(silent=True) or {}
+    aid = body.get("analyza_id")
+    msg = body.get("message", "")
+    if not aid or not msg:
+        return jsonify({"ok": False, "error": "analyza_id + message required"}), 400
+    try:
+        return jsonify(_aom_ai.chat_refinement(_sb(), aid, msg, body.get("user_name")))
+    except Exception as e:
+        log.exception("[aom-ai-chat-reply] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
+@app.route("/webhook/aom-ai-accept-variant", methods=["POST"])
+def webhook_aom_ai_accept_variant():
+    """Akceptuje konkrétny AI navrhnutý variant — uloží do analyza_om_variants."""
+    if not _aom_ai:
+        return jsonify({"ok": False, "error": "aom_ai_strategist not loaded"}), 500
+    body = request.get_json(silent=True) or {}
+    aid = body.get("analyza_id")
+    label = body.get("variant_label")
+    if not aid or not label:
+        return jsonify({"ok": False, "error": "analyza_id + variant_label required"}), 400
+    try:
+        return jsonify(_aom_ai.accept_variant(_sb(), aid, label))
+    except Exception as e:
+        log.exception("[aom-ai-accept-variant] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
