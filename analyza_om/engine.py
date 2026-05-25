@@ -121,12 +121,22 @@ def parse_consumption(analyza_id: str, file_paths: List[str], options: Optional[
                 series = ec.parse_sse_csv(tmp)
                 fmt = "sse_csv_15min"
             elif tmp.suffix.lower() in (".xls", ".xlsx"):
-                try:
-                    series = ec.parse_xls_96cols(tmp)
-                    fmt = "xls_96cols"
-                except Exception:
-                    series = ec.parse_zdis_xls(tmp)
-                    fmt = "zdis_xls"
+                # Skús v poradí: sse_obis (OBIS kódy + koeficienty) → 96cols → zdis
+                series = None
+                fmt = None
+                for parser_fn, label in [
+                    (ec.parse_sse_obis_xls, "sse_obis_xls"),
+                    (ec.parse_xls_96cols, "xls_96cols"),
+                    (ec.parse_zdis_xls, "zdis_xls"),
+                ]:
+                    try:
+                        series = parser_fn(tmp)
+                        fmt = label
+                        break
+                    except Exception as ex:
+                        warnings.append(f"{label} fallback: {ex}")
+                if series is None:
+                    raise RuntimeError("Žiadny XLS parser nezbehol")
             else:
                 warnings.append(f"Unknown format for {storage_path}")
                 continue

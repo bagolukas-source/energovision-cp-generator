@@ -75,6 +75,124 @@ def parse_zdis_xls(fn: Path) -> pd.Series:
     return df['kWh']
 
 
+def parse_sse_obis_xls(fn: Path) -> pd.Series:
+    """SSE-D / ZSDIS XLS s OBIS kódmi (napr. Gonvauto formát).
+    Štruktúra:
+      Row 0: title, Koeficient U=X, Koeficient I=Y, ...
+      Row 1: hlavička: dátum, štart, koniec, 1-1:1.5 kW (P+ kW), 1-1:2.5 kW (P-), ...kvar..., 1-1:1.8 kWh (cum.)
+      Row 2+: dátové riadky (35040 = 365×96 pre 15-min ročný profil)
+
+    Vracia: pd.Series — MWh per 15-min interval (kompatibilné s aggregate_to_hourly).
+    """
+    # Skús oba enginy (xlrd pre .xls, openpyxl pre .xlsx)
+    suffix = fn.suffix.lower()
+    if suffix == ".xls":
+        df = pd.read_excel(fn, sheet_name=0, header=None, engine="xlrd")
+    else:
+        df = pd.read_excel(fn, sheet_name=0, header=None, engine="openpyxl")
+
+    # 1) Detekuj koeficienty U a I z prvých 3 riadkov
+    koef_u = 1.0
+    koef_i = 1.0
+    import re
+    for r in range(min(3, len(df))):
+        for c in range(min(20, df.shape[1])):
+            cell = str(df.iat[r, c]) if not pd.isna(df.iat[r, c]) else ""
+            mu = re.search(r"Koeficient\s*U\s*=\s*([0-9.,]+)", cell, re.IGNORECASE)
+            mi = re.search(r"Koeficient\s*I\s*=\s*([0-9.,]+)", cell, re.IGNORECASE)
+            if mu:
+                try: koef_u = float(mu.group(1).replace(",", "."))
+                except: pass
+            if mi:
+                try: koef_i = float(mi.group(1).replace(",", "."))
+                except: pass
+
+    multiplier = koef_u * koef_i
+
+    # 2) Nájdi header row (obsahuje "dátum" a "štart")
+    header_row = None
+    for r in range(min(10, len(df))):
+        row_vals = [str(df.iat[r, c]).strip().lower() if not pd.isna(df.iat[r, c]) else "" for c in range(min(20, df.shape[1]))]
+        if any("dátum" in v or "datum" in v for v in row_vals) and any("štart" in v or "start" in v for v in row_vals):
+            header_row = r
+            break
+    if header_row is None:
+        raise ValueError("SSE OBIS: nenašiel som header s 'dátum' a 'štart'")
+
+    # 3) Nájdi stĺpce: dátum, štart, P+ (kW pre odber činnej)
+    headers = [str(df.iat[header_row, c]).strip() if not pd.isna(df.iat[header_row, c]) else "" for c in range(df.shape[1])]
+    col_date = None
+    col_start = None
+    col_p_plus = None
+    for i, h in enumerate(headers):
+        hl = h.lower()
+        if col_date is None and ("dátum" in hl or "datum" in hl):
+            col_date = i
+        elif col_start is None and ("štart" in hl or "start" in hl):
+            col_start = i
+        # P+ má OBIS kód 1-1:1.5 (priemer 15-min činný odber)
+        if col_p_plus is None and ("1.5" in h or "1-1:1.5" in h) and "kw" in hl and "kvar" not in hl and "kwh" not in hl:
+            col_p_plus = i
+
+    if col_p_plus is None:
+        # Fallback: prvý stĺpec po 'koniec' ktorý má 'kW' (nie kvar, nie kWh)
+        for i, h in enumerate(headers):
+            hl = h.lower()
+            if "kw" in hl and "kvar" not in hl and "kwh" not in hl:
+                col_p_plus = i
+                break
+    if col_date is None or col_start is None or col_p_plus is None:
+        raise ValueError(f"SSE OBIS: nenašiel stĺpce dátum={col_date} štart={col_start} P+={col_p_plus}")
+
+    # 4) Načítaj dátové riadky
+    rows = []
+    for r in range(header_row + 1, len(df)):
+        d_val = df.iat[r, col_date]
+        t_val = df.iat[r, col_start]
+        v_val = df.iat[r, col_p_plus]
+        if pd.isna(d_val) or pd.isna(v_val):
+            continue
+        # Dátum: "1. 1. 2025" alebo "01.01.2025" alebo datetime
+        if isinstance(d_val, str):
+            d_str = d_val.strip().replace(" ", "")
+            d = pd.to_datetime(d_str, format="%d.%m.%Y", errors="coerce")
+            if pd.isna(d):
+                d = pd.to_datetime(d_val, errors="coerce", dayfirst=True)
+        else:
+            d = pd.to_datetime(d_val, errors="coerce")
+        if pd.isna(d):
+            continue
+        # Čas: "0:00", "0:15", ... alebo time object
+        if isinstance(t_val, str):
+            try:
+                hh, mm = t_val.split(":")[:2]
+                ts = d + pd.Timedelta(hours=int(hh), minutes=int(mm))
+            except Exception:
+                continue
+        elif hasattr(t_val, "hour"):
+            ts = d + pd.Timedelta(hours=t_val.hour, minutes=t_val.minute)
+        else:
+            continue
+        try:
+            kw = float(str(v_val).replace(",", "."))
+        except Exception:
+            continue
+        # kW (priemer 15 min) × multiplier (CT/PT) × 0.25 h = kWh per 15-min interval
+        # aggregate_to_hourly očakáva MWh per 15-min ak interval < 3000s → / 1000
+        kwh_per_15min = kw * multiplier * 0.25
+        mwh_per_15min = kwh_per_15min / 1000.0
+        rows.append((ts, mwh_per_15min))
+
+    if not rows:
+        raise ValueError("SSE OBIS: žiadne dátové riadky")
+    s = pd.Series(dict(rows)).sort_index()
+    s.index.name = "ts"
+    s.attrs["koef_u"] = koef_u
+    s.attrs["koef_i"] = koef_i
+    s.attrs["multiplier"] = multiplier
+    return s
+
+
 def aggregate_to_hourly(series: pd.Series) -> pd.Series:
     """Agreguje 15-min profil na hodinový (suma kWh za hodinu)."""
     if (series.index[1] - series.index[0]).total_seconds() < 3000:  # ~15min
