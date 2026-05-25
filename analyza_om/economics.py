@@ -72,9 +72,18 @@ def calc_dotacia(capex, max_eur=50000, pct=0.45):
 
 
 def calc_savings(sim_var, p_buy, p_sell, arb_bonus=0):
-    """Save ročne = samosp × P_BUY + export × P_SELL + arbitráž BS."""
-    return (sim_var['self_use'] * 1000 * p_buy
-            + sim_var['grid_export'] * 1000 * p_sell
+    """Save ročne = samosp × P_BUY + export × P_SELL + arbitráž BS.
+    Defensive: skúsi viac kľúčov pre backward compat.
+    """
+    # self_use v MWh — skús 'self_use' najprv, fallback na 'selfuse_mwh'
+    su = sim_var.get('self_use')
+    if su is None:
+        su = sim_var.get('selfuse_mwh', 0)
+    ex = sim_var.get('grid_export')
+    if ex is None:
+        ex = sim_var.get('export_mwh', 0)
+    return (float(su) * 1000 * p_buy
+            + float(ex) * 1000 * p_sell
             + arb_bonus)
 
 

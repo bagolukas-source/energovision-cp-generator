@@ -259,6 +259,17 @@ def run_simulation(analyza_id: str, profile_path: str, om: Dict[str, Any], varia
             "load_mwh": round(sim_result.get("total_load", 0), 2),
             "selfuse_mwh": round(sim_result.get("self_use", 0), 2),
             "peak_export_kw": round(float(np.max(np.maximum(0, pv_arr - load_arr))), 1),
+            # Zachovať aj raw kľúče pre economics.calc_savings (schema compat — fix 2026-05-25)
+            "self_use": round(sim_result.get("self_use", 0), 4),
+            "grid_export": round(sim_result.get("grid_export", 0), 4),
+            "grid_import": round(sim_result.get("grid_import", 0), 4),
+            "fve_prod": round(sim_result.get("fve_prod", 0), 4),
+            "total_load": round(sim_result.get("total_load", 0), 4),
+            "self_use_direct": round(sim_result.get("self_use_direct", 0), 4),
+            "bess_charge": round(sim_result.get("bess_charge", 0), 4),
+            "bess_discharge": round(sim_result.get("bess_discharge", 0), 4),
+            "self_use_ratio": round(sim_result.get("self_use_ratio", 0), 4),
+            "coverage": round(sim_result.get("coverage", 0), 4),
         })
 
     return {"status": "ok", "variants": results, "lat": lat, "lon": lon, "target_yield": target_yield}
