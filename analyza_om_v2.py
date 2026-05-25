@@ -207,6 +207,7 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
         sb.table("analyza_om_variants").insert(rows).execute()
     
     # Save sim + econ summary do analyza_om
+    # full_response sa použije pri renderingu Premium DOCX posudku (musí mať bohatú schému variantov)
     sb.table("analyza_om").update({
         "status": "completed",
         "sim_results": result.get("variants", [])[:1] if result.get("variants") else None,
@@ -214,6 +215,7 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
             "top_picks": result.get("top_picks", []),
             "variants_count": len(variants),
             "engine_version": result.get("engine_version", "0.9.5"),
+            "full_response": result,  # full build_run_variants_response output (variants+top_picks+manifest)
         },
         "updated_at": datetime.now().isoformat(),
     }).eq("id", analyza_id).execute()
@@ -229,6 +231,11 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
 def render_posudok_premium(sb, analyza_id: str) -> dict:
     """
     Vyrenderuje premium DOCX posudok z analyza_om + variantov → upload do Storage.
+    
+    Architektúra:
+    - run_variants_premium ukladá full_response z build_run_variants_response do econ_results.full_response
+    - tento endpoint ho vyberie a posiela priamo do generate_premium_posudok(run_response=...)
+    - generate_premium_posudok vracia bytes (NEMÁ output_path parameter)
     """
     from energovision_analytics.reporting.posudok_premium import generate_premium_posudok
     
@@ -237,88 +244,104 @@ def render_posudok_premium(sb, analyza_id: str) -> dict:
     if not analyza:
         raise ValueError(f"Analyza {analyza_id} not found")
     
-    v_res = sb.table("analyza_om_variants").select("*").eq("analyza_id", analyza_id).order("position").execute()
-    db_variants = v_res.data or []
-    if not db_variants:
-        raise ValueError("No variants — spusti run_variants_premium najprv")
+    # Plný engine response — zapisuje sa pri run_variants_premium
+    econ = analyza.get("econ_results") or {}
+    run_response = econ.get("full_response")
     
-    # Customer name: preferuj company_name pre B2B, inak first+last_name
+    # Fallback: ak full_response chýba (legacy analýza pred patch1), rebuilduj minimal z analyza_om_variants
+    if not run_response or not run_response.get("variants"):
+        v_res = sb.table("analyza_om_variants").select("*").eq("analyza_id", analyza_id).order("position").execute()
+        db_variants = v_res.data or []
+        if not db_variants:
+            raise ValueError("No variants — spusti run_variants_premium najprv")
+        
+        rebuilt_variants = []
+        for v in db_variants:
+            pv_kwp = float(v.get("fve_kwp") or 0)
+            bess_kwh = float(v.get("bess_kwh") or 0)
+            bess_kw = float(v.get("bess_kw") or 0)
+            capex_total = float(v.get("capex_eur") or 0)
+            dotacia = float(v.get("result_dotacia_eur") or 0)
+            # Odhadneme capex split (PV ~70% ak BESS prítomné, inak 100%)
+            if bess_kwh > 0:
+                capex_pv = capex_total * 0.7
+                capex_bess = capex_total * 0.3
+            else:
+                capex_pv = capex_total
+                capex_bess = 0.0
+            rebuilt_variants.append({
+                "variant_id": v.get("name", f"V{v.get('position', 0)}"),
+                "label": v.get("name", "Variant"),
+                "pv_kwp": pv_kwp,
+                "bess_kwh": bess_kwh,
+                "bess_kw": bess_kw,
+                "ems_strategy": "rule_based",
+                "capex_pv_eur": capex_pv,
+                "capex_bess_eur": capex_bess,
+                "capex_total_eur": capex_total,
+                "dotacia_eur": dotacia,
+                "net_capex_eur": capex_total - dotacia,
+                "samospotreba_pct": float(v.get("result_samosp_pct") or 0),
+                "samostatnost_pct": float(v.get("result_samostat_pct") or 0),
+                "pv_total_kwh": pv_kwp * 1050,  # PVGIS yield approx
+                "grid_import_kwh": float(v.get("result_import_mwh") or 0) * 1000,
+                "saving_y1_eur": 0,  # nepoznáme, fallback
+                "npv_eur": float(v.get("result_npv_eur_base") or 0),
+                "irr_pct": float(v.get("result_irr_pct_base") or 0),
+                "payback_simple_y": float(v.get("result_payback_y_base") or 0),
+                "lcoe_eur_mwh": 0,
+                "lcos_eur_mwh": 0,
+                "rank_labels": [],
+            })
+        run_response = {
+            "variants": rebuilt_variants,
+            "top_picks": econ.get("top_picks", []),
+            "n_variants_run": len(rebuilt_variants),
+            "manifest": {},
+        }
+    
+    # Customer
     cust = analyza.get("customers") or {}
     if cust.get("company_name"):
-        cust_display_name = cust["company_name"]
+        client_name = cust["company_name"]
     else:
-        cust_display_name = f"{cust.get('first_name') or ''} {cust.get('last_name') or ''}".strip() or "Klient"
-    # Backward compat — niektoré reporting funkcie čítajú customer.get("name")
-    if isinstance(cust, dict) and "name" not in cust:
-        cust["name"] = cust_display_name
+        client_name = f"{cust.get('first_name') or ''} {cust.get('last_name') or ''}".strip() or "Klient"
+    client_contact = cust.get("email") or ""
     
-    # Convert DB variants na engine format
-    engine_variants = []
-    for v in db_variants:
-        engine_variants.append({
-            "name": v["name"],
-            "pv_kwp": float(v["fve_kwp"]),
-            "bess_kwh": float(v["bess_kwh"] or 0),
-            "bess_kw": float(v["bess_kw"] or 0),
-            "capex_total_eur": float(v["capex_eur"] or 0),
-            "self_consumption_pct": float(v["result_samosp_pct"] or 0),
-            "self_sufficiency_pct": float(v["result_samostat_pct"] or 0),
-            "export_kwh": float(v["result_export_mwh"] or 0) * 1000,
-            "import_kwh": float(v["result_import_mwh"] or 0) * 1000,
-            "npv_eur": float(v["result_npv_eur_base"] or 0),
-            "irr_pct": float(v["result_irr_pct_base"] or 0),
-            "payback_years": float(v["result_payback_y_base"] or 0),
-            "dotacia_eur": float(v["result_dotacia_eur"] or 0),
-        })
+    # Site meta — kľúče ktoré posudok_premium očakáva
+    site_meta = {
+        "lokalita": analyza.get("om_address") or "",
+        "psc": analyza.get("om_psc") or "",
+        "distribuutor": analyza.get("om_distributor") or "",
+        "sadzba": analyza.get("om_sadzba") or "NN",
+        "typ_tarify": analyza.get("om_tarif_typ") or "spot",
+        "rk_kw": float(analyza.get("om_rk_kw") or 0),
+        "mrk_kw": float(analyza.get("om_mrk_kw") or 0),
+        "rocna_spotreba_kwh": float(analyza.get("consumption_annual_mwh") or 0) * 1000,
+    }
     
-    # Vyber víťaza (najvyšší NPV)
-    winner = max(engine_variants, key=lambda v: v["npv_eur"])
+    # Project ID — engine_version pre manifest footer
+    engine_version = econ.get("engine_version") or "0.9.5"
+    project_id = analyza.get("name") or f"AOM-{str(analyza_id)[:8]}"
     
-    customer = analyza.get("customers") or {}
+    # Render DOCX — funkcia VRACIA bytes (žiadny output_path!)
+    docx_bytes = generate_premium_posudok(
+        client_name=client_name,
+        project_id=project_id,
+        client_address=analyza.get("om_address") or "",
+        client_contact=client_contact,
+        project_name=analyza.get("name") or "Hybridné riešenie FVE + BESS",
+        site_meta=site_meta,
+        run_response=run_response,
+        engine_version=engine_version,
+        manifest_footer=f"Engine v{engine_version} | Analýza OM {project_id}",
+        posudok_date=datetime.now().strftime("%d.%m.%Y"),
+        prepared_by_name="Lukáš Bago",
+        prepared_by_email="lukas.bago@energovision.sk",
+        prepared_by_phone="0918 187 762",
+    )
     
-    # Render DOCX
-    tmp_pdf = tempfile.NamedTemporaryFile(suffix=".docx", delete=False)
-    tmp_pdf.close()
-    try:
-        kwargs = dict(
-            output_path=tmp_pdf.name,
-            project_name=analyza.get("name", "Analýza OM"),
-            client_name=customer.get("name", "Klient"),
-            client_address=analyza.get("om_address", ""),
-            client_contact=customer.get("email", ""),
-            site_data={
-                "psc": analyza.get("om_psc", ""),
-                "rk_kw": float(analyza.get("om_rk_kw") or 0),
-                "mrk_kw": float(analyza.get("om_mrk_kw") or 0),
-                "annual_kwh": float(analyza.get("consumption_annual_mwh") or 0) * 1000,
-            },
-            variants=engine_variants,
-            winner_variant=winner,
-            include_sensitivity=True,
-            include_monte_carlo=True,
-            posudok_date=datetime.now().strftime("%d.%m.%Y"),
-            prepared_by_name="Lukáš Bago",
-            prepared_by_email="lukas.bago@energovision.sk",
-            prepared_by_phone="+421 905 123 456",
-        )
-        try:
-            generate_premium_posudok(**kwargs)
-        except TypeError:
-            # Niektoré argumenty môžu byť pomenované inak v engine — fallback minimal
-            generate_premium_posudok(
-                output_path=tmp_pdf.name,
-                project_name=analyza.get("name", "Analýza OM"),
-                client_name=customer.get("name", "Klient"),
-                variants=engine_variants,
-            )
-        
-        with open(tmp_pdf.name, "rb") as f:
-            docx_bytes = f.read()
-    finally:
-        try: os.unlink(tmp_pdf.name)
-        except: pass
-    
-    # Upload
+    # Upload do Storage
     storage_path = f"analyza_om/{analyza_id}/posudok_premium_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
     sb.storage.from_("documents").upload(
         storage_path, docx_bytes,
