@@ -6382,7 +6382,8 @@ def webhook_omshare_monthly_billing():
     """
     Cron 1. dňa v mesiaci — vystaví draft mesačné faktúry pre všetky aktívne OM-Share skupiny.
     Kalkulácia: monthly_flat + monthly_per_om*active_om_count + usage_per_mwh*shared_mwh_last_month
-    Bundle zľava sa aplikuje ak plan_snapshot.bundle_discount_pct > 0.
+    Bundle zľava (30 %) sa aplikuje ak group.is_bundle = true a bundle_expires_at >= dnes.
+    Pricing model v3.2 — bundle je atribút skupiny, nie plánu.
     """
     body = request.get_json(silent=True) or {}
     target_month = body.get("month")
@@ -6420,8 +6421,19 @@ def webhook_omshare_monthly_billing():
             monthly_flat = float(plan.get("monthly_flat_eur") or 0)
             monthly_per_om = float(plan.get("monthly_per_om_eur") or 0)
             usage_per_mwh = float(plan.get("usage_per_mwh_eur") or 0)
-            bundle_pct = float(plan.get("bundle_discount_pct") or 0)
             vat_rate = float(plan.get("vat_rate") or 23)
+            # v3.2: bundle discount na úrovni skupiny, 30 % ak je aktívny
+            is_bundle = bool(g.get("is_bundle") or False)
+            bundle_exp = g.get("bundle_expires_at")
+            bundle_active = False
+            if is_bundle and bundle_exp:
+                try:
+                    from datetime import datetime as _dt
+                    exp_d = _dt.fromisoformat(bundle_exp).date() if isinstance(bundle_exp, str) else bundle_exp
+                    bundle_active = today <= exp_d
+                except Exception:
+                    bundle_active = False
+            bundle_pct = 30.0 if bundle_active else 0.0
 
             # active OM count
             mem = sb.table("sharing_members").select("id", count="exact").eq("group_id", g["id"]).eq("status", "active").execute()
@@ -7194,4 +7206,35 @@ def webhook_omshare_onepager():
         return jsonify({"ok": True, "pdf_url": pdf_url, "filename": filename, "type": onepager_type})
     except Exception as e:
         log.exception("[omshare-onepager] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
+@app.route("/webhook/omshare-bundle-expiry-check", methods=["POST"])
+def webhook_omshare_bundle_expiry_check():
+    """
+    Denný cron — nájde skupiny ktorých bundle expiruje za 30 dní (§ 17g notice požiadavka)
+    a zapíše activity log + interný alert. Tu by sa neskôr pridal email klientovi.
+    """
+    try:
+        sb = _sb()
+        # skupiny s bundle_expires_at presne za 30 dní
+        target = (datetime.now(timezone.utc).date() + timedelta(days=30)).isoformat()
+        res = sb.table("sharing_groups").select("*").eq("is_bundle", True).eq("bundle_expires_at", target).execute()
+        groups = res.data or []
+        notified = []
+        for g in groups:
+            sb.table("activities").insert({
+                "entity_type": "sharing_group",
+                "entity_id": g["id"],
+                "action": "bundle_expiry_30d_alert",
+                "changes": {
+                    "bundle_expires_at": g.get("bundle_expires_at"),
+                    "name": g.get("name"),
+                    "note": "Klient musí byť informovaný 30 dní vopred podľa § 17g zákona o energetike",
+                },
+            }).execute()
+            notified.append({"group_id": g["id"], "name": g.get("name"), "expires_at": g.get("bundle_expires_at")})
+        return jsonify({"ok": True, "count": len(notified), "groups": notified, "target_date": target})
+    except Exception as e:
+        log.exception("[omshare-bundle-expiry-check] failed")
         return jsonify({"ok": False, "error": str(e)[:500]}), 500
