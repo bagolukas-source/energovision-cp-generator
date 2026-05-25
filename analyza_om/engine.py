@@ -303,11 +303,14 @@ def calc_economics(sim_results: Dict[str, Any], tarif_buy: float, tarif_sell: fl
 
             annual_save = ec.calc_savings(sim_v, tb, ts)
             npv_calc = ec.calc_npv(capex, annual_save, dotacia=dotacia)
+            # economics vracia "irr"/"payback", defensive fallback aj na nové "irr_pct"/"payback_y"
+            irr_val = npv_calc.get("irr_pct", npv_calc.get("irr", 0))
+            payback_val = npv_calc.get("payback_y", npv_calc.get("payback", 0))
             scenarios_results[sc] = {
                 "annual_save_eur": round(annual_save, 0),
                 "npv_eur": round(npv_calc["npv"], 0),
-                "irr_pct": round(npv_calc["irr_pct"], 2),
-                "payback_y": round(npv_calc["payback_y"], 2),
+                "irr_pct": round(float(irr_val), 2),
+                "payback_y": round(float(payback_val), 2),
             }
         out.append({"id": vid, "name": sim_v["name"], "capex_eur": capex, "dotacia_eur": dotacia, "scenarios": scenarios_results})
 
