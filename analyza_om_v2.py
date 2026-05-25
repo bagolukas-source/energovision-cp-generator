@@ -111,8 +111,18 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
     request_dict = _build_request_from_analyza(analyza)
     log.info(f"[aom-v2] Running pipeline for {analyza_id} with {len(request_dict['variants']['pv_kwp_options'])} PV × {len(request_dict['variants']['bess_kwh_options'])} BESS")
     
-    raw_result = run_variants_pipeline(request_dict)
-    result = build_run_variants_response(raw_result)
+    # Wrap engine call — pri chybe nastav status na 'failed' aby analyza neuviazla v running
+    try:
+        raw_result = run_variants_pipeline(request_dict)
+        result = build_run_variants_response(raw_result)
+    except Exception as engine_err:
+        log.exception("[aom-v2] engine pipeline failed for %s", analyza_id)
+        sb.table("analyza_om").update({
+            "status": "failed",
+            "econ_results": {"error": str(engine_err)[:500]},
+            "updated_at": datetime.now().isoformat(),
+        }).eq("id", analyza_id).execute()
+        raise
     
     # Save variants do DB — variants sú teraz JSON-serializable dicts
     variants = result.get("variants") or []
