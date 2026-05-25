@@ -109,6 +109,15 @@ def generate_smart_variants(sb, analyza: dict, profile: dict) -> list[dict]:
     peak_kw = profile["peak_kw"]
     mrk_kw = float(analyza.get("om_mrk_kw") or 0)
     max_export = float(analyza.get("max_export_kw") or 0)
+
+    # Fallback: ak chýba 15-min profil + faktúra → odhad z MRK
+    # Typický B2B load factor 35–45 % (priemerné využitie MRK počas roka)
+    annual_estimated = False
+    if annual_kwh <= 0 and mrk_kw > 0:
+        annual_kwh = mrk_kw * 8760 * 0.40  # 40 % load factor
+        peak_kw = mrk_kw * 0.85
+        annual_estimated = True
+        log.info(f"[smart_variants] annual_kwh odhadnuté z MRK {mrk_kw} kW → {annual_kwh:.0f} kWh/rok")
     
     # Base kWp = 80% pokrytie ročnej spotreby (PVGIS yield 1050 kWh/kWp)
     base_kwp = round(annual_kwh * 0.8 / 1050, 0) if annual_kwh > 0 else max(20, mrk_kw * 0.8)
@@ -204,20 +213,75 @@ def generate_smart_variants(sb, analyza: dict, profile: dict) -> list[dict]:
                 arch["capex_total_eur"] = float(match.get("capex_total_eur", 0) or 0)
                 arch["dotacia_eur"] = float(match.get("dotacia_eur", 0) or 0)
             else:
-                # Fallback estimate
-                arch["npv_eur"] = 0
-                arch["payback_years"] = 0
-                arch["self_consumption_pct"] = 0
-                arch["capex_total_eur"] = arch["fve_kwp"] * 800 + arch["bess_kwh"] * 480
-                arch["dotacia_eur"] = 0
+                _apply_economic_fallback(arch, annual_kwh, annual_estimated)
+            # Ak engine match má 0 NPV/payback (zlyhal výpočet) — fallback
+            if (arch.get("npv_eur") or 0) <= 0 or (arch.get("payback_years") or 0) <= 0:
+                _apply_economic_fallback(arch, annual_kwh, annual_estimated)
     except Exception as e:
         log.warning(f"Engine call failed, using estimates: {e}")
         for arch in archetypes:
-            arch["capex_total_eur"] = arch["fve_kwp"] * 800 + arch["bess_kwh"] * 480
-            arch["npv_eur"] = 0
-            arch["payback_years"] = 0
+            _apply_economic_fallback(arch, annual_kwh, annual_estimated)
+    
+    # Mark all archetypes if estimated
+    if annual_estimated:
+        for arch in archetypes:
+            arch["estimated_from_mrk"] = True
     
     return archetypes
+
+
+def _apply_economic_fallback(arch: dict, annual_kwh: float, estimated: bool):
+    """Jednoduchý ekonomický odhad — pre prípady keď engine nemá 15-min profil.
+    Predpokladá: PVGIS 1050 kWh/kWp, samospotreba per archetype,
+    cena el. 0.18 €/kWh fix + 0.04 € predaj prebytkov."""
+    kwp = float(arch.get("fve_kwp") or 0)
+    bess = float(arch.get("bess_kwh") or 0)
+
+    # CAPEX (mode quick z engine config: 800 €/kWp PV, 480 €/kWh BESS)
+    capex_pv = kwp * 800
+    capex_bess = bess * 480
+    capex_total = capex_pv + capex_bess
+
+    # Samospotreba podľa archetype
+    archetype_key = arch.get("archetype", "")
+    samospotreba_map = {
+        "conservative":   0.95,  # malé PV, takmer všetko sa spotrebuje
+        "optimal_npv":    0.75,
+        "independence":   0.85,  # veľký BESS dvíha samospotrebu
+        "spot_arbitrage": 0.70,
+        "stretch":        0.50,  # over-spec → veľa prebytkov
+    }
+    samospotreba = samospotreba_map.get(archetype_key, 0.65)
+    if annual_kwh > 0 and kwp > 0:
+        # Cap samospotrebou: nemôže byť viac ako annual_kwh / (kwp * 1050)
+        max_sams = min(1.0, annual_kwh / (kwp * 1050))
+        samospotreba = min(samospotreba, max_sams)
+
+    # Výroba a úspora
+    annual_production = kwp * 1050  # kWh/rok
+    self_consumed = annual_production * samospotreba
+    exported = annual_production - self_consumed
+    saving_y1 = self_consumed * 0.18 + exported * 0.04  # €/rok
+
+    # Dotácia (Zelená podnikom 30 % intenzita, max 200 000 €)
+    dotacia = min(capex_total * 0.30, 200000) if kwp <= 500 else 0
+    net_capex = capex_total - dotacia
+
+    # NPV: 20r horizont, 6 % diskont, 21 % DPPO, daňové výhody odpisu
+    payback_simple = net_capex / saving_y1 if saving_y1 > 0 else 99.0
+    # NPV cez perpetuity-like approx: saving × annuity_factor(20y, 6%) - net_capex
+    annuity_factor = 11.47  # (1-(1+0.06)^-20)/0.06
+    npv = saving_y1 * 0.79 * annuity_factor - net_capex  # 79 % po DPPO
+
+    arch["npv_eur"] = round(npv, 0)
+    arch["payback_years"] = round(min(payback_simple, 25.0), 1)
+    arch["self_consumption_pct"] = round(samospotreba * 100, 0)
+    arch["self_sufficiency_pct"] = round((self_consumed / annual_kwh * 100) if annual_kwh > 0 else 0, 0)
+    arch["capex_total_eur"] = round(capex_total, 0)
+    arch["dotacia_eur"] = round(dotacia, 0)
+    arch["irr_pct"] = round((saving_y1 * 0.79 / net_capex * 100) if net_capex > 0 else 0, 1)
+    arch["saving_y1_eur"] = round(saving_y1, 0)
+    arch["fallback_estimate"] = True
 
 
 def _detect_profile_template(profile: dict) -> str:
