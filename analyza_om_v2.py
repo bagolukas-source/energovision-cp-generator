@@ -97,7 +97,7 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
     """
     Spustí VariantGenerator nad analyza_om → uloží varianty do analyza_om_variants.
     """
-    from energovision_analytics.api.services.engine_service import run_variants_pipeline
+    from energovision_analytics.api.services.engine_service import run_variants_pipeline, build_run_variants_response
     
     # Načítaj analyza_om
     a_res = sb.table("analyza_om").select("*").eq("id", analyza_id).single().execute()
@@ -111,9 +111,10 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
     request_dict = _build_request_from_analyza(analyza)
     log.info(f"[aom-v2] Running pipeline for {analyza_id} with {len(request_dict['variants']['pv_kwp_options'])} PV × {len(request_dict['variants']['bess_kwh_options'])} BESS")
     
-    result = run_variants_pipeline(request_dict)
+    raw_result = run_variants_pipeline(request_dict)
+    result = build_run_variants_response(raw_result)
     
-    # Save variants do DB
+    # Save variants do DB — variants sú teraz JSON-serializable dicts
     variants = result.get("variants") or []
     if variants:
         # Clear existing variants
@@ -123,7 +124,7 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
         for idx, v in enumerate(variants):
             rows.append({
                 "analyza_id": analyza_id,
-                "name": v.get("name", f"V{idx+1}"),
+                "name": v.get("label", f"V{idx+1}"),
                 "position": idx + 1,
                 "fve_kwp": v.get("pv_kwp", 0),
                 "fve_tilt_deg": 35,
@@ -134,13 +135,13 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
                 "bess_arbitrage_enabled": v.get("bess_kwh", 0) > 0,
                 "capex_eur": v.get("capex_total_eur", 0),
                 "capex_source": "engine_v095_quick",
-                "result_samosp_pct": v.get("self_consumption_pct", 0),
-                "result_samostat_pct": v.get("self_sufficiency_pct", 0),
-                "result_export_mwh": v.get("export_kwh", 0) / 1000,
-                "result_import_mwh": v.get("import_kwh", 0) / 1000,
+                "result_samosp_pct": v.get("samospotreba_pct", 0),
+                "result_samostat_pct": v.get("samostatnost_pct", 0),
+                "result_export_mwh": v.get("export_kwh", 0) / 1000 if v.get("export_kwh") else 0,
+                "result_import_mwh": (v.get("grid_import_kwh", 0) or 0) / 1000,
                 "result_npv_eur_base": v.get("npv_eur", 0),
                 "result_irr_pct_base": v.get("irr_pct", 0),
-                "result_payback_y_base": v.get("payback_years", 0),
+                "result_payback_y_base": v.get("payback_simple_y", 0),
                 "result_dotacia_eur": v.get("dotacia_eur", 0),
             })
         sb.table("analyza_om_variants").insert(rows).execute()

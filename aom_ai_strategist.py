@@ -154,7 +154,7 @@ def generate_smart_variants(sb, analyza: dict, profile: dict) -> list[dict]:
     
     # Volá engine pre každý archetype (rýchla simulácia)
     try:
-        from energovision_analytics.api.services.engine_service import run_variants_pipeline
+        from energovision_analytics.api.services.engine_service import run_variants_pipeline, build_run_variants_response
         
         # Komponuj request pre všetky archetypy naraz
         pv_options = sorted(set(a["fve_kwp"] for a in archetypes))
@@ -186,25 +186,30 @@ def generate_smart_variants(sb, analyza: dict, profile: dict) -> list[dict]:
             "async_mode": False,
         }
         
-        result = run_variants_pipeline(request_dict)
+        raw_result = run_variants_pipeline(request_dict)
+        # Konvertuj VariantResult dataclasses na JSON-serializable dicts
+        result = build_run_variants_response(raw_result)
         engine_variants = result.get("variants") or []
         
         # Match engine results to archetypes (closest match by PV+BESS)
+        # build_run_variants_response vracia: npv_eur, irr_pct, payback_simple_y, samospotreba_pct, samostatnost_pct, capex_total_eur, dotacia_eur
         for arch in archetypes:
             match = _find_best_match(engine_variants, arch["fve_kwp"], arch["bess_kwh"])
             if match:
-                arch["npv_eur"] = match.get("npv_eur", 0)
-                arch["irr_pct"] = match.get("irr_pct", 0)
-                arch["payback_years"] = match.get("payback_years", 0)
-                arch["self_consumption_pct"] = match.get("self_consumption_pct", 0)
-                arch["self_sufficiency_pct"] = match.get("self_sufficiency_pct", 0)
-                arch["capex_total_eur"] = match.get("capex_total_eur", 0)
-                arch["dotacia_eur"] = match.get("dotacia_eur", 0)
+                arch["npv_eur"] = float(match.get("npv_eur", 0) or 0)
+                arch["irr_pct"] = float(match.get("irr_pct", 0) or 0)
+                arch["payback_years"] = float(match.get("payback_simple_y", 0) or 0)
+                arch["self_consumption_pct"] = float(match.get("samospotreba_pct", 0) or 0)
+                arch["self_sufficiency_pct"] = float(match.get("samostatnost_pct", 0) or 0)
+                arch["capex_total_eur"] = float(match.get("capex_total_eur", 0) or 0)
+                arch["dotacia_eur"] = float(match.get("dotacia_eur", 0) or 0)
             else:
                 # Fallback estimate
                 arch["npv_eur"] = 0
                 arch["payback_years"] = 0
+                arch["self_consumption_pct"] = 0
                 arch["capex_total_eur"] = arch["fve_kwp"] * 800 + arch["bess_kwh"] * 480
+                arch["dotacia_eur"] = 0
     except Exception as e:
         log.warning(f"Engine call failed, using estimates: {e}")
         for arch in archetypes:
