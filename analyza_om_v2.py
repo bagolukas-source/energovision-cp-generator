@@ -139,7 +139,7 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
                 "fve_kwp": v.get("pv_kwp", 0),
                 "fve_tilt_deg": 35,
                 "fve_azimuth_deg": 180,
-                "fve_topology": "single_string",
+                "fve_topology": "south",  # default tilt/azimuth topology (constraint: south|east_west|tracker|carport)
                 "bess_kwh": v.get("bess_kwh", 0),
                 "bess_kw": v.get("bess_kw", 0),
                 "bess_arbitrage_enabled": v.get("bess_kwh", 0) > 0,
