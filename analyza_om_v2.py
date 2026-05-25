@@ -232,7 +232,7 @@ def render_posudok_premium(sb, analyza_id: str) -> dict:
     """
     from energovision_analytics.reporting.posudok_premium import generate_premium_posudok
     
-    a_res = sb.table("analyza_om").select("*, customers(name, email, ico)").eq("id", analyza_id).single().execute()
+    a_res = sb.table("analyza_om").select("*, customers(first_name, last_name, company_name, email, ico)").eq("id", analyza_id).single().execute()
     analyza = a_res.data
     if not analyza:
         raise ValueError(f"Analyza {analyza_id} not found")
@@ -241,6 +241,16 @@ def render_posudok_premium(sb, analyza_id: str) -> dict:
     db_variants = v_res.data or []
     if not db_variants:
         raise ValueError("No variants — spusti run_variants_premium najprv")
+    
+    # Customer name: preferuj company_name pre B2B, inak first+last_name
+    cust = analyza.get("customers") or {}
+    if cust.get("company_name"):
+        cust_display_name = cust["company_name"]
+    else:
+        cust_display_name = f"{cust.get('first_name') or ''} {cust.get('last_name') or ''}".strip() or "Klient"
+    # Backward compat — niektoré reporting funkcie čítajú customer.get("name")
+    if isinstance(cust, dict) and "name" not in cust:
+        cust["name"] = cust_display_name
     
     # Convert DB variants na engine format
     engine_variants = []
