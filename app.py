@@ -8152,3 +8152,164 @@ def webhook_alarm_action():
     except Exception as e:
         log.exception("[alarm-action] update failed")
         return jsonify({"ok": False, "error": str(e)[:300]}), 500
+
+
+# =============================================================================
+# /webhook/fleet-anomaly  →  AI-powered anomaly detection cez Anthropic
+# =============================================================================
+# Analyzuje aktuálny fleet snapshot + identifikuje podozrivé stanice.
+# Vracia štruktúrované insights pre dispečera.
+
+_FLEET_ANOMALY_CACHE: dict = {"ts": 0.0, "data": None}
+_FLEET_ANOMALY_TTL_SEC = 300  # 5 min — LLM call je drahý
+
+
+def _build_fleet_anomaly_prompt(sites: list, alarms_total: int) -> str:
+    """Sumarizuj fleet pre LLM."""
+    huawei_sites = [s for s in sites if isinstance(s, dict) and (s.get("vendor") or "").lower() == "huawei"]
+    if not huawei_sites:
+        return ""
+
+    # Vypočítaj flotila stats pre baseline
+    spec_yields = [s.get("specific_yield_today") for s in huawei_sites if s.get("specific_yield_today") is not None and s.get("specific_yield_today") > 0]
+    fleet_avg_spec = sum(spec_yields) / len(spec_yields) if spec_yields else 0
+
+    lines = []
+    for s in huawei_sites[:30]:  # max 30 staníc, LLM context limit
+        spec = s.get("specific_yield_today")
+        power = s.get("current_ac_power_kw")
+        dc_kwp = s.get("dc_kwp") or s.get("ac_kw") or 0
+        cf = s.get("capacity_factor_pct")
+        yield_kwh = s.get("current_day_yield_kwh")
+        alarms = s.get("open_alarms_count", 0)
+        status = s.get("status_label", "?")
+
+        # Compute deviation
+        dev = ""
+        if spec is not None and fleet_avg_spec > 0:
+            d = ((spec - fleet_avg_spec) / fleet_avg_spec) * 100
+            dev = f"Δ{d:+.0f}% vs flotila"
+
+        lines.append(
+            f"- {s.get('site_name', '?')} ({dc_kwp} kWp): "
+            f"výkon={power} kW, dnes={yield_kwh} kWh, spec={spec} kWh/kWp {dev}, "
+            f"CF={cf}%, status={status}, alarmy={alarms}"
+        )
+
+    summary = "\n".join(lines)
+    return f"""Si analyst fotovoltickej flotily Energovision (SK). Tu je aktuálny snapshot {len(huawei_sites)} Huawei staníc:
+
+FLOTILA priemer specific yield dnes: {fleet_avg_spec:.2f} kWh/kWp/deň
+CELKOVO otvorených alarmov: {alarms_total}
+
+STANICE:
+{summary}
+
+ÚLOHA: Identifikuj **TOP 3 najpodozrivejšie stanice** alebo problémy ktoré si dispečer musí pozrieť TERAZ. Pre každú:
+
+1. **Stanica + dôvod** (jednou vetou)
+2. **Pravdepodobná príčina** (string offline, MPPT mismatch, soiling, shading, hardware fault, žiadne dáta...)
+3. **Akcia** (čo dispečer má urobiť — kontaktovať klienta, pozrieť alarmy, zavolať technika, atď.)
+
+Formát odpovede STRIKTNE JSON:
+{{
+  "insights": [
+    {{"station": "názov", "severity": "high|medium|low", "issue": "popis problému", "cause": "pravdepodobná príčina", "action": "konkrétna akcia"}}
+  ],
+  "fleet_health": "good|fair|poor",
+  "summary": "1-veta súhrn stavu flotily"
+}}
+
+Iba JSON, žiadny ďalší text. Ak je všetko v poriadku, vráť prázdne insights[]."""
+
+
+def _fleet_anomaly_compute() -> dict:
+    import datetime as _dt
+    if not _hs:
+        return {"ok": False, "error": "huawei_spot module not available"}
+
+    # Pull current fleet from cache
+    if _FLEET_CACHE.get("data") is None:
+        # Force fresh compute ak nie je cache
+        try:
+            data = _fleet_status_compute()
+        except Exception as e:
+            return {"ok": False, "error": f"fleet snapshot failed: {e}"}
+    else:
+        data = _FLEET_CACHE["data"]
+
+    sites = data.get("sites") or []
+    alarms_total = (data.get("meta") or {}).get("alarms_total", 0)
+
+    prompt = _build_fleet_anomaly_prompt(sites, alarms_total)
+    if not prompt:
+        return {"ok": True, "insights": [], "fleet_health": "good", "summary": "Žiadne Huawei stanice."}
+
+    # Call Anthropic
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return {"ok": False, "error": "ANTHROPIC_API_KEY missing"}
+
+    payload = {
+        "model": "claude-sonnet-4-5-20250929",
+        "max_tokens": 1500,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
+
+    try:
+        r = requests.post("https://api.anthropic.com/v1/messages", headers=headers, json=payload, timeout=60)
+        if r.status_code != 200:
+            return {"ok": False, "error": f"LLM HTTP {r.status_code}: {r.text[:200]}"}
+        resp = r.json()
+        text = resp["content"][0]["text"].strip()
+        # Strip markdown JSON fence if present
+        if text.startswith("```"):
+            text = text.split("```", 2)[1]
+            if text.startswith("json"):
+                text = text[4:]
+            text = text.strip()
+        import json as _json
+        parsed = _json.loads(text)
+        return {
+            "ok": True,
+            "insights": parsed.get("insights", []),
+            "fleet_health": parsed.get("fleet_health", "fair"),
+            "summary": parsed.get("summary", ""),
+            "analyzed_at": _dt.datetime.utcnow().isoformat() + "Z",
+        }
+    except Exception as e:
+        log.exception("[fleet-anomaly] LLM call failed")
+        return {"ok": False, "error": str(e)[:300]}
+
+
+@app.route("/webhook/fleet-anomaly", methods=["GET", "OPTIONS"])
+def webhook_fleet_anomaly():
+    if request.method == "OPTIONS":
+        resp = jsonify({})
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        resp.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Webhook-Secret"
+        return resp
+
+    fresh = request.args.get("fresh") in ("1", "true", "yes")
+    now = _time.time()
+    if not fresh and _FLEET_ANOMALY_CACHE["data"] is not None and (now - _FLEET_ANOMALY_CACHE["ts"]) < _FLEET_ANOMALY_TTL_SEC:
+        cached = {**_FLEET_ANOMALY_CACHE["data"], "cached": True, "cache_age_sec": int(now - _FLEET_ANOMALY_CACHE["ts"])}
+        resp = jsonify(cached)
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        return resp
+
+    try:
+        data = _fleet_anomaly_compute()
+    except Exception as e:
+        log.exception("[fleet-anomaly] compute failed")
+        return jsonify({"ok": False, "error": str(e)[:300]}), 500
+
+    if data.get("ok"):
+        _FLEET_ANOMALY_CACHE["data"] = data
+        _FLEET_ANOMALY_CACHE["ts"] = now
+
+    resp = jsonify({**data, "cached": False})
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    return resp
