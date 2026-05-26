@@ -184,6 +184,10 @@ class RuleBasedEMS:
 
             # Priorita 5: PV → grid export (zvyšok PV)
             pv_to_grid = max(0.0, remaining_pv * dt_h)
+            # AOM-FIX-31: Curtail pri zápornom spote — nevyplatí sa exportovať pod 0 €/MWh
+            # (klient platí distribučný poplatok aj pri zápornej cene). Default ON.
+            if getattr(self.config, "negative_spot_curtail", True) and spot < 0:
+                pv_to_grid = 0.0
             # Clip na MRK
             mrk_export_limit_kwh = self.site.mrk_kw * dt_h
             pv_to_grid_clipped = min(pv_to_grid, mrk_export_limit_kwh)

@@ -150,7 +150,13 @@ def _build_request_from_analyza(analyza: dict) -> dict:
         },
         "dotacia": {
             "enabled": bool(analyza.get("dotacia_enabled", False)),
-            "scheme_id": "zelena_podnikom",
+            "scheme_id": analyza.get("dotacia_scheme") or "zelena_podnikom",
+        },
+        "ems_config": {
+            "arb_min_spread_eur_mwh": float(analyza.get("arb_min_spread_eur_mwh") or 30),
+            "max_efc_per_year": float(analyza.get("max_efc_per_year") or 1000),
+            "negative_spot_curtail": bool(analyza.get("negative_spot_curtail", True)),
+            "mrk_export_penalty_eur_kwh": float(analyza.get("mrk_export_penalty_eur_kwh") or 0.03),
         },
         "async_mode": False,
     }

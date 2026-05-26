@@ -30,7 +30,7 @@ class EMSConfig:
     """Konfigurácia EMS stratégie."""
     # Multi-cycle limit
     max_cycles_per_day: int = 2          # Realistic optimum pre LFP (warranty target)
-    max_efc_per_year: float = 500.0       # warranty 6000 cy / 12 r = 500/y target
+    max_efc_per_year: float = 1000.0      # warranty 10000 cy / 10 r = 1000/y target (LFP B2B)
 
     # Arbitráž triggery
     lookahead_hours: int = 24             # 24h = OKTE D-1 published
@@ -44,6 +44,9 @@ class EMSConfig:
 
     # Self-consumption
     enable_bess_self_cons: bool = True    # BESS vybíja v deficite (Stav 0)
+
+    # Negative spot curtailment (AOM-FIX-31)
+    negative_spot_curtail: bool = True    # Pri spot < 0 €/MWh neexportuj (preferuj BAT charge alebo clip)
 
 
 @dataclass
