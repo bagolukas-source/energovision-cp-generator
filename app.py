@@ -7281,3 +7281,207 @@ def webhook_aom_orphan_reset():
     except Exception as e:
         log.exception("[aom-orphan-reset] failed")
         return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
+# ============================================================
+# FLEET STATUS — live Huawei API → /admin/monitoring
+# ============================================================
+# Read-only endpoint. Combines DB metadata (inverter_sites + alarms)
+# with live realtime KPI pulled from Huawei FusionSolar.
+# In-memory cache 60s to avoid hammering Huawei API quota.
+# CORS open for crm.energovision.sk + app.energovision.sk.
+# No mutations — SPOT reactor is unaffected.
+
+_FLEET_CACHE: Dict[str, Any] = {"ts": 0.0, "data": None}
+_FLEET_CACHE_TTL_SEC = 60
+
+
+def _fleet_status_compute() -> Dict[str, Any]:
+    """Fetch fleet status: DB metadata + live Huawei KPI batch call.
+
+    Returns dict with `sites` list + `meta` (counts, fetched_at).
+    Each site row keys: id, site_name, vendor, vendor_station_id, dc_kwp,
+    ac_kw, bess_kwh, lat, lon, customer_id, monitoring_enabled, address,
+    spot_control_enabled, spot_dry_run, spot_current_state,
+    current_ac_power_kw, current_day_yield_kwh, current_battery_soc_pct,
+    last_telemetry_at, open_alarms_count, status_label, status_tone.
+    """
+    from datetime import datetime, timezone
+    started = time.time()
+
+    # 1. DB metadata
+    sites = sb_get("inverter_sites", {
+        "select": (
+            "id,site_name,vendor,vendor_station_id,dc_kwp,ac_kw,bess_kwh,"
+            "latitude,longitude,customer_id,monitoring_enabled,address,"
+            "spot_control_enabled,spot_dry_run,spot_current_state,"
+            "spot_last_transition_at"
+        ),
+        "order": "site_name.asc",
+    }) or []
+
+    # 2. Open alarm counts per site (cheap query)
+    try:
+        alarm_rows = sb_get("inverter_alarms", {
+            "select": "site_id",
+            "resolved_at": "is.null",
+        }) or []
+    except Exception as e:
+        log.warning("[fleet-status] alarms query failed: %s", e)
+        alarm_rows = []
+    alarm_counts: Dict[str, int] = {}
+    for a in alarm_rows:
+        sid = a.get("site_id")
+        if sid:
+            alarm_counts[sid] = alarm_counts.get(sid, 0) + 1
+
+    # 3. Batch live KPI from Huawei (only for huawei sites with monitoring_enabled)
+    huawei_codes = [
+        s.get("vendor_station_id") for s in sites
+        if s.get("vendor") == "huawei"
+        and s.get("monitoring_enabled")
+        and s.get("vendor_station_id")
+    ]
+    live_kpi: Dict[str, Dict[str, Any]] = {}
+    huawei_error: Optional[str] = None
+
+    if huawei_codes and _hs is not None:
+        try:
+            token = _hs.huawei_login()
+            if not token:
+                huawei_error = "Huawei login failed (no token)"
+            else:
+                base = _hs._huawei_session.get("base") or _hs.HUAWEI_BASE
+                headers = {"XSRF-TOKEN": token, "Content-Type": "application/json"}
+                # API limit 100 stations per request
+                for chunk_start in range(0, len(huawei_codes), 100):
+                    chunk = huawei_codes[chunk_start:chunk_start + 100]
+                    body = {"stationCodes": ",".join(chunk)}
+                    r = requests.post(
+                        f"{base}/getStationRealKpi",
+                        headers=headers, json=body, timeout=30,
+                    )
+                    if r.status_code != 200:
+                        huawei_error = f"HTTP {r.status_code}: {r.text[:200]}"
+                        break
+                    payload = r.json() or {}
+                    rows = payload.get("data") or payload.get("list") or []
+                    for row in rows:
+                        code = str(row.get("stationCode") or "")
+                        kpi = row.get("dataItemMap") or {}
+                        live_kpi[code] = {
+                            "current_ac_power_kw": _to_float_safe(kpi.get("real_health_state")),
+                            "current_day_yield_kwh": _to_float_safe(kpi.get("day_power")),
+                            "current_total_yield_mwh": _to_float_safe(kpi.get("total_power")),
+                            "current_co2_kg": _to_float_safe(kpi.get("day_use_energy")),
+                        }
+        except Exception as e:
+            log.exception("[fleet-status] Huawei batch fetch failed")
+            huawei_error = str(e)[:200]
+
+    # 4. Combine
+    now_iso = datetime.now(timezone.utc).isoformat()
+    enriched: List[Dict[str, Any]] = []
+    for s in sites:
+        sid = s.get("id")
+        code = s.get("vendor_station_id")
+        kpi = live_kpi.get(code) if code else None
+
+        has_live = kpi is not None
+        power = (kpi or {}).get("current_ac_power_kw")
+        # Status semantics:
+        #   live + monitoring_enabled → "Live"
+        #   monitoring_enabled, no live → "Bez dát" (rose)
+        #   monitoring_enabled=false → "Vypnuté" (slate)
+        if not s.get("monitoring_enabled"):
+            status_label, status_tone = "Vypnuté", "slate"
+        elif has_live:
+            status_label, status_tone = "Live", "emerald"
+        else:
+            status_label, status_tone = "Bez dát", "rose"
+
+        enriched.append({
+            "id": sid,
+            "site_name": s.get("site_name"),
+            "vendor": s.get("vendor"),
+            "vendor_station_id": code,
+            "dc_kwp": s.get("dc_kwp"),
+            "ac_kw": s.get("ac_kw"),
+            "bess_kwh": s.get("bess_kwh"),
+            "lat": s.get("latitude"),
+            "lon": s.get("longitude"),
+            "customer_id": s.get("customer_id"),
+            "monitoring_enabled": bool(s.get("monitoring_enabled")),
+            "address": s.get("address"),
+            "spot_control_enabled": bool(s.get("spot_control_enabled")),
+            "spot_dry_run": bool(s.get("spot_dry_run")),
+            "spot_current_state": s.get("spot_current_state"),
+            "spot_last_transition_at": s.get("spot_last_transition_at"),
+            "current_ac_power_kw": power,
+            "current_day_yield_kwh": (kpi or {}).get("current_day_yield_kwh"),
+            "current_total_yield_mwh": (kpi or {}).get("current_total_yield_mwh"),
+            "last_telemetry_at": now_iso if has_live else None,
+            "open_alarms_count": alarm_counts.get(sid, 0),
+            "status_label": status_label,
+            "status_tone": status_tone,
+        })
+
+    return {
+        "ok": True,
+        "fetched_at": now_iso,
+        "duration_ms": int((time.time() - started) * 1000),
+        "sites": enriched,
+        "meta": {
+            "total": len(enriched),
+            "monitored": sum(1 for x in enriched if x["monitoring_enabled"]),
+            "live": sum(1 for x in enriched if x["status_label"] == "Live"),
+            "huawei_codes_polled": len(huawei_codes),
+            "huawei_kpi_returned": len(live_kpi),
+            "huawei_error": huawei_error,
+            "alarms_total": sum(alarm_counts.values()),
+        },
+    }
+
+
+def _to_float_safe(v) -> Optional[float]:
+    if v is None or v == "" or v == "N/A":
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+@app.route("/webhook/fleet-status", methods=["GET", "OPTIONS"])
+def webhook_fleet_status():
+    """Live fleet snapshot for /admin/monitoring dashboard.
+
+    GET ?fresh=1 → bypass cache.
+    Cache TTL: 60 seconds. CORS open for CRM domains.
+    """
+    # CORS preflight
+    if request.method == "OPTIONS":
+        resp = jsonify({})
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        resp.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Webhook-Secret"
+        return resp
+
+    fresh = request.args.get("fresh") in ("1", "true", "yes")
+    now = time.time()
+    if not fresh and _FLEET_CACHE["data"] is not None and (now - _FLEET_CACHE["ts"]) < _FLEET_CACHE_TTL_SEC:
+        resp = jsonify({**_FLEET_CACHE["data"], "cached": True, "cache_age_sec": int(now - _FLEET_CACHE["ts"])})
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        return resp
+
+    try:
+        data = _fleet_status_compute()
+    except Exception as e:
+        log.exception("[fleet-status] compute failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+    _FLEET_CACHE["data"] = data
+    _FLEET_CACHE["ts"] = now
+    resp = jsonify({**data, "cached": False})
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    return resp
