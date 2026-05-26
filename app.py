@@ -7307,7 +7307,7 @@ def _fleet_status_compute() -> dict:
     last_telemetry_at, open_alarms_count, status_label, status_tone.
     """
     from datetime import datetime, timezone
-    started = time.time()
+    started = _time.time()
 
     # 1. DB metadata
     sites = sb_get("inverter_sites", {
@@ -7429,7 +7429,7 @@ def _fleet_status_compute() -> dict:
     return {
         "ok": True,
         "fetched_at": now_iso,
-        "duration_ms": int((time.time() - started) * 1000),
+        "duration_ms": int((_time.time() - started) * 1000),
         "sites": enriched,
         "meta": {
             "total": len(enriched),
@@ -7468,7 +7468,7 @@ def webhook_fleet_status():
         return resp
 
     fresh = request.args.get("fresh") in ("1", "true", "yes")
-    now = time.time()
+    now = _time.time()
     if not fresh and _FLEET_CACHE["data"] is not None and (now - _FLEET_CACHE["ts"]) < _FLEET_CACHE_TTL_SEC:
         resp = jsonify({**_FLEET_CACHE["data"], "cached": True, "cache_age_sec": int(now - _FLEET_CACHE["ts"])})
         resp.headers["Access-Control-Allow-Origin"] = "*"
