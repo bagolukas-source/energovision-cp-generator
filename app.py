@@ -7656,3 +7656,166 @@ def webhook_fleet_status():
     resp = jsonify({**data, "cached": False})
     resp.headers["Access-Control-Allow-Origin"] = "*"
     return resp
+
+
+# =============================================================================
+# /webhook/station-kpi  →  historické KPI grafy pre detail stanice
+# =============================================================================
+# Volá Huawei FusionSolar agregačné endpointy:
+#   - getKpiStationHour   → 24h výkonový profil (hourly samples)
+#   - getKpiStationDay    → 30-day daily yield (denný výnos)
+#   - getKpiStationMonth  → 12-month monthly yield (mesačný výnos)
+#
+# In-memory cache 5 min (Huawei stejne agreguje raz za 5 min).
+# CORS open. No mutations.
+
+_STATION_KPI_CACHE: dict = {}   # {station_code: {"ts": float, "data": dict}}
+_STATION_KPI_TTL_SEC = 300       # 5 min
+
+
+def _huawei_call(endpoint: str, payload: dict, base: str, headers: dict) -> dict:
+    """POST helper. Vracia parsed JSON alebo {} pri chybe."""
+    try:
+        r = requests.post(f"{base}{endpoint}", headers=headers, json=payload, timeout=30)
+        if r.status_code != 200:
+            log.warning("[station-kpi] %s HTTP %s: %s", endpoint, r.status_code, r.text[:200])
+            return {}
+        return r.json() or {}
+    except Exception as e:
+        log.warning("[station-kpi] %s failed: %s", endpoint, e)
+        return {}
+
+
+def _station_kpi_compute(station_code: str) -> dict:
+    """Pull hourly/daily/monthly KPI pre 1 stanicu."""
+    if not _hs:
+        return {"ok": False, "error": "huawei_spot module not loaded"}
+
+    token = _hs.huawei_login()
+    if not token:
+        return {"ok": False, "error": "Huawei login failed"}
+
+    base = _hs._huawei_session.get("base") or _hs.HUAWEI_BASE
+    headers = {"XSRF-TOKEN": token, "Content-Type": "application/json"}
+
+    import datetime as _dt
+    now_ts_ms = int(_dt.datetime.utcnow().timestamp() * 1000)
+
+    # 1) getKpiStationHour — dnešok hodinové dáta (24 vzoriek)
+    today_start = _dt.datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    hour_payload = {"stationCodes": station_code, "collectTime": int(today_start.timestamp() * 1000)}
+    hour_resp = _huawei_call("/getKpiStationHour", hour_payload, base, headers)
+
+    # 2) getKpiStationDay — posledných 30 dní
+    day_start = today_start - _dt.timedelta(days=30)
+    day_payload = {"stationCodes": station_code, "collectTime": int(day_start.timestamp() * 1000)}
+    day_resp = _huawei_call("/getKpiStationDay", day_payload, base, headers)
+
+    # 3) getKpiStationMonth — 12 mesiacov
+    month_start = today_start.replace(day=1) - _dt.timedelta(days=365)
+    month_start = month_start.replace(day=1)
+    month_payload = {"stationCodes": station_code, "collectTime": int(month_start.timestamp() * 1000)}
+    month_resp = _huawei_call("/getKpiStationMonth", month_payload, base, headers)
+
+    def _extract(resp, key_aliases):
+        """Huawei vracia rôzne tvary — niekedy data: [...], inokedy data: [{dataItemMap: {...}}]."""
+        rows = []
+        if not isinstance(resp, dict):
+            return rows
+        data = resp.get("data") or []
+        if not isinstance(data, list):
+            return rows
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            ts = item.get("collectTime") or item.get("time")
+            dim = item.get("dataItemMap") or item
+            row = {"ts": ts}
+            for alias in key_aliases:
+                v = dim.get(alias)
+                if v is not None and v != "N/A":
+                    try:
+                        row[alias] = float(v)
+                    except (TypeError, ValueError):
+                        row[alias] = None
+            rows.append(row)
+        return rows
+
+    # Huawei field names (z NBI Reference 25.4.0):
+    #   inverter_power (kW)  — hourly power
+    #   product_power (kWh)  — daily/monthly yield
+    #   ongrid_power (kWh)   — feed-in
+    #   power_profit (CNY... ale pre nás môže byť aj v EUR od FusionSolar)
+
+    hourly = _extract(hour_resp, ["inverter_power", "product_power", "ongrid_power"])
+    daily = _extract(day_resp, ["product_power", "ongrid_power", "power_profit"])
+    monthly = _extract(month_resp, ["product_power", "ongrid_power", "power_profit"])
+
+    return {
+        "ok": True,
+        "station_code": station_code,
+        "fetched_at": _dt.datetime.utcnow().isoformat() + "Z",
+        "hourly": hourly,       # 24h power profile
+        "daily": daily,         # 30-day daily yield
+        "monthly": monthly,     # 12-month yield
+        "huawei_raw": {
+            "hour_success": bool(hour_resp.get("success")),
+            "day_success": bool(day_resp.get("success")),
+            "month_success": bool(month_resp.get("success")),
+        },
+    }
+
+
+@app.route("/webhook/station-kpi", methods=["GET", "OPTIONS"])
+def webhook_station_kpi():
+    """Historical KPI for a single station — hourly / daily / monthly.
+
+    GET ?station_code=NE=... or ?site_id=<inverter_sites.id>
+    GET ?fresh=1 → bypass cache
+    """
+    if request.method == "OPTIONS":
+        resp = jsonify({})
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        resp.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Webhook-Secret"
+        return resp
+
+    station_code = request.args.get("station_code") or request.args.get("vendor_station_id")
+    site_id = request.args.get("site_id")
+
+    # Ak nemáme station_code, dohľadáme z DB cez site_id
+    if not station_code and site_id and _hs:
+        try:
+            rows = _hs.sb_get("inverter_sites", {
+                "select": "vendor_station_id,vendor_plant_code",
+                "id": f"eq.{site_id}",
+                "limit": "1",
+            })
+            if rows and isinstance(rows[0], dict):
+                station_code = rows[0].get("vendor_station_id") or rows[0].get("vendor_plant_code")
+        except Exception as e:
+            log.warning("[station-kpi] sb_get failed: %s", e)
+
+    if not station_code:
+        return jsonify({"ok": False, "error": "missing station_code or site_id"}), 400
+
+    fresh = request.args.get("fresh") in ("1", "true", "yes")
+    now = _time.time()
+    cached = _STATION_KPI_CACHE.get(station_code)
+    if not fresh and cached and (now - cached["ts"]) < _STATION_KPI_TTL_SEC:
+        resp = jsonify({**cached["data"], "cached": True, "cache_age_sec": int(now - cached["ts"])})
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        return resp
+
+    try:
+        data = _station_kpi_compute(station_code)
+    except Exception as e:
+        log.exception("[station-kpi] compute failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+    if data.get("ok"):
+        _STATION_KPI_CACHE[station_code] = {"ts": now, "data": data}
+
+    resp = jsonify({**data, "cached": False})
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    return resp
