@@ -7819,3 +7819,133 @@ def webhook_station_kpi():
     resp = jsonify({**data, "cached": False})
     resp.headers["Access-Control-Allow-Origin"] = "*"
     return resp
+
+
+# =============================================================================
+# /webhook/fleet-trend  →  30-day fleet-wide yield (suma všetkých staníc)
+# =============================================================================
+# Volá Huawei getKpiStationDay batchovo (8 staníc per call),
+# sčíta product_power per deň naprieč všetkými stanicami.
+# Cache 30 min (Huawei agreguje denné dáta s odstupom).
+
+_FLEET_TREND_CACHE = {"ts": 0.0, "data": None}
+_FLEET_TREND_TTL_SEC = 1800  # 30 min
+
+
+def _fleet_trend_compute() -> dict:
+    if not _hs:
+        return {"ok": False, "error": "huawei_spot module not loaded"}
+
+    sites = _hs.sb_get("inverter_sites", {
+        "select": "vendor_station_id,vendor_plant_code,monitoring_enabled,vendor",
+        "vendor": "eq.huawei",
+        "monitoring_enabled": "eq.true",
+    })
+
+    station_codes = []
+    for s in (sites or []):
+        if not isinstance(s, dict):
+            continue
+        code = s.get("vendor_station_id") or s.get("vendor_plant_code")
+        if code:
+            station_codes.append(code)
+
+    if not station_codes:
+        return {"ok": True, "trend": [], "stations_count": 0}
+
+    token = _hs.huawei_login()
+    if not token:
+        return {"ok": False, "error": "Huawei login failed"}
+
+    base = _hs._huawei_session.get("base") or _hs.HUAWEI_BASE
+    headers = {"XSRF-TOKEN": token, "Content-Type": "application/json"}
+
+    import datetime as _dt
+    today_start = _dt.datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    collect_time = int((today_start - _dt.timedelta(days=30)).timestamp() * 1000)
+
+    # Aggregate per timestamp (deň)
+    by_day_yield: dict = {}    # {ts: product_power_sum}
+    by_day_export: dict = {}   # {ts: ongrid_power_sum}
+
+    CHUNK = 8
+    for i in range(0, len(station_codes), CHUNK):
+        chunk = station_codes[i:i + CHUNK]
+        try:
+            r = requests.post(
+                f"{base}/getKpiStationDay",
+                headers=headers,
+                json={"stationCodes": ",".join(chunk), "collectTime": collect_time},
+                timeout=30,
+            )
+            if r.status_code != 200:
+                log.warning("[fleet-trend] HTTP %s for chunk %d: %s", r.status_code, i, r.text[:200])
+                continue
+            payload = r.json() or {}
+            data = payload.get("data") or []
+            if not isinstance(data, list):
+                continue
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                ts = item.get("collectTime") or item.get("time")
+                if not ts:
+                    continue
+                dim = item.get("dataItemMap") or item
+                yield_kwh = dim.get("product_power")
+                export_kwh = dim.get("ongrid_power")
+                try:
+                    if yield_kwh is not None and yield_kwh != "N/A":
+                        by_day_yield[ts] = by_day_yield.get(ts, 0.0) + float(yield_kwh)
+                    if export_kwh is not None and export_kwh != "N/A":
+                        by_day_export[ts] = by_day_export.get(ts, 0.0) + float(export_kwh)
+                except (TypeError, ValueError):
+                    pass
+        except Exception as e:
+            log.warning("[fleet-trend] chunk %d failed: %s", i, e)
+
+    trend = []
+    for ts in sorted(by_day_yield.keys()):
+        trend.append({
+            "ts": ts,
+            "yield_kwh": round(by_day_yield.get(ts, 0.0), 1),
+            "export_kwh": round(by_day_export.get(ts, 0.0), 1),
+        })
+
+    return {
+        "ok": True,
+        "trend": trend,
+        "stations_count": len(station_codes),
+        "fetched_at": _dt.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+@app.route("/webhook/fleet-trend", methods=["GET", "OPTIONS"])
+def webhook_fleet_trend():
+    if request.method == "OPTIONS":
+        resp = jsonify({})
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        resp.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Webhook-Secret"
+        return resp
+
+    fresh = request.args.get("fresh") in ("1", "true", "yes")
+    now = _time.time()
+    if not fresh and _FLEET_TREND_CACHE["data"] is not None and (now - _FLEET_TREND_CACHE["ts"]) < _FLEET_TREND_TTL_SEC:
+        resp = jsonify({**_FLEET_TREND_CACHE["data"], "cached": True, "cache_age_sec": int(now - _FLEET_TREND_CACHE["ts"])})
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        return resp
+
+    try:
+        data = _fleet_trend_compute()
+    except Exception as e:
+        log.exception("[fleet-trend] compute failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+    if data.get("ok"):
+        _FLEET_TREND_CACHE["data"] = data
+        _FLEET_TREND_CACHE["ts"] = now
+
+    resp = jsonify({**data, "cached": False})
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    return resp
