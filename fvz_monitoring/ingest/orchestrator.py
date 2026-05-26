@@ -101,13 +101,24 @@ def get_supabase():
 def supabase_credentials_loader(vendor: str) -> dict:
     """Načíta credentials zo Supabase inverter_vendor_credentials tabuľky.
 
-    Predpoklad: tabuľka má stĺpce vendor, username, password, api_key, api_secret.
+    Reálne stĺpce: vendor, base_url, username, encrypted_password, client_id,
+    encrypted_client_secret, current_token, ...
+    Mapujeme ich na názvy ktoré base.py očakáva (password, api_secret).
     """
     try:
         sb = get_supabase()
-        res = sb.table("inverter_vendor_credentials").select("*").eq("vendor", vendor).limit(1).execute()
+        res = sb.table("inverter_vendor_credentials").select(
+            "vendor,base_url,username,encrypted_password,client_id,encrypted_client_secret,is_active"
+        ).eq("vendor", vendor).eq("is_active", True).limit(1).execute()
         if res.data:
-            return res.data[0]
+            r = res.data[0]
+            return {
+                "username": r.get("username"),
+                "password": r.get("encrypted_password"),  # stĺpec sa volá _encrypted_ ale obsahuje plain text (Huawei systemCode)
+                "api_key": r.get("client_id"),
+                "api_secret": r.get("encrypted_client_secret"),
+                "base_url": r.get("base_url"),
+            }
     except Exception as e:
         log.warning(f"Failed to load credentials for {vendor} from Supabase: {e}")
     return {}
