@@ -1,4 +1,7 @@
 services:
+  # =============================================================================
+  # EXISTUJÚCI WEB SERVICE — Flask backend (CP generator, AOM, B2B, M365, ...)
+  # =============================================================================
   - type: web
     name: energovision-cp-generator
     runtime: python
@@ -11,14 +14,215 @@ services:
     healthCheckPath: /health
     envVars:
       - key: NOTION_TOKEN
-        sync: false  # zadáš v Render dashboard ako secret
+        sync: false
       - key: NOTION_DATABASE_ID
         value: ba7a1d6c-63a9-43da-b66d-2b1c7e8660da
       - key: WEBHOOK_SECRET
-        generateValue: true  # auto-vygeneruje secret pre webhook autentifikáciu
+        generateValue: true
       - key: SUPABASE_URL
         value: https://uzwajrpebblafuhrtuwn.supabase.co
       - key: SUPABASE_SERVICE_ROLE_KEY
-        sync: false  # MUSÍ byť nastavený v Render dashboard ako secret (zo Supabase Settings → API)
+        sync: false
       - key: ANTHROPIC_API_KEY
-        sync: false  # zadáš v Render dashboard ako secret
+        sync: false
+
+  # =============================================================================
+  # FVZ MONITORING — vendor cloud ingest (každých 5 min)
+  # =============================================================================
+  - type: cron
+    name: fvz-monitoring-realtime
+    runtime: python
+    plan: starter
+    region: frankfurt
+    rootDir: fvz_monitoring
+    schedule: "*/5 * * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m ingest.orchestrator --all-vendors --action realtime
+    envVars:
+      - fromGroup: fvz-monitoring-shared
+
+  # =============================================================================
+  # FVZ MONITORING — alarm sync z vendor cloudov (každých 5 min +1)
+  # =============================================================================
+  - type: cron
+    name: fvz-monitoring-alarms
+    runtime: python
+    plan: starter
+    region: frankfurt
+    rootDir: fvz_monitoring
+    schedule: "1-59/5 * * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m ingest.orchestrator --all-vendors --action alarms
+    envVars:
+      - fromGroup: fvz-monitoring-shared
+
+  # =============================================================================
+  # FVZ MONITORING — denný KPI rollup + cohort outlier detection (00:30 UTC)
+  # =============================================================================
+  - type: cron
+    name: fvz-monitoring-daily-kpi
+    runtime: python
+    plan: starter
+    region: frankfurt
+    rootDir: fvz_monitoring
+    schedule: "30 0 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: |
+      python -m ingest.orchestrator --all-vendors --action daily-summary && \
+      python -m dispatch.kpi_engine --period daily && \
+      python -m dispatch.anomaly_detector --mode cohort
+    envVars:
+      - fromGroup: fvz-monitoring-shared
+
+  # =============================================================================
+  # FVZ MONITORING — zero-export breach detector (každých 15 min)
+  # =============================================================================
+  - type: cron
+    name: fvz-monitoring-zero-export
+    runtime: python
+    plan: starter
+    region: frankfurt
+    rootDir: fvz_monitoring
+    schedule: "*/15 * * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m dispatch.zero_export
+    envVars:
+      - fromGroup: fvz-monitoring-shared
+
+  # =============================================================================
+  # FVZ MONITORING — alarm engine dedup + routing (každých 10 min)
+  # =============================================================================
+  - type: cron
+    name: fvz-monitoring-alarm-engine
+    runtime: python
+    plan: starter
+    region: frankfurt
+    rootDir: fvz_monitoring
+    schedule: "*/10 * * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m dispatch.alarm_engine
+    envVars:
+      - fromGroup: fvz-monitoring-shared
+
+  # =============================================================================
+  # FVZ MONITORING — ML anomaly classifier (každé 2 hodiny)
+  # =============================================================================
+  - type: cron
+    name: fvz-monitoring-anomaly-ml
+    runtime: python
+    plan: starter
+    region: frankfurt
+    rootDir: fvz_monitoring
+    schedule: "0 */2 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m dispatch.anomaly_detector --mode ml
+    envVars:
+      - fromGroup: fvz-monitoring-shared
+
+# =============================================================================
+# ENV VAR GROUP — zdieľaný medzi všetkými FVZ workers
+# Render automaticky vytvorí v dashboarde po prvom Blueprint sync.
+# Hodnoty s `sync: false` vyplníš v Render UI po vytvorení skupiny.
+# =============================================================================
+envVarGroups:
+  - name: fvz-monitoring-shared
+    envVars:
+      # Supabase (zdielané s hlavným web service)
+      - key: SUPABASE_URL
+        value: https://uzwajrpebblafuhrtuwn.supabase.co
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_DB_URL
+        sync: false
+
+      # Vendor toggles — Phase 1: len Huawei zapnutý
+      - key: VENDOR_HUAWEI_ENABLED
+        value: "true"
+      - key: VENDOR_SOLINTEG_ENABLED
+        value: "false"
+      - key: VENDOR_GOODWE_ENABLED
+        value: "false"
+      - key: VENDOR_FRONIUS_ENABLED
+        value: "false"
+      - key: VENDOR_SUNGROW_ENABLED
+        value: "false"
+
+      # Huawei
+      - key: HUAWEI_USERNAME
+        sync: false
+      - key: HUAWEI_PASS
+        sync: false
+      - key: HUAWEI_API_BASE
+        value: "https://intl.fusionsolar.huawei.com"
+
+      # Solinteg (Phase 2 — credentials pending)
+      - key: SOLINTEG_APP_KEY
+        sync: false
+      - key: SOLINTEG_APP_SECRET
+        sync: false
+      - key: SOLINTEG_USERNAME
+        sync: false
+      - key: SOLINTEG_PASS
+        sync: false
+      - key: SOLINTEG_API_BASE
+        value: "https://api.solinteg-cloud.com"
+
+      # GoodWe (Phase 2 — credentials pending)
+      - key: GOODWE_USERNAME
+        sync: false
+      - key: GOODWE_PASS
+        sync: false
+      - key: GOODWE_API_BASE
+        value: "https://www.semsportal.com"
+
+      # Fronius (Phase 2 — credentials pending)
+      - key: FRONIUS_CLIENT_ID
+        sync: false
+      - key: FRONIUS_CLIENT_SECRET
+        sync: false
+      - key: FRONIUS_ACCESS_KEY_ID
+        sync: false
+      - key: FRONIUS_ACCESS_KEY_VALUE
+        sync: false
+      - key: FRONIUS_API_BASE
+        value: "https://api.solarweb.com"
+
+      # Sungrow (Phase 2 — credentials pending)
+      - key: SUNGROW_APP_KEY
+        sync: false
+      - key: SUNGROW_USERNAME
+        sync: false
+      - key: SUNGROW_PASS
+        sync: false
+      - key: SUNGROW_API_BASE
+        value: "https://gateway.isolarcloud.eu"
+
+      # Dispatch — SAFETY default = read-only
+      - key: DISPATCH_READ_ONLY
+        value: "true"
+      - key: ZERO_EXPORT_TOLERANCE_KWH
+        value: "0.05"
+      - key: ZERO_EXPORT_CONSECUTIVE_WINDOWS
+        value: "2"
+
+      # Notifikácie (optional — len ak chceš Slack/email/SMS alarmy)
+      - key: SLACK_BOT_TOKEN
+        sync: false
+      - key: SLACK_DISPATCH_CHANNEL
+        value: "#dispatch-alarms"
+      - key: SENDGRID_API_KEY
+        sync: false
+      - key: NOTIFICATION_FROM_EMAIL
+        value: "dispecing@energovision.sk"
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_FROM_PHONE
+        sync: false
+
+      # LLM
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: LLM_MODEL
+        value: "claude-sonnet-4-6"
