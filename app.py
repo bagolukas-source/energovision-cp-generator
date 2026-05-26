@@ -7292,11 +7292,11 @@ def webhook_aom_orphan_reset():
 # CORS open for crm.energovision.sk + app.energovision.sk.
 # No mutations — SPOT reactor is unaffected.
 
-_FLEET_CACHE: Dict[str, Any] = {"ts": 0.0, "data": None}
+_FLEET_CACHE = {"ts": 0.0, "data": None}
 _FLEET_CACHE_TTL_SEC = 60
 
 
-def _fleet_status_compute() -> Dict[str, Any]:
+def _fleet_status_compute() -> dict:
     """Fetch fleet status: DB metadata + live Huawei KPI batch call.
 
     Returns dict with `sites` list + `meta` (counts, fetched_at).
@@ -7329,7 +7329,7 @@ def _fleet_status_compute() -> Dict[str, Any]:
     except Exception as e:
         log.warning("[fleet-status] alarms query failed: %s", e)
         alarm_rows = []
-    alarm_counts: Dict[str, int] = {}
+    alarm_counts: dict = {}
     for a in alarm_rows:
         sid = a.get("site_id")
         if sid:
@@ -7342,8 +7342,8 @@ def _fleet_status_compute() -> Dict[str, Any]:
         and s.get("monitoring_enabled")
         and s.get("vendor_station_id")
     ]
-    live_kpi: Dict[str, Dict[str, Any]] = {}
-    huawei_error: Optional[str] = None
+    live_kpi = {}
+    huawei_error: str = None
 
     if huawei_codes and _hs is not None:
         try:
@@ -7381,7 +7381,7 @@ def _fleet_status_compute() -> Dict[str, Any]:
 
     # 4. Combine
     now_iso = datetime.now(timezone.utc).isoformat()
-    enriched: List[Dict[str, Any]] = []
+    enriched = []
     for s in sites:
         sid = s.get("id")
         code = s.get("vendor_station_id")
@@ -7443,7 +7443,7 @@ def _fleet_status_compute() -> Dict[str, Any]:
     }
 
 
-def _to_float_safe(v) -> Optional[float]:
+def _to_float_safe(v) -> float:
     if v is None or v == "" or v == "N/A":
         return None
     try:
