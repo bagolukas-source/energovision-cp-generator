@@ -8313,3 +8313,134 @@ def webhook_fleet_anomaly():
     resp = jsonify({**data, "cached": False})
     resp.headers["Access-Control-Allow-Origin"] = "*"
     return resp
+
+
+# =============================================================================
+# /webhook/station-expected  →  PVGIS očakávaná produkcia pre stanicu
+# =============================================================================
+# Pre porovnanie Expected vs Actual: voláme PVGIS PVcalc API pre lat/lon stanice
+# a vrátime mesačné očakávané kWh + odhad denného profilu.
+# Cache 7 dní (PVGIS dáta sa nemenia, sú TMY 2005-2023 priemer).
+
+_STATION_EXPECTED_CACHE: dict = {}  # {site_id: {ts, data}}
+_STATION_EXPECTED_TTL_SEC = 7 * 24 * 3600  # týždeň
+
+
+def _pvgis_monthly_expected(lat: float, lon: float, dc_kwp: float, tilt: int = 35, azimuth: int = 0) -> dict:
+    """Volá PVGIS PVcalc API. Vracia 12 mesiacov očakávaný yield (kWh/mesiac).
+
+    Tilt default 35° (typický SK optimum), azimuth 0 (juh).
+    PEAK power = dc_kwp, system losses default 14% (PVGIS standard).
+    """
+    url = "https://re.jrc.ec.europa.eu/api/v5_3/PVcalc"
+    params = {
+        "lat": lat,
+        "lon": lon,
+        "peakpower": dc_kwp,
+        "loss": 14,
+        "angle": tilt,
+        "aspect": azimuth,
+        "outputformat": "json",
+        "mountingplace": "free",
+        "pvtechchoice": "crystSi",
+    }
+    try:
+        r = requests.get(url, params=params, timeout=30)
+        if r.status_code != 200:
+            return {"ok": False, "error": f"PVGIS HTTP {r.status_code}"}
+        data = r.json()
+        monthly_results = data.get("outputs", {}).get("monthly", {}).get("fixed", [])
+        if not monthly_results:
+            return {"ok": False, "error": "no monthly data"}
+
+        monthly = []
+        for m in monthly_results:
+            monthly.append({
+                "month": m.get("month"),
+                "E_m_kwh": m.get("E_m"),    # mesačná výroba kWh
+                "H_m_kwh_m2": m.get("H(i)_m"),  # mesačná irradiance kWh/m²
+            })
+
+        annual_total = sum(m["E_m_kwh"] for m in monthly if m["E_m_kwh"] is not None)
+        # Daily expected per month (avg)
+        days_in_month = [31, 28.25, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+        for i, m in enumerate(monthly):
+            if m["E_m_kwh"] is not None:
+                m["E_d_avg_kwh"] = round(m["E_m_kwh"] / days_in_month[i], 1)
+                m["spec_yield_avg"] = round((m["E_m_kwh"] / days_in_month[i]) / dc_kwp, 2) if dc_kwp > 0 else None
+
+        return {
+            "ok": True,
+            "monthly": monthly,
+            "annual_total_kwh": round(annual_total, 1),
+            "spec_yield_annual": round(annual_total / dc_kwp, 0) if dc_kwp > 0 else None,
+            "tilt": tilt,
+            "azimuth": azimuth,
+            "loss_pct": 14,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:300]}
+
+
+@app.route("/webhook/station-expected", methods=["GET", "OPTIONS"])
+def webhook_station_expected():
+    """PVGIS očakávaná produkcia per stanica.
+
+    GET ?site_id=<uuid>  → 12-month expected production from PVGIS
+    """
+    if request.method == "OPTIONS":
+        resp = jsonify({})
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        resp.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        return resp
+
+    site_id = request.args.get("site_id")
+    if not site_id:
+        return jsonify({"ok": False, "error": "missing site_id"}), 400
+
+    fresh = request.args.get("fresh") in ("1", "true", "yes")
+    now = _time.time()
+    cached = _STATION_EXPECTED_CACHE.get(site_id)
+    if not fresh and cached and (now - cached["ts"]) < _STATION_EXPECTED_TTL_SEC:
+        resp = jsonify({**cached["data"], "cached": True, "cache_age_sec": int(now - cached["ts"])})
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        return resp
+
+    if not _hs:
+        return jsonify({"ok": False, "error": "huawei_spot module not available"}), 500
+
+    # Pull lat/lon/dc_kwp from DB
+    try:
+        rows = _hs.sb_get("inverter_sites", {
+            "select": "latitude,longitude,dc_kwp,ac_kw,site_name",
+            "id": f"eq.{site_id}",
+            "limit": "1",
+        })
+        if not rows or not isinstance(rows[0], dict):
+            return jsonify({"ok": False, "error": "site not found"}), 404
+        site = rows[0]
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"DB query failed: {e}"}), 500
+
+    lat = site.get("latitude")
+    lon = site.get("longitude")
+    dc_kwp = site.get("dc_kwp") or site.get("ac_kw") or 0
+
+    if lat is None or lon is None:
+        return jsonify({"ok": False, "error": "site missing lat/lon (skip auto-fill GPS first)"}), 400
+    if not dc_kwp:
+        return jsonify({"ok": False, "error": "site missing dc_kwp"}), 400
+
+    data = _pvgis_monthly_expected(float(lat), float(lon), float(dc_kwp))
+    if data.get("ok"):
+        data["site_id"] = site_id
+        data["site_name"] = site.get("site_name")
+        data["lat"] = lat
+        data["lon"] = lon
+        data["dc_kwp"] = dc_kwp
+        _STATION_EXPECTED_CACHE[site_id] = {"ts": now, "data": data}
+
+    resp = jsonify({**data, "cached": False})
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    return resp
