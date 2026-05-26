@@ -7724,10 +7724,27 @@ def _station_kpi_compute(station_code: str) -> dict:
     hour_payload = {"stationCodes": station_code, "collectTime": int(today_start.timestamp() * 1000)}
     hour_resp = _huawei_call("/getKpiStationHour", hour_payload, base, headers)
 
-    # 2) getKpiStationDay — posledných 30 dní
+    # 2) getKpiStationDay — posledných 30 dní (default)
     day_start = today_start - _dt.timedelta(days=30)
     day_payload = {"stationCodes": station_code, "collectTime": int(day_start.timestamp() * 1000)}
     day_resp = _huawei_call("/getKpiStationDay", day_payload, base, headers)
+
+    # 2b) getKpiStationDay batchovo — posledných 365 dní (pre PR heatmap kalendár)
+    # Huawei vracia max ~31 dní per call, voláme 12× s posunutým collectTime
+    yearly_daily_raw = []
+    for months_back in range(12, -1, -1):
+        period_start = today_start.replace(day=1)
+        for _ in range(months_back):
+            period_start = (period_start - _dt.timedelta(days=1)).replace(day=1)
+        period_payload = {"stationCodes": station_code, "collectTime": int(period_start.timestamp() * 1000)}
+        try:
+            period_resp = _huawei_call("/getKpiStationDay", period_payload, base, headers)
+            if isinstance(period_resp, dict):
+                period_data = period_resp.get("data") or []
+                if isinstance(period_data, list):
+                    yearly_daily_raw.extend(period_data)
+        except Exception:
+            continue
 
     # 3) getKpiStationMonth — 12 mesiacov
     month_start = today_start.replace(day=1) - _dt.timedelta(days=365)
@@ -7769,13 +7786,35 @@ def _station_kpi_compute(station_code: str) -> dict:
     daily = _extract(day_resp, ["product_power", "ongrid_power", "power_profit"])
     monthly = _extract(month_resp, ["product_power", "ongrid_power", "power_profit"])
 
+    # Yearly daily — dedup po ts + extract na same shape ako daily
+    yearly_daily_dedup = {}
+    for item in yearly_daily_raw:
+        if not isinstance(item, dict):
+            continue
+        ts = item.get("collectTime") or item.get("time")
+        if not ts:
+            continue
+        dim = item.get("dataItemMap") or item
+        row = {"ts": ts}
+        for alias in ("product_power", "ongrid_power", "power_profit"):
+            v = dim.get(alias)
+            if v is not None and v != "N/A":
+                try:
+                    row[alias] = float(v)
+                except (TypeError, ValueError):
+                    row[alias] = None
+        yearly_daily_dedup[ts] = row
+    yearly_daily = sorted(yearly_daily_dedup.values(), key=lambda r: r["ts"])
+
+
     return {
         "ok": True,
         "station_code": station_code,
         "fetched_at": _dt.datetime.utcnow().isoformat() + "Z",
-        "hourly": hourly,       # 24h power profile
-        "daily": daily,         # 30-day daily yield
-        "monthly": monthly,     # 12-month yield
+        "hourly": hourly,                   # 24h power profile
+        "daily": daily,                     # 30-day daily yield
+        "yearly_daily": yearly_daily,       # ~365-day daily yield pre PR heatmap kalendár
+        "monthly": monthly,                 # 12-month yield
         "huawei_raw": {
             "hour_success": bool(hour_resp.get("success")),
             "day_success": bool(day_resp.get("success")),
