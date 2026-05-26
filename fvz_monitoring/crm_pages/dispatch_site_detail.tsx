@@ -112,8 +112,8 @@ export default function SiteDetailPage({ params }: { params: { id: string } }) {
         <div>
           <h1 className="text-2xl font-semibold">{site.site_name}</h1>
           <p className="text-sm text-gray-500 mt-1">
-            {site.customer_name} · {site.vendor} · {site.kw_dc_nominal} kWp
-            {site.battery_kwh_nominal ? ` · ${site.battery_kwh_nominal} kWh batéria` : ""}
+            {site.customer_name} · {site.vendor} · {site.dc_kwp} kWp
+            {site.bess_kwh ? ` · ${site.bess_kwh} kWh batéria` : ""}
           </p>
         </div>
         <span className={`px-3 py-1 rounded-full text-sm font-medium ${statusColor}`}>

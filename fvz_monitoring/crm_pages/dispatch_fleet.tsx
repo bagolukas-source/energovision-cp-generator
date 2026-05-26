@@ -23,8 +23,8 @@ type FleetSite = {
   id: string;
   site_name: string;
   vendor: "huawei" | "solinteg" | "goodwe" | "fronius" | "sungrow";
-  kw_dc_nominal: number;
-  battery_kwh_nominal: number | null;
+  dc_kwp: number;
+  bess_kwh: number | null;
   lat: number | null;
   lon: number | null;
   distribution_area: string | null;
@@ -120,7 +120,7 @@ export default function FleetPage() {
     const warn = sites.filter((s) => s.health_status === "warn").length;
     const alarm = sites.filter((s) => s.health_status === "alarm").length;
     const offline = sites.filter((s) => s.health_status === "offline").length;
-    const totalCapacity = sites.reduce((sum, s) => sum + (s.kw_dc_nominal || 0), 0);
+    const totalCapacity = sites.reduce((sum, s) => sum + (s.dc_kwp || 0), 0);
     const yesterdayEnergy = sites.reduce((sum, s) => sum + (s.energy_kwh_yesterday || 0), 0);
     return { total, ok, warn, alarm, offline, totalCapacity, yesterdayEnergy };
   }, [sites]);
@@ -220,7 +220,7 @@ export default function FleetPage() {
                   <td className="px-4 py-2 font-medium text-gray-900">{s.site_name}</td>
                   <td className="px-4 py-2 text-gray-600">{s.customer_name || "—"}</td>
                   <td className="px-4 py-2 capitalize">{s.vendor}</td>
-                  <td className="px-4 py-2 text-right">{s.kw_dc_nominal?.toFixed(1)}</td>
+                  <td className="px-4 py-2 text-right">{s.dc_kwp?.toFixed(1)}</td>
                   <td className="px-4 py-2 text-right">{s.energy_kwh_yesterday?.toFixed(0) || "—"}</td>
                   <td className="px-4 py-2 text-right">
                     {s.pr_yesterday ? (
