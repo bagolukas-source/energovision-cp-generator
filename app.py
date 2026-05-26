@@ -7388,8 +7388,12 @@ def _fleet_status_compute() -> dict:
                             pass
                     chunk_returned = 0
                     for row in rows:
+                        if not isinstance(row, dict):
+                            continue
                         code = str(row.get("stationCode") or "")
                         kpi = row.get("dataItemMap") or {}
+                        if not isinstance(kpi, dict):
+                            kpi = {}
                         if not code:
                             continue
                         live_kpi[code] = {
