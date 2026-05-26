@@ -484,10 +484,21 @@ def quick_estimate(payload: dict) -> dict:
     bess_kwh = float(payload.get("bess_kwh", 0))
     capex_per_bess_kwh = float(payload.get("capex_per_bess_kwh", 480))
     discount_rate = float(payload.get("discount_rate", 0.06))
+    profile_template = str(payload.get("profile_template", "kancelaria"))
     
     # Heuristics z reálnych ponúk + spot 2025
     yield_per_kwp = 1050  # kWh/kWp/rok pre SK
-    self_consumption = 0.65 if bess_kwh > 0 else 0.40  # samospotreba %
+    
+    # Samospotreba per typ prevádzky (kalibrované z reálnych SK B2B ponúk)
+    # bez BESS / s BESS (BESS posúva self-cons o ~15-25 %)
+    profile_self_cons = {
+        "priemysel_24_7":   (0.78, 0.92),  # priemysel 24/7 — najvyššia samospotreba
+        "priemysel_8_16":   (0.58, 0.78),  # priemysel pracovné dni 8-16
+        "kancelaria":       (0.50, 0.72),  # kancelária 9-17 + víkendy doma
+        "domacnost":        (0.30, 0.65),  # rodinný dom, cez deň prázdny
+    }
+    base_sc, bess_sc = profile_self_cons.get(profile_template, (0.45, 0.68))
+    self_consumption = bess_sc if bess_kwh > 0 else base_sc
     
     pv_production_kwh = kwp * yield_per_kwp
     self_used_kwh = min(pv_production_kwh * self_consumption, annual_kwh * 0.85)
