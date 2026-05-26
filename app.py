@@ -7550,6 +7550,22 @@ def _fleet_status_compute() -> dict:
         else:
             status_label, status_tone = "Bez dát", "rose"
 
+        # Performance metrics
+        _dc = s.get("dc_kwp") or s.get("ac_kw") or 0
+        _day_yield = (kpi or {}).get("current_day_yield_kwh")
+        _spec_yield = None
+        if _dc and _day_yield is not None:
+            try:
+                _spec_yield = round(float(_day_yield) / float(_dc), 2) if float(_dc) > 0 else None
+            except (TypeError, ValueError, ZeroDivisionError):
+                _spec_yield = None
+        _cap_factor = None
+        if _dc and power is not None:
+            try:
+                _cap_factor = round(float(power) / float(_dc) * 100.0, 1) if float(_dc) > 0 else None
+            except (TypeError, ValueError, ZeroDivisionError):
+                _cap_factor = None
+
         enriched.append({
             "id": sid,
             "site_name": s.get("site_name"),
@@ -7569,6 +7585,8 @@ def _fleet_status_compute() -> dict:
             "spot_last_transition_at": s.get("spot_last_transition_at"),
             "current_ac_power_kw": power,
             "current_day_yield_kwh": (kpi or {}).get("current_day_yield_kwh"),
+            "specific_yield_today": _spec_yield,         # kWh / kWp dnes (good ~3-5 v lete)
+            "capacity_factor_pct": _cap_factor,          # % aktuálneho využitia DC kapacity
             "current_total_yield_kwh": (kpi or {}).get("current_total_yield_kwh"),
             "current_total_yield_mwh": (kpi or {}).get("current_total_yield_mwh"),
             "current_month_yield_kwh": (kpi or {}).get("current_month_yield_kwh"),
