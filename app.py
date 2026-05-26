@@ -8087,3 +8087,68 @@ def webhook_station_history():
     resp = jsonify({"ok": True, "alarms": alarms, "daily": daily})
     resp.headers["Access-Control-Allow-Origin"] = "*"
     return resp
+
+
+# =============================================================================
+# /webhook/alarm-action  → ack / resolve / snooze alarm s logom
+# =============================================================================
+
+@app.route("/webhook/alarm-action", methods=["POST", "OPTIONS"])
+def webhook_alarm_action():
+    """Acknowledge / resolve / snooze alarm.
+
+    POST {"alarm_id": "<uuid>", "action": "ack"|"resolve"|"snooze", "user": "<email>", "note": "..."}
+    """
+    if request.method == "OPTIONS":
+        resp = jsonify({})
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        resp.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Webhook-Secret"
+        return resp
+
+    if not _hs:
+        return jsonify({"ok": False, "error": "huawei_spot module not available"}), 500
+
+    try:
+        payload = request.get_json(force=True) or {}
+    except Exception:
+        return jsonify({"ok": False, "error": "invalid JSON"}), 400
+
+    alarm_id = payload.get("alarm_id")
+    action = (payload.get("action") or "").lower()
+    user_email = payload.get("user") or "unknown"
+    note = payload.get("note", "")
+
+    if not alarm_id or action not in {"ack", "resolve", "snooze"}:
+        return jsonify({"ok": False, "error": "missing alarm_id or invalid action"}), 400
+
+    import datetime as _dt
+    now_iso = _dt.datetime.utcnow().isoformat() + "Z"
+    update_payload: dict = {}
+    if action == "ack":
+        update_payload["acknowledged_at"] = now_iso
+        update_payload["acknowledged_by"] = user_email
+        update_payload["status"] = "acked"
+    elif action == "resolve":
+        update_payload["resolved_at"] = now_iso
+        update_payload["resolved_by"] = user_email
+        update_payload["status"] = "resolved"
+    elif action == "snooze":
+        # Snooze 24h
+        snooze_until = (_dt.datetime.utcnow() + _dt.timedelta(hours=24)).isoformat() + "Z"
+        update_payload["snoozed_until"] = snooze_until
+        update_payload["status"] = "snoozed"
+
+    if note:
+        update_payload["resolution_note"] = note
+
+    try:
+        ok, errmsg = _hs.sb_patch(f"inverter_alarms?id=eq.{alarm_id}", update_payload)
+        if not ok:
+            return jsonify({"ok": False, "error": errmsg[:300]}), 500
+        resp = jsonify({"ok": True, "action": action, "alarm_id": alarm_id, "updated": update_payload})
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        return resp
+    except Exception as e:
+        log.exception("[alarm-action] update failed")
+        return jsonify({"ok": False, "error": str(e)[:300]}), 500
