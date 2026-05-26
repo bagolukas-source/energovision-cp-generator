@@ -116,6 +116,26 @@ def run_variants_pipeline(request_dict: dict, progress_cb=None) -> dict:
     spot = spot_df["price_eur_per_mwh"].to_numpy()
     tariff_engine = TariffEngine.from_yaml(TARIFF_YAML)
 
+    # UX-AOM-6: aplikuj per-analyza tariff_overrides ak existujú
+    tariff_overrides = request_dict.get("tariff_overrides") or {}
+    if tariff_overrides:
+        for ty in tariff_engine._tariffs.values():
+            if tariff_overrides.get("silova_eur_mwh") is not None:
+                ty.fix_silova_eur_mwh = float(tariff_overrides["silova_eur_mwh"])
+            if tariff_overrides.get("distribucia_eur_mwh") is not None:
+                ty.distrib_eur_mwh = float(tariff_overrides["distribucia_eur_mwh"])
+            if tariff_overrides.get("tps_eur_mwh") is not None:
+                ty.tps_eur_mwh = float(tariff_overrides["tps_eur_mwh"])
+            if tariff_overrides.get("oze_eur_mwh") is not None:
+                ty.njf_eur_mwh = float(tariff_overrides["oze_eur_mwh"])
+            if tariff_overrides.get("ostatne_eur_mwh") is not None:
+                # Spotrebná daň + TSS dohromady; engine ich má oddelené, takže rozdelíme 50/50
+                half = float(tariff_overrides["ostatne_eur_mwh"]) / 2
+                ty.spotrebna_dan_eur_mwh = half
+                ty.tss_eur_mwh = half
+            if tariff_overrides.get("mrk_kapacita_eur_mw_mes") is not None:
+                ty.mrk_kapacita_eur_mw_mes = float(tariff_overrides["mrk_kapacita_eur_mw_mes"])
+
     n = min(len(load_kw), len(spot), 8760)
     load_kw = load_kw[:n]
     spot = spot[:n]

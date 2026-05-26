@@ -158,6 +158,15 @@ def _build_request_from_analyza(analyza: dict) -> dict:
             "negative_spot_curtail": bool(analyza.get("negative_spot_curtail", True)),
             "mrk_export_penalty_eur_kwh": float(analyza.get("mrk_export_penalty_eur_kwh") or 0.03),
         },
+        "tariff_overrides": {
+            "silova_eur_mwh": analyza.get("tarif_silova_eur_mwh"),
+            "distribucia_eur_mwh": analyza.get("tarif_distribucia_eur_mwh"),
+            "tps_eur_mwh": analyza.get("tarif_tps_eur_mwh"),
+            "oze_eur_mwh": analyza.get("tarif_oze_eur_mwh"),
+            "ostatne_eur_mwh": analyza.get("tarif_ostatne_eur_mwh"),
+            "fix_mes_eur": analyza.get("tarif_fix_mes_eur"),
+            "mrk_kapacita_eur_mw_mes": analyza.get("tarif_mrk_kapacita_eur_mw_mes"),
+        },
         "async_mode": False,
     }
 
