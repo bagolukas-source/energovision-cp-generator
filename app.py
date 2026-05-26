@@ -18,7 +18,7 @@ import tempfile
 from pathlib import Path
 from functools import wraps
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, make_response
 from sk_gender import oslovenie_pan_pani, oslovenie_plne
 import requests
 import time as _time
@@ -7965,5 +7965,86 @@ def webhook_fleet_trend():
         _FLEET_TREND_CACHE["ts"] = now
 
     resp = jsonify({**data, "cached": False})
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    return resp
+
+
+# =============================================================================
+# /webhook/station-history  →  alarmy + daily yield pre detail stanice
+# =============================================================================
+
+@app.route("/webhook/station-history", methods=["GET", "OPTIONS"])
+def webhook_station_history():
+    """Vráti alarm history + daily yield (zo Supabase) pre stanicu.
+
+    GET ?site_id=<uuid>  → JSON s alarms[] a daily[]
+    GET ?site_id=<uuid>&format=csv → CSV download
+    """
+    if request.method == "OPTIONS":
+        resp = jsonify({})
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        resp.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        return resp
+
+    site_id = request.args.get("site_id")
+    if not site_id:
+        return jsonify({"ok": False, "error": "missing site_id"}), 400
+
+    fmt = request.args.get("format", "json").lower()
+
+    if not _hs:
+        return jsonify({"ok": False, "error": "huawei_spot module not available"}), 500
+
+    # Alarms (open + resolved, last 90 days)
+    try:
+        import datetime as _dt
+        since = (_dt.datetime.utcnow() - _dt.timedelta(days=90)).strftime("%Y-%m-%d")
+        alarms = _hs.sb_get("inverter_alarms", {
+            "select": "id,severity,code,message,status,created_at,acknowledged_at,resolved_at",
+            "site_id": f"eq.{site_id}",
+            "created_at": f"gte.{since}",
+            "order": "created_at.desc",
+            "limit": "200",
+        }) or []
+    except Exception as e:
+        log.warning("[station-history] alarms query failed: %s", e)
+        alarms = []
+
+    # Daily telemetry (zo Supabase inverter_telemetry_daily ak existuje, fallback []
+    try:
+        daily = _hs.sb_get("inverter_telemetry_daily", {
+            "select": "date,yield_kwh,export_kwh,load_kwh,peak_power_kw",
+            "site_id": f"eq.{site_id}",
+            "order": "date.desc",
+            "limit": "90",
+        }) or []
+    except Exception:
+        daily = []
+
+    if fmt == "csv":
+        import csv
+        import io
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow(["Date", "Yield kWh", "Export kWh", "Load kWh", "Peak Power kW"])
+        for d in daily:
+            if isinstance(d, dict):
+                w.writerow([d.get("date"), d.get("yield_kwh"), d.get("export_kwh"), d.get("load_kwh"), d.get("peak_power_kw")])
+        w.writerow([])
+        w.writerow(["Alarms (last 90 days)"])
+        w.writerow(["Severity", "Code", "Message", "Status", "Created", "Acked", "Resolved"])
+        for a in alarms:
+            if isinstance(a, dict):
+                w.writerow([a.get("severity"), a.get("code"), a.get("message"), a.get("status"),
+                            a.get("created_at"), a.get("acknowledged_at"), a.get("resolved_at")])
+        csv_data = buf.getvalue()
+        resp = make_response(csv_data)
+        resp.headers["Content-Type"] = "text/csv; charset=utf-8"
+        resp.headers["Content-Disposition"] = f'attachment; filename="station-{site_id[:8]}-history.csv"'
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        return resp
+
+    resp = jsonify({"ok": True, "alarms": alarms, "daily": daily})
     resp.headers["Access-Control-Allow-Origin"] = "*"
     return resp
