@@ -91,7 +91,7 @@ class SungrowAdapter(VendorAdapter):
             for it in items:
                 all_plants.append(PlantInfo(
                     vendor="sungrow",
-                    vendor_plant_id=str(it.get("ps_id")),
+                    vendor_plant_code=str(it.get("ps_id")),
                     site_name=it.get("ps_name") or "",
                     kw_dc_nominal=_to_float(it.get("design_capacity")),
                     lat=_to_float(it.get("latitude")),
@@ -118,7 +118,7 @@ class SungrowAdapter(VendorAdapter):
             )
             for row in data.get("pageList", []) if isinstance(data, dict) else []:
                 snapshots.append(TelemetrySnapshot(
-                    vendor_plant_id=str(row.get("ps_id")),
+                    vendor_plant_code=str(row.get("ps_id")),
                     ts=datetime.now(timezone.utc),
                     ac_power_kw=_to_float(row.get("p83022")) or _to_float(row.get("real_power")),  # p83022 = active power
                     ac_energy_today_kwh=_to_float(row.get("p83025")) or _to_float(row.get("today_energy")),
@@ -133,7 +133,7 @@ class SungrowAdapter(VendorAdapter):
             {"ps_id": plant_id, "date_id": day.strftime("%Y%m%d")},
         )
         return DailySummary(
-            vendor_plant_id=plant_id,
+            vendor_plant_code=plant_id,
             day=day,
             energy_kwh=_to_float((data or {}).get("today_energy")),
             raw=data if isinstance(data, dict) else {},
@@ -149,7 +149,7 @@ class SungrowAdapter(VendorAdapter):
             title = it.get("alarm_name") or it.get("fault_name") or "Sungrow alarm"
             out.append(VendorAlarm(
                 vendor="sungrow",
-                vendor_plant_id=str(it.get("ps_id")),
+                vendor_plant_code=str(it.get("ps_id")),
                 vendor_alarm_id=str(it.get("alarm_id") or it.get("uuid")),
                 severity=map_severity("sungrow", str(it.get("alarm_level", "2"))),
                 category=classify_alarm_category(title, it.get("alarm_remarks", "")),

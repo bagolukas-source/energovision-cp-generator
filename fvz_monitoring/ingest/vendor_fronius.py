@@ -87,7 +87,7 @@ class FroniusAdapter(VendorAdapter):
                 addr = it.get("address", {}) or {}
                 all_plants.append(PlantInfo(
                     vendor="fronius",
-                    vendor_plant_id=str(it.get("pvSystemId")),
+                    vendor_plant_code=str(it.get("pvSystemId")),
                     site_name=it.get("name") or "",
                     kw_dc_nominal=_to_float(it.get("peakPower")) and _to_float(it["peakPower"]) / 1000.0,  # Wp → kWp
                     lat=_to_float((it.get("location") or {}).get("latitude")),
@@ -112,7 +112,7 @@ class FroniusAdapter(VendorAdapter):
                 )
                 channels = {ch["channelName"]: ch.get("value") for ch in data.get("data", [])}
                 snapshots.append(TelemetrySnapshot(
-                    vendor_plant_id=pid,
+                    vendor_plant_code=pid,
                     ts=datetime.now(timezone.utc),
                     ac_power_kw=_to_float(channels.get("PowerProduction")) and _to_float(channels["PowerProduction"]) / 1000.0,
                     ac_energy_today_kwh=_to_float(channels.get("EnergyProductionDay")) and _to_float(channels["EnergyProductionDay"]) / 1000.0,
@@ -139,7 +139,7 @@ class FroniusAdapter(VendorAdapter):
             return None
         sums = {r["channelName"]: r.get("value") for r in rows}
         return DailySummary(
-            vendor_plant_id=plant_id,
+            vendor_plant_code=plant_id,
             day=day,
             energy_kwh=_to_float(sums.get("EnergyProductionTotal")) and _to_float(sums["EnergyProductionTotal"]) / 1000.0,
             grid_export_kwh=_to_float(sums.get("EnergyExported")) and _to_float(sums["EnergyExported"]) / 1000.0,

@@ -24,7 +24,7 @@ class PlantInfo:
     Mapuje sa do tabuľky inverter_sites pri synchronizácii.
     """
     vendor: str                                  # 'huawei','solinteg',...
-    vendor_plant_id: str                         # vendor-specific PK (NE u Huawei, sid u Solinteg)
+    vendor_plant_code: str                         # vendor-specific PK (NE u Huawei, sid u Solinteg)
     site_name: str
     kw_dc_nominal: Optional[float] = None
     kw_ac_nominal: Optional[float] = None
@@ -42,7 +42,7 @@ class PlantInfo:
 @dataclass
 class TelemetrySnapshot:
     """Real-time snapshot — vstup do tabuľky telemetry_5min."""
-    vendor_plant_id: str
+    vendor_plant_code: str
     ts: datetime                                 # vendor timestamp
     # AC
     ac_power_kw: Optional[float] = None
@@ -74,7 +74,7 @@ class TelemetrySnapshot:
     def to_db_row(self, site_id: str) -> dict:
         """Pripraví dict ready na INSERT do telemetry_5min."""
         d = asdict(self)
-        d.pop("vendor_plant_id", None)
+        d.pop("vendor_plant_code", None)
         d["site_id"] = site_id
         return d
 
@@ -82,7 +82,7 @@ class TelemetrySnapshot:
 @dataclass
 class DailySummary:
     """Denný súhrn — vstup do telemetry_daily (alebo audit log)."""
-    vendor_plant_id: str
+    vendor_plant_code: str
     day: date
     energy_kwh: Optional[float] = None
     peak_power_kw: Optional[float] = None
@@ -97,7 +97,7 @@ class DailySummary:
 class VendorAlarm:
     """Alarm z vendor cloud-u — vstup do tabuľky alarms."""
     vendor: str
-    vendor_plant_id: str
+    vendor_plant_code: str
     vendor_alarm_id: str
     severity: str                                # 'info','warn','minor','major','critical'
     category: str                                # canonical kategória po klasifikácii

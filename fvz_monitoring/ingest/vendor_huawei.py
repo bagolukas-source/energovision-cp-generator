@@ -97,7 +97,7 @@ class HuaweiAdapter(VendorAdapter):
             for it in items:
                 all_plants.append(PlantInfo(
                     vendor="huawei",
-                    vendor_plant_id=str(it.get("plantCode") or it.get("stationCode")),
+                    vendor_plant_code=str(it.get("plantCode") or it.get("stationCode")),
                     site_name=it.get("plantName") or it.get("stationName") or "",
                     kw_dc_nominal=float(it["capacity"]) if it.get("capacity") else None,
                     address=it.get("plantAddress") or it.get("stationAddr"),
@@ -125,7 +125,7 @@ class HuaweiAdapter(VendorAdapter):
             for row in (data if isinstance(data, list) else data.get("list", [])):
                 kpi = row.get("dataItemMap") or row
                 snapshots.append(TelemetrySnapshot(
-                    vendor_plant_id=str(row.get("stationCode")),
+                    vendor_plant_code=str(row.get("stationCode")),
                     ts=datetime.now(timezone.utc),  # Huawei realKpi nemá explicit timestamp
                     ac_power_kw=_to_float(kpi.get("real_health_state")) or _to_float(kpi.get("day_power")),
                     ac_energy_today_kwh=_to_float(kpi.get("day_power")),
@@ -146,7 +146,7 @@ class HuaweiAdapter(VendorAdapter):
         row = data[0] if isinstance(data, list) else data
         kpi = row.get("dataItemMap") or row
         return DailySummary(
-            vendor_plant_id=plant_id,
+            vendor_plant_code=plant_id,
             day=day,
             energy_kwh=_to_float(kpi.get("inverter_power")),
             grid_export_kwh=_to_float(kpi.get("ongrid_power")),
@@ -166,7 +166,7 @@ class HuaweiAdapter(VendorAdapter):
             title = it.get("alarmName") or it.get("causeId") or "Huawei alarm"
             out.append(VendorAlarm(
                 vendor="huawei",
-                vendor_plant_id=str(it.get("stationCode")),
+                vendor_plant_code=str(it.get("stationCode")),
                 vendor_alarm_id=str(it.get("alarmId") or it.get("alarmSn")),
                 severity=map_severity("huawei", str(it.get("level", "3"))),
                 category=classify_alarm_category(title, it.get("repairSuggestion", "")),

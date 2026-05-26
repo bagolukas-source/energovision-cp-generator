@@ -71,7 +71,7 @@ class SolintegAdapter(VendorAdapter):
             for it in items:
                 all_plants.append(PlantInfo(
                     vendor="solinteg",
-                    vendor_plant_id=str(it.get("plantId") or it.get("sid")),
+                    vendor_plant_code=str(it.get("plantId") or it.get("sid")),
                     site_name=it.get("plantName") or "",
                     kw_dc_nominal=_to_float(it.get("designedCapacity")) or _to_float(it.get("installedCapacity")),
                     battery_kwh_nominal=_to_float(it.get("batteryCapacity")),
@@ -102,7 +102,7 @@ class SolintegAdapter(VendorAdapter):
         for row in items:
             ts = _solinteg_ts(row.get("updateTime")) or datetime.now(timezone.utc)
             snapshots.append(TelemetrySnapshot(
-                vendor_plant_id=str(row.get("plantId")),
+                vendor_plant_code=str(row.get("plantId")),
                 ts=ts,
                 ac_power_kw=_to_float(row.get("realPower")) and _to_float(row["realPower"]) / 1000.0,
                 ac_energy_today_kwh=_to_float(row.get("dailyEnergy")),
@@ -126,7 +126,7 @@ class SolintegAdapter(VendorAdapter):
         if not row:
             return None
         return DailySummary(
-            vendor_plant_id=plant_id,
+            vendor_plant_code=plant_id,
             day=day,
             energy_kwh=_to_float(row.get("dailyEnergy")),
             peak_power_kw=_to_float(row.get("peakPower")) and _to_float(row["peakPower"]) / 1000.0,
@@ -146,7 +146,7 @@ class SolintegAdapter(VendorAdapter):
             title = it.get("alarmName") or it.get("alarmCode") or "Solinteg alarm"
             out.append(VendorAlarm(
                 vendor="solinteg",
-                vendor_plant_id=str(it.get("plantId")),
+                vendor_plant_code=str(it.get("plantId")),
                 vendor_alarm_id=str(it.get("alarmId")),
                 severity=map_severity("solinteg", str(it.get("level", "2"))),
                 category=classify_alarm_category(title, it.get("description", "")),

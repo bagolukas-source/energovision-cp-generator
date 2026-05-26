@@ -87,7 +87,7 @@ class GoodWeAdapter(VendorAdapter):
             for it in items:
                 all_plants.append(PlantInfo(
                     vendor="goodwe",
-                    vendor_plant_id=str(it.get("powerstation_id")),
+                    vendor_plant_code=str(it.get("powerstation_id")),
                     site_name=it.get("stationname") or "",
                     kw_dc_nominal=_to_float(it.get("capacity")),
                     battery_kwh_nominal=_to_float(it.get("battery_capacity")),
@@ -118,7 +118,7 @@ class GoodWeAdapter(VendorAdapter):
                 inv = (data.get("inverter") or [{}])[0]
                 soc = (data.get("soc") or {})
                 snapshots.append(TelemetrySnapshot(
-                    vendor_plant_id=pid,
+                    vendor_plant_code=pid,
                     ts=datetime.now(timezone.utc),
                     ac_power_kw=_to_float(kpi.get("pac")) and _to_float(kpi["pac"]) / 1000.0,
                     ac_energy_today_kwh=_to_float(kpi.get("power")),
@@ -137,7 +137,7 @@ class GoodWeAdapter(VendorAdapter):
             {"id": plant_id, "date": day.strftime("%Y-%m-%d"), "full_script": False},
         )
         return DailySummary(
-            vendor_plant_id=plant_id,
+            vendor_plant_code=plant_id,
             day=day,
             energy_kwh=_to_float(data.get("energy")),
             raw=data if isinstance(data, dict) else {},
@@ -150,7 +150,7 @@ class GoodWeAdapter(VendorAdapter):
             title = it.get("warning_message") or it.get("warningname") or "GoodWe alarm"
             out.append(VendorAlarm(
                 vendor="goodwe",
-                vendor_plant_id=str(it.get("station_id")),
+                vendor_plant_code=str(it.get("station_id")),
                 vendor_alarm_id=str(it.get("warning_id") or it.get("id")),
                 severity=map_severity("goodwe", str(it.get("warning_level", "medium")).lower()),
                 category=classify_alarm_category(title),

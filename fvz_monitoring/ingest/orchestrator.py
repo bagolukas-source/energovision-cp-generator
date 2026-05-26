@@ -125,7 +125,7 @@ def supabase_credentials_loader(vendor: str) -> dict:
 
 
 def upsert_plants(plants: list[PlantInfo]):
-    """Upsert plant list do inverter_sites tabuľky cez (vendor, vendor_plant_id) unique key."""
+    """Upsert plant list do inverter_sites tabuľky cez (vendor, vendor_plant_code) unique key."""
     if not plants:
         return
     sb = get_supabase()
@@ -133,7 +133,7 @@ def upsert_plants(plants: list[PlantInfo]):
     for p in plants:
         rows.append({
             "vendor": p.vendor,
-            "vendor_plant_id": p.vendor_plant_id,
+            "vendor_plant_code": p.vendor_plant_code,
             "site_name": p.site_name,
             "kw_dc_nominal": p.kw_dc_nominal,
             "kw_ac_nominal": p.kw_ac_nominal,
@@ -144,35 +144,35 @@ def upsert_plants(plants: list[PlantInfo]):
             "commissioning_date": p.commissioning_date.isoformat() if p.commissioning_date else None,
             "monitoring_active": True,
         })
-    sb.table("inverter_sites").upsert(rows, on_conflict="vendor,vendor_plant_id").execute()
+    sb.table("inverter_sites").upsert(rows, on_conflict="vendor,vendor_plant_code").execute()
     log.info(f"Upserted {len(rows)} plants")
 
 
-def resolve_site_ids(vendor: str, vendor_plant_ids: list[str]) -> dict[str, str]:
-    """Z vendor_plant_id → internal site_id (uuid)."""
-    if not vendor_plant_ids:
+def resolve_site_ids(vendor: str, vendor_plant_codes: list[str]) -> dict[str, str]:
+    """Z vendor_plant_code → internal site_id (uuid)."""
+    if not vendor_plant_codes:
         return {}
     sb = get_supabase()
     res = (
         sb.table("inverter_sites")
-        .select("id, vendor_plant_id")
+        .select("id, vendor_plant_code")
         .eq("vendor", vendor)
-        .in_("vendor_plant_id", vendor_plant_ids)
+        .in_("vendor_plant_code", vendor_plant_codes)
         .execute()
     )
-    return {row["vendor_plant_id"]: row["id"] for row in res.data or []}
+    return {row["vendor_plant_code"]: row["id"] for row in res.data or []}
 
 
 def insert_telemetry(vendor: str, snapshots: list[TelemetrySnapshot]):
     if not snapshots:
         return
     sb = get_supabase()
-    plant_ids = [s.vendor_plant_id for s in snapshots]
+    plant_ids = [s.vendor_plant_code for s in snapshots]
     id_map = resolve_site_ids(vendor, plant_ids)
     rows = []
     skipped = 0
     for s in snapshots:
-        site_id = id_map.get(s.vendor_plant_id)
+        site_id = id_map.get(s.vendor_plant_code)
         if not site_id:
             skipped += 1
             continue
@@ -192,11 +192,11 @@ def insert_alarms(vendor: str, alarms: list[VendorAlarm]):
     if not alarms:
         return
     sb = get_supabase()
-    plant_ids = [a.vendor_plant_id for a in alarms]
+    plant_ids = [a.vendor_plant_code for a in alarms]
     id_map = resolve_site_ids(vendor, plant_ids)
     rows = []
     for a in alarms:
-        site_id = id_map.get(a.vendor_plant_id)
+        site_id = id_map.get(a.vendor_plant_code)
         rows.append({
             "site_id": site_id,
             "vendor": a.vendor,
@@ -217,8 +217,8 @@ def insert_daily_summary(vendor: str, summary: DailySummary):
     if not summary:
         return
     sb = get_supabase()
-    id_map = resolve_site_ids(vendor, [summary.vendor_plant_id])
-    site_id = id_map.get(summary.vendor_plant_id)
+    id_map = resolve_site_ids(vendor, [summary.vendor_plant_code])
+    site_id = id_map.get(summary.vendor_plant_code)
     if not site_id:
         return
     sb.table("performance_kpis_daily").upsert({
@@ -243,7 +243,7 @@ def run_plant_list(adapter: VendorAdapter):
 
 def run_realtime(adapter: VendorAdapter):
     plants = adapter.fetch_plant_list()
-    plant_ids = [p.vendor_plant_id for p in plants]
+    plant_ids = [p.vendor_plant_code for p in plants]
     snapshots = adapter.fetch_realtime_batch(plant_ids)
     log.info(f"[{adapter.vendor}] {len(snapshots)} realtime snapshots")
     insert_telemetry(adapter.vendor, snapshots)
@@ -261,12 +261,12 @@ def run_daily_summary(adapter: VendorAdapter, day: date):
     count = 0
     for p in plants:
         try:
-            summary = adapter.fetch_daily_summary(p.vendor_plant_id, day)
+            summary = adapter.fetch_daily_summary(p.vendor_plant_code, day)
             if summary:
                 insert_daily_summary(adapter.vendor, summary)
                 count += 1
         except Exception as e:
-            log.warning(f"[{adapter.vendor}] daily summary fail {p.vendor_plant_id}: {e}")
+            log.warning(f"[{adapter.vendor}] daily summary fail {p.vendor_plant_code}: {e}")
     log.info(f"[{adapter.vendor}] {count} daily summaries for {day}")
 
 
