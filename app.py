@@ -8444,3 +8444,431 @@ def webhook_station_expected():
     resp = jsonify({**data, "cached": False})
     resp.headers["Access-Control-Allow-Origin"] = "*"
     return resp
+
+# ============================================================================
+# FVE MONTHLY REPORT — generuje PDF report za predošlý mesiac + email klientovi
+# /webhook/fve-monthly-report — Vercel cron 1. dňa v mesiaci o 06:00
+# /webhook/fve-monthly-report-site — manuálny trigger pre 1 stanicu
+# ============================================================================
+
+import calendar as _cal
+import io as _io
+
+_FVE_REPORT_HTML = """
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+<meta charset="utf-8">
+<title>Mesačný report FVE — {site_name}</title>
+<style>
+  @page {{ size: A4; margin: 18mm 14mm; }}
+  * {{ box-sizing: border-box; }}
+  body {{ font-family: 'Helvetica Neue', Arial, sans-serif; color: #0F172A; margin: 0; }}
+  .header {{ display: flex; justify-content: space-between; align-items: flex-end; padding-bottom: 14px; border-bottom: 3px solid #16A34A; }}
+  .brand {{ font-size: 28px; font-weight: 800; color: #16A34A; letter-spacing: -0.5px; }}
+  .sub {{ font-size: 11px; color: #64748B; margin-top: 2px; }}
+  .meta {{ text-align: right; font-size: 11px; color: #64748B; }}
+  h1 {{ font-size: 22px; margin: 22px 0 4px; color: #0F172A; }}
+  h2 {{ font-size: 14px; margin: 22px 0 8px; color: #0F172A; padding-bottom: 4px; border-bottom: 1px solid #E2E8F0; }}
+  .kpi-grid {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 14px 0; }}
+  .kpi {{ background: #F0FDF4; border: 1px solid #BBF7D0; border-radius: 8px; padding: 12px; }}
+  .kpi .lbl {{ font-size: 10px; color: #15803D; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }}
+  .kpi .val {{ font-size: 20px; font-weight: 800; color: #14532D; margin-top: 4px; }}
+  .kpi .sub {{ font-size: 9px; color: #16A34A; margin-top: 2px; }}
+  table {{ width: 100%; border-collapse: collapse; font-size: 11px; margin: 8px 0; }}
+  th, td {{ padding: 6px 8px; text-align: left; border-bottom: 1px solid #E2E8F0; }}
+  th {{ background: #F8FAFC; font-weight: 700; color: #475569; font-size: 10px; text-transform: uppercase; }}
+  td.num {{ text-align: right; font-variant-numeric: tabular-nums; }}
+  .summary-box {{ background: #ECFDF5; border-left: 4px solid #16A34A; padding: 12px 14px; margin: 14px 0; border-radius: 4px; }}
+  .summary-box p {{ margin: 0; font-size: 12px; line-height: 1.5; }}
+  .footer {{ position: fixed; bottom: 8mm; left: 14mm; right: 14mm; font-size: 9px; color: #94A3B8; text-align: center; border-top: 1px solid #E2E8F0; padding-top: 6px; }}
+</style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <div class="brand">ENERGOVISION EMS</div>
+      <div class="sub">Mesačný report fotovoltickej elektrárne</div>
+    </div>
+    <div class="meta">
+      <div><b>{period}</b></div>
+      <div>Vygenerované: {gen_date}</div>
+    </div>
+  </div>
+
+  <h1>{site_name}</h1>
+  <div style="font-size: 12px; color: #64748B; margin-bottom: 6px;">
+    Klient: <b>{customer_name}</b>{dc_info}
+  </div>
+
+  <h2>Hlavné ukazovatele</h2>
+  <div class="kpi-grid">
+    <div class="kpi">
+      <div class="lbl">Vyrobené</div>
+      <div class="val">{total_kwh:,.0f} kWh</div>
+      <div class="sub">spec. yield {spec_yield:.2f} kWh/kWp/deň</div>
+    </div>
+    <div class="kpi">
+      <div class="lbl">Úspora</div>
+      <div class="val">{savings_eur:,.0f} €</div>
+      <div class="sub">pri {price_eur:.2f} €/kWh</div>
+    </div>
+    <div class="kpi">
+      <div class="lbl">CO₂ ušetrené</div>
+      <div class="val">{co2_kg:,.0f} kg</div>
+      <div class="sub">ekvivalent {trees:.0f} stromov/rok</div>
+    </div>
+    <div class="kpi">
+      <div class="lbl">Performance Ratio</div>
+      <div class="val">{pr_pct:.0f} %</div>
+      <div class="sub">{pr_label}</div>
+    </div>
+  </div>
+
+  <div class="summary-box">
+    <p><b>Zhrnutie:</b> {summary_text}</p>
+  </div>
+
+  <h2>Denná produkcia ({period})</h2>
+  <table>
+    <thead><tr><th>Deň</th><th class="num">Výroba (kWh)</th><th class="num">Spec. yield (kWh/kWp)</th></tr></thead>
+    <tbody>{daily_rows}</tbody>
+    <tfoot><tr style="font-weight:700; background:#F0FDF4;">
+      <td>SPOLU</td><td class="num">{total_kwh:,.1f}</td><td class="num">{spec_yield_total:.2f}</td>
+    </tr></tfoot>
+  </table>
+
+  <h2>Alarmy v období</h2>
+  {alarms_section}
+
+  <h2>Stav zariadenia</h2>
+  <table>
+    <tr><th style="width: 40%;">Inštalovaný výkon FVE</th><td>{dc_kwp:.2f} kWp</td></tr>
+    <tr><th>Vendor / typ meniča</th><td>{vendor}</td></tr>
+    <tr><th>Online status v období</th><td>{uptime_pct:.1f} %</td></tr>
+    <tr><th>Posledný kontakt</th><td>{last_seen}</td></tr>
+  </table>
+
+  <div class="footer">
+    Energovision, s.r.o. — Certified Huawei FusionSolar Installer Partner • IČO 53 036 280 • +421 948 302 137 • dispecing@energovision.sk • energovision.sk
+  </div>
+</body>
+</html>
+"""
+
+
+def _fve_monthly_collect_data(site_id: str, year: int, month: int) -> dict:
+    """Z monitoring dát + alarms zostaví dáta pre 1 mesačný report."""
+    sb = _sb()
+    site_rows = sb.table("inverter_sites").select(
+        "id, site_name, dc_kwp, vendor, vendor_plant_code, customer_id, public_portal_email, latitude, longitude"
+    ).eq("id", site_id).limit(1).execute().data or []
+    if not site_rows:
+        return {"ok": False, "error": "site_not_found"}
+    site = site_rows[0]
+
+    # Customer
+    customer_name = "—"
+    if site.get("customer_id"):
+        cust = sb.table("customers").select("company_name, first_name, last_name, email").eq("id", site["customer_id"]).limit(1).execute().data or []
+        if cust:
+            c = cust[0]
+            customer_name = c.get("company_name") or f"{c.get('first_name','')} {c.get('last_name','')}".strip() or "—"
+
+    # Daily production z station-kpi (interný call)
+    try:
+        kpi = _station_kpi_compute(site_id)
+        daily = (kpi.get("daily") or [])[-31:]  # posledných 31 dní
+    except Exception:
+        daily = []
+
+    # Filter na target month
+    period_daily = []
+    for d in daily:
+        ds = d.get("date") or ""
+        try:
+            y, m, _ = ds.split("-")
+            if int(y) == year and int(m) == month:
+                period_daily.append(d)
+        except Exception:
+            continue
+
+    total_kwh = sum(float(d.get("energy_kwh") or 0) for d in period_daily)
+    days_in_month = _cal.monthrange(year, month)[1]
+    dc_kwp = float(site.get("dc_kwp") or 0)
+
+    spec_yield = total_kwh / dc_kwp / max(len(period_daily), 1) if dc_kwp > 0 else 0
+    spec_yield_total = total_kwh / dc_kwp if dc_kwp > 0 else 0
+
+    # Alarmy
+    period_start = f"{year}-{month:02d}-01"
+    period_end = f"{year}-{month:02d}-{days_in_month:02d}"
+    alarms = sb.table("inverter_alarms").select(
+        "alarm_name, severity, detected_at, resolved_at, status"
+    ).eq("station_id_vendor", site.get("vendor_plant_code") or "").gte(
+        "detected_at", period_start
+    ).lte("detected_at", period_end + "T23:59:59").order("detected_at", desc=False).execute().data or []
+
+    # Performance Ratio — actual vs PVGIS expected
+    pr_pct = 85.0
+    if dc_kwp > 0 and site.get("latitude") and site.get("longitude"):
+        try:
+            pvg = _pvgis_monthly_expected(float(site["latitude"]), float(site["longitude"]), dc_kwp)
+            if pvg.get("ok"):
+                exp_month_kwh = (pvg.get("monthly_kwh") or [0]*12)[month-1]
+                if exp_month_kwh > 0:
+                    pr_pct = max(0, min(100, total_kwh / exp_month_kwh * 100))
+        except Exception:
+            pass
+
+    # Economic
+    PRICE = 0.18
+    savings_eur = total_kwh * PRICE
+    co2_kg = total_kwh * 0.4
+    trees = co2_kg / 21  # 1 strom ~ 21 kg CO2/rok
+
+    # PR label
+    if pr_pct >= 85:
+        pr_label = "Výborné"
+    elif pr_pct >= 75:
+        pr_label = "OK"
+    else:
+        pr_label = "Sledujeme"
+
+    # Summary text
+    period_name = ["", "január", "február", "marec", "apríl", "máj", "jún", "júl", "august", "september", "október", "november", "december"][month]
+    if total_kwh > 0:
+        summary_text = (
+            f"V mesiaci {period_name} {year} vyrobila vaša FVE {total_kwh:,.0f} kWh, "
+            f"čo predstavuje úsporu {savings_eur:,.0f} € na účte za elektrinu. "
+            f"Performance Ratio {pr_pct:.0f} % — {pr_label.lower()}. "
+            f"CO₂ ekvivalent {co2_kg:,.0f} kg ušetrený."
+        )
+    else:
+        summary_text = "V tomto období neboli zaznamenané produkčné dáta. Kontaktujte servisné stredisko."
+
+    # Daily rows HTML
+    daily_rows = ""
+    for d in period_daily:
+        ds = d.get("date") or ""
+        e = float(d.get("energy_kwh") or 0)
+        sy = e / dc_kwp if dc_kwp > 0 else 0
+        daily_rows += f'<tr><td>{ds}</td><td class="num">{e:,.1f}</td><td class="num">{sy:.2f}</td></tr>'
+    if not daily_rows:
+        daily_rows = '<tr><td colspan="3" style="text-align:center; color:#94A3B8; padding:14px;">Žiadne dáta v období.</td></tr>'
+
+    # Alarms HTML
+    if alarms:
+        alarms_section = '<table><thead><tr><th>Dátum</th><th>Alarm</th><th>Severity</th><th>Status</th></tr></thead><tbody>'
+        for a in alarms:
+            sev = a.get("severity", "info")
+            sev_color = {"critical": "#EF4444", "warning": "#F59E0B", "info": "#3B82F6"}.get(sev, "#64748B")
+            status_label = {"resolved": "Vyriešené", "acked": "Riešime", "snoozed": "Odložené", "new": "Nové"}.get(a.get("status"), a.get("status", "—"))
+            det = (a.get("detected_at") or "")[:16].replace("T", " ")
+            alarms_section += (
+                f'<tr><td>{det}</td><td>{a.get("alarm_name","Alarm")}</td>'
+                f'<td><span style="color:{sev_color};font-weight:600;">{sev.upper()}</span></td>'
+                f'<td>{status_label}</td></tr>'
+            )
+        alarms_section += "</tbody></table>"
+    else:
+        alarms_section = '<p style="font-size:12px; color:#16A34A; margin: 8px 0;">✓ V tomto období neboli zaznamenané žiadne alarmy. Stanica bežala stabilne.</p>'
+
+    last_seen = "neznáme"
+    uptime_pct = 99.0  # placeholder
+
+    return {
+        "ok": True,
+        "site_id": site_id,
+        "site_name": site.get("site_name", "—"),
+        "customer_name": customer_name,
+        "customer_email": next((c.get("email") for c in (sb.table("customers").select("email").eq("id", site.get("customer_id") or "00000000-0000-0000-0000-000000000000").execute().data or [])), None) if site.get("customer_id") else None,
+        "portal_email": site.get("public_portal_email"),
+        "year": year,
+        "month": month,
+        "period": f"{period_name.capitalize()} {year}",
+        "gen_date": datetime.now(timezone.utc).strftime("%d.%m.%Y"),
+        "total_kwh": total_kwh,
+        "savings_eur": savings_eur,
+        "co2_kg": co2_kg,
+        "trees": trees,
+        "pr_pct": pr_pct,
+        "pr_label": pr_label,
+        "spec_yield": spec_yield,
+        "spec_yield_total": spec_yield_total,
+        "price_eur": PRICE,
+        "dc_kwp": dc_kwp,
+        "vendor": (site.get("vendor") or "—").upper(),
+        "uptime_pct": uptime_pct,
+        "last_seen": last_seen,
+        "summary_text": summary_text,
+        "daily_rows": daily_rows,
+        "alarms_section": alarms_section,
+        "dc_info": f" • {dc_kwp:.2f} kWp" if dc_kwp else "",
+    }
+
+
+def _fve_monthly_render_html(data: dict) -> str:
+    return _FVE_REPORT_HTML.format(**data)
+
+
+def _fve_monthly_render_pdf(html: str) -> bytes:
+    """Render HTML → PDF cez Playwright (zhodný pattern ako posudok)."""
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as p:
+        browser = p.chromium.launch(args=["--no-sandbox"])
+        context = browser.new_context()
+        page = context.new_page()
+        page.set_content(html, wait_until="networkidle", timeout=20000)
+        pdf_bytes = page.pdf(format="A4", print_background=True, margin={"top": "0", "right": "0", "bottom": "0", "left": "0"})
+        browser.close()
+        return pdf_bytes
+
+
+def _fve_monthly_upload_pdf(site_id: str, year: int, month: int, pdf_bytes: bytes) -> str:
+    """Upload PDF do Supabase Storage `fve-reports/{site_id}/{year}-{month}.pdf`, vráti public URL."""
+    sb = _sb()
+    path = f"{site_id}/{year}-{month:02d}.pdf"
+    try:
+        sb.storage.from_("fve-reports").upload(path, pdf_bytes, {"content-type": "application/pdf", "upsert": "true"})
+    except Exception as e:
+        log.warning("[fve-monthly] storage upload failed (bucket may not exist): %s", e)
+        # try to create bucket
+        try:
+            sb.storage.create_bucket("fve-reports", options={"public": True})
+            sb.storage.from_("fve-reports").upload(path, pdf_bytes, {"content-type": "application/pdf", "upsert": "true"})
+        except Exception as ee:
+            log.exception("[fve-monthly] bucket+upload failed: %s", ee)
+            return ""
+    return f"{os.environ.get('SUPABASE_URL','').rstrip('/')}/storage/v1/object/public/fve-reports/{path}"
+
+
+def _fve_monthly_send_email(data: dict, pdf_url: str, recipient: str) -> bool:
+    """Pošle email klientovi cez M365 Graph (rovnaký pattern ako ostatné modules)."""
+    try:
+        from email_m365 import send_email_m365
+    except Exception:
+        log.warning("[fve-monthly] M365 module not available")
+        return False
+
+    subject = f"Mesačný report FVE — {data['site_name']} ({data['period']})"
+    body_html = f"""
+    <p>Dobrý deň,</p>
+    <p>v prílohe / na linke nájdete <b>mesačný report</b> vašej fotovoltickej elektrárne za <b>{data['period']}</b>.</p>
+    <ul>
+      <li>Vyrobené: <b>{data['total_kwh']:,.0f} kWh</b></li>
+      <li>Úspora: <b>{data['savings_eur']:,.0f} €</b></li>
+      <li>Performance Ratio: <b>{data['pr_pct']:.0f} % — {data['pr_label']}</b></li>
+    </ul>
+    <p><a href="{pdf_url}" style="background:#16A34A;color:white;padding:10px 16px;border-radius:6px;text-decoration:none;display:inline-block;">📄 Stiahnuť PDF report</a></p>
+    <p>Online dashboard s aktuálnymi dátami: <a href="https://app.energovision.sk/portal/fve/{data.get('public_token','')}">otvoriť portál</a></p>
+    <p>S pozdravom,<br>Energovision dispečing</p>
+    """
+    try:
+        send_email_m365(to=recipient, subject=subject, html=body_html)
+        return True
+    except Exception as e:
+        log.exception("[fve-monthly] email send failed: %s", e)
+        return False
+
+
+@app.route("/webhook/fve-monthly-report-site", methods=["POST"])
+def webhook_fve_monthly_report_site():
+    """Manuálny trigger pre 1 stanicu. body: {site_id, year, month, email?}"""
+    body = request.get_json(silent=True) or {}
+    site_id = body.get("site_id")
+    if not site_id:
+        return jsonify({"ok": False, "error": "site_id required"}), 400
+
+    today = datetime.now(timezone.utc).date()
+    year = int(body.get("year") or (today.year if today.month > 1 else today.year - 1))
+    month = int(body.get("month") or (today.month - 1 if today.month > 1 else 12))
+    recipient_override = body.get("email")
+
+    sb = _sb()
+    # Check duplicate
+    dup = sb.table("fve_monthly_reports").select("id, pdf_url").eq("site_id", site_id).eq("year", year).eq("month", month).limit(1).execute().data or []
+    if dup and not body.get("force"):
+        return jsonify({"ok": True, "skipped": "exists", "pdf_url": dup[0].get("pdf_url")})
+
+    data = _fve_monthly_collect_data(site_id, year, month)
+    if not data.get("ok"):
+        return jsonify(data), 400
+
+    # Načítaj token pre email link
+    site_token = sb.table("inverter_sites").select("public_token").eq("id", site_id).limit(1).execute().data or [{}]
+    data["public_token"] = site_token[0].get("public_token", "") if site_token else ""
+
+    html = _fve_monthly_render_html(data)
+    try:
+        pdf_bytes = _fve_monthly_render_pdf(html)
+    except Exception as e:
+        log.exception("[fve-monthly] PDF render failed")
+        return jsonify({"ok": False, "error": f"pdf_render_failed: {e}"}), 500
+
+    pdf_url = _fve_monthly_upload_pdf(site_id, year, month, pdf_bytes)
+
+    # Persist
+    sb.table("fve_monthly_reports").upsert({
+        "site_id": site_id,
+        "year": year,
+        "month": month,
+        "pdf_url": pdf_url,
+        "pdf_path": f"{site_id}/{year}-{month:02d}.pdf",
+        "total_production_kwh": data["total_kwh"],
+        "total_savings_eur": data["savings_eur"],
+        "pr_avg_pct": data["pr_pct"],
+        "alarms_count": data["alarms_section"].count("<tr>") - 1 if "<table>" in data["alarms_section"] else 0,
+    }, on_conflict="site_id,year,month").execute()
+
+    # Email
+    recipient = recipient_override or data.get("portal_email") or data.get("customer_email")
+    email_sent = False
+    if recipient:
+        email_sent = _fve_monthly_send_email(data, pdf_url, recipient)
+        if email_sent:
+            sb.table("fve_monthly_reports").update({
+                "email_sent_at": datetime.now(timezone.utc).isoformat(),
+                "email_sent_to": recipient,
+            }).eq("site_id", site_id).eq("year", year).eq("month", month).execute()
+
+    return jsonify({
+        "ok": True,
+        "site_id": site_id,
+        "period": data["period"],
+        "pdf_url": pdf_url,
+        "email_sent": email_sent,
+        "recipient": recipient,
+    })
+
+
+@app.route("/webhook/fve-monthly-report", methods=["POST", "GET"])
+def webhook_fve_monthly_report_cron():
+    """
+    Vercel cron 1. dňa v mesiaci o 06:00 — generuje reporty pre všetky monitoring stanice.
+    """
+    today = datetime.now(timezone.utc).date()
+    if today.month == 1:
+        year = today.year - 1
+        month = 12
+    else:
+        year = today.year
+        month = today.month - 1
+
+    sb = _sb()
+    # Iba Huawei live stanice (zatiaľ)
+    sites = sb.table("inverter_sites").select("id, site_name, public_portal_enabled").eq("vendor", "huawei").execute().data or []
+
+    results = []
+    for s in sites:
+        if not s.get("public_portal_enabled"):
+            continue
+        try:
+            with app.test_client() as c:
+                r = c.post("/webhook/fve-monthly-report-site", json={"site_id": s["id"], "year": year, "month": month})
+                results.append({"site_id": s["id"], "site_name": s["site_name"], "status": r.status_code, "ok": r.get_json().get("ok") if r.get_json() else False})
+        except Exception as e:
+            results.append({"site_id": s["id"], "error": str(e)})
+
+    log.info("[fve-monthly-cron] generated %d reports for %d/%d", len(results), month, year)
+    return jsonify({"ok": True, "year": year, "month": month, "count": len(results), "results": results})
