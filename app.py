@@ -7293,7 +7293,7 @@ def webhook_aom_orphan_reset():
 # No mutations — SPOT reactor is unaffected.
 
 _FLEET_CACHE = {"ts": 0.0, "data": None}
-_FLEET_CACHE_TTL_SEC = 60
+_FLEET_CACHE_TTL_SEC = 120  # 2 min cache (Huawei API quota)
 
 
 def _fleet_status_compute() -> dict:
@@ -7353,28 +7353,56 @@ def _fleet_status_compute() -> dict:
             else:
                 base = _hs._huawei_session.get("base") or _hs.HUAWEI_BASE
                 headers = {"XSRF-TOKEN": token, "Content-Type": "application/json"}
-                # API limit 100 stations per request
-                for chunk_start in range(0, len(huawei_codes), 100):
-                    chunk = huawei_codes[chunk_start:chunk_start + 100]
+                # Huawei API: batch >10 stations zlyháva s data:[] (rate-limit či iný safeguard).
+                # Robíme menšie chunks po 8 + retry per-station ak batch vráti 0 rows.
+                CHUNK_SIZE = 8
+                total_polled = 0
+                total_returned = 0
+                for chunk_start in range(0, len(huawei_codes), CHUNK_SIZE):
+                    chunk = huawei_codes[chunk_start:chunk_start + CHUNK_SIZE]
+                    total_polled += len(chunk)
                     body = {"stationCodes": ",".join(chunk)}
-                    r = requests.post(
-                        f"{base}/getStationRealKpi",
-                        headers=headers, json=body, timeout=30,
-                    )
+                    try:
+                        r = requests.post(
+                            f"{base}/getStationRealKpi",
+                            headers=headers, json=body, timeout=30,
+                        )
+                    except Exception as e:
+                        huawei_error = f"chunk {chunk_start}: {str(e)[:120]}"
+                        continue
                     if r.status_code != 200:
                         huawei_error = f"HTTP {r.status_code}: {r.text[:200]}"
-                        break
+                        continue
                     payload = r.json() or {}
                     rows = payload.get("data") or payload.get("list") or []
+                    if not rows and not payload.get("success", True):
+                        # Auth expired? Re-login a skús ešte raz tento chunk
+                        try:
+                            token = _hs.huawei_login(force=True)
+                            if token:
+                                headers["XSRF-TOKEN"] = token
+                                r2 = requests.post(f"{base}/getStationRealKpi", headers=headers, json=body, timeout=30)
+                                if r2.status_code == 200:
+                                    rows = (r2.json() or {}).get("data") or []
+                        except Exception:
+                            pass
+                    chunk_returned = 0
                     for row in rows:
                         code = str(row.get("stationCode") or "")
                         kpi = row.get("dataItemMap") or {}
+                        if not code:
+                            continue
                         live_kpi[code] = {
                             "current_ac_power_kw": _to_float_safe(kpi.get("real_health_state")),
                             "current_day_yield_kwh": _to_float_safe(kpi.get("day_power")),
                             "current_total_yield_mwh": _to_float_safe(kpi.get("total_power")),
                             "current_co2_kg": _to_float_safe(kpi.get("day_use_energy")),
                         }
+                        chunk_returned += 1
+                    total_returned += chunk_returned
+                    # Pri prázdnom chunk fallback: skús per-station call pre debug
+                    if chunk_returned == 0 and rows:
+                        log.warning("[fleet-status] huawei chunk %d returned %d rows but 0 valid stationCodes", chunk_start, len(rows))
         except Exception as e:
             log.exception("[fleet-status] Huawei batch fetch failed")
             huawei_error = str(e)[:200]
@@ -7479,6 +7507,20 @@ def webhook_fleet_status():
     except Exception as e:
         log.exception("[fleet-status] compute failed")
         return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+    # Graceful degradation: ak nový beh má 0 live ALE máme starší cache s validnými dátami,
+    # zachovaj starý cache (Huawei API občas vráti prázdny payload pri rate-limit).
+    new_live = (data.get("meta") or {}).get("live", 0)
+    if new_live == 0 and _FLEET_CACHE.get("data") is not None:
+        old_live = (_FLEET_CACHE["data"].get("meta") or {}).get("live", 0)
+        if old_live > 0:
+            # Preferuj cache, no over-write, ale extend timestamp aby sa za chvíľu retry-nul
+            cached = _FLEET_CACHE["data"]
+            cached_resp = {**cached, "cached": True, "stale_protect": True,
+                           "cache_age_sec": int(now - _FLEET_CACHE["ts"])}
+            resp = jsonify(cached_resp)
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            return resp
 
     _FLEET_CACHE["data"] = data
     _FLEET_CACHE["ts"] = now
