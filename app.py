@@ -7310,7 +7310,7 @@ def _fleet_status_compute() -> dict:
     started = _time.time()
 
     # 1. DB metadata
-    sites = sb_get("inverter_sites", {
+    sites = _hs.sb_get("inverter_sites", {
         "select": (
             "id,site_name,vendor,vendor_station_id,dc_kwp,ac_kw,bess_kwh,"
             "latitude,longitude,customer_id,monitoring_enabled,address,"
@@ -7322,7 +7322,7 @@ def _fleet_status_compute() -> dict:
 
     # 2. Open alarm counts per site (cheap query)
     try:
-        alarm_rows = sb_get("inverter_alarms", {
+        alarm_rows = _hs.sb_get("inverter_alarms", {
             "select": "site_id",
             "resolved_at": "is.null",
         }) or []
