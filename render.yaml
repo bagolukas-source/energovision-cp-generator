@@ -153,7 +153,7 @@ envVarGroups:
       - key: HUAWEI_PASS
         sync: false
       - key: HUAWEI_API_BASE
-        value: "https://intl.fusionsolar.huawei.com"
+        value: "https://eu5.fusionsolar.huawei.com"
 
       # Solinteg (Phase 2 — credentials pending)
       - key: SOLINTEG_APP_KEY
