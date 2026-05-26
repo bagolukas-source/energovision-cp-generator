@@ -1,0 +1,160 @@
+# FVZ Monitoring Render Blueprint
+# Vytvor cez: Render dashboard → Blueprints → New Blueprint Instance
+#   - Repository: bagolukas-source/energovision-cp-generator
+#   - Branch: main
+#   - Root Directory: fvz_monitoring
+#   - Blueprint File: render.yaml
+
+services:
+  - type: cron
+    name: fvz-monitoring-realtime
+    runtime: python
+    plan: starter
+    region: frankfurt
+    schedule: "*/5 * * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m ingest.orchestrator --all-vendors --action realtime
+    envVars:
+      - fromGroup: fvz-monitoring-shared
+
+  - type: cron
+    name: fvz-monitoring-alarms
+    runtime: python
+    plan: starter
+    region: frankfurt
+    schedule: "1-59/5 * * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m ingest.orchestrator --all-vendors --action alarms
+    envVars:
+      - fromGroup: fvz-monitoring-shared
+
+  - type: cron
+    name: fvz-monitoring-daily-kpi
+    runtime: python
+    plan: starter
+    region: frankfurt
+    schedule: "30 0 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: |
+      python -m ingest.orchestrator --all-vendors --action daily-summary && \
+      python -m dispatch.kpi_engine --period daily && \
+      python -m dispatch.anomaly_detector --mode cohort
+    envVars:
+      - fromGroup: fvz-monitoring-shared
+
+  - type: cron
+    name: fvz-monitoring-zero-export
+    runtime: python
+    plan: starter
+    region: frankfurt
+    schedule: "*/15 * * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m dispatch.zero_export
+    envVars:
+      - fromGroup: fvz-monitoring-shared
+
+  - type: cron
+    name: fvz-monitoring-alarm-engine
+    runtime: python
+    plan: starter
+    region: frankfurt
+    schedule: "*/10 * * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m dispatch.alarm_engine
+    envVars:
+      - fromGroup: fvz-monitoring-shared
+
+  - type: cron
+    name: fvz-monitoring-anomaly-ml
+    runtime: python
+    plan: starter
+    region: frankfurt
+    schedule: "0 */2 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m dispatch.anomaly_detector --mode ml
+    envVars:
+      - fromGroup: fvz-monitoring-shared
+
+envVarGroups:
+  - name: fvz-monitoring-shared
+    envVars:
+      - key: SUPABASE_URL
+        value: https://uzwajrpebblafuhrtuwn.supabase.co
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_DB_URL
+        sync: false
+      - key: VENDOR_HUAWEI_ENABLED
+        value: "true"
+      - key: VENDOR_SOLINTEG_ENABLED
+        value: "false"
+      - key: VENDOR_GOODWE_ENABLED
+        value: "false"
+      - key: VENDOR_FRONIUS_ENABLED
+        value: "false"
+      - key: VENDOR_SUNGROW_ENABLED
+        value: "false"
+      - key: HUAWEI_USERNAME
+        sync: false
+      - key: HUAWEI_PASS
+        sync: false
+      - key: HUAWEI_API_BASE
+        value: "https://intl.fusionsolar.huawei.com"
+      - key: SOLINTEG_APP_KEY
+        sync: false
+      - key: SOLINTEG_APP_SECRET
+        sync: false
+      - key: SOLINTEG_USERNAME
+        sync: false
+      - key: SOLINTEG_PASS
+        sync: false
+      - key: SOLINTEG_API_BASE
+        value: "https://api.solinteg-cloud.com"
+      - key: GOODWE_USERNAME
+        sync: false
+      - key: GOODWE_PASS
+        sync: false
+      - key: GOODWE_API_BASE
+        value: "https://www.semsportal.com"
+      - key: FRONIUS_CLIENT_ID
+        sync: false
+      - key: FRONIUS_CLIENT_SECRET
+        sync: false
+      - key: FRONIUS_ACCESS_KEY_ID
+        sync: false
+      - key: FRONIUS_ACCESS_KEY_VALUE
+        sync: false
+      - key: FRONIUS_API_BASE
+        value: "https://api.solarweb.com"
+      - key: SUNGROW_APP_KEY
+        sync: false
+      - key: SUNGROW_USERNAME
+        sync: false
+      - key: SUNGROW_PASS
+        sync: false
+      - key: SUNGROW_API_BASE
+        value: "https://gateway.isolarcloud.eu"
+      - key: DISPATCH_READ_ONLY
+        value: "true"
+      - key: ZERO_EXPORT_TOLERANCE_KWH
+        value: "0.05"
+      - key: ZERO_EXPORT_CONSECUTIVE_WINDOWS
+        value: "2"
+      - key: SLACK_BOT_TOKEN
+        sync: false
+      - key: SLACK_DISPATCH_CHANNEL
+        value: "#dispatch-alarms"
+      - key: SENDGRID_API_KEY
+        sync: false
+      - key: NOTIFICATION_FROM_EMAIL
+        value: "dispecing@energovision.sk"
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_FROM_PHONE
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: LLM_MODEL
+        value: "claude-sonnet-4-6"
