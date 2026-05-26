@@ -476,6 +476,206 @@ def auto_fill_site_from_psc(psc: str, rocna_spotreba_kwh: float = 30000, rk_kw: 
 
 
 def quick_estimate(payload: dict) -> dict:
+    """Hodinová simulácia 8760h pre rýchly odhad bez upload 15-min dát.
+
+    Engine:
+    1) Load profile 8760h — generovaný z profile_template (24/7 / 8-16 / kancelária / domácnosť)
+    2) PV profile 8760h — PVGIS monthly × daily gaussian okolo poludnia
+    3) Per-hour dispatch: pv→load → pv→bat (RTE 0.94 charge) → bat→load (deficit) → pv→grid
+    4) Agregát: ročná úspora, samospotreba %, NPV 15r, payback, per-month chart
+
+    Pridáva sa per-month aggregate (mesačná spotreba/export/úspora) pre sanity check.
+    """
+    import numpy as np
+    
+    kwp = float(payload.get("kwp", 0))
+    annual_kwh = float(payload.get("annual_kwh", 0))
+    tarif_buy = float(payload.get("tarif_buy", 0.18))
+    capex_per_kwp = float(payload.get("capex_per_kwp", 800))
+    bess_kwh = float(payload.get("bess_kwh", 0))
+    bess_kw = float(payload.get("bess_kw", bess_kwh * 0.5)) if bess_kwh > 0 else 0  # default C/2
+    capex_per_bess_kwh = float(payload.get("capex_per_bess_kwh", 480))
+    discount_rate = float(payload.get("discount_rate", 0.06))
+    profile_template = str(payload.get("profile_template", "kancelaria"))
+    export_price = float(payload.get("export_price_eur_kwh", 0.06))
+
+    # === 1) LOAD PROFILE 8760h ===
+    HOURS = 8760
+    hours = np.arange(HOURS)
+    day_of_year = hours // 24
+    hour_of_day = hours % 24
+    day_of_week = (day_of_year + 1) % 7  # 0=Sun, 1=Mon, ..., 6=Sat (rok začína Po pre simplicity)
+
+    # Base shape — per hour of day, per profile
+    PROFILE_SHAPES = {
+        # 0  1  2  3  4  5  6  7   8   9  10  11  12  13  14  15  16  17  18  19  20  21  22  23
+        "priemysel_24_7":   [0.85,0.80,0.75,0.75,0.75,0.80,0.85,0.95,1.00,1.00,1.00,1.00,1.00,1.00,1.00,1.00,1.00,0.95,0.90,0.88,0.85,0.85,0.85,0.85],
+        "priemysel_8_16":   [0.25,0.20,0.20,0.20,0.20,0.25,0.40,0.85,1.00,1.00,1.00,1.00,1.00,1.00,1.00,1.00,1.00,0.70,0.40,0.30,0.28,0.25,0.25,0.25],
+        "kancelaria":       [0.20,0.18,0.18,0.18,0.18,0.20,0.30,0.60,0.85,1.00,1.00,1.00,0.95,0.95,1.00,1.00,0.95,0.80,0.55,0.40,0.30,0.25,0.22,0.20],
+        "domacnost":        [0.30,0.25,0.22,0.20,0.20,0.25,0.45,0.65,0.55,0.40,0.35,0.40,0.50,0.45,0.40,0.45,0.55,0.75,0.95,1.00,0.95,0.80,0.55,0.40],
+    }
+    shape = np.array(PROFILE_SHAPES.get(profile_template, PROFILE_SHAPES["kancelaria"]))
+    
+    # Replicate per hour cez celý rok
+    load_kw = shape[hour_of_day]
+    
+    # Víkendový faktor (Sa=Sun = day_of_week 0 alebo 6)
+    weekend = ((day_of_week == 0) | (day_of_week == 6))
+    weekend_factor = {
+        "priemysel_24_7":  0.85,  # mierne nižšia záťaž víkend
+        "priemysel_8_16":  0.30,  # pracovné dni only
+        "kancelaria":      0.20,
+        "domacnost":       1.15,  # cez víkend doma — vyššia spotreba
+    }.get(profile_template, 0.40)
+    load_kw = np.where(weekend, load_kw * weekend_factor, load_kw)
+    
+    # Sezónna variácia (zima viac kúrenie + svetlo, leto AC)
+    month_factor = np.array([1.15, 1.10, 1.00, 0.92, 0.88, 0.90, 0.95, 0.95, 0.92, 1.00, 1.10, 1.18])
+    month_for_hour = ((day_of_year * 12 // 365) % 12)  # 0..11
+    load_kw *= month_factor[month_for_hour]
+    
+    # Škálovať aby celkový annual_kwh sedel
+    raw_total = load_kw.sum()  # kWh za rok (1h timestep)
+    if raw_total > 0:
+        load_kw *= (annual_kwh / raw_total)
+
+    # === 2) PV PROFILE 8760h ===
+    # Mesačné SK yieldy kWh/kWp (Bratislava)
+    monthly_kwh_per_kwp = [38, 58, 95, 125, 140, 145, 152, 138, 105, 70, 42, 32]
+    annual_yield = sum(monthly_kwh_per_kwp)  # ~1140 kWh/kWp
+    
+    # Daily curve — Gaussian okolo poludnia, šírka σ=2.5 hodín
+    daily_curve = np.exp(-0.5 * ((np.arange(24) - 12.5) / 2.5) ** 2)
+    daily_curve[(np.arange(24) < 5) | (np.arange(24) > 20)] = 0  # noc
+    daily_curve /= daily_curve.sum()  # normalizácia na 1
+    
+    # Per-hour PV: monthly_kwh_per_kwp[m] × kwp × daily_curve[h]
+    pv_kw = np.zeros(HOURS)
+    for m in range(12):
+        days_in_month = [31,28,31,30,31,30,31,31,30,31,30,31][m]
+        # Hodiny v tomto mesiaci
+        start_h = sum([31,28,31,30,31,30,31,31,30,31,30,31][:m]) * 24
+        end_h = start_h + days_in_month * 24
+        n_days = days_in_month
+        # Energia per mesiac per kWp
+        month_total_kwh = monthly_kwh_per_kwp[m] * kwp
+        # Per deň
+        per_day_kwh = month_total_kwh / n_days
+        # Per hour cez celý mesiac
+        for d in range(n_days):
+            day_start = start_h + d * 24
+            pv_kw[day_start:day_start+24] = daily_curve * per_day_kwh
+    
+    # === 3) PER-HOUR DISPATCH ===
+    soc_kwh = bess_kwh * 0.5  # start 50% SoC
+    rte_charge = 0.97
+    rte_discharge = 0.97
+    soc_min = bess_kwh * 0.10
+    soc_max = bess_kwh * 0.95
+
+    pv_to_load = np.zeros(HOURS)
+    pv_to_bat = np.zeros(HOURS)
+    pv_to_grid = np.zeros(HOURS)
+    bat_to_load = np.zeros(HOURS)
+    grid_to_load = np.zeros(HOURS)
+
+    for h in range(HOURS):
+        pv = pv_kw[h]
+        load = load_kw[h]
+        # 1. PV → load
+        to_load = min(pv, load)
+        pv_to_load[h] = to_load
+        rem_pv = pv - to_load
+        rem_load = load - to_load
+        
+        # 2. PV → BAT
+        if bess_kwh > 0 and rem_pv > 0 and soc_kwh < soc_max:
+            charge_room = (soc_max - soc_kwh)
+            max_charge_kw = min(rem_pv, bess_kw)
+            charge_kwh_in = min(max_charge_kw, charge_room / rte_charge)
+            pv_to_bat[h] = charge_kwh_in
+            soc_kwh += charge_kwh_in * rte_charge
+            rem_pv -= charge_kwh_in
+        
+        # 3. BAT → load
+        if bess_kwh > 0 and rem_load > 0 and soc_kwh > soc_min:
+            available = (soc_kwh - soc_min) * rte_discharge
+            max_disch_kw = min(rem_load, bess_kw)
+            disch = min(max_disch_kw, available)
+            bat_to_load[h] = disch
+            soc_kwh -= disch / rte_discharge
+            rem_load -= disch
+        
+        # 4. PV → grid (zvyšok)
+        pv_to_grid[h] = rem_pv
+        # 5. Grid → load (zvyšok)
+        grid_to_load[h] = rem_load
+
+    # === 4) AGREGÁTY ===
+    pv_total = pv_kw.sum()
+    self_used = pv_to_load.sum() + pv_to_bat.sum()  # PV ktoré zostalo doma
+    bat_discharge = bat_to_load.sum()
+    export_total = pv_to_grid.sum()
+    grid_import = grid_to_load.sum()
+    
+    samospotreba_pct = (self_used / pv_total * 100) if pv_total > 0 else 0
+    
+    # Úspora: priame nahradenie + export
+    saved_buy_eur = (pv_to_load.sum() + bat_to_load.sum()) * tarif_buy
+    export_eur = export_total * export_price
+    annual_savings = saved_buy_eur + export_eur
+    
+    capex_total = kwp * capex_per_kwp + bess_kwh * capex_per_bess_kwh
+    payback_years = capex_total / annual_savings if annual_savings > 0 else 999
+    
+    # NPV 15 rokov, eskalácia 2 % retail
+    horizon = 15
+    cashflows = [-capex_total]
+    for y in range(1, horizon + 1):
+        cf = annual_savings * (1.02 ** (y-1)) * (0.992 ** (y-1))  # +2 % retail eskalácia, -0.8 % degradace
+        cashflows.append(cf)
+    npv = sum(cf / ((1 + discount_rate) ** i) for i, cf in enumerate(cashflows))
+
+    # Per-month chart data
+    months = []
+    for m in range(12):
+        days_in_month = [31,28,31,30,31,30,31,31,30,31,30,31][m]
+        start_h = sum([31,28,31,30,31,30,31,31,30,31,30,31][:m]) * 24
+        end_h = start_h + days_in_month * 24
+        months.append({
+            "month": m + 1,
+            "pv_kwh": round(pv_kw[start_h:end_h].sum()),
+            "load_kwh": round(load_kw[start_h:end_h].sum()),
+            "self_used_kwh": round((pv_to_load[start_h:end_h].sum() + bat_to_load[start_h:end_h].sum())),
+            "export_kwh": round(pv_to_grid[start_h:end_h].sum()),
+            "import_kwh": round(grid_to_load[start_h:end_h].sum()),
+        })
+
+    return {
+        "ok": True,
+        "engine": "quick_v2_hourly",
+        "kwp": kwp,
+        "bess_kwh": bess_kwh,
+        "bess_kw": bess_kw,
+        "profile_template": profile_template,
+        "pv_production_kwh": round(pv_total),
+        "self_used_kwh": round(self_used + bat_discharge),
+        "bat_discharge_kwh": round(bat_discharge),
+        "export_kwh": round(export_total),
+        "import_kwh": round(grid_import),
+        "self_consumption_pct": round(samospotreba_pct, 1),
+        "annual_savings_eur": round(annual_savings),
+        "saved_buy_eur": round(saved_buy_eur),
+        "export_revenue_eur": round(export_eur),
+        "capex_eur": round(capex_total),
+        "payback_years": round(payback_years, 1),
+        "npv_eur": round(npv),
+        "co2_saved_tons_per_year": round((pv_to_load.sum() + bat_discharge + export_total) * 0.000236, 2),
+        "monthly": months,
+    }
+
+
+def _quick_estimate_legacy(payload: dict) -> dict:
     """Rýchla kalkulácia bez 15-min dát. Vstupy: kwp, annual_kwh, tarif_buy, psc."""
     kwp = float(payload.get("kwp", 0))
     annual_kwh = float(payload.get("annual_kwh", 0))
