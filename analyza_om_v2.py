@@ -149,7 +149,7 @@ def _build_request_from_analyza(analyza: dict) -> dict:
             "depr_years": 6,
         },
         "dotacia": {
-            "enabled": True,
+            "enabled": bool(analyza.get("dotacia_enabled", False)),
             "scheme_id": "zelena_podnikom",
         },
         "async_mode": False,

@@ -393,8 +393,9 @@ def run_full_pipeline(analyza_id: str) -> Dict[str, Any]:
     _job_update(econ_job, progress_pct=50)
     tarif_buy = float(analyza.get("tarif_buy") or 0.146)
     tarif_sell = float(analyza.get("tarif_sell") or 0.06)
+    dotacia_on = bool(analyza.get("dotacia_enabled", False))
     variants_capex = [{"id": str(v["id"]), "capex_eur": v.get("capex_eur") or 0,
-                        "dotacia_eur": min(50000, 0.45 * (v.get("capex_eur") or 0))} for v in variants]
+                        "dotacia_eur": (min(50000, 0.45 * (v.get("capex_eur") or 0)) if dotacia_on else 0)} for v in variants]
     econ_result = calc_economics(sim_result, tarif_buy, tarif_sell, variants_capex)
     _job_update(econ_job, progress_pct=100, status="done")
 
