@@ -7296,6 +7296,96 @@ _FLEET_CACHE = {"ts": 0.0, "data": None}
 _FLEET_CACHE_TTL_SEC = 120  # 2 min cache (Huawei API quota)
 
 
+def _huawei_fetch_active_power_per_station(station_codes: list, base: str, headers: dict) -> dict:
+    """Pre každú stanicu zistí aktuálny AC výkon [kW] sumovaním active_power
+    všetkých jej inverterov.
+
+    Postup (podľa Huawei NBI Reference 25.4.0):
+    1. POST /getDevList {stationCodes: "a,b,c"} → zoznam zariadení (devTypeId=1 invertery, 38 residential)
+    2. POST /getDevRealKpi {devIds: "id1,id2", devTypeId: 1} → active_power per inverter
+    3. Sum active_power po stationCode
+
+    Returns: {stationCode: kw_sum, ...}
+    """
+    power_by_station: dict = {}
+    if not station_codes:
+        return power_by_station
+
+    # 1. Zoznam zariadení pre všetky stanice naraz (max 100 staníc per call)
+    try:
+        r = requests.post(
+            f"{base}/getDevList",
+            headers=headers,
+            json={"stationCodes": ",".join(station_codes)},
+            timeout=30,
+        )
+        if r.status_code != 200:
+            log.warning("[fleet-status] getDevList HTTP %s: %s", r.status_code, r.text[:200])
+            return power_by_station
+        payload = r.json() or {}
+        devices = payload.get("data") or []
+        if not isinstance(devices, list):
+            return power_by_station
+    except Exception as e:
+        log.warning("[fleet-status] getDevList failed: %s", e)
+        return power_by_station
+
+    # 2. Filter len invertery (devTypeId 1 = string inverter, 38 = residential inverter)
+    inverters_by_type: dict = {}  # {devTypeId: [(devId, stationCode), ...]}
+    for d in devices:
+        if not isinstance(d, dict):
+            continue
+        dev_type = d.get("devTypeId")
+        if dev_type not in (1, 38):
+            continue
+        dev_id = d.get("id")
+        station_code = d.get("stationCode")
+        if not dev_id or not station_code:
+            continue
+        inverters_by_type.setdefault(dev_type, []).append((dev_id, station_code))
+
+    # 3. getDevRealKpi per device type (max 100 zariadení per call)
+    for dev_type, inv_list in inverters_by_type.items():
+        for chunk_start in range(0, len(inv_list), 100):
+            chunk = inv_list[chunk_start:chunk_start + 100]
+            dev_ids = [str(x[0]) for x in chunk]
+            station_map = {str(x[0]): x[1] for x in chunk}
+            try:
+                r = requests.post(
+                    f"{base}/getDevRealKpi",
+                    headers=headers,
+                    json={"devIds": ",".join(dev_ids), "devTypeId": dev_type},
+                    timeout=30,
+                )
+                if r.status_code != 200:
+                    continue
+                payload = r.json() or {}
+                rows = payload.get("data") or []
+                if not isinstance(rows, list):
+                    continue
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    kpi = row.get("dataItemMap") or {}
+                    if not isinstance(kpi, dict):
+                        continue
+                    ap = kpi.get("active_power")
+                    if ap is None:
+                        continue
+                    try:
+                        kw = float(ap)
+                    except (TypeError, ValueError):
+                        continue
+                    dev_id = str(row.get("devId") or row.get("id") or "")
+                    station_code = station_map.get(dev_id)
+                    if station_code:
+                        power_by_station[station_code] = power_by_station.get(station_code, 0.0) + kw
+            except Exception as e:
+                log.warning("[fleet-status] getDevRealKpi failed for devType %s: %s", dev_type, e)
+
+    return power_by_station
+
+
 def _fleet_status_compute() -> dict:
     """Fetch fleet status: DB metadata + live Huawei KPI batch call.
 
@@ -7396,17 +7486,45 @@ def _fleet_status_compute() -> dict:
                             kpi = {}
                         if not code:
                             continue
+                        # Huawei getStationRealKpi vracia:
+                        #   real_health_state — 1=offline, 2=fault, 3=normal (int, NIE výkon!)
+                        #   day_power — dnes vyrobené [kWh]
+                        #   total_power — celoživotne vyrobené [kWh]  (NIE MWh!)
+                        #   month_power — mesačne [kWh]
+                        #   day_use_energy — dnes spotreba [kWh]
+                        #   day_on_grid_energy — dnes export [kWh]
+                        #   day_income / total_income — príjem [€]
+                        total_kwh = _to_float_safe(kpi.get("total_power"))
                         live_kpi[code] = {
-                            "current_ac_power_kw": _to_float_safe(kpi.get("real_health_state")),
+                            # current_ac_power_kw nezistíme z getStationRealKpi — treba getDevRealKpi.
+                            # Nechávame None aby UI zobrazilo "—" namiesto fake hodnoty.
+                            "current_ac_power_kw": None,
+                            "health_state": _to_float_safe(kpi.get("real_health_state")),
                             "current_day_yield_kwh": _to_float_safe(kpi.get("day_power")),
-                            "current_total_yield_mwh": _to_float_safe(kpi.get("total_power")),
-                            "current_co2_kg": _to_float_safe(kpi.get("day_use_energy")),
+                            "current_total_yield_kwh": total_kwh,
+                            "current_total_yield_mwh": (total_kwh / 1000.0) if total_kwh else None,
+                            "current_month_yield_kwh": _to_float_safe(kpi.get("month_power")),
+                            "current_day_export_kwh": _to_float_safe(kpi.get("day_on_grid_energy")),
+                            "current_day_load_kwh": _to_float_safe(kpi.get("day_use_energy")),
+                            "current_day_income_eur": _to_float_safe(kpi.get("day_income")),
+                            "current_total_income_eur": _to_float_safe(kpi.get("total_income")),
                         }
                         chunk_returned += 1
                     total_returned += chunk_returned
                     # Pri prázdnom chunk fallback: skús per-station call pre debug
                     if chunk_returned == 0 and rows:
                         log.warning("[fleet-status] huawei chunk %d returned %d rows but 0 valid stationCodes", chunk_start, len(rows))
+
+                # 5. Pre presný aktuálny výkon volaj getDevList + getDevRealKpi
+                # (getStationRealKpi NEVRACIA active_power per Huawei NBI Reference 25.4.0).
+                # Toto pridá ~2-3s na response time ale dáva reálne kW.
+                try:
+                    power_map = _huawei_fetch_active_power_per_station(huawei_codes, base, headers)
+                    for code, kw in power_map.items():
+                        if code in live_kpi:
+                            live_kpi[code]["current_ac_power_kw"] = kw
+                except Exception as e:
+                    log.warning("[fleet-status] active_power fetch failed: %s", e)
         except Exception as e:
             log.exception("[fleet-status] Huawei batch fetch failed")
             huawei_error = str(e)[:200]
@@ -7451,7 +7569,14 @@ def _fleet_status_compute() -> dict:
             "spot_last_transition_at": s.get("spot_last_transition_at"),
             "current_ac_power_kw": power,
             "current_day_yield_kwh": (kpi or {}).get("current_day_yield_kwh"),
+            "current_total_yield_kwh": (kpi or {}).get("current_total_yield_kwh"),
             "current_total_yield_mwh": (kpi or {}).get("current_total_yield_mwh"),
+            "current_month_yield_kwh": (kpi or {}).get("current_month_yield_kwh"),
+            "current_day_export_kwh": (kpi or {}).get("current_day_export_kwh"),
+            "current_day_load_kwh": (kpi or {}).get("current_day_load_kwh"),
+            "current_day_income_eur": (kpi or {}).get("current_day_income_eur"),
+            "current_total_income_eur": (kpi or {}).get("current_total_income_eur"),
+            "health_state": (kpi or {}).get("health_state"),
             "last_telemetry_at": now_iso if has_live else None,
             "open_alarms_count": alarm_counts.get(sid, 0),
             "status_label": status_label,
