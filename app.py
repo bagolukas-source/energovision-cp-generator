@@ -9421,3 +9421,189 @@ def webhook_generate_service_protocol():
             log.warning("[service-protocol] email fail: %s", e)
 
     return jsonify({"ok": True, "ticket_id": ticket_id, "pdf_url": pdf_url, "emailed": bool(recipient)})
+
+# ============================================================================
+# EXECUTIVE SUMMARY AI — 1× mes Eva vyrobí 1-page exec summary per stanica
+# /webhook/exec-summary-site — manuálny per-site
+# /webhook/exec-summary-cron — Vercel cron 1. v mes. 08:00 (po monthly-report)
+# ============================================================================
+
+import json as _exj
+
+def _exec_summary_compute(site_id: str, year: int, month: int) -> dict:
+    sb = _sb()
+    s = sb.table("inverter_sites").select(
+        "id, site_name, dc_kwp, vendor, customer_id, public_token, public_portal_email"
+    ).eq("id", site_id).single().execute().data
+    if not s:
+        return {"ok": False, "error": "site_not_found"}
+
+    # Vytiahnut monthly report (ak existuje)
+    rep = sb.table("fve_monthly_reports").select("*").eq("site_id", site_id).eq("year", year).eq("month", month).maybeSingle().execute().data
+    # Tickety v mesiaci
+    period_start = f"{year}-{month:02d}-01"
+    period_end_dt = datetime(year, month, 28) + timedelta(days=4)
+    period_end = period_end_dt.replace(day=1).strftime("%Y-%m-%d")
+    tickets = sb.table("service_tickets").select("id, ticket_number, title, severity, status, resolved_at, sla_breached, hours_worked").eq("site_id", site_id).gte("created_at", period_start).lt("created_at", period_end).execute().data or []
+    open_critical = [t for t in tickets if t.get("severity") == "critical" and t.get("status") not in ("resolved","verified","closed")]
+    sla_breach_count = len([t for t in tickets if t.get("sla_breached")])
+
+    # Customer
+    cust = {}
+    if s.get("customer_id"):
+        cust_data = sb.table("customers").select("first_name, last_name, company_name, email").eq("id", s["customer_id"]).maybeSingle().execute().data
+        if cust_data:
+            cust = cust_data
+
+    cust_name = cust.get("company_name") or f"{cust.get('first_name','')} {cust.get('last_name','')}".strip() or "—"
+    period_name = ["", "január", "február", "marec", "apríl", "máj", "jún", "júl", "august", "september", "október", "november", "december"][month]
+
+    # Build context for Claude
+    context = {
+        "site_name": s.get("site_name"),
+        "dc_kwp": s.get("dc_kwp"),
+        "customer": cust_name,
+        "period": f"{period_name} {year}",
+        "production_kwh": (rep or {}).get("total_production_kwh"),
+        "savings_eur": (rep or {}).get("total_savings_eur"),
+        "pr_avg_pct": (rep or {}).get("pr_avg_pct"),
+        "alarms_count": (rep or {}).get("alarms_count", 0),
+        "tickets_total": len(tickets),
+        "tickets_critical_open": len(open_critical),
+        "tickets_sla_breached": sla_breach_count,
+        "tickets_resolved": len([t for t in tickets if t.get("status") in ("resolved","verified","closed")]),
+        "tickets_avg_hours": sum(float(t.get("hours_worked") or 0) for t in tickets) / max(len(tickets),1),
+    }
+
+    # AI call — Anthropic Claude Sonnet
+    try:
+        from anthropic import Anthropic
+        client = Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
+        prompt = f"""Si energetický analytik Energovision. Vytvor 1-stranový executive summary pre majiteľa FVE stanice.
+
+Dáta za {context['period']}:
+- Stanica: {context['site_name']} ({context['dc_kwp']} kWp), klient {context['customer']}
+- Výroba: {context['production_kwh']} kWh
+- Úspora: {context['savings_eur']} €
+- Performance Ratio: {context['pr_avg_pct']} %
+- Alarmy: {context['alarms_count']}
+- Servisné tickety: {context['tickets_total']} celkom, {context['tickets_resolved']} vyriešených, {context['tickets_critical_open']} kritických otvorených, {context['tickets_sla_breached']} SLA breach
+
+Vytvor JSON s polami:
+- "headline": 1 veta — kľúčový takeaway (či mesiac bol OK alebo má problémy)
+- "key_metrics": pole 3 najdôležitejších čísiel s krátkym popisom
+- "highlights": pole 2-3 pozitívnych vecí
+- "concerns": pole 0-3 vecí ktoré treba sledovať
+- "next_actions": pole 1-3 odporúčaní pre nasledujúci mesiac
+- "verdict": jedno slovo (excellent/good/ok/attention/critical)
+
+Strikt: iba JSON, žiadny markdown ani komentáre. Píš po slovensky, vecne, ako senior consultant. Maximum 60 slov per pole. Žiadne sľuby ani superlatívy."""
+
+        msg = client.messages.create(
+            model="claude-sonnet-4-5-20250929",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        text = msg.content[0].text.strip()
+        # Strip markdown fences if present
+        if text.startswith("```"):
+            text = text.split("```")[1].lstrip("json\n")
+        ai = _exj.loads(text)
+    except Exception as e:
+        log.exception("[exec-summary] AI fail: %s", e)
+        ai = {
+            "headline": f"Stanica {s['site_name']} — {context['production_kwh'] or 0:.0f} kWh za {context['period']}",
+            "key_metrics": [
+                {"label": "Výroba", "value": f"{context['production_kwh'] or 0:.0f} kWh"},
+                {"label": "Úspora", "value": f"{context['savings_eur'] or 0:.0f} €"},
+                {"label": "PR", "value": f"{context['pr_avg_pct'] or 0:.0f} %"}
+            ],
+            "highlights": [],
+            "concerns": [f"Critical otvorené: {context['tickets_critical_open']}"] if context['tickets_critical_open'] else [],
+            "next_actions": ["Skontroluj mesačný report v emaili"],
+            "verdict": "ok"
+        }
+
+    return {"ok": True, "site_id": site_id, "context": context, "ai": ai, "customer_email": cust.get("email"), "public_token": s.get("public_token"), "site_name": s.get("site_name")}
+
+
+@app.route("/webhook/exec-summary-site", methods=["POST"])
+def webhook_exec_summary_site():
+    body = request.get_json(silent=True) or {}
+    site_id = body.get("site_id")
+    if not site_id:
+        return jsonify({"ok": False, "error": "site_id required"}), 400
+    today = datetime.now(timezone.utc).date()
+    year = int(body.get("year") or (today.year if today.month > 1 else today.year - 1))
+    month = int(body.get("month") or (today.month - 1 if today.month > 1 else 12))
+
+    data = _exec_summary_compute(site_id, year, month)
+    if not data.get("ok"):
+        return jsonify(data), 400
+
+    # Send email
+    recipient = body.get("email") or data.get("customer_email")
+    if recipient:
+        try:
+            from email_m365 import send_email_m365
+            ai = data["ai"]
+            ctx = data["context"]
+            verdict_color = {"excellent":"#16A34A","good":"#16A34A","ok":"#0EA5E9","attention":"#F59E0B","critical":"#EF4444"}.get(ai.get("verdict","ok"), "#64748B")
+            highlights_html = "".join(f"<li>{h}</li>" for h in ai.get("highlights", []))
+            concerns_html = "".join(f"<li>{c}</li>" for c in ai.get("concerns", []))
+            actions_html = "".join(f"<li>{a}</li>" for a in ai.get("next_actions", []))
+            kpi_html = "".join(
+                f'<td style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:8px;padding:14px;text-align:center;width:33%;"><div style="font-size:10px;color:#15803D;text-transform:uppercase;">{k.get("label","")}</div><div style="font-size:20px;font-weight:700;color:#14532D;margin-top:4px;">{k.get("value","—")}</div></td>'
+                for k in ai.get("key_metrics", [])[:3]
+            )
+            body_html = f"""
+            <div style="font-family:Arial,sans-serif;color:#0F172A;max-width:600px;">
+              <div style="background:linear-gradient(135deg,#16A34A,#15803D);color:white;padding:24px;border-radius:12px;">
+                <div style="font-size:12px;opacity:0.9;">ENERGOVISION EMS — Executive Summary</div>
+                <h1 style="margin:8px 0 4px;font-size:22px;">{ctx['site_name']}</h1>
+                <div style="opacity:0.9;font-size:13px;">{ctx['period']} · {ctx['customer']}</div>
+              </div>
+              <div style="background:white;padding:20px;border:1px solid #E2E8F0;border-top:none;border-radius:0 0 12px 12px;">
+                <div style="display:inline-block;padding:4px 12px;background:{verdict_color};color:white;border-radius:20px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">{ai.get("verdict","ok")}</div>
+                <p style="font-size:16px;font-weight:600;margin:12px 0 16px;color:#0F172A;line-height:1.4;">{ai.get("headline","")}</p>
+                <table style="width:100%;border-collapse:separate;border-spacing:6px;margin-bottom:16px;">{kpi_html}</table>
+                {f'<h3 style="margin-top:18px;font-size:13px;color:#15803D;">✓ Pozitíva</h3><ul style="margin:6px 0;padding-left:20px;font-size:13px;line-height:1.6;color:#0F172A;">{highlights_html}</ul>' if highlights_html else ''}
+                {f'<h3 style="margin-top:18px;font-size:13px;color:#B45309;">⚠ Pozor</h3><ul style="margin:6px 0;padding-left:20px;font-size:13px;line-height:1.6;color:#0F172A;">{concerns_html}</ul>' if concerns_html else ''}
+                {f'<h3 style="margin-top:18px;font-size:13px;color:#0F172A;">→ Ďalšie kroky</h3><ul style="margin:6px 0;padding-left:20px;font-size:13px;line-height:1.6;color:#0F172A;">{actions_html}</ul>' if actions_html else ''}
+                <div style="margin-top:24px;padding-top:14px;border-top:1px solid #E2E8F0;text-align:center;">
+                  <a href="https://app.energovision.sk/portal/fve/{data.get('public_token','')}" style="background:#16A34A;color:white;padding:10px 20px;border-radius:6px;text-decoration:none;font-size:13px;font-weight:600;">📊 Otvoriť portál</a>
+                </div>
+                <p style="margin-top:20px;font-size:11px;color:#64748B;text-align:center;">Vygenerovala Eva AI · Energovision dispečing +421 948 302 137</p>
+              </div>
+            </div>
+            """
+            send_email_m365(to=recipient, subject=f"📊 Executive Summary — {ctx['site_name']} ({ctx['period']})", html=body_html)
+            data["emailed"] = True
+        except Exception as e:
+            log.warning("[exec-summary] email fail: %s", e)
+            data["emailed"] = False
+
+    return jsonify(data)
+
+
+@app.route("/webhook/exec-summary-cron", methods=["POST", "GET"])
+def webhook_exec_summary_cron():
+    """Vercel cron 1. v mes. 08:00 — exec summary pre všetky monitoring stanice s portal_enabled."""
+    today = datetime.now(timezone.utc).date()
+    if today.month == 1:
+        year = today.year - 1
+        month = 12
+    else:
+        year = today.year
+        month = today.month - 1
+    sb = _sb()
+    sites = sb.table("inverter_sites").select("id, site_name").eq("vendor", "huawei").eq("public_portal_enabled", True).execute().data or []
+    results = []
+    for s in sites:
+        try:
+            with app.test_client() as c:
+                r = c.post("/webhook/exec-summary-site", json={"site_id": s["id"], "year": year, "month": month})
+                results.append({"site_id": s["id"], "ok": r.status_code == 200})
+        except Exception as e:
+            results.append({"site_id": s["id"], "error": str(e)})
+    return jsonify({"ok": True, "year": year, "month": month, "count": len(results), "results": results})
