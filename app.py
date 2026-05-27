@@ -10226,3 +10226,736 @@ def webhook_huawei_pull_battery_health():
         "total_packs_upserted": total_packs,
         "results": results,
     })
+
+
+# ============================================================================
+# F2: STRING-LEVEL MPPT TELEMETRIA
+# /webhook/huawei-pull-strings — hodinový cron počas dňa (06-20 UTC)
+# Extract pv1_u..pv25_u + pv1_i..pv25_i z getDevRealKpi devTypeId=1
+# ============================================================================
+
+def _pull_strings_for_site(site: dict, base: str, headers: dict, devices: List[dict]) -> dict:
+    """
+    Pre 1 stanicu: pre všetky string inverter zariadenia (devTypeId=1)
+    vytiahne per-MPPT voltage + current, uloží do string_telemetry,
+    spočíta sibling-comparison underperforming detection.
+    """
+    sb = _sb()
+    string_inverters = [d for d in devices if d.get("devTypeId") == 1]
+    if not string_inverters:
+        return {"ok": True, "info": "no string inverters", "strings_recorded": 0}
+
+    now = datetime.now(timezone.utc)
+    today = now.date()
+    strings_recorded = 0
+    string_points: List[dict] = []   # in-memory per inverter aggregation
+
+    # Batch po max 100
+    for chunk_start in range(0, len(string_inverters), 100):
+        chunk = string_inverters[chunk_start:chunk_start + 100]
+        dev_ids = [str(d.get("id")) for d in chunk if d.get("id")]
+        dev_meta = {str(d.get("id")): d for d in chunk}
+        if not dev_ids:
+            continue
+
+        try:
+            r = requests.post(
+                f"{base}/getDevRealKpi",
+                headers=headers,
+                json={"devIds": ",".join(dev_ids), "devTypeId": 1},
+                timeout=30,
+            )
+            if r.status_code != 200:
+                continue
+            rows = (r.json() or {}).get("data") or []
+        except Exception as e:
+            log.warning("[strings-pull] getDevRealKpi failed: %s", e)
+            continue
+
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            dev_id = str(row.get("devId") or row.get("id") or "")
+            meta = dev_meta.get(dev_id, {})
+            kpi = row.get("dataItemMap") or {}
+            if not isinstance(kpi, dict):
+                continue
+
+            # Iteruj pv1..pv25
+            for n in range(1, 26):
+                v_key = f"pv{n}_u"
+                i_key = f"pv{n}_i"
+                v = kpi.get(v_key)
+                i = kpi.get(i_key)
+                # Skip ak sú obe None alebo 0 (string neexistuje alebo offline)
+                if v is None and i is None:
+                    continue
+                try:
+                    v_num = float(v) if v is not None else None
+                    i_num = float(i) if i is not None else None
+                except (TypeError, ValueError):
+                    continue
+                if v_num is None and i_num is None:
+                    continue
+                p_kw = None
+                if v_num is not None and i_num is not None:
+                    p_kw = round((v_num * i_num) / 1000.0, 3)
+                # Skip ak power 0 a oba sú malé (string je v nočnom stave, nemá zmysel ukladať)
+                if p_kw is not None and p_kw < 0.05 and (v_num or 0) < 50:
+                    continue
+
+                row_data = {
+                    "site_id": site["id"],
+                    "vendor_device_id": dev_id,
+                    "device_model": meta.get("devName") or meta.get("devTypeName"),
+                    "pv_index": n,
+                    "voltage_v": v_num,
+                    "current_a": i_num,
+                    "power_kw": p_kw,
+                    "measured_at": now.isoformat(),
+                }
+                string_points.append(row_data)
+                strings_recorded += 1
+
+    # Bulk insert string_telemetry
+    if string_points:
+        try:
+            # Insert v batchoch po 200 aby sa nepretiahol payload
+            for batch_start in range(0, len(string_points), 200):
+                batch = string_points[batch_start:batch_start + 200]
+                sb.table("string_telemetry").insert(batch).execute()
+        except Exception as e:
+            log.warning("[strings-pull] bulk insert failed: %s", e)
+
+    # Daily snapshot + underperforming detection
+    # Group by (device_id, pv_index) → výpočet peak za dnes
+    by_string: Dict[Tuple[str, int], List[dict]] = {}
+    for p in string_points:
+        key = (p["vendor_device_id"], p["pv_index"])
+        by_string.setdefault(key, []).append(p)
+
+    # Per device: nájdi peer stringy (rovnaký vendor_device_id), spočítaj sibling avg
+    by_device: Dict[str, List[Tuple[int, float]]] = {}
+    for (dev_id, pv_idx), pts in by_string.items():
+        peaks = [p["power_kw"] for p in pts if p.get("power_kw") is not None]
+        if peaks:
+            avg_p = sum(peaks) / len(peaks)
+            by_device.setdefault(dev_id, []).append((pv_idx, avg_p))
+
+    underperforming_count = 0
+    for dev_id, str_list in by_device.items():
+        if len(str_list) < 2:
+            continue   # potrebujem aspoň 2 stringy pre porovnanie
+        peers_avg = sum(p for _, p in str_list) / len(str_list)
+        for pv_idx, my_avg in str_list:
+            ratio = (my_avg / peers_avg) if peers_avg > 0 else 1.0
+            underperforming = ratio < 0.70 and my_avg < peers_avg - 0.5  # 30% pod priemer + abs rozdiel
+            issue = None
+            if underperforming:
+                # Heuristika: zlý voltage = shading, zlý current = soiling/zlý panel
+                pts = by_string.get((dev_id, pv_idx), [])
+                avg_v = sum(p["voltage_v"] for p in pts if p.get("voltage_v")) / max(1, len([p for p in pts if p.get("voltage_v")]))
+                avg_i = sum(p["current_a"] for p in pts if p.get("current_a")) / max(1, len([p for p in pts if p.get("current_a")]))
+                issue = "shading" if avg_v < 300 else "soiling_or_panel"
+                underperforming_count += 1
+            try:
+                sb.table("string_performance_daily").upsert({
+                    "site_id": site["id"],
+                    "vendor_device_id": dev_id,
+                    "pv_index": pv_idx,
+                    "date": str(today),
+                    "avg_voltage_v": sum(p["voltage_v"] for p in by_string.get((dev_id, pv_idx), []) if p.get("voltage_v")) / max(1, len([p for p in by_string.get((dev_id, pv_idx), []) if p.get("voltage_v")])),
+                    "avg_current_a": sum(p["current_a"] for p in by_string.get((dev_id, pv_idx), []) if p.get("current_a")) / max(1, len([p for p in by_string.get((dev_id, pv_idx), []) if p.get("current_a")])),
+                    "peak_power_kw": my_avg,
+                    "samples_count": len(by_string.get((dev_id, pv_idx), [])),
+                    "underperforming": underperforming,
+                    "performance_ratio_vs_siblings": round(ratio * 100, 1),
+                    "issue_type": issue,
+                }, on_conflict="vendor_device_id,pv_index,date").execute()
+            except Exception as e:
+                log.warning("[strings-pull] daily upsert failed: %s", e)
+
+    # Update site agregát
+    if strings_recorded > 0:
+        try:
+            sb.table("inverter_sites").update({
+                "string_count": len({k for k in by_string.keys()}),
+                "string_underperforming_count": underperforming_count,
+                "string_last_sync_at": now.isoformat(),
+            }).eq("id", site["id"]).execute()
+        except Exception as e:
+            log.warning("[strings-pull] site agg failed: %s", e)
+
+    return {
+        "ok": True,
+        "site_id": site["id"],
+        "site_name": site.get("site_name"),
+        "string_inverters_processed": len(string_inverters),
+        "strings_recorded": strings_recorded,
+        "underperforming_count": underperforming_count,
+    }
+
+
+@app.route("/webhook/huawei-pull-strings", methods=["POST", "GET"])
+def webhook_huawei_pull_strings():
+    """Pull per-MPPT string voltage/current z Huawei NBI pre celý fleet.
+    Hodinový cron počas dňa (06-20 UTC), výsledok do string_telemetry.
+    """
+    if not _hs_auth_ok(request):
+        return jsonify({"error": "unauthorized"}), 401
+    if _hs is None:
+        return jsonify({"ok": False, "error": "huawei_spot module not available"}), 500
+
+    token = _hs.huawei_login()
+    if not token:
+        return jsonify({"ok": False, "error": "huawei login failed (check backoff)"}), 503
+
+    base = _hs._huawei_session.get("base") or _hs.HUAWEI_BASE
+    headers = {"XSRF-TOKEN": token, "Content-Type": "application/json"}
+
+    sb = _sb()
+    sites = sb.table("inverter_sites").select(
+        "id, site_name, vendor_station_id"
+    ).eq("vendor", "huawei").eq("monitoring_enabled", True).execute().data or []
+
+    body = request.get_json(silent=True) or {}
+    site_id_filter = body.get("site_id")
+    if site_id_filter:
+        sites = [s for s in sites if s["id"] == site_id_filter]
+
+    total_strings = 0
+    total_underperforming = 0
+    results = []
+
+    for s in sites:
+        try:
+            # Pre každú stanicu najprv getDevList aby sme videli aké invertery má
+            r = requests.post(
+                f"{base}/getDevList",
+                headers=headers,
+                json={"stationCodes": s.get("vendor_station_id") or ""},
+                timeout=30,
+            )
+            if r.status_code != 200:
+                results.append({"site_id": s["id"], "ok": False, "error": f"getDevList HTTP {r.status_code}"})
+                continue
+            devices = (r.json() or {}).get("data") or []
+
+            res = _pull_strings_for_site(s, base, headers, devices)
+            results.append(res)
+            if res.get("ok"):
+                total_strings += res.get("strings_recorded", 0)
+                total_underperforming += res.get("underperforming_count", 0)
+        except Exception as e:
+            log.exception("[strings-pull] site %s crashed", s.get("id"))
+            results.append({"ok": False, "site_id": s["id"], "error": str(e)})
+
+    return jsonify({
+        "ok": True,
+        "sites_processed": len(sites),
+        "total_strings_recorded": total_strings,
+        "total_underperforming": total_underperforming,
+        "results": results[:20],   # truncate pre response size
+    })
+
+
+# ============================================================================
+# F3: ENVIRONMENT MONITOR (devTypeId=10 EMI)
+# Pyranometer, ambient/module temp, wind, rainfall - každú hodinu
+# ============================================================================
+
+@app.route("/webhook/huawei-pull-environment", methods=["POST", "GET"])
+def webhook_huawei_pull_environment():
+    """Pull EMI (Environment Monitor) data z Huawei NBI - pyranometer, temps, wind."""
+    if not _hs_auth_ok(request):
+        return jsonify({"error": "unauthorized"}), 401
+    if _hs is None:
+        return jsonify({"ok": False, "error": "huawei_spot module not available"}), 500
+
+    token = _hs.huawei_login()
+    if not token:
+        return jsonify({"ok": False, "error": "huawei login failed"}), 503
+
+    base = _hs._huawei_session.get("base") or _hs.HUAWEI_BASE
+    headers = {"XSRF-TOKEN": token, "Content-Type": "application/json"}
+
+    sb = _sb()
+    sites = sb.table("inverter_sites").select(
+        "id, site_name, vendor_station_id"
+    ).eq("vendor", "huawei").eq("monitoring_enabled", True).execute().data or []
+
+    now = datetime.now(timezone.utc)
+    today = now.date()
+    total_readings = 0
+    sites_with_emi = 0
+    results = []
+
+    for s in sites:
+        try:
+            r = requests.post(
+                f"{base}/getDevList",
+                headers=headers,
+                json={"stationCodes": s.get("vendor_station_id") or ""},
+                timeout=30,
+            )
+            if r.status_code != 200:
+                continue
+            devices = (r.json() or {}).get("data") or []
+            # EMI = devTypeId=10
+            emi_devices = [d for d in devices if d.get("devTypeId") == 10]
+            if not emi_devices:
+                continue
+            sites_with_emi += 1
+
+            dev_ids = [str(d.get("id")) for d in emi_devices if d.get("id")]
+            r2 = requests.post(
+                f"{base}/getDevRealKpi",
+                headers=headers,
+                json={"devIds": ",".join(dev_ids), "devTypeId": 10},
+                timeout=30,
+            )
+            if r2.status_code != 200:
+                continue
+            rows = (r2.json() or {}).get("data") or []
+
+            site_readings = []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                dev_id = str(row.get("devId") or row.get("id") or "")
+                kpi = row.get("dataItemMap") or {}
+                if not isinstance(kpi, dict):
+                    continue
+
+                # EMI fields (Huawei NBI keys)
+                irradiance = kpi.get("radiant_total_dose") or kpi.get("radiant_dose") or kpi.get("global_radiation") or kpi.get("radiation_intensity")
+                ambient = kpi.get("temperature") or kpi.get("ambient_temperature")
+                module = kpi.get("pv_temperature") or kpi.get("panel_temperature")
+                wind = kpi.get("wind_speed")
+                wind_dir = kpi.get("wind_direction")
+                humidity = kpi.get("humidity")
+                rainfall = kpi.get("rainfall")
+
+                def _to_num(x):
+                    if x is None:
+                        return None
+                    try:
+                        return float(x)
+                    except (TypeError, ValueError):
+                        return None
+
+                reading = {
+                    "site_id": s["id"],
+                    "vendor_device_id": dev_id,
+                    "irradiance_wm2": _to_num(irradiance),
+                    "ambient_temp_c": _to_num(ambient),
+                    "module_temp_c": _to_num(module),
+                    "wind_speed_ms": _to_num(wind),
+                    "wind_direction_deg": _to_num(wind_dir),
+                    "humidity_pct": _to_num(humidity),
+                    "rainfall_mm": _to_num(rainfall),
+                    "measured_at": now.isoformat(),
+                }
+                # Skip ak všetky polia None
+                if all(v is None for k, v in reading.items() if k not in ("site_id","vendor_device_id","measured_at")):
+                    continue
+                site_readings.append(reading)
+
+            if site_readings:
+                try:
+                    sb.table("environment_readings").upsert(site_readings, on_conflict="vendor_device_id,measured_at").execute()
+                    total_readings += len(site_readings)
+                except Exception as e:
+                    log.warning("[env-pull] insert fail: %s", e)
+
+                # Update site flag
+                try:
+                    sb.table("inverter_sites").update({
+                        "has_environment_monitor": True,
+                        "environment_last_sync_at": now.isoformat(),
+                    }).eq("id", s["id"]).execute()
+                except Exception:
+                    pass
+
+                # Update daily aggregate
+                try:
+                    # Načítaj všetky dnešné readings pre site, spočítaj agregát
+                    daily = sb.table("environment_readings").select("*").eq("site_id", s["id"]).gte("measured_at", f"{today}T00:00:00Z").execute().data or []
+                    if daily:
+                        ir_values = [d.get("irradiance_wm2") for d in daily if d.get("irradiance_wm2") is not None]
+                        amb_values = [d.get("ambient_temp_c") for d in daily if d.get("ambient_temp_c") is not None]
+                        mod_values = [d.get("module_temp_c") for d in daily if d.get("module_temp_c") is not None]
+                        wind_values = [d.get("wind_speed_ms") for d in daily if d.get("wind_speed_ms") is not None]
+                        rain_values = [d.get("rainfall_mm") for d in daily if d.get("rainfall_mm") is not None]
+                        # Trapezoidal integration pre kWh/m² (cca - závisí od sample rate)
+                        peak_irr = max(ir_values) if ir_values else None
+                        # Naive: priemer × hodiny / 1000
+                        if ir_values:
+                            hours_in_day = (now.hour + now.minute / 60.0) or 1
+                            avg_irr = sum(ir_values) / len(ir_values)
+                            total_kwh_m2 = (avg_irr / 1000.0) * hours_in_day
+                        else:
+                            total_kwh_m2 = None
+
+                        sb.table("environment_daily").upsert({
+                            "site_id": s["id"],
+                            "date": str(today),
+                            "total_irradiance_kwh_m2": total_kwh_m2,
+                            "peak_irradiance_wm2": peak_irr,
+                            "avg_ambient_temp_c": sum(amb_values)/len(amb_values) if amb_values else None,
+                            "max_ambient_temp_c": max(amb_values) if amb_values else None,
+                            "avg_module_temp_c": sum(mod_values)/len(mod_values) if mod_values else None,
+                            "max_module_temp_c": max(mod_values) if mod_values else None,
+                            "avg_wind_speed_ms": sum(wind_values)/len(wind_values) if wind_values else None,
+                            "total_rainfall_mm": sum(rain_values) if rain_values else None,
+                            "samples_count": len(daily),
+                        }, on_conflict="site_id,date").execute()
+                except Exception as e:
+                    log.warning("[env-pull] daily agg fail: %s", e)
+
+            results.append({"ok": True, "site_id": s["id"], "site_name": s.get("site_name"), "readings": len(site_readings)})
+        except Exception as e:
+            log.exception("[env-pull] site %s crashed", s.get("id"))
+            results.append({"ok": False, "site_id": s["id"], "error": str(e)})
+
+    return jsonify({
+        "ok": True,
+        "sites_processed": len(sites),
+        "sites_with_emi": sites_with_emi,
+        "total_readings": total_readings,
+        "results": results[:20],
+    })
+
+
+# ============================================================================
+# F4: INVERTER STATE ENUM (Huawei NBI Table 5-1)
+# ============================================================================
+
+INVERTER_STATE_MAP = {
+    0: ("Standby: initializing", "standby"),
+    1: ("Standby: insulation resistance detecting", "standby"),
+    2: ("Standby: irradiation detecting", "standby"),
+    3: ("Standby: grid detecting", "standby"),
+    7: ("Standby: initialization after storage", "standby"),
+    256: ("Start", "ok"),
+    512: ("Grid-connected", "ok"),
+    513: ("Grid-connected: power limited", "grid_limit"),
+    514: ("Grid-connected: self-derating", "derating"),
+    768: ("Shutdown: on fault", "fault"),
+    769: ("Shutdown: on command", "shutdown"),
+    770: ("Shutdown: OVGR", "shutdown"),
+    771: ("Shutdown: communication interrupted", "comm_loss"),
+    772: ("Shutdown: power limited", "grid_limit"),
+    773: ("Shutdown: manual startup required", "fault"),
+    774: ("Shutdown: DC switch disconnected", "shutdown"),
+    1025: ("Grid scheduling: cosψ-P curve", "grid_limit"),
+    1026: ("Grid scheduling: Q-U curve", "grid_limit"),
+    1280: ("Ready for terminal test", "standby"),
+    1281: ("Terminal testing...", "standby"),
+    1536: ("Inspection in progress", "standby"),
+    1792: ("AFCI self-check", "standby"),
+    2048: ("I-V curve scanning", "standby"),
+    2304: ("DC input detection", "standby"),
+    40960: ("Standby: no irradiation", "standby"),
+    45056: ("Communication interrupted (SmartLogger)", "comm_loss"),
+    49152: ("Loading... (SmartLogger)", "standby"),
+}
+
+def map_inverter_state(code):
+    """Map Huawei inverter_state code to (label, category)."""
+    if code is None:
+        return (None, None)
+    try:
+        c = int(code)
+    except (TypeError, ValueError):
+        return (str(code), "unknown")
+    label, cat = INVERTER_STATE_MAP.get(c, (f"Unknown state {c}", "unknown"))
+    return (label, cat)
+
+
+def compute_phase_imbalance(va, vb, vc):
+    """Compute % phase voltage imbalance per NEMA MG-1.
+    Vrátí 0 ak všetky fázy = nominal, > 2% = problem.
+    """
+    try:
+        voltages = [float(v) for v in [va, vb, vc] if v is not None]
+        if len(voltages) < 2:
+            return None
+        avg = sum(voltages) / len(voltages)
+        if avg < 1:
+            return None
+        max_dev = max(abs(v - avg) for v in voltages)
+        return round((max_dev / avg) * 100, 2)
+    except (TypeError, ValueError):
+        return None
+
+
+# ============================================================================
+# F5+F6: GRID QUALITY (phase imbalance) + GRID METER (import/export)
+# /webhook/huawei-pull-grid-meter — hodinový cron
+# ============================================================================
+
+@app.route("/webhook/huawei-pull-grid-meter", methods=["POST", "GET"])
+def webhook_huawei_pull_grid_meter():
+    """Pull grid meter (devTypeId=17/47) cumulative import/export pre billing kontrolu."""
+    if not _hs_auth_ok(request):
+        return jsonify({"error": "unauthorized"}), 401
+    if _hs is None:
+        return jsonify({"ok": False, "error": "huawei_spot module not available"}), 500
+
+    token = _hs.huawei_login()
+    if not token:
+        return jsonify({"ok": False, "error": "huawei login failed"}), 503
+
+    base = _hs._huawei_session.get("base") or _hs.HUAWEI_BASE
+    headers = {"XSRF-TOKEN": token, "Content-Type": "application/json"}
+
+    sb = _sb()
+    sites = sb.table("inverter_sites").select(
+        "id, site_name, vendor_station_id"
+    ).eq("vendor", "huawei").eq("monitoring_enabled", True).execute().data or []
+
+    now = datetime.now(timezone.utc)
+    today = now.date()
+    total_readings = 0
+    results = []
+
+    for s in sites:
+        try:
+            r = requests.post(
+                f"{base}/getDevList",
+                headers=headers,
+                json={"stationCodes": s.get("vendor_station_id") or ""},
+                timeout=30,
+            )
+            if r.status_code != 200:
+                continue
+            devices = (r.json() or {}).get("data") or []
+            # Grid meters: devTypeId 17 (grid meter) + 47 (power sensor)
+            meters = [d for d in devices if d.get("devTypeId") in (17, 47)]
+            if not meters:
+                continue
+
+            for dev_type in {m.get("devTypeId") for m in meters}:
+                type_meters = [m for m in meters if m.get("devTypeId") == dev_type]
+                dev_ids = [str(m.get("id")) for m in type_meters if m.get("id")]
+                if not dev_ids:
+                    continue
+                r2 = requests.post(
+                    f"{base}/getDevRealKpi",
+                    headers=headers,
+                    json={"devIds": ",".join(dev_ids), "devTypeId": dev_type},
+                    timeout=30,
+                )
+                if r2.status_code != 200:
+                    continue
+                rows = (r2.json() or {}).get("data") or []
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    dev_id = str(row.get("devId") or row.get("id") or "")
+                    kpi = row.get("dataItemMap") or {}
+                    if not isinstance(kpi, dict):
+                        continue
+
+                    def _num(x):
+                        try:
+                            return float(x) if x is not None else None
+                        except (TypeError, ValueError):
+                            return None
+
+                    # Grid meter fields per NBI doc
+                    import_total = _num(kpi.get("active_cap") or kpi.get("positive_active_power") or kpi.get("forward_active_cap"))
+                    export_total = _num(kpi.get("reverse_active_cap") or kpi.get("reverse_active_power"))
+                    active_power = _num(kpi.get("active_power"))
+
+                    try:
+                        sb.table("grid_meter_readings").upsert({
+                            "site_id": s["id"],
+                            "vendor_device_id": dev_id,
+                            "date": str(today),
+                            "import_kwh_total": import_total,
+                            "export_kwh_total": export_total,
+                            "active_power_kw": active_power,
+                            "measured_at": now.isoformat(),
+                        }, on_conflict="vendor_device_id,date").execute()
+                        total_readings += 1
+                    except Exception as e:
+                        log.warning("[grid-meter] upsert fail: %s", e)
+
+            results.append({"ok": True, "site_id": s["id"], "meters": len(meters)})
+        except Exception as e:
+            log.exception("[grid-meter] site %s crashed", s.get("id"))
+            results.append({"ok": False, "site_id": s["id"], "error": str(e)})
+
+    return jsonify({
+        "ok": True,
+        "sites_processed": len(sites),
+        "total_readings": total_readings,
+        "results": results[:20],
+    })
+
+
+@app.route("/webhook/huawei-pull-detailed-inverters", methods=["POST", "GET"])
+def webhook_huawei_pull_detailed_inverters():
+    """Pull detailed inverter telemetria - state, phase imbalance, power factor, frequency, temperature.
+    Hodinový cron - extra fields nad rámec basic active_power."""
+    if not _hs_auth_ok(request):
+        return jsonify({"error": "unauthorized"}), 401
+    if _hs is None:
+        return jsonify({"ok": False, "error": "huawei_spot module not available"}), 500
+
+    token = _hs.huawei_login()
+    if not token:
+        return jsonify({"ok": False, "error": "huawei login failed"}), 503
+
+    base = _hs._huawei_session.get("base") or _hs.HUAWEI_BASE
+    headers = {"XSRF-TOKEN": token, "Content-Type": "application/json"}
+
+    sb = _sb()
+    sites = sb.table("inverter_sites").select(
+        "id, site_name, vendor_station_id"
+    ).eq("vendor", "huawei").eq("monitoring_enabled", True).execute().data or []
+
+    now = datetime.now(timezone.utc)
+    measurements_inserted = 0
+
+    for s in sites:
+        try:
+            r = requests.post(
+                f"{base}/getDevList",
+                headers=headers,
+                json={"stationCodes": s.get("vendor_station_id") or ""},
+                timeout=30,
+            )
+            if r.status_code != 200:
+                continue
+            devices = (r.json() or {}).get("data") or []
+            inverters = [d for d in devices if d.get("devTypeId") in (1, 38)]
+            if not inverters:
+                continue
+
+            for dev_type in {d.get("devTypeId") for d in inverters}:
+                type_devs = [d for d in inverters if d.get("devTypeId") == dev_type]
+                dev_ids = [str(d.get("id")) for d in type_devs if d.get("id")]
+                if not dev_ids:
+                    continue
+                r2 = requests.post(
+                    f"{base}/getDevRealKpi",
+                    headers=headers,
+                    json={"devIds": ",".join(dev_ids), "devTypeId": dev_type},
+                    timeout=30,
+                )
+                if r2.status_code != 200:
+                    continue
+                rows = (r2.json() or {}).get("data") or []
+
+                # Aggregate to site-level: sum power, avg PF, avg freq, max temp, state of "primary" inverter
+                site_active_power = 0.0
+                site_reactive = 0.0
+                pf_values = []
+                freq_values = []
+                temp_values = []
+                state_codes = []
+                phase_voltages = {"a": [], "b": [], "c": []}
+                phase_currents = {"a": [], "b": [], "c": []}
+                mppt_powers = []
+
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    kpi = row.get("dataItemMap") or {}
+                    if not isinstance(kpi, dict):
+                        continue
+
+                    def _num(x):
+                        try:
+                            return float(x) if x is not None else None
+                        except (TypeError, ValueError):
+                            return None
+
+                    ap = _num(kpi.get("active_power"))
+                    if ap is not None:
+                        site_active_power += ap
+                    rp = _num(kpi.get("reactive_power"))
+                    if rp is not None:
+                        site_reactive += rp
+                    pf = _num(kpi.get("power_factor"))
+                    if pf is not None:
+                        pf_values.append(pf)
+                    fq = _num(kpi.get("elec_freq"))
+                    if fq is not None:
+                        freq_values.append(fq)
+                    tmp = _num(kpi.get("temperature"))
+                    if tmp is not None:
+                        temp_values.append(tmp)
+                    st = kpi.get("inverter_state")
+                    if st is not None:
+                        try:
+                            state_codes.append(int(st))
+                        except (TypeError, ValueError):
+                            pass
+                    for ph in ("a", "b", "c"):
+                        u = _num(kpi.get(f"{ph}_u"))
+                        i = _num(kpi.get(f"{ph}_i"))
+                        if u is not None:
+                            phase_voltages[ph].append(u)
+                        if i is not None:
+                            phase_currents[ph].append(i)
+                    mppt = _num(kpi.get("mppt_power") or kpi.get("mppt_total_cap"))
+                    if mppt is not None:
+                        mppt_powers.append(mppt)
+
+                # Primary state = najhorší stav (fault > shutdown > comm_loss > standby > grid_limit > ok)
+                primary_state = None
+                primary_label = None
+                primary_cat = None
+                if state_codes:
+                    priority = {"fault": 0, "shutdown": 1, "comm_loss": 2, "derating": 3, "grid_limit": 4, "standby": 5, "ok": 6, "unknown": 7}
+                    best = None
+                    for c in state_codes:
+                        label, cat = map_inverter_state(c)
+                        pr = priority.get(cat, 99)
+                        if best is None or pr < best[0]:
+                            best = (pr, c, label, cat)
+                    if best:
+                        primary_state, primary_label, primary_cat = best[1], best[2], best[3]
+
+                avg_va = sum(phase_voltages["a"]) / len(phase_voltages["a"]) if phase_voltages["a"] else None
+                avg_vb = sum(phase_voltages["b"]) / len(phase_voltages["b"]) if phase_voltages["b"] else None
+                avg_vc = sum(phase_voltages["c"]) / len(phase_voltages["c"]) if phase_voltages["c"] else None
+                imbalance = compute_phase_imbalance(avg_va, avg_vb, avg_vc)
+
+                row_data = {
+                    "site_id": s["id"],
+                    "measured_at": now.isoformat(),
+                    "active_power_kw": site_active_power,
+                    "reactive_power_kvar": site_reactive,
+                    "inverter_state_code": primary_state,
+                    "inverter_state_label": primary_label,
+                    "inverter_state_category": primary_cat,
+                    "power_factor": sum(pf_values) / len(pf_values) if pf_values else None,
+                    "grid_frequency_hz": sum(freq_values) / len(freq_values) if freq_values else None,
+                    "inverter_internal_temp_c": max(temp_values) if temp_values else None,  # max = najhorší case
+                    "phase_a_voltage_v": avg_va,
+                    "phase_b_voltage_v": avg_vb,
+                    "phase_c_voltage_v": avg_vc,
+                    "phase_a_current_a": sum(phase_currents["a"]) / len(phase_currents["a"]) if phase_currents["a"] else None,
+                    "phase_b_current_a": sum(phase_currents["b"]) / len(phase_currents["b"]) if phase_currents["b"] else None,
+                    "phase_c_current_a": sum(phase_currents["c"]) / len(phase_currents["c"]) if phase_currents["c"] else None,
+                    "phase_imbalance_pct": imbalance,
+                    "mppt_total_power_kw": sum(mppt_powers) if mppt_powers else None,
+                }
+                try:
+                    sb.table("inverter_measurements").insert(row_data).execute()
+                    measurements_inserted += 1
+                except Exception as e:
+                    log.warning("[detailed-inv] insert fail: %s", e)
+        except Exception as e:
+            log.exception("[detailed-inv] site %s crashed", s.get("id"))
+
+    return jsonify({
+        "ok": True,
+        "sites_processed": len(sites),
+        "measurements_inserted": measurements_inserted,
+    })
