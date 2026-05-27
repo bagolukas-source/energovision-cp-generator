@@ -10959,3 +10959,202 @@ def webhook_huawei_pull_detailed_inverters():
         "sites_processed": len(sites),
         "measurements_inserted": measurements_inserted,
     })
+
+
+# ============================================================================
+# F7: HISTORICAL DEVICE DATA (5.1.4.5/6/7)
+# /webhook/huawei-pull-device-history — denný cron 23:30 UTC (po skončení dňa)
+# ============================================================================
+
+@app.route("/webhook/huawei-pull-device-history-daily", methods=["POST", "GET"])
+def webhook_huawei_pull_device_history_daily():
+    """Pull per-device daily data z Huawei NBI (getDevKpiDay).
+    Spúšťa sa denne 23:30 UTC pre celý fleet, ukladá do device_history_daily.
+    """
+    if not _hs_auth_ok(request):
+        return jsonify({"error": "unauthorized"}), 401
+    if _hs is None:
+        return jsonify({"ok": False, "error": "huawei_spot module not available"}), 500
+
+    token = _hs.huawei_login()
+    if not token:
+        return jsonify({"ok": False, "error": "huawei login failed"}), 503
+
+    base = _hs._huawei_session.get("base") or _hs.HUAWEI_BASE
+    headers = {"XSRF-TOKEN": token, "Content-Type": "application/json"}
+
+    sb = _sb()
+    sites = sb.table("inverter_sites").select(
+        "id, vendor_station_id"
+    ).eq("vendor", "huawei").eq("monitoring_enabled", True).execute().data or []
+
+    # Voliteľne back-fill cez body.collect_time, inak dnešok
+    body = request.get_json(silent=True) or {}
+    collect_time_ms = body.get("collect_time_ms") or int(datetime.now(timezone.utc).timestamp() * 1000)
+
+    total_rows = 0
+    for s in sites:
+        try:
+            r = requests.post(
+                f"{base}/getDevList",
+                headers=headers,
+                json={"stationCodes": s.get("vendor_station_id") or ""},
+                timeout=30,
+            )
+            if r.status_code != 200:
+                continue
+            devices = (r.json() or {}).get("data") or []
+            inverters = [d for d in devices if d.get("devTypeId") in (1, 38)]
+            if not inverters:
+                continue
+
+            for dev_type in {d.get("devTypeId") for d in inverters}:
+                type_devs = [d for d in inverters if d.get("devTypeId") == dev_type]
+                dev_ids = [str(d.get("id")) for d in type_devs if d.get("id")]
+                if not dev_ids:
+                    continue
+                r2 = requests.post(
+                    f"{base}/getDevKpiDay",
+                    headers=headers,
+                    json={"devIds": ",".join(dev_ids), "devTypeId": dev_type, "collectTime": collect_time_ms},
+                    timeout=60,
+                )
+                if r2.status_code != 200:
+                    continue
+                rows = (r2.json() or {}).get("data") or []
+
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    dev_id = str(row.get("devId") or row.get("id") or "")
+                    kpi = row.get("dataItemMap") or {}
+                    if not isinstance(kpi, dict):
+                        continue
+
+                    # Huawei vracia 96 quarter-hour vzoriek + agregát
+                    # Sumarizujeme product_power, operation_time, alarm_count
+                    def _num(x):
+                        try:
+                            return float(x) if x is not None else None
+                        except (TypeError, ValueError):
+                            return None
+
+                    product = _num(kpi.get("product_power"))
+                    pr = _num(kpi.get("perpower_ratio"))
+                    op_time = _num(kpi.get("inverter_state_time") or kpi.get("operation_time"))
+
+                    try:
+                        sb.table("device_history_daily").upsert({
+                            "site_id": s["id"],
+                            "vendor_device_id": dev_id,
+                            "device_type_id": dev_type,
+                            "date": datetime.fromtimestamp(collect_time_ms / 1000, tz=timezone.utc).date().isoformat(),
+                            "product_power_kwh": product,
+                            "perpower_ratio": pr,
+                            "operation_time_minutes": int(op_time) if op_time else None,
+                            "raw_json": kpi,
+                        }, on_conflict="vendor_device_id,date").execute()
+                        total_rows += 1
+                    except Exception as e:
+                        log.warning("[device-hist-daily] upsert fail: %s", e)
+        except Exception as e:
+            log.exception("[device-hist-daily] site %s crashed", s.get("id"))
+
+    return jsonify({"ok": True, "sites_processed": len(sites), "rows_upserted": total_rows, "collect_time_ms": collect_time_ms})
+
+
+@app.route("/webhook/huawei-pull-device-history-monthly", methods=["POST", "GET"])
+def webhook_huawei_pull_device_history_monthly():
+    """Pull per-device monthly data z Huawei NBI (getDevKpiMonth).
+    Spúšťa sa 1. v mesiaci, archivuje predošlý mesiac.
+    """
+    if not _hs_auth_ok(request):
+        return jsonify({"error": "unauthorized"}), 401
+    if _hs is None:
+        return jsonify({"ok": False, "error": "huawei_spot module not available"}), 500
+
+    token = _hs.huawei_login()
+    if not token:
+        return jsonify({"ok": False, "error": "huawei login failed"}), 503
+
+    base = _hs._huawei_session.get("base") or _hs.HUAWEI_BASE
+    headers = {"XSRF-TOKEN": token, "Content-Type": "application/json"}
+
+    body = request.get_json(silent=True) or {}
+    # Predošlý mesiac (1. dňa nasledujúceho mesiaca pre kompletné dáta)
+    today = datetime.now(timezone.utc)
+    if body.get("year") and body.get("month"):
+        year = int(body["year"])
+        month = int(body["month"])
+    else:
+        if today.month == 1:
+            year, month = today.year - 1, 12
+        else:
+            year, month = today.year, today.month - 1
+    collect_time_ms = int(datetime(year, month, 1, 12, 0, 0, tzinfo=timezone.utc).timestamp() * 1000)
+
+    sb = _sb()
+    sites = sb.table("inverter_sites").select(
+        "id, vendor_station_id"
+    ).eq("vendor", "huawei").eq("monitoring_enabled", True).execute().data or []
+
+    total_rows = 0
+    for s in sites:
+        try:
+            r = requests.post(
+                f"{base}/getDevList",
+                headers=headers,
+                json={"stationCodes": s.get("vendor_station_id") or ""},
+                timeout=30,
+            )
+            if r.status_code != 200:
+                continue
+            devices = (r.json() or {}).get("data") or []
+            inverters = [d for d in devices if d.get("devTypeId") in (1, 38)]
+            if not inverters:
+                continue
+
+            for dev_type in {d.get("devTypeId") for d in inverters}:
+                type_devs = [d for d in inverters if d.get("devTypeId") == dev_type]
+                dev_ids = [str(d.get("id")) for d in type_devs if d.get("id")]
+                if not dev_ids:
+                    continue
+                r2 = requests.post(
+                    f"{base}/getDevKpiMonth",
+                    headers=headers,
+                    json={"devIds": ",".join(dev_ids), "devTypeId": dev_type, "collectTime": collect_time_ms},
+                    timeout=60,
+                )
+                if r2.status_code != 200:
+                    continue
+                rows = (r2.json() or {}).get("data") or []
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    dev_id = str(row.get("devId") or row.get("id") or "")
+                    kpi = row.get("dataItemMap") or {}
+                    if not isinstance(kpi, dict):
+                        continue
+                    def _num(x):
+                        try:
+                            return float(x) if x is not None else None
+                        except (TypeError, ValueError):
+                            return None
+                    try:
+                        sb.table("device_history_monthly").upsert({
+                            "site_id": s["id"],
+                            "vendor_device_id": dev_id,
+                            "device_type_id": dev_type,
+                            "year": year,
+                            "month": month,
+                            "product_power_kwh": _num(kpi.get("product_power")),
+                            "perpower_ratio": _num(kpi.get("perpower_ratio")),
+                            "raw_json": kpi,
+                        }, on_conflict="vendor_device_id,year,month").execute()
+                        total_rows += 1
+                    except Exception as e:
+                        log.warning("[device-hist-monthly] upsert fail: %s", e)
+        except Exception as e:
+            log.exception("[device-hist-monthly] site crashed: %s", e)
+
+    return jsonify({"ok": True, "year": year, "month": month, "sites": len(sites), "rows_upserted": total_rows})
