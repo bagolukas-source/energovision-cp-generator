@@ -26,6 +26,10 @@ SLACK_WEBHOOK_OPS = os.environ.get("SLACK_WEBHOOK_OPS", "")
 
 _huawei_session: Dict[str, Any] = {"token": None, "expires_at": 0}
 
+# Per-endpoint rate limit tracking (NBI doc: Plant List = 5 calls/10min per account)
+# Cache výsledok na 5 min aby sa nevolal každý klik
+_stations_cache: Dict[str, Any] = {"data": None, "cached_at": 0, "next_allowed_at": 0, "backoff_until": 0}
+
 
 def _sb_headers() -> Dict[str, str]:
     return {
@@ -664,13 +668,45 @@ def manual_force_state(site_id: str, target_state: str, issued_by: str = "manual
 
 
 # ---------------- Sync stations from Huawei ----------------
-def huawei_get_station_list(debug: bool = False):
+def huawei_get_station_list(debug: bool = False, force_refresh: bool = False):
     """
     Fetch ALL stations from Huawei NBI Plant List API (/thirdData/stations).
+    Uses per-endpoint cache (5 min TTL) + backoff guard (10 min after failCode 407).
 
     Vracia: list[dict] alebo (list[dict], debug_dict) ak debug=True.
     """
-    debug_info = {"login": None, "page_responses": []}
+    global _stations_cache
+    now = time.time()
+    debug_info = {"login": None, "page_responses": [], "cache_hit": False, "backoff_active": False}
+
+    # 1) Cache check (5 min TTL)
+    CACHE_TTL = 5 * 60
+    if not force_refresh and _stations_cache.get("data") and (now - _stations_cache.get("cached_at", 0) < CACHE_TTL):
+        debug_info["cache_hit"] = True
+        debug_info["cache_age_sec"] = int(now - _stations_cache["cached_at"])
+        cached = _stations_cache["data"]
+        return (cached, debug_info) if debug else cached
+
+    # 2) Backoff check (10 min po failCode 407)
+    if now < _stations_cache.get("backoff_until", 0):
+        backoff_remaining = int(_stations_cache["backoff_until"] - now)
+        debug_info["backoff_active"] = True
+        debug_info["backoff_remaining_sec"] = backoff_remaining
+        debug_info["error"] = f"Plant List API backoff aktivny - cakaj {backoff_remaining // 60} min {backoff_remaining % 60}s"
+        log.warning("[huawei_get_station_list] backoff active, %ss remaining", backoff_remaining)
+        # Vrat cache ak je nejaky, inak prazdny
+        cached = _stations_cache.get("data") or []
+        return (cached, debug_info) if debug else cached
+
+    # 3) Min interval medzi callmi (120s aby sme nedosiahli 5/10min)
+    MIN_INTERVAL = 120
+    if now < _stations_cache.get("next_allowed_at", 0):
+        wait = int(_stations_cache["next_allowed_at"] - now)
+        debug_info["error"] = f"Plant List API min interval - cakaj este {wait}s"
+        log.info("[huawei_get_station_list] rate limit guard: wait %ss", wait)
+        cached = _stations_cache.get("data") or []
+        return (cached, debug_info) if debug else cached
+
     token = huawei_login()
     if not token:
         debug_info["login"] = "failed (None token)"
@@ -733,6 +769,18 @@ def huawei_get_station_list(debug: bool = False):
             break
 
     debug_info["total_stations"] = len(all_stations)
+
+    # Check ci posledna page mala failCode 407 → spusti 10 min backoff
+    last_resp = debug_info["page_responses"][-1] if debug_info["page_responses"] else {}
+    if last_resp.get("fail_code") == 407:
+        _stations_cache["backoff_until"] = time.time() + 10 * 60
+        log.warning("[huawei_get_station_list] failCode 407 detected → backoff 10 min")
+    else:
+        # Uloz do cache + nastav min interval
+        _stations_cache["data"] = all_stations
+        _stations_cache["cached_at"] = time.time()
+        _stations_cache["next_allowed_at"] = time.time() + 120  # min 2 min medzi callmi
+
     return (all_stations, debug_info) if debug else all_stations
 
 
