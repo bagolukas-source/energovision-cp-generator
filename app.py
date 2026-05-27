@@ -9144,3 +9144,280 @@ def webhook_sla_breach_cron():
                     _notify_ticket_dispatch(c["id"], channels=rule["notification_channels"])
 
     return jsonify({"ok": True, "breached": len(breached), "rules_checked": len(rules)})
+
+# ============================================================================
+# SERVICE PROTOCOL PDF — generuje PDF protokol pre resolved ticket + email klientovi
+# /webhook/generate-service-protocol — manuálny trigger po resolve
+# ============================================================================
+
+_PROTOCOL_HTML = """
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+<meta charset="utf-8">
+<title>Servisný protokol — {ticket_number}</title>
+<style>
+  @page {{ size: A4; margin: 16mm 14mm; }}
+  body {{ font-family: 'Helvetica Neue', Arial, sans-serif; color: #0F172A; margin: 0; font-size: 11px; }}
+  .header {{ display: flex; justify-content: space-between; align-items: flex-end; padding-bottom: 12px; border-bottom: 3px solid #16A34A; }}
+  .brand {{ font-size: 24px; font-weight: 800; color: #16A34A; }}
+  .meta {{ text-align: right; font-size: 10px; color: #64748B; }}
+  h1 {{ font-size: 18px; margin: 18px 0 6px; }}
+  h2 {{ font-size: 13px; margin: 18px 0 6px; padding-bottom: 3px; border-bottom: 1px solid #E2E8F0; }}
+  .badge {{ display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600; }}
+  .b-critical {{ background: #FEE2E2; color: #B91C1C; }}
+  .b-warning {{ background: #FEF3C7; color: #92400E; }}
+  .b-info {{ background: #DBEAFE; color: #1E40AF; }}
+  table {{ width: 100%; border-collapse: collapse; font-size: 10px; margin: 6px 0; }}
+  th, td {{ padding: 5px 7px; text-align: left; border-bottom: 1px solid #E2E8F0; vertical-align: top; }}
+  th {{ background: #F8FAFC; font-weight: 700; color: #475569; font-size: 9px; text-transform: uppercase; }}
+  .kpi {{ display: inline-block; background: #F0FDF4; border: 1px solid #BBF7D0; border-radius: 6px; padding: 8px 10px; margin-right: 6px; }}
+  .kpi .lbl {{ font-size: 9px; color: #15803D; text-transform: uppercase; }}
+  .kpi .val {{ font-size: 14px; font-weight: 700; color: #14532D; }}
+  .checklist-item {{ padding: 3px 0; }}
+  .check-yes {{ color: #16A34A; }}
+  .check-no {{ color: #DC2626; }}
+  .signatures {{ display: flex; gap: 20px; margin-top: 24px; }}
+  .sig-box {{ flex: 1; border-top: 2px solid #0F172A; padding-top: 6px; min-height: 60px; }}
+  .sig-img {{ max-height: 60px; max-width: 100%; display: block; margin-bottom: 4px; }}
+  .photos {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 8px 0; }}
+  .photo {{ border: 1px solid #E2E8F0; border-radius: 4px; padding: 4px; text-align: center; }}
+  .photo img {{ max-width: 100%; max-height: 100px; }}
+  .footer {{ position: fixed; bottom: 6mm; left: 14mm; right: 14mm; font-size: 8px; color: #94A3B8; text-align: center; border-top: 1px solid #E2E8F0; padding-top: 4px; }}
+</style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <div class="brand">ENERGOVISION EMS</div>
+      <div style="font-size: 10px; color: #64748B;">Servisný protokol</div>
+    </div>
+    <div class="meta">
+      <div><b>{ticket_number}</b></div>
+      <div>Vytvorený: {created_date}</div>
+      <div>Vyriešený: {resolved_date}</div>
+    </div>
+  </div>
+
+  <h1>{title}</h1>
+  <div style="margin-bottom: 8px;">
+    <span class="badge b-{severity_class}">{severity_label}</span>
+    {site_info}
+  </div>
+
+  <h2>Klient</h2>
+  <table>
+    <tr><th style="width: 30%;">Meno / Firma</th><td>{customer_name}</td></tr>
+    <tr><th>Stanica</th><td>{site_name}{dc_info}</td></tr>
+    <tr><th>Adresa</th><td>{address}</td></tr>
+    <tr><th>Kontakt</th><td>{contact}</td></tr>
+  </table>
+
+  <h2>Sumár zásahu</h2>
+  <div>
+    <span class="kpi"><span class="lbl">Hodín</span><br><span class="val">{hours_worked}</span></span>
+    <span class="kpi"><span class="lbl">km</span><br><span class="val">{km_driven}</span></span>
+    <span class="kpi"><span class="lbl">Technik</span><br><span class="val" style="font-size:11px;">{technician_name}</span></span>
+    <span class="kpi"><span class="lbl">Dátum zásahu</span><br><span class="val" style="font-size:11px;">{resolved_date}</span></span>
+  </div>
+
+  <h2>Popis riešenia</h2>
+  <p style="background: #F8FAFC; padding: 10px; border-radius: 4px; border-left: 3px solid #16A34A;">{resolution}</p>
+
+  {root_cause_section}
+
+  <h2>Checklist</h2>
+  {checklist_section}
+
+  {photos_section}
+
+  <h2>Použitý materiál</h2>
+  {materials_section}
+
+  <div class="signatures">
+    <div class="sig-box">
+      <div style="font-size: 9px; color: #64748B; margin-bottom: 4px;">Technik</div>
+      {tech_signature}
+      <div style="font-size: 10px;">{technician_name}</div>
+    </div>
+    <div class="sig-box">
+      <div style="font-size: 9px; color: #64748B; margin-bottom: 4px;">Klient</div>
+      {customer_signature}
+      <div style="font-size: 10px;">{customer_name}</div>
+    </div>
+  </div>
+
+  <div class="footer">
+    Energovision, s.r.o. — IČO 53 036 280 — Lamačská cesta 1738/111, 841 03 Bratislava — +421 948 302 137 — dispecing@energovision.sk
+  </div>
+</body>
+</html>
+"""
+
+
+def _build_protocol_html(ticket_id: str) -> dict:
+    sb = _sb()
+    t = sb.table("service_tickets").select(
+        "*, customer:customers(first_name, last_name, company_name, email, phone1, street, city), "
+        "site:inverter_sites(site_name, dc_kwp, vendor), "
+        "assignee:users(full_name, email)"
+    ).eq("id", ticket_id).single().execute().data
+    if not t:
+        return {"ok": False, "error": "ticket_not_found"}
+
+    attachments = sb.table("ticket_attachments").select("*").eq("ticket_id", ticket_id).execute().data or []
+    photos = [a for a in attachments if a.get("category", "").startswith("photo_")]
+    tech_sig = next((a for a in attachments if a.get("category") == "signature" and a.get("metadata", {}).get("role") == "technician"), None)
+    cust_sig = next((a for a in attachments if a.get("category") == "signature" and a.get("metadata", {}).get("role") == "customer"), None)
+
+    cust = t.get("customer") or {}
+    customer_name = cust.get("company_name") or f"{cust.get('first_name','')} {cust.get('last_name','')}".strip() or "—"
+    site = t.get("site") or {}
+    assignee = t.get("assignee") or {}
+    severity = t.get("severity", "info") or "info"
+    severity_labels = {"critical": "🔴 Kritický", "catastrophic": "⚠ Catastrophic", "warning": "🟡 Warning", "info": "Info"}
+
+    # Checklist
+    checklist = t.get("checklist") or []
+    if checklist:
+        checklist_html = "<ul style='padding-left: 0; list-style: none;'>"
+        for it in checklist:
+            mark = "✓" if it.get("done") else "✗"
+            cls = "check-yes" if it.get("done") else "check-no"
+            checklist_html += f'<li class="checklist-item"><span class="{cls}">{mark}</span> {it.get("label","")}</li>'
+        checklist_html += "</ul>"
+    else:
+        checklist_html = "<p style='color: #94A3B8; font-style: italic;'>Žiadny checklist.</p>"
+
+    # Photos
+    if photos:
+        photos_html = '<h2>Fotodokumentácia</h2><div class="photos">'
+        cat_labels = {"photo_before": "Pred", "photo_during": "Počas", "photo_after": "Po", "photo_detail": "Detail", "photo_label": "Štítok"}
+        for p in photos[:9]:
+            label = cat_labels.get(p.get("category", ""), "Foto")
+            photos_html += f'<div class="photo"><img src="{p.get("file_url","")}" alt="{label}"/><div style="font-size: 8px; color: #64748B; margin-top: 3px;">{label}</div></div>'
+        photos_html += "</div>"
+    else:
+        photos_html = ""
+
+    # Materials
+    materials = t.get("materials_used") or []
+    if materials:
+        materials_html = '<table><thead><tr><th>Položka</th><th>Množstvo</th><th>Pozn.</th></tr></thead><tbody>'
+        for m in materials:
+            materials_html += f'<tr><td>{m.get("name","")}</td><td>{m.get("qty","")}</td><td>{m.get("note","")}</td></tr>'
+        materials_html += "</tbody></table>"
+    else:
+        materials_html = "<p style='color: #94A3B8; font-style: italic;'>Žiadny materiál neevidovaný.</p>"
+
+    # Signatures
+    tech_sig_html = f'<img src="{tech_sig["file_url"]}" class="sig-img" />' if tech_sig else '<div style="height: 50px;"></div>'
+    cust_sig_html = f'<img src="{cust_sig["file_url"]}" class="sig-img" />' if cust_sig else '<div style="height: 50px;"></div>'
+
+    # Root cause
+    root_cause_section = ""
+    if t.get("root_cause"):
+        root_cause_section = f'<h2>Koreňová príčina</h2><p>{t["root_cause"]}</p>'
+
+    address = ", ".join(filter(None, [cust.get("street"), cust.get("city")])) or "—"
+    contact = " · ".join(filter(None, [cust.get("phone1"), cust.get("email")])) or "—"
+    site_info = ""
+    if site.get("site_name"):
+        site_info = f' <span style="font-size: 10px; color: #64748B; margin-left: 8px;">📍 {site["site_name"]}</span>'
+    dc_info = f" • {site['dc_kwp']} kWp" if site.get("dc_kwp") else ""
+
+    html = _PROTOCOL_HTML.format(
+        ticket_number=t.get("ticket_number", "—"),
+        created_date=(t.get("created_at") or "")[:10],
+        resolved_date=(t.get("resolved_at") or datetime.now(timezone.utc).isoformat())[:10],
+        title=t.get("title", "—"),
+        severity_class={"critical": "critical", "catastrophic": "critical", "warning": "warning"}.get(severity, "info"),
+        severity_label=severity_labels.get(severity, severity),
+        site_info=site_info,
+        customer_name=customer_name,
+        site_name=site.get("site_name", "—"),
+        dc_info=dc_info,
+        address=address,
+        contact=contact,
+        hours_worked=t.get("hours_worked", "—"),
+        km_driven=t.get("km_driven", "—"),
+        technician_name=assignee.get("full_name", "—"),
+        resolution=t.get("resolution") or "—",
+        root_cause_section=root_cause_section,
+        checklist_section=checklist_html,
+        photos_section=photos_html,
+        materials_section=materials_html,
+        tech_signature=tech_sig_html,
+        customer_signature=cust_sig_html,
+    )
+    return {"ok": True, "html": html, "ticket": t, "customer_email": cust.get("email")}
+
+
+@app.route("/webhook/generate-service-protocol", methods=["POST"])
+def webhook_generate_service_protocol():
+    body = request.get_json(silent=True) or {}
+    ticket_id = body.get("ticket_id")
+    if not ticket_id:
+        return jsonify({"ok": False, "error": "ticket_id required"}), 400
+
+    data = _build_protocol_html(ticket_id)
+    if not data.get("ok"):
+        return jsonify(data), 400
+
+    # Render PDF
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch(args=["--no-sandbox"])
+            page = browser.new_page()
+            page.set_content(data["html"], wait_until="networkidle", timeout=20000)
+            pdf_bytes = page.pdf(format="A4", print_background=True, margin={"top": "0", "right": "0", "bottom": "0", "left": "0"})
+            browser.close()
+    except Exception as e:
+        log.exception("[service-protocol] PDF fail")
+        return jsonify({"ok": False, "error": f"pdf_render: {e}"}), 500
+
+    # Upload do Storage
+    sb = _sb()
+    t = data["ticket"]
+    path = f"{ticket_id}/protocol_{t.get('ticket_number','')}.pdf"
+    try:
+        sb.storage.from_("ticket-attachments").upload(path, pdf_bytes, {"content-type": "application/pdf", "upsert": "true"})
+    except Exception:
+        try:
+            sb.storage.create_bucket("ticket-attachments", options={"public": True})
+            sb.storage.from_("ticket-attachments").upload(path, pdf_bytes, {"content-type": "application/pdf"})
+        except Exception as ee:
+            log.exception("[service-protocol] storage: %s", ee)
+
+    pdf_url = f"{os.environ.get('SUPABASE_URL','').rstrip('/')}/storage/v1/object/public/ticket-attachments/{path}"
+
+    sb.table("service_tickets").update({"resolution_pdf_url": pdf_url}).eq("id", ticket_id).execute()
+    sb.table("ticket_attachments").insert({
+        "ticket_id": ticket_id,
+        "category": "pdf",
+        "file_name": f"protocol_{t.get('ticket_number')}.pdf",
+        "file_path": path,
+        "file_url": pdf_url,
+        "mime_type": "application/pdf",
+        "size_bytes": len(pdf_bytes),
+    }).execute()
+
+    # Email klientovi
+    recipient = data.get("customer_email")
+    if recipient:
+        try:
+            from email_m365 import send_email_m365
+            body_html = f"""
+            <p>Dobrý deň,</p>
+            <p>v prílohe / na linke nájdete <b>servisný protokol</b> k ticketu <b>{t.get('ticket_number')}</b> ({t.get('title')}).</p>
+            <p>Riešenie: {t.get('resolution', '')[:200]}</p>
+            <p><a href="{pdf_url}" style="background:#16A34A;color:white;padding:10px 16px;border-radius:6px;text-decoration:none;display:inline-block;">📄 Stiahnuť protokol</a></p>
+            <p>S pozdravom,<br>Energovision servis</p>
+            """
+            send_email_m365(to=recipient, subject=f"Servisný protokol {t.get('ticket_number')} — {t.get('title')}", html=body_html)
+            sb.table("service_tickets").update({"resolution_email_sent_at": datetime.now(timezone.utc).isoformat()}).eq("id", ticket_id).execute()
+        except Exception as e:
+            log.warning("[service-protocol] email fail: %s", e)
+
+    return jsonify({"ok": True, "ticket_id": ticket_id, "pdf_url": pdf_url, "emailed": bool(recipient)})
