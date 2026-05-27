@@ -8872,3 +8872,275 @@ def webhook_fve_monthly_report_cron():
 
     log.info("[fve-monthly-cron] generated %d reports for %d/%d", len(results), month, year)
     return jsonify({"ok": True, "year": year, "month": month, "count": len(results), "results": results})
+
+# ============================================================================
+# NOTIFICATIONS — Twilio SMS + Web Push + Email dispatch
+# /webhook/notify-ticket — vyšle notifikácie pre 1 ticket podľa severity + channels
+# /webhook/sla-breach-cron — Vercel cron 15-min: zistí SLA breaches + eskaluje
+# /webhook/ticket-created-cron — Vercel cron 1-min: vyšle notifikácie pre nové tikety
+# ============================================================================
+
+import json as _json
+import os as _os
+import requests as _req
+from datetime import timedelta as _td
+
+# Twilio
+TWILIO_SID = _os.environ.get('TWILIO_ACCOUNT_SID', '')
+TWILIO_TOKEN = _os.environ.get('TWILIO_AUTH_TOKEN', '')
+TWILIO_FROM = _os.environ.get('TWILIO_FROM_NUMBER', '')
+
+# VAPID for Web Push
+VAPID_PUBLIC = _os.environ.get('VAPID_PUBLIC_KEY', '')
+VAPID_PRIVATE = _os.environ.get('VAPID_PRIVATE_KEY', '')
+VAPID_SUBJECT = _os.environ.get('VAPID_SUBJECT', 'mailto:dispecing@energovision.sk')
+
+
+def _send_sms(phone: str, body: str, ticket_id: str = None) -> dict:
+    """Pošli SMS cez Twilio."""
+    if not TWILIO_SID or not TWILIO_TOKEN:
+        log.warning("[notif] Twilio not configured, skipping SMS")
+        return {"ok": False, "error": "twilio_not_configured"}
+    if not phone.startswith('+'):
+        phone = '+421' + phone.lstrip('0') if phone.startswith('9') or phone.startswith('0') else '+' + phone
+    try:
+        r = _req.post(
+            f'https://api.twilio.com/2010-04-01/Accounts/{TWILIO_SID}/Messages.json',
+            auth=(TWILIO_SID, TWILIO_TOKEN),
+            data={'From': TWILIO_FROM, 'To': phone, 'Body': body[:1599]},
+            timeout=10
+        )
+        if r.status_code in (200, 201):
+            d = r.json()
+            return {"ok": True, "sid": d.get("sid"), "status": d.get("status")}
+        return {"ok": False, "error": f"twilio_http_{r.status_code}", "detail": r.text[:200]}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _send_push(subscription: dict, title: str, body: str, url: str = None) -> dict:
+    """Pošli Web Push cez pywebpush."""
+    if not VAPID_PRIVATE:
+        return {"ok": False, "error": "vapid_not_configured"}
+    try:
+        from pywebpush import webpush, WebPushException
+        payload = _json.dumps({"title": title, "body": body, "url": url or "/admin/servis"})
+        webpush(
+            subscription_info={
+                "endpoint": subscription["endpoint"],
+                "keys": {"p256dh": subscription["p256dh"], "auth": subscription["auth_key"]}
+            },
+            data=payload,
+            vapid_private_key=VAPID_PRIVATE,
+            vapid_claims={"sub": VAPID_SUBJECT}
+        )
+        return {"ok": True}
+    except WebPushException as e:
+        return {"ok": False, "error": f"webpush: {e}"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _notify_ticket_dispatch(ticket_id: str, channels: list[str] = None) -> dict:
+    """Pre daný ticket pošle notifikácie podľa severity + preference."""
+    sb = _sb()
+    t = sb.table("service_tickets").select(
+        "id, ticket_number, title, severity, sla_tier, sla_due_at, customer_id, assigned_to, site_id, "
+        "customer:customers(first_name, last_name, company_name, email, phone1), "
+        "site:inverter_sites(site_name, public_token)"
+    ).eq("id", ticket_id).single().execute().data
+    if not t:
+        return {"ok": False, "error": "ticket_not_found"}
+
+    severity = t.get("severity") or "info"
+
+    # Default channels podle alarm_sla_mapping
+    if channels is None:
+        alarm_code = t.get("vendor_alarm_code")
+        if alarm_code:
+            m = sb.table("alarm_sla_mapping").select("notification_channels").eq("alarm_code", alarm_code).execute().data or []
+            channels = m[0].get("notification_channels", ["email"]) if m else ["email"]
+        else:
+            channels = ["email"]
+
+    site_name = (t.get("site") or {}).get("site_name", "—")
+    customer = t.get("customer") or {}
+    customer_name = customer.get("company_name") or f"{customer.get('first_name','')} {customer.get('last_name','')}".strip() or "klient"
+
+    subject = f"🔴 {severity.upper()}: {t['title']} — {site_name}"
+    body_short = f"Stanica {site_name}: {t['title']}. Ticket {t['ticket_number']}. Otvor: app.energovision.sk/admin/servis/{t['id']}"
+    body_long = f"""
+    Dobrý deň,
+
+    na stanici {site_name} bol detegovaný {severity} alarm:
+    {t['title']}
+
+    Ticket číslo: {t['ticket_number']}
+    SLA tier: {t.get('sla_tier', '—')}
+    SLA deadline: {t.get('sla_due_at', '—')}
+
+    Detail: https://app.energovision.sk/admin/servis/{t['id']}
+
+    Energovision dispečing
+    +421 948 302 137
+    """
+
+    results = []
+
+    # ─── SMS ───
+    if "sms" in channels:
+        # Get phone z notification_preferences (alebo customer.phone1)
+        phones_to_notify = []
+        # 1) Customer
+        if customer.get("phone1"):
+            phones_to_notify.append((customer["phone1"], "customer", customer_name))
+        # 2) Assignee user
+        if t.get("assigned_to"):
+            u = sb.table("notification_preferences").select("sms_phone, sms_critical, sms_warning, sms_info").eq("user_id", t["assigned_to"]).maybeSingle().execute().data
+            if u and u.get("sms_phone"):
+                want = (severity == "critical" and u.get("sms_critical")) or (severity == "warning" and u.get("sms_warning")) or (severity in ("info","catastrophic"))
+                if want:
+                    phones_to_notify.append((u["sms_phone"], "technician", "tech"))
+        # 3) Admin fallback (Lukáš)
+        admin_prefs = sb.table("notification_preferences").select("sms_phone, sms_critical").not_.is_("sms_phone", "null").execute().data or []
+        for ap in admin_prefs:
+            if ap.get("sms_phone") and ap.get("sms_critical"):
+                phones_to_notify.append((ap["sms_phone"], "admin", "admin"))
+                break
+
+        for phone, role, label in phones_to_notify[:5]:  # cap pri 5
+            r = _send_sms(phone, body_short, ticket_id=ticket_id)
+            sb.table("notification_events").insert({
+                "ticket_id": ticket_id, "channel": "sms", "recipient": phone,
+                "body": body_short, "status": "sent" if r.get("ok") else "failed",
+                "provider": "twilio", "provider_id": r.get("sid"),
+                "error": r.get("error"), "sent_at": datetime.now(timezone.utc).isoformat(),
+                "metadata": {"role": role, "label": label}
+            }).execute()
+            results.append({"channel": "sms", "to": phone, "ok": r.get("ok")})
+
+    # ─── PUSH ───
+    if "push" in channels:
+        # All push_subscriptions filtered by user_id assigned + admin
+        subs = []
+        if t.get("assigned_to"):
+            s = sb.table("push_subscriptions").select("*").eq("user_id", t["assigned_to"]).execute().data or []
+            subs.extend(s)
+        admin_subs = sb.table("push_subscriptions").select("*").is_("customer_id", "null").execute().data or []
+        for s in admin_subs:
+            if s not in subs:
+                subs.append(s)
+
+        for sub in subs[:10]:
+            r = _send_push(sub, subject, body_short, f"/admin/servis/{t['id']}")
+            sb.table("notification_events").insert({
+                "ticket_id": ticket_id, "channel": "push", "recipient": sub.get("device_label","push"),
+                "body": body_short, "status": "sent" if r.get("ok") else "failed",
+                "provider": "vapid", "error": r.get("error"),
+                "sent_at": datetime.now(timezone.utc).isoformat()
+            }).execute()
+            results.append({"channel": "push", "ok": r.get("ok")})
+
+    # ─── EMAIL ───
+    if "email" in channels:
+        try:
+            from email_m365 import send_email_m365
+        except Exception:
+            send_email_m365 = None
+
+        recipients_email = []
+        if customer.get("email"):
+            recipients_email.append(customer["email"])
+        # Dispečer email
+        recipients_email.append("dispecing@energovision.sk")
+
+        for to in set(recipients_email):
+            if send_email_m365:
+                try:
+                    send_email_m365(to=to, subject=subject, html=body_long.replace("\n", "<br>"))
+                    sb.table("notification_events").insert({
+                        "ticket_id": ticket_id, "channel": "email", "recipient": to,
+                        "subject": subject, "body": body_long, "status": "sent",
+                        "provider": "m365", "sent_at": datetime.now(timezone.utc).isoformat()
+                    }).execute()
+                    results.append({"channel": "email", "to": to, "ok": True})
+                except Exception as e:
+                    sb.table("notification_events").insert({
+                        "ticket_id": ticket_id, "channel": "email", "recipient": to,
+                        "subject": subject, "status": "failed", "error": str(e),
+                        "provider": "m365", "sent_at": datetime.now(timezone.utc).isoformat()
+                    }).execute()
+                    results.append({"channel": "email", "to": to, "ok": False, "err": str(e)})
+
+    return {"ok": True, "ticket_id": ticket_id, "channels_attempted": channels, "results": results}
+
+
+@app.route("/webhook/notify-ticket", methods=["POST"])
+def webhook_notify_ticket():
+    body = request.get_json(silent=True) or {}
+    ticket_id = body.get("ticket_id")
+    channels = body.get("channels")
+    if not ticket_id:
+        return jsonify({"ok": False, "error": "ticket_id required"}), 400
+    return jsonify(_notify_ticket_dispatch(ticket_id, channels))
+
+
+@app.route("/webhook/ticket-created-cron", methods=["POST", "GET"])
+def webhook_ticket_created_cron():
+    """Vercel cron každú minútu: nájdi nové tickety bez notifikácií a odošli."""
+    sb = _sb()
+    # Tickety created v poslednych 5 min, status=open, žiadne sent notification_events
+    cutoff = (datetime.now(timezone.utc) - _td(minutes=5)).isoformat()
+    tickets = sb.table("service_tickets").select("id, severity, vendor_alarm_code, created_at").gte("created_at", cutoff).eq("status", "open").execute().data or []
+
+    results = []
+    for t in tickets:
+        # Skip ak už máme notifikáciu
+        existing = sb.table("notification_events").select("id").eq("ticket_id", t["id"]).limit(1).execute().data
+        if existing:
+            continue
+        r = _notify_ticket_dispatch(t["id"])
+        results.append({"ticket_id": t["id"], "result": r})
+
+    return jsonify({"ok": True, "processed": len(results), "results": results})
+
+
+@app.route("/webhook/sla-breach-cron", methods=["POST", "GET"])
+def webhook_sla_breach_cron():
+    """Vercel cron každých 15 min: zistí SLA breaches + eskalácie."""
+    sb = _sb()
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    # 1) SLA breach mark
+    breached = sb.table("service_tickets").select("id, ticket_number, severity, sla_due_at, status").lt("sla_due_at", now_iso).not_.in_("status", ["closed", "cancelled", "resolved", "verified"]).eq("sla_breached", False).execute().data or []
+    for t in breached:
+        sb.table("service_tickets").update({"sla_breached": True}).eq("id", t["id"]).execute()
+        sb.table("ticket_events").insert({
+            "ticket_id": t["id"], "event_type": "sla_breached",
+            "actor_label": "Systém (cron)",
+            "new_value": {"sla_due_at": t["sla_due_at"]},
+            "comment": f"SLA deadline prešiel — eskalácia"
+        }).execute()
+        # Trigger notify
+        _notify_ticket_dispatch(t["id"], channels=["email", "sms"])
+
+    # 2) Escalation rules check
+    rules = sb.table("escalation_rules").select("*").eq("is_active", True).execute().data or []
+    for rule in rules:
+        # Find candidates per rule
+        q = sb.table("service_tickets").select("id, severity, status, created_at, acknowledged_at, sla_due_at, escalation_level").eq("severity", rule["severity"]).not_.in_("status", ["closed", "cancelled", "resolved", "verified"])
+        # Unacked check
+        if rule.get("trigger_minutes_unacked"):
+            cutoff_unacked = (datetime.now(timezone.utc) - _td(minutes=rule["trigger_minutes_unacked"])).isoformat()
+            candidates = q.lt("created_at", cutoff_unacked).is_("acknowledged_at", "null").execute().data or []
+            for c in candidates:
+                if (c.get("escalation_level") or 0) < 1:
+                    sb.table("service_tickets").update({"escalation_level": 1}).eq("id", c["id"]).execute()
+                    sb.table("ticket_events").insert({
+                        "ticket_id": c["id"], "event_type": "escalated",
+                        "actor_label": f"Cron rule '{rule['name']}'",
+                        "comment": f"Eskalácia: {rule['name']} (unacked > {rule['trigger_minutes_unacked']} min)"
+                    }).execute()
+                    _notify_ticket_dispatch(c["id"], channels=rule["notification_channels"])
+
+    return jsonify({"ok": True, "breached": len(breached), "rules_checked": len(rules)})
