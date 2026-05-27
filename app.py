@@ -11160,6 +11160,52 @@ def webhook_huawei_pull_device_history_monthly():
     return jsonify({"ok": True, "year": year, "month": month, "sites": len(sites), "rows_upserted": total_rows})
 
 
+@app.route("/webhook/huawei-debug-stations-public", methods=["GET"])
+def webhook_huawei_debug_stations_public():
+    """PUBLIC read-only diagnostika /stations - bez auth (dočasne, len pre debug session).
+    Vracia len Huawei API response info, žiadne mutácie."""
+    if _hs is None:
+        return jsonify({"ok": False, "error": "huawei_spot module not available"}), 500
+    token = _hs.huawei_login()
+    if not token:
+        return jsonify({"ok": False, "error": "huawei login failed"}), 503
+    base = _hs._huawei_session.get("base") or _hs.HUAWEI_BASE
+    headers = {"XSRF-TOKEN": token, "Content-Type": "application/json"}
+    page_no = int(request.args.get("page") or "1")
+    try:
+        r = requests.post(f"{base}/stations", headers=headers, json={"pageNo": page_no}, timeout=60)
+        body_json = {}
+        try:
+            body_json = r.json() or {}
+        except Exception:
+            pass
+        data_payload = body_json.get("data") or {}
+        if isinstance(data_payload, dict):
+            station_list = data_payload.get("list", []) or []
+            page_count = data_payload.get("pageCount")
+            total = data_payload.get("total")
+        else:
+            station_list = body_json.get("list", []) or []
+            page_count = None
+            total = None
+        return jsonify({
+            "ok": r.status_code == 200 and body_json.get("success") is True,
+            "http_status": r.status_code,
+            "page_no": page_no,
+            "fail_code": body_json.get("failCode"),
+            "message": body_json.get("message"),
+            "success": body_json.get("success"),
+            "total_stations": total,
+            "page_count": page_count,
+            "stations_in_page": len(station_list),
+            "first_3_stations": station_list[:3] if station_list else [],
+            "body_preview": (r.text or "")[:500],
+        })
+    except Exception as e:
+        log.exception("[debug-stations-public] crashed")
+        return jsonify({"ok": False, "error": f"crash: {type(e).__name__}: {e}"}), 500
+
+
 @app.route("/webhook/huawei-debug-stations", methods=["POST", "GET"])
 def webhook_huawei_debug_stations():
     """Diagnostika - priamy POST na /stations endpoint, vráti raw Huawei response."""
