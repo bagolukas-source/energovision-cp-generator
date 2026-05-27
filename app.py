@@ -11158,3 +11158,59 @@ def webhook_huawei_pull_device_history_monthly():
             log.exception("[device-hist-monthly] site crashed: %s", e)
 
     return jsonify({"ok": True, "year": year, "month": month, "sites": len(sites), "rows_upserted": total_rows})
+
+
+@app.route("/webhook/huawei-debug-stations", methods=["POST", "GET"])
+def webhook_huawei_debug_stations():
+    """Diagnostika - priamy POST na /stations endpoint, vráti raw Huawei response."""
+    if not _hs_auth_ok(request):
+        return jsonify({"error": "unauthorized"}), 401
+    if _hs is None:
+        return jsonify({"ok": False, "error": "huawei_spot module not available"}), 500
+
+    token = _hs.huawei_login()
+    if not token:
+        return jsonify({"ok": False, "error": "huawei login failed (check backoff)"}), 503
+
+    base = _hs._huawei_session.get("base") or _hs.HUAWEI_BASE
+    headers = {"XSRF-TOKEN": token, "Content-Type": "application/json"}
+
+    page_no = int(request.args.get("page") or "1")
+    body = {"pageNo": page_no}
+
+    try:
+        r = requests.post(f"{base}/stations", headers=headers, json=body, timeout=60)
+        body_text = r.text[:2000] if r.text else ""
+        body_json = {}
+        try:
+            body_json = r.json() or {}
+        except Exception:
+            pass
+
+        data_payload = body_json.get("data") or {}
+        if isinstance(data_payload, dict):
+            station_list = data_payload.get("list", []) or []
+            page_count = data_payload.get("pageCount")
+            total = data_payload.get("total")
+        else:
+            station_list = body_json.get("list", []) or []
+            page_count = None
+            total = None
+
+        return jsonify({
+            "ok": r.status_code == 200 and body_json.get("success") is True,
+            "http_status": r.status_code,
+            "page_no": page_no,
+            "fail_code": body_json.get("failCode"),
+            "message": body_json.get("message"),
+            "success": body_json.get("success"),
+            "total_stations": total,
+            "page_count": page_count,
+            "stations_in_page": len(station_list),
+            "first_3_stations": station_list[:3] if station_list else [],
+            "body_preview": body_text[:500],
+            "base_url": base,
+        })
+    except Exception as e:
+        log.exception("[huawei-debug-stations] crashed")
+        return jsonify({"ok": False, "error": f"crash: {type(e).__name__}: {e}"}), 500
