@@ -5436,6 +5436,78 @@ def webhook_huawei_sync_stations():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/webhook/huawei-login-test", methods=["POST", "GET"])
+def webhook_huawei_login_test():
+    """Diagnostika — pokúsi sa o login do Huawei NBI, vráti presný error code (failCode, HTTP status, body)."""
+    if not _hs_auth_ok(request):
+        return jsonify({"error": "unauthorized"}), 401
+    if _hs is None:
+        return jsonify({"ok": False, "error": "huawei_spot module not available"}), 500
+    try:
+        import requests as _rq
+        from huawei_spot import HUAWEI_BASE, HUAWEI_USER, HUAWEI_PASS, _load_huawei_credentials_from_db
+
+        base = HUAWEI_BASE
+        user = HUAWEI_USER
+        pwd = HUAWEI_PASS
+        source = "env"
+        if not pwd:
+            db_base, db_user, db_pwd = _load_huawei_credentials_from_db()
+            if db_pwd:
+                base = db_base or base
+                user = db_user or user
+                pwd = db_pwd
+                source = "db"
+
+        if not pwd:
+            return jsonify({
+                "ok": False,
+                "error": "No password — env HUAWEI_PASS prázdny a v DB inverter_vendor_credentials nič",
+                "credential_source": "none",
+                "username": user,
+                "base_url": base,
+            })
+
+        url = f"{base}/login"
+        payload = {"userName": user, "systemCode": pwd}
+        r = _rq.post(url, json=payload, timeout=30)
+        body_preview = (r.text or "")[:500]
+        body_json = {}
+        try:
+            body_json = r.json()
+        except Exception:
+            pass
+        fail_code = body_json.get("failCode")
+        success = body_json.get("success")
+        token = r.headers.get("XSRF-TOKEN") or r.headers.get("xsrf-token")
+
+        if r.status_code == 200 and token:
+            return jsonify({
+                "ok": True,
+                "credential_source": source,
+                "username": user,
+                "base_url": base,
+                "http_status": r.status_code,
+                "token_len": len(token),
+                "body_success": success,
+            })
+
+        return jsonify({
+            "ok": False,
+            "credential_source": source,
+            "username": user,
+            "base_url": base,
+            "http_status": r.status_code,
+            "fail_code": fail_code,
+            "body_success": success,
+            "body_preview": body_preview,
+            "error": f"failCode={fail_code} (HTTP {r.status_code})" if fail_code else f"HTTP {r.status_code} bez XSRF tokenu",
+        })
+    except Exception as e:
+        log.exception("[huawei-login-test] crashed")
+        return jsonify({"ok": False, "error": f"crash: {type(e).__name__}: {e}"}), 500
+
+
 # ============================================================
 # ANALYZA OM module — Pilier FVE+BESS posudok
 # ============================================================
