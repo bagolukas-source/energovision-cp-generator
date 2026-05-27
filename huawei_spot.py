@@ -222,6 +222,39 @@ def _huawei_login_backoff_active(cred_row: Dict[str, Any]) -> Tuple[bool, Option
     return (False, None)
 
 
+def get_huawei_backoff_status() -> Dict[str, Any]:
+    """Public helper - vráti aktuálny backoff status pre UI (bez logovania).
+
+    Returns:
+      {is_blocked: bool, next_login_allowed_at: iso|null, fail_code: int|null, minutes_remaining: int|null}
+    """
+    cred = _load_huawei_credentials_from_db()
+    is_blocked, next_iso = _huawei_login_backoff_active(cred)
+    fail_code = None
+    if cred.get("notes"):
+        try:
+            n = _pj.loads(cred["notes"]) if isinstance(cred["notes"], str) else cred["notes"]
+            fail_code = n.get("last_login_fail_code")
+        except Exception:
+            pass
+    minutes_remaining = None
+    if is_blocked and next_iso:
+        try:
+            next_dt = datetime.fromisoformat(next_iso.replace("Z","+00:00"))
+            delta = (next_dt - datetime.now(timezone.utc)).total_seconds()
+            minutes_remaining = max(0, int(delta / 60))
+        except Exception:
+            pass
+    return {
+        "is_blocked": is_blocked,
+        "next_login_allowed_at": next_iso,
+        "fail_code": fail_code,
+        "minutes_remaining": minutes_remaining,
+        "has_db_token": bool(cred.get("current_token")),
+        "token_expires_at": cred.get("token_expires_at"),
+    }
+
+
 def huawei_login(force: bool = False) -> Optional[str]:
     """
     Login do Huawei NBI.
@@ -263,11 +296,12 @@ def huawei_login(force: bool = False) -> Optional[str]:
             log.warning("[huawei_login] DB token parse fail: %s", e)
 
     # Step 3: backoff check (avoid hammering after 407)
-    if not force:
-        is_blocked, next_iso = _huawei_login_backoff_active(cred)
-        if is_blocked:
-            log.warning("[huawei_login] BACKOFF active - next attempt allowed at %s", next_iso)
-            return None
+    # CRITICAL: aj pri force=True musí platiť backoff. Huawei vráti 407 bez ohľadu na našu intenciu.
+    # force=True znamená "ak je token v DB cache, preskoč ho a urob fresh" - NIE "ignoruj rate limit".
+    is_blocked, next_iso = _huawei_login_backoff_active(cred)
+    if is_blocked:
+        log.warning("[huawei_login] BACKOFF active (force=%s) - next attempt allowed at %s", force, next_iso)
+        return None
 
     if not pwd:
         log.warning("[huawei_login] no password - env HUAWEI_PASS empty and no row in inverter_vendor_credentials")

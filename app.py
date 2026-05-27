@@ -7756,7 +7756,14 @@ def webhook_fleet_status():
     fresh = request.args.get("fresh") in ("1", "true", "yes")
     now = _time.time()
     if not fresh and _FLEET_CACHE["data"] is not None and (now - _FLEET_CACHE["ts"]) < _FLEET_CACHE_TTL_SEC:
-        resp = jsonify({**_FLEET_CACHE["data"], "cached": True, "cache_age_sec": int(now - _FLEET_CACHE["ts"])})
+        cached_data = {**_FLEET_CACHE["data"]}
+        # Refresh backoff status na live (DB read - cheap)
+        try:
+            if _hs is not None and hasattr(_hs, "get_huawei_backoff_status"):
+                cached_data["huawei_backoff"] = _hs.get_huawei_backoff_status()
+        except Exception:
+            pass
+        resp = jsonify({**cached_data, "cached": True, "cache_age_sec": int(now - _FLEET_CACHE["ts"])})
         resp.headers["Access-Control-Allow-Origin"] = "*"
         return resp
 
@@ -7779,6 +7786,13 @@ def webhook_fleet_status():
             resp = jsonify(cached_resp)
             resp.headers["Access-Control-Allow-Origin"] = "*"
             return resp
+
+    # Pridaj backoff status do response (aby UI vedelo countdown bez kliku na Test login)
+    try:
+        if _hs is not None and hasattr(_hs, "get_huawei_backoff_status"):
+            data["huawei_backoff"] = _hs.get_huawei_backoff_status()
+    except Exception as e:
+        log.warning("[fleet-status] backoff status fail: %s", e)
 
     _FLEET_CACHE["data"] = data
     _FLEET_CACHE["ts"] = now
