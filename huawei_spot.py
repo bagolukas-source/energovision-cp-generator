@@ -668,44 +668,82 @@ def manual_force_state(site_id: str, target_state: str, issued_by: str = "manual
 
 
 # ---------------- Sync stations from Huawei ----------------
+def _load_api_state(endpoint_key: str) -> Dict[str, Any]:
+    """Load cross-worker shared state z huawei_api_state DB tabuľky."""
+    try:
+        rows = sb_get("huawei_api_state", {"endpoint_key": f"eq.{endpoint_key}", "select": "*", "limit": "1"})
+        if rows:
+            return rows[0]
+    except Exception as e:
+        log.warning("[_load_api_state] %s", e)
+    return {}
+
+
+def _save_api_state(endpoint_key: str, payload: Dict[str, Any]) -> None:
+    """Persist API state do DB pre cross-worker zdieľanie."""
+    try:
+        payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+        sb_patch(f"huawei_api_state?endpoint_key=eq.{endpoint_key}", payload)
+    except Exception as e:
+        log.warning("[_save_api_state] %s", e)
+
+
 def huawei_get_station_list(debug: bool = False, force_refresh: bool = False):
     """
     Fetch ALL stations from Huawei NBI Plant List API (/thirdData/stations).
-    Uses per-endpoint cache (5 min TTL) + backoff guard (10 min after failCode 407).
-
-    Vracia: list[dict] alebo (list[dict], debug_dict) ak debug=True.
+    Uses DB-backed cache (5 min TTL) + cross-worker backoff guard (10 min after 407).
     """
-    global _stations_cache
-    now = time.time()
+    now_dt = datetime.now(timezone.utc)
+    now = now_dt.timestamp()
     debug_info = {"login": None, "page_responses": [], "cache_hit": False, "backoff_active": False}
 
-    # 1) Cache check (5 min TTL)
+    state = _load_api_state("plant_list")
     CACHE_TTL = 5 * 60
-    if not force_refresh and _stations_cache.get("data") and (now - _stations_cache.get("cached_at", 0) < CACHE_TTL):
-        debug_info["cache_hit"] = True
-        debug_info["cache_age_sec"] = int(now - _stations_cache["cached_at"])
-        cached = _stations_cache["data"]
-        return (cached, debug_info) if debug else cached
-
-    # 2) Backoff check (10 min po failCode 407)
-    if now < _stations_cache.get("backoff_until", 0):
-        backoff_remaining = int(_stations_cache["backoff_until"] - now)
-        debug_info["backoff_active"] = True
-        debug_info["backoff_remaining_sec"] = backoff_remaining
-        debug_info["error"] = f"Plant List API backoff aktivny - cakaj {backoff_remaining // 60} min {backoff_remaining % 60}s"
-        log.warning("[huawei_get_station_list] backoff active, %ss remaining", backoff_remaining)
-        # Vrat cache ak je nejaky, inak prazdny
-        cached = _stations_cache.get("data") or []
-        return (cached, debug_info) if debug else cached
-
-    # 3) Min interval medzi callmi (120s aby sme nedosiahli 5/10min)
     MIN_INTERVAL = 120
-    if now < _stations_cache.get("next_allowed_at", 0):
-        wait = int(_stations_cache["next_allowed_at"] - now)
-        debug_info["error"] = f"Plant List API min interval - cakaj este {wait}s"
-        log.info("[huawei_get_station_list] rate limit guard: wait %ss", wait)
-        cached = _stations_cache.get("data") or []
-        return (cached, debug_info) if debug else cached
+
+    # 1) Cache check
+    if not force_refresh and state.get("last_response") and state.get("last_response_at"):
+        try:
+            cached_at = datetime.fromisoformat(state["last_response_at"].replace("Z","+00:00"))
+            age = (now_dt - cached_at).total_seconds()
+            if age < CACHE_TTL:
+                debug_info["cache_hit"] = True
+                debug_info["cache_age_sec"] = int(age)
+                cached = state["last_response"] if isinstance(state["last_response"], list) else []
+                return (cached, debug_info) if debug else cached
+        except Exception:
+            pass
+
+    # 2) Backoff check (cross-worker, perzistuje cez Render restart)
+    if state.get("backoff_until"):
+        try:
+            backoff_dt = datetime.fromisoformat(state["backoff_until"].replace("Z","+00:00"))
+            if now_dt < backoff_dt:
+                remaining = int((backoff_dt - now_dt).total_seconds())
+                debug_info["backoff_active"] = True
+                debug_info["backoff_remaining_sec"] = remaining
+                debug_info["error"] = f"Plant List backoff aktivny - cakaj {remaining // 60}min {remaining % 60}s (fail_code={state.get('last_fail_code')})"
+                log.warning("[huawei_get_station_list] DB backoff active, %ss remaining", remaining)
+                cached = state.get("last_response") if isinstance(state.get("last_response"), list) else []
+                return (cached or [], debug_info) if debug else (cached or [])
+        except Exception:
+            pass
+
+    # 3) Min interval
+    if state.get("last_call_at"):
+        try:
+            last_call = datetime.fromisoformat(state["last_call_at"].replace("Z","+00:00"))
+            elapsed = (now_dt - last_call).total_seconds()
+            if elapsed < MIN_INTERVAL:
+                wait = int(MIN_INTERVAL - elapsed)
+                debug_info["error"] = f"Plant List min interval - cakaj {wait}s"
+                cached = state.get("last_response") if isinstance(state.get("last_response"), list) else []
+                return (cached or [], debug_info) if debug else (cached or [])
+        except Exception:
+            pass
+
+    # Update last_call_at PRED API call (worker B vidí že worker A ide na API)
+    _save_api_state("plant_list", {"last_call_at": now_dt.isoformat()})
 
     token = huawei_login()
     if not token:
@@ -770,16 +808,24 @@ def huawei_get_station_list(debug: bool = False, force_refresh: bool = False):
 
     debug_info["total_stations"] = len(all_stations)
 
-    # Check ci posledna page mala failCode 407 → spusti 10 min backoff
+    # Save state to DB cross-worker
     last_resp = debug_info["page_responses"][-1] if debug_info["page_responses"] else {}
+    end_dt = datetime.now(timezone.utc)
     if last_resp.get("fail_code") == 407:
-        _stations_cache["backoff_until"] = time.time() + 10 * 60
-        log.warning("[huawei_get_station_list] failCode 407 detected → backoff 10 min")
-    else:
-        # Uloz do cache + nastav min interval
-        _stations_cache["data"] = all_stations
-        _stations_cache["cached_at"] = time.time()
-        _stations_cache["next_allowed_at"] = time.time() + 120  # min 2 min medzi callmi
+        # 10 min backoff per Huawei doc
+        backoff_until = end_dt + timedelta(minutes=10)
+        _save_api_state("plant_list", {
+            "last_fail_code": 407,
+            "last_fail_at": end_dt.isoformat(),
+            "backoff_until": backoff_until.isoformat(),
+        })
+        log.warning("[huawei_get_station_list] failCode 407 → DB backoff %s", backoff_until.isoformat())
+    elif all_stations:
+        _save_api_state("plant_list", {
+            "last_response": all_stations,
+            "last_response_at": end_dt.isoformat(),
+            "backoff_until": None,    # clear backoff on success
+        })
 
     return (all_stations, debug_info) if debug else all_stations
 
