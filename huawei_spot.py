@@ -664,85 +664,91 @@ def manual_force_state(site_id: str, target_state: str, issued_by: str = "manual
 
 
 # ---------------- Sync stations from Huawei ----------------
-def huawei_get_station_list() -> List[Dict[str, Any]]:
+def huawei_get_station_list(debug: bool = False):
     """
     Fetch ALL stations from Huawei NBI Plant List API (/thirdData/stations).
 
-    Per doc 25.4.0:
-      - POST /thirdData/stations
-      - Body: {"pageNo": N} (pageSize ignored, max 100 per page)
-      - Response: {"success": true, "data": {"list": [...], "total": N, "pageCount": N, "pageNo": N, "pageSize": 100}, "failCode": 0}
-      - Fields: plantCode, plantName, plantAddress, longitude, latitude, capacity (kWp DC), contactPerson, contactMethod, gridConnectionDate
-
-    Pages cez všetky pageNo (1..pageCount) aby sa stiahli aj stanice 101+.
+    Vracia: list[dict] alebo (list[dict], debug_dict) ak debug=True.
     """
+    debug_info = {"login": None, "page_responses": []}
     token = huawei_login()
     if not token:
-        return []
+        debug_info["login"] = "failed (None token)"
+        return ([], debug_info) if debug else []
+    debug_info["login"] = f"OK (token len={len(token)})"
+
     base = _huawei_session.get("base") or HUAWEI_BASE
     url = f"{base}/stations"
     headers = {"XSRF-TOKEN": token, "Content-Type": "application/json"}
+    debug_info["url"] = url
 
     all_stations: List[Dict[str, Any]] = []
     page_no = 1
-    max_pages = 50  # safety cap (5000 plants)
+    max_pages = 50
 
     while page_no <= max_pages:
         body = {"pageNo": page_no}
         try:
             r = requests.post(url, headers=headers, json=body, timeout=60)
+            page_debug = {"page": page_no, "http_status": r.status_code}
+            body_text = (r.text or "")[:600]
+            page_debug["body_preview"] = body_text
             if r.status_code != 200:
-                log.error("[huawei_get_station_list] page=%s HTTP %s %s", page_no, r.status_code, r.text[:300])
+                log.error("[huawei_get_station_list] page=%s HTTP %s %s", page_no, r.status_code, body_text[:300])
+                debug_info["page_responses"].append(page_debug)
                 break
             data = r.json() or {}
             fail_code = data.get("failCode")
+            success_flag = data.get("success")
+            msg = data.get("message", "")
+            page_debug["fail_code"] = fail_code
+            page_debug["success"] = success_flag
+            page_debug["message"] = msg
             if fail_code and fail_code != 0:
-                log.error("[huawei_get_station_list] page=%s failCode=%s msg=%s", page_no, fail_code, data.get("message",""))
+                log.error("[huawei_get_station_list] page=%s failCode=%s msg=%s", page_no, fail_code, msg)
+                debug_info["page_responses"].append(page_debug)
                 break
 
             payload = data.get("data") or {}
-            # v6/25.x: {"data": {"list":[...], "pageCount": N}}
-            # v2/legacy: {"list":[...]}
             if isinstance(payload, dict):
                 page_list = payload.get("list", []) or []
                 page_count = int(payload.get("pageCount") or 1)
+                page_debug["total"] = payload.get("total")
+                page_debug["pageCount"] = page_count
             else:
                 page_list = data.get("list", []) or []
                 page_count = 1
+            page_debug["stations_in_page"] = len(page_list)
+            debug_info["page_responses"].append(page_debug)
 
             all_stations.extend(page_list)
-            log.info("[huawei_get_station_list] page %s/%s got %s plants (total so far %s)", page_no, page_count, len(page_list), len(all_stations))
+            log.info("[huawei_get_station_list] page %s/%s got %s plants", page_no, page_count, len(page_list))
 
             if page_no >= page_count or len(page_list) == 0:
                 break
             page_no += 1
         except Exception as e:
             log.exception("[huawei_get_station_list] page=%s failed: %s", page_no, e)
+            debug_info["page_responses"].append({"page": page_no, "error": f"{type(e).__name__}: {e}"})
             break
 
-    return all_stations
+    debug_info["total_stations"] = len(all_stations)
+    return (all_stations, debug_info) if debug else all_stations
 
 
 def sync_huawei_stations() -> Dict[str, Any]:
     """
     Pull station list from Huawei NBI, upsert do inverter_sites.
-
-    Mapping podľa SmartPVMS 25.4.0 NBI doc (5.1.1.1 Plant List API):
-      plantCode → vendor_station_id
-      plantName → site_name
-      capacity (kWp, DC) → dc_kwp        ⚠ NIE ac_kw (kWp je DC strana)
-      plantAddress → address
-      longitude → longitude
-      latitude → latitude
-      contactPerson → contact_person (notes ak stĺpec neexistuje)
-      contactMethod → contact_method
-      gridConnectionDate → grid_connection_date
-
-    Returns {ok, total_huawei, added, updated, skipped, details[]}.
+    Returns {ok, total_huawei, added, updated, skipped, details[], diagnostic} pri fail.
     """
-    stations = huawei_get_station_list()
+    stations, debug_info = huawei_get_station_list(debug=True)
     if not stations:
-        return {"ok": False, "error": "no stations returned (login fail, backoff aktívny alebo prázdny zoznam)"}
+        return {
+            "ok": False,
+            "error": "no stations returned",
+            "diagnostic": debug_info,
+            "hint": "Skontroluj failCode v page_responses. failCode=20009 znamená 'no permission for Plant List API'. failCode=407 znamená rate limit.",
+        }
 
     existing = sb_get("inverter_sites", {
         "select": "id,vendor_station_id",
