@@ -9607,3 +9607,262 @@ def webhook_exec_summary_cron():
         except Exception as e:
             results.append({"site_id": s["id"], "error": str(e)})
     return jsonify({"ok": True, "year": year, "month": month, "count": len(results), "results": results})
+
+# ============================================================================
+# PREDICTIVE MAINTENANCE + LOSS ATTRIBUTION
+# /webhook/predictive-scan-cron — denne 03:00 UTC pre všetky stanice
+# /webhook/loss-attribution-compute — per-site, mesačne
+# ============================================================================
+
+import json as _pj
+from datetime import timedelta as _ptd
+
+def _predictive_scan_site(site_id: str) -> dict:
+    sb = _sb()
+    site = sb.table("inverter_sites").select("id, site_name, dc_kwp, vendor_plant_code, vendor, latitude, longitude").eq("id", site_id).single().execute().data
+    if not site:
+        return {"ok": False, "error": "site_not_found"}
+
+    # Alarmy posledných 30 dní
+    since = (datetime.now(timezone.utc) - _ptd(days=30)).isoformat()
+    alarms = sb.table("inverter_alarms").select("alarm_name, alarm_code, severity, detected_at, status").eq("station_id_vendor", site.get("vendor_plant_code") or "").gte("detected_at", since).execute().data or []
+
+    # Performance daily — posledných 90 dní
+    since_pr = (datetime.now(timezone.utc) - _ptd(days=90)).isoformat()
+    perf = sb.table("inverter_performance_daily").select("day, performance_ratio, energy_kwh").gte("day", since_pr[:10]).execute().data or []
+
+    # Tickety posledných 90 dní
+    tickets_90 = sb.table("service_tickets").select("ticket_number, severity, status, created_at").eq("site_id", site_id).gte("created_at", since_pr).execute().data or []
+
+    context = {
+        "site_name": site["site_name"],
+        "dc_kwp": site.get("dc_kwp"),
+        "alarms_30d": len(alarms),
+        "alarms_critical": len([a for a in alarms if a.get("severity") == "critical"]),
+        "alarm_codes_freq": _freq([a.get("alarm_code") for a in alarms if a.get("alarm_code")]),
+        "pr_records": len(perf),
+        "pr_avg_last_30d": _avg([p.get("performance_ratio") for p in perf[-30:]]),
+        "pr_avg_first_30d": _avg([p.get("performance_ratio") for p in perf[:30]]),
+        "tickets_total_90d": len(tickets_90),
+        "tickets_critical": len([t for t in tickets_90 if t.get("severity") == "critical"]),
+    }
+
+    # AI predikcia
+    try:
+        from anthropic import Anthropic
+        client = Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
+        prompt = f"""Si predictive maintenance engineer pre FVE. Z dát zaver predikcie:
+
+Stanica: {context['site_name']} ({context['dc_kwp']} kWp)
+Alarmy 30d: {context['alarms_30d']} celkom, {context['alarms_critical']} kritických
+Najčastejšie alarm kódy: {context['alarm_codes_freq']}
+PR posledných 30d: {context['pr_avg_last_30d']:.1f}%, prvých 30d 90d obdobia: {context['pr_avg_first_30d']:.1f}%
+Tickety 90d: {context['tickets_total_90d']} ({context['tickets_critical']} critical)
+
+Vyhodnoť riziká a vráť JSON pole predikcií. Každá predikcia má:
+- component_type: "inverter"|"battery"|"string"|"panel"|"meter"|"communication"
+- component_label: konkrétny popis (napr. "Invertor 1" alebo "String 3 na MPPT 2")
+- prediction_type: "failure_likely"|"degradation"|"underperform"|"maintenance_due"|"soh_low"|"communication_loss"
+- severity: "info"|"warning"|"critical"
+- confidence: 0-100 (percento istoty)
+- predicted_within_days: 0-90
+- evidence: krátky popis dôkazov (max 100 znakov)
+- recommendation: konkrétna akcia (max 120 znakov)
+
+PR drift > 5 % YoY = degradácia panelov. Časté alarmy z jedného komponentu = riziko zlyhania. PR pod 75 % = underperformance.
+
+Iba JSON pole, max 3 predikcie. Iba ak existuje skutočná evidence. Bez vaty, slovenský jazyk."""
+
+        msg = client.messages.create(
+            model="claude-sonnet-4-5-20250929",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        text = msg.content[0].text.strip()
+        if text.startswith("```"):
+            text = text.split("```")[1].lstrip("json\n")
+        predictions = _pj.loads(text)
+        if not isinstance(predictions, list):
+            predictions = []
+    except Exception as e:
+        log.warning("[predictive] AI fail: %s", e)
+        predictions = []
+
+    # Persist (clear stale + insert new)
+    sb.table("predictive_alerts").update({"status": "dismissed"}).eq("site_id", site_id).eq("status", "open").execute()
+    for p in predictions[:3]:
+        try:
+            sb.table("predictive_alerts").insert({
+                "site_id": site_id,
+                "component_type": p.get("component_type", "inverter"),
+                "component_label": p.get("component_label"),
+                "prediction_type": p.get("prediction_type", "underperform"),
+                "severity": p.get("severity", "warning"),
+                "confidence": p.get("confidence", 50),
+                "predicted_within_days": p.get("predicted_within_days"),
+                "evidence": {"text": p.get("evidence", "")},
+                "recommendation": p.get("recommendation"),
+                "expires_at": (datetime.now(timezone.utc) + _ptd(days=14)).isoformat(),
+            }).execute()
+        except Exception as e:
+            log.warning("[predictive] insert fail: %s", e)
+
+    return {"ok": True, "site_id": site_id, "predictions_count": len(predictions), "context": context}
+
+
+def _freq(items):
+    from collections import Counter
+    return dict(Counter([i for i in items if i]).most_common(5))
+
+
+def _avg(values):
+    nums = [float(v) for v in values if v is not None]
+    return sum(nums) / len(nums) if nums else 0.0
+
+
+@app.route("/webhook/predictive-scan-site", methods=["POST"])
+def webhook_predictive_scan_site():
+    body = request.get_json(silent=True) or {}
+    site_id = body.get("site_id")
+    if not site_id:
+        return jsonify({"ok": False, "error": "site_id required"}), 400
+    return jsonify(_predictive_scan_site(site_id))
+
+
+@app.route("/webhook/predictive-scan-cron", methods=["POST", "GET"])
+def webhook_predictive_scan_cron():
+    """Vercel cron denne 03:00 UTC — predictive scan všetkých Huawei staníc."""
+    sb = _sb()
+    sites = sb.table("inverter_sites").select("id, site_name").eq("vendor", "huawei").execute().data or []
+    results = []
+    for s in sites:
+        try:
+            r = _predictive_scan_site(s["id"])
+            results.append({"site_id": s["id"], "ok": r.get("ok"), "count": r.get("predictions_count", 0)})
+        except Exception as e:
+            results.append({"site_id": s["id"], "error": str(e)})
+    return jsonify({"ok": True, "scanned": len(results), "results": results})
+
+
+def _loss_attribution_compute(site_id: str, year: int, month: int) -> dict:
+    """Loss attribution waterfall — porovnanie actual vs PVGIS expected, rozklad strát."""
+    sb = _sb()
+    site = sb.table("inverter_sites").select("id, site_name, dc_kwp, latitude, longitude, vendor_plant_code").eq("id", site_id).single().execute().data
+    if not site:
+        return {"ok": False, "error": "site_not_found"}
+    dc_kwp = float(site.get("dc_kwp") or 0)
+    if dc_kwp == 0 or not site.get("latitude") or not site.get("longitude"):
+        return {"ok": False, "error": "missing_dc_kwp_or_gps"}
+
+    # PVGIS expected za mesiac
+    try:
+        pvg = _pvgis_monthly_expected(float(site["latitude"]), float(site["longitude"]), dc_kwp)
+        expected_kwh = (pvg.get("monthly_kwh") or [0]*12)[month-1]
+    except Exception:
+        expected_kwh = 0
+
+    # Actual production za mesiac
+    period_start = f"{year}-{month:02d}-01"
+    period_end_dt = datetime(year, month, 28) + _ptd(days=4)
+    period_end = period_end_dt.replace(day=1).strftime("%Y-%m-%d")
+    try:
+        daily = sb.table("inverter_performance_daily").select("day, energy_kwh, performance_ratio").gte("day", period_start).lt("day", period_end).execute().data or []
+        actual_kwh = sum(float(d.get("energy_kwh") or 0) for d in daily)
+        pr_actual = sum(float(d.get("performance_ratio") or 0) for d in daily if d.get("performance_ratio")) / max(1, sum(1 for d in daily if d.get("performance_ratio")))
+    except Exception:
+        actual_kwh = 0; pr_actual = 0
+
+    total_loss = max(0, expected_kwh - actual_kwh)
+
+    # Heuristics: kategórie strát z alarmov + downtime
+    alarms = sb.table("inverter_alarms").select("alarm_code, detected_at, resolved_at").eq("station_id_vendor", site.get("vendor_plant_code") or "").gte("detected_at", period_start).lt("detected_at", period_end).execute().data or []
+
+    # Downtime — kKWh z hodín kedy bola stanica offline
+    downtime_hours = 0
+    for a in alarms:
+        if a.get("alarm_code", "").startswith("INV_OFFLINE") or a.get("alarm_code") == "COMM_LOSS":
+            try:
+                d_start = datetime.fromisoformat(a["detected_at"].replace("Z", "+00:00"))
+                d_end = datetime.fromisoformat((a.get("resolved_at") or datetime.now(timezone.utc).isoformat()).replace("Z", "+00:00"))
+                downtime_hours += (d_end - d_start).total_seconds() / 3600
+            except Exception:
+                pass
+    # Pri 5h sunshine avg/day a dc_kwp avg power = dc_kwp/2 (priemer)
+    loss_downtime = min(total_loss, downtime_hours * dc_kwp * 0.5)
+
+    # Soiling — odhad cez PR drift (ak PR_actual < PR_expected o > 3 %)
+    pr_expected = 82  # SK priemer pre dobre dimensionnu FVE
+    pr_gap = max(0, pr_expected - (pr_actual or 0))
+    loss_soiling = total_loss * min(0.4, pr_gap / 100 * 0.5) if total_loss > 0 else 0
+
+    # String mismatch / shading — heuristika: ak je veľa STRING_* alarmov
+    string_alarms = len([a for a in alarms if "STRING" in (a.get("alarm_code") or "")])
+    loss_shading = total_loss * 0.10 * min(1, string_alarms / 5)
+    loss_mismatch = total_loss * 0.05 * min(1, string_alarms / 5)
+
+    # Clipping — heuristika: dc_kwp/ac_kw ratio, zatiaľ nepoznáme presne
+    loss_clipping = 0
+
+    # Zvyšok = other
+    loss_other = max(0, total_loss - loss_downtime - loss_soiling - loss_shading - loss_mismatch - loss_clipping)
+
+    PRICE = 0.18
+    row = {
+        "site_id": site_id,
+        "year": year,
+        "month": month,
+        "pvgis_expected_kwh": round(expected_kwh, 2),
+        "actual_kwh": round(actual_kwh, 2),
+        "total_loss_kwh": round(total_loss, 2),
+        "loss_soiling_kwh": round(loss_soiling, 2),
+        "loss_shading_kwh": round(loss_shading, 2),
+        "loss_clipping_kwh": round(loss_clipping, 2),
+        "loss_curtailment_kwh": 0,
+        "loss_downtime_kwh": round(loss_downtime, 2),
+        "loss_mismatch_kwh": round(loss_mismatch, 2),
+        "loss_other_kwh": round(loss_other, 2),
+        "loss_soiling_eur": round(loss_soiling * PRICE, 2),
+        "loss_shading_eur": round(loss_shading * PRICE, 2),
+        "loss_clipping_eur": 0,
+        "loss_curtailment_eur": 0,
+        "loss_downtime_eur": round(loss_downtime * PRICE, 2),
+        "loss_mismatch_eur": round(loss_mismatch * PRICE, 2),
+        "loss_other_eur": round(loss_other * PRICE, 2),
+        "pr_actual_pct": round(pr_actual or 0, 2),
+        "pr_expected_pct": pr_expected,
+    }
+
+    sb.table("loss_attribution_monthly").upsert(row, on_conflict="site_id,year,month").execute()
+    return {"ok": True, **row}
+
+
+@app.route("/webhook/loss-attribution-compute", methods=["POST"])
+def webhook_loss_attribution_compute():
+    body = request.get_json(silent=True) or {}
+    site_id = body.get("site_id")
+    if not site_id:
+        return jsonify({"ok": False, "error": "site_id required"}), 400
+    today = datetime.now(timezone.utc).date()
+    year = int(body.get("year") or (today.year if today.month > 1 else today.year - 1))
+    month = int(body.get("month") or (today.month - 1 if today.month > 1 else 12))
+    return jsonify(_loss_attribution_compute(site_id, year, month))
+
+
+@app.route("/webhook/loss-attribution-cron", methods=["POST", "GET"])
+def webhook_loss_attribution_cron():
+    """Vercel cron 2. dňa v mesiaci — loss attribution pre všetky stanice."""
+    today = datetime.now(timezone.utc).date()
+    if today.month == 1:
+        year = today.year - 1; month = 12
+    else:
+        year = today.year; month = today.month - 1
+    sb = _sb()
+    sites = sb.table("inverter_sites").select("id").eq("vendor", "huawei").execute().data or []
+    results = []
+    for s in sites:
+        try:
+            r = _loss_attribution_compute(s["id"], year, month)
+            results.append({"site_id": s["id"], "ok": r.get("ok"), "total_loss_eur": r.get("total_loss_kwh", 0) * 0.18})
+        except Exception as e:
+            results.append({"site_id": s["id"], "error": str(e)})
+    return jsonify({"ok": True, "year": year, "month": month, "count": len(results), "results": results})
