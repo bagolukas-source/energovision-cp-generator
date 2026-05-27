@@ -9991,3 +9991,238 @@ def webhook_loss_attribution_cron():
         except Exception as e:
             results.append({"site_id": s["id"], "error": str(e)})
     return jsonify({"ok": True, "year": year, "month": month, "count": len(results), "results": results})
+
+
+# ============================================================================
+# F1: BATTERY HEALTH MONITORING
+# /webhook/huawei-pull-battery-health — cron 3× denne (06,12,18 UTC)
+# Pulluje devTypeId=39 (battery) + 41 (ESS) + 23048 (battery pack) z Huawei NBI
+# ============================================================================
+
+def _pull_battery_health_for_site(site: dict, base: str, headers: dict) -> dict:
+    """
+    Pre 1 stanicu (site dict): pull device list, filter na battery devices,
+    pull real-time KPI, upsert do battery_packs + battery_telemetry_daily.
+
+    Returns: {ok, packs_added, packs_updated, total_soh_avg, error}
+    """
+    sb = _sb()
+    station_code = site.get("vendor_station_id") or site.get("vendor_plant_code")
+    if not station_code:
+        return {"ok": False, "error": "no station code"}
+
+    # 1) getDevList pre stanicu
+    try:
+        r = requests.post(
+            f"{base}/getDevList",
+            headers=headers,
+            json={"stationCodes": station_code},
+            timeout=30,
+        )
+        if r.status_code != 200:
+            return {"ok": False, "error": f"getDevList HTTP {r.status_code}"}
+        dev_data = r.json() or {}
+        all_devices = dev_data.get("data") or []
+    except Exception as e:
+        return {"ok": False, "error": f"getDevList failed: {e}"}
+
+    # 2) Filtruj battery zariadenia (devTypeId 39, 41, 23048, 37890, 23045, 23047)
+    BATTERY_DEV_TYPES = {39, 41, 23045, 23047, 23048, 37890}
+    battery_devices = [d for d in all_devices if d.get("devTypeId") in BATTERY_DEV_TYPES]
+
+    if not battery_devices:
+        return {"ok": True, "packs_found": 0, "info": "no battery devices on site"}
+
+    # 3) Group by devTypeId pre batch call getDevRealKpi
+    by_type: Dict[int, List[dict]] = {}
+    for d in battery_devices:
+        t = int(d.get("devTypeId") or 0)
+        by_type.setdefault(t, []).append(d)
+
+    packs_upserted = 0
+    soh_values = []
+    today = datetime.now(timezone.utc).date()
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    for dev_type, devices in by_type.items():
+        # Batch po max 100 (NBI limit)
+        for chunk_start in range(0, len(devices), 100):
+            chunk = devices[chunk_start:chunk_start + 100]
+            dev_ids = [str(d.get("id")) for d in chunk if d.get("id")]
+            if not dev_ids:
+                continue
+
+            try:
+                r2 = requests.post(
+                    f"{base}/getDevRealKpi",
+                    headers=headers,
+                    json={"devIds": ",".join(dev_ids), "devTypeId": dev_type},
+                    timeout=30,
+                )
+                if r2.status_code != 200:
+                    log.warning("[battery-pull] getDevRealKpi devType=%s HTTP %s", dev_type, r2.status_code)
+                    continue
+                kpi_data = r2.json() or {}
+                rows = kpi_data.get("data") or []
+            except Exception as e:
+                log.warning("[battery-pull] getDevRealKpi devType=%s failed: %s", dev_type, e)
+                continue
+
+            # 4) Per device: extract SoC, SoH, charge/discharge cap
+            dev_meta = {str(d.get("id")): d for d in chunk}
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                dev_id = str(row.get("devId") or row.get("id") or "")
+                meta = dev_meta.get(dev_id, {})
+                kpi = row.get("dataItemMap") or {}
+                if not isinstance(kpi, dict):
+                    continue
+
+                # Battery-specific fields (per NBI 25.4.0 doc 5.1.2.2)
+                soc = kpi.get("battery_soc") or kpi.get("soc")
+                soh = kpi.get("battery_soh") or kpi.get("soh")
+                charge_cap = kpi.get("charge_cap")
+                discharge_cap = kpi.get("discharge_cap")
+                cd_power = kpi.get("charge_discharge_power") or kpi.get("ch_discharge_power")
+
+                # Status z run_state alebo battery_status
+                state_code = kpi.get("battery_status") or kpi.get("run_state") or kpi.get("state")
+                state_map = {0: "offline", 1: "standby", 2: "running", 3: "fault"}
+                status = state_map.get(int(state_code), str(state_code)) if state_code is not None else None
+
+                # Per-pack data (ESS môže mať list battery_pack)
+                packs = kpi.get("battery_pack") or [{"soh": soh, "soc": soc}]
+                if not isinstance(packs, list):
+                    packs = [packs] if isinstance(packs, dict) else []
+
+                # Upsert každého pack
+                for pack_idx, pack in enumerate(packs, start=1):
+                    if not isinstance(pack, dict):
+                        continue
+                    pack_soh = pack.get("soh") or pack.get("soh_pct") or soh
+                    pack_soc = pack.get("soc") or soc
+                    pack_soh_num = None
+                    if pack_soh is not None:
+                        try:
+                            # SoH môže byť "90.0%" string alebo number
+                            ps = str(pack_soh).replace("%", "").strip()
+                            pack_soh_num = float(ps)
+                            soh_values.append(pack_soh_num)
+                        except (TypeError, ValueError):
+                            pass
+                    pack_soc_num = None
+                    if pack_soc is not None:
+                        try:
+                            pack_soc_num = float(str(pack_soc).replace("%", "").strip())
+                        except (TypeError, ValueError):
+                            pass
+
+                    row_data = {
+                        "site_id": site["id"],
+                        "vendor_device_id": dev_id,
+                        "vendor_device_sn": row.get("sn"),
+                        "device_type_id": dev_type,
+                        "device_model": meta.get("devName") or meta.get("devTypeName"),
+                        "pack_index": pack_idx if len(packs) > 1 else None,
+                        "soc_pct": pack_soc_num,
+                        "soh_pct": pack_soh_num,
+                        "charge_power_kw": float(cd_power) if cd_power and float(cd_power) > 0 else None,
+                        "discharge_power_kw": -float(cd_power) if cd_power and float(cd_power) < 0 else None,
+                        "total_charge_kwh": float(charge_cap) if charge_cap else None,
+                        "total_discharge_kwh": float(discharge_cap) if discharge_cap else None,
+                        "status": status,
+                        "last_seen_at": now_iso,
+                        "raw_json": kpi,
+                    }
+
+                    try:
+                        sb.table("battery_packs").upsert(
+                            row_data,
+                            on_conflict="site_id,vendor_device_id,pack_index",
+                        ).execute()
+                        packs_upserted += 1
+                    except Exception as e:
+                        log.warning("[battery-pull] upsert pack failed dev=%s: %s", dev_id, e)
+
+                    # Tiež daily snapshot
+                    try:
+                        sb.table("battery_telemetry_daily").upsert({
+                            "site_id": site["id"],
+                            "vendor_device_id": dev_id,
+                            "date": str(today),
+                            "soh_pct": pack_soh_num,
+                            "soc_avg_pct": pack_soc_num,
+                            "total_charge_kwh": float(charge_cap) if charge_cap else None,
+                            "total_discharge_kwh": float(discharge_cap) if discharge_cap else None,
+                        }, on_conflict="vendor_device_id,date").execute()
+                    except Exception as e:
+                        log.warning("[battery-pull] daily snapshot failed: %s", e)
+
+    # 5) Update aggregát na inverter_sites
+    if soh_values:
+        try:
+            sb.table("inverter_sites").update({
+                "battery_avg_soh_pct": sum(soh_values) / len(soh_values),
+                "battery_pack_count": len(soh_values),
+                "battery_last_sync_at": now_iso,
+            }).eq("id", site["id"]).execute()
+        except Exception as e:
+            log.warning("[battery-pull] update site agg failed: %s", e)
+
+    return {
+        "ok": True,
+        "site_id": site["id"],
+        "site_name": site.get("site_name"),
+        "packs_upserted": packs_upserted,
+        "battery_devices": len(battery_devices),
+        "avg_soh_pct": round(sum(soh_values) / len(soh_values), 1) if soh_values else None,
+    }
+
+
+@app.route("/webhook/huawei-pull-battery-health", methods=["POST", "GET"])
+def webhook_huawei_pull_battery_health():
+    """Pull battery health (SoC, SoH, charge/discharge) z Huawei NBI pre celý fleet.
+    Spúšťa sa cronom 3× denne (06, 12, 18 UTC).
+    """
+    if not _hs_auth_ok(request):
+        return jsonify({"error": "unauthorized"}), 401
+    if _hs is None:
+        return jsonify({"ok": False, "error": "huawei_spot module not available"}), 500
+
+    token = _hs.huawei_login()
+    if not token:
+        return jsonify({"ok": False, "error": "huawei login failed (check backoff / credentials)"}), 503
+
+    base = _hs._huawei_session.get("base") or _hs.HUAWEI_BASE
+    headers = {"XSRF-TOKEN": token, "Content-Type": "application/json"}
+
+    sb = _sb()
+    sites = sb.table("inverter_sites").select(
+        "id, site_name, vendor_station_id"
+    ).eq("vendor", "huawei").eq("monitoring_enabled", True).execute().data or []
+
+    # Voliteľne filter na 1 stanicu
+    body = request.get_json(silent=True) or {}
+    site_id_filter = body.get("site_id")
+    if site_id_filter:
+        sites = [s for s in sites if s["id"] == site_id_filter]
+
+    results = []
+    total_packs = 0
+    for s in sites:
+        try:
+            r = _pull_battery_health_for_site(s, base, headers)
+            results.append(r)
+            if r.get("ok"):
+                total_packs += r.get("packs_upserted", 0)
+        except Exception as e:
+            log.exception("[battery-pull] site %s crashed", s.get("id"))
+            results.append({"ok": False, "site_id": s["id"], "error": str(e)})
+
+    return jsonify({
+        "ok": True,
+        "sites_processed": len(sites),
+        "total_packs_upserted": total_packs,
+        "results": results,
+    })
