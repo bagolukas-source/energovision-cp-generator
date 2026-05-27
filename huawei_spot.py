@@ -11,6 +11,7 @@ from datetime import datetime, timezone, timedelta, date
 from typing import Optional, Dict, Any, List, Tuple
 
 import requests
+import json as _pj
 
 log = logging.getLogger(__name__)
 
@@ -156,60 +157,183 @@ def okte_ingest(target_day: Optional[date] = None, backfill_days: int = 0) -> Di
 
 
 # ---------------- Huawei FusionSolar API ----------------
-def _load_huawei_credentials_from_db() -> Tuple[Optional[str], Optional[str], Optional[str]]:
-    """Load Huawei credentials from inverter_vendor_credentials table."""
+def _load_huawei_credentials_from_db() -> Dict[str, Any]:
+    """Load Huawei credentials + cached token + backoff state from inverter_vendor_credentials."""
     try:
         rows = sb_get("inverter_vendor_credentials", {
-            "select": "base_url,username,encrypted_password,is_active",
+            "select": "id,base_url,username,encrypted_password,current_token,token_expires_at,last_token_refresh_at,notes,is_active",
             "vendor": "eq.huawei",
             "is_active": "eq.true",
             "limit": "1",
         })
         if rows:
-            r = rows[0]
-            return r.get("base_url"), r.get("username"), r.get("encrypted_password")
+            return rows[0]
     except Exception as e:
         log.warning("[_load_huawei_credentials_from_db] %s", e)
-    return None, None, None
+    return {}
+
+
+def _save_huawei_token_to_db(cred_id: str, token: str, ttl_seconds: int = 25 * 60) -> None:
+    """Persist token to DB so worker restarts dont trigger fresh login (avoid rate limit 407)."""
+    try:
+        expires = datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
+        sb_patch(f"inverter_vendor_credentials?id=eq.{cred_id}", {
+            "current_token": token,
+            "token_expires_at": expires.isoformat(),
+            "last_token_refresh_at": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as e:
+        log.warning("[_save_huawei_token_to_db] %s", e)
+
+
+def _save_huawei_login_failure(cred_id: str, fail_code: Optional[int], backoff_min: int = 30) -> None:
+    """Persist 407 / login failure backoff so we dont retry too soon and worsen lockout."""
+    try:
+        until = datetime.now(timezone.utc) + timedelta(minutes=backoff_min)
+        sb_patch(f"inverter_vendor_credentials?id=eq.{cred_id}", {
+            "current_token": None,
+            "token_expires_at": None,
+            "notes": _pj.dumps({
+                "last_login_fail_code": fail_code,
+                "last_login_fail_at": datetime.now(timezone.utc).isoformat(),
+                "next_login_allowed_at": until.isoformat(),
+                "backoff_min": backoff_min,
+            }),
+        })
+    except Exception as e:
+        log.warning("[_save_huawei_login_failure] %s", e)
+
+
+def _huawei_login_backoff_active(cred_row: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+    """Vracia (is_active, next_allowed_iso). Ak je active, NEVOLAJ login (lockout 407)."""
+    notes = cred_row.get("notes")
+    if not notes:
+        return (False, None)
+    try:
+        n = _pj.loads(notes) if isinstance(notes, str) else notes
+        next_iso = n.get("next_login_allowed_at")
+        if not next_iso:
+            return (False, None)
+        next_dt = datetime.fromisoformat(next_iso.replace("Z","+00:00"))
+        if datetime.now(timezone.utc) < next_dt:
+            return (True, next_iso)
+    except Exception:
+        pass
+    return (False, None)
 
 
 def huawei_login(force: bool = False) -> Optional[str]:
+    """
+    Login do Huawei NBI.
+    Token cache stratégia (vyhne sa rate limit 407 - max 5 loginov/10 min):
+      1. RAM cache (process-local, ~25 min)
+      2. DB cache v inverter_vendor_credentials.current_token (cross-worker)
+      3. Backoff check - ak bol nedávno 407, neskúšaj
+      4. Fresh login + persist token do DB
+    """
     global _huawei_session
     now = time.time()
+    # Step 1: RAM cache
     if not force and _huawei_session["token"] and _huawei_session["expires_at"] > now + 60:
         return _huawei_session["token"]
 
-    # Priority: env vars first, fallback to Supabase inverter_vendor_credentials
+    # Load credentials + DB cache
+    cred = _load_huawei_credentials_from_db()
     base = HUAWEI_BASE
     user = HUAWEI_USER
     pwd = HUAWEI_PASS
+    cred_id = cred.get("id")
     if not pwd:
-        db_base, db_user, db_pwd = _load_huawei_credentials_from_db()
-        base = db_base or base
-        user = db_user or user
-        pwd = db_pwd or pwd
+        base = cred.get("base_url") or base
+        user = cred.get("username") or user
+        pwd = cred.get("encrypted_password") or pwd
+
+    # Step 2: DB cache (cross-worker token reuse)
+    if not force and cred.get("current_token") and cred.get("token_expires_at"):
+        try:
+            exp = datetime.fromisoformat(cred["token_expires_at"].replace("Z","+00:00"))
+            if datetime.now(timezone.utc) < exp - timedelta(seconds=60):
+                tok = cred["current_token"]
+                _huawei_session["token"] = tok
+                _huawei_session["expires_at"] = exp.timestamp()
+                _huawei_session["base"] = base
+                log.info("[huawei_login] reusing DB-cached token (expires %s)", cred["token_expires_at"])
+                return tok
+        except Exception as e:
+            log.warning("[huawei_login] DB token parse fail: %s", e)
+
+    # Step 3: backoff check (avoid hammering after 407)
+    if not force:
+        is_blocked, next_iso = _huawei_login_backoff_active(cred)
+        if is_blocked:
+            log.warning("[huawei_login] BACKOFF active - next attempt allowed at %s", next_iso)
+            return None
 
     if not pwd:
-        log.warning("[huawei_login] no password — env HUAWEI_PASS empty and no row in inverter_vendor_credentials")
+        log.warning("[huawei_login] no password - env HUAWEI_PASS empty and no row in inverter_vendor_credentials")
         return None
 
+    # Step 4: fresh login
     url = f"{base}/login"
     payload = {"userName": user, "systemCode": pwd}
     try:
         r = requests.post(url, json=payload, timeout=30)
-        if r.status_code != 200:
-            log.error("[huawei_login] %s %s", r.status_code, r.text[:300])
+        body_json = {}
+        try:
+            body_json = r.json() or {}
+        except Exception:
+            pass
+        fail_code = body_json.get("failCode")
+
+        # failCode 407 = ACCESS_FREQUENCY_IS_TOO_HIGH (rate limit 5/10min, lockout 30 min)
+        if fail_code == 407:
+            log.error("[huawei_login] failCode 407 ACCESS_FREQUENCY_IS_TOO_HIGH - backoff 30 min")
+            if cred_id:
+                _save_huawei_login_failure(cred_id, 407, backoff_min=30)
             return None
+        # failCode 401 = account locked (5 wrong pwd within 10 min, lockout 30 min)
+        if fail_code == 401:
+            log.error("[huawei_login] failCode 401 account locked - backoff 30 min")
+            if cred_id:
+                _save_huawei_login_failure(cred_id, 401, backoff_min=30)
+            return None
+        # 20400 / 305 = wrong password
+        if fail_code in (20400, 305):
+            log.error("[huawei_login] wrong credentials (failCode=%s) - backoff 10 min", fail_code)
+            if cred_id:
+                _save_huawei_login_failure(cred_id, fail_code, backoff_min=10)
+            return None
+
+        if r.status_code != 200:
+            log.error("[huawei_login] HTTP %s body=%s", r.status_code, r.text[:300])
+            if cred_id:
+                _save_huawei_login_failure(cred_id, fail_code, backoff_min=5)
+            return None
+
         token = r.headers.get("XSRF-TOKEN") or r.headers.get("xsrf-token")
         if not token:
-            log.error("[huawei_login] no XSRF-TOKEN in response (body=%s)", r.text[:300])
+            log.error("[huawei_login] no XSRF-TOKEN in response (failCode=%s body=%s)", fail_code, r.text[:300])
+            if cred_id:
+                _save_huawei_login_failure(cred_id, fail_code or -1, backoff_min=5)
             return None
+
+        # Success - cache to RAM + DB
         _huawei_session["token"] = token
         _huawei_session["expires_at"] = now + 25 * 60
         _huawei_session["base"] = base
+        if cred_id:
+            _save_huawei_token_to_db(cred_id, token, ttl_seconds=25 * 60)
+            # clear backoff notes on success
+            try:
+                sb_patch(f"inverter_vendor_credentials?id=eq.{cred_id}", {"notes": None})
+            except Exception:
+                pass
+        log.info("[huawei_login] OK new token cached for 25 min")
         return token
     except Exception as e:
         log.exception("[huawei_login] failed: %s", e)
+        if cred_id:
+            _save_huawei_login_failure(cred_id, None, backoff_min=5)
         return None
 
 
@@ -507,37 +631,84 @@ def manual_force_state(site_id: str, target_state: str, issued_by: str = "manual
 
 # ---------------- Sync stations from Huawei ----------------
 def huawei_get_station_list() -> List[Dict[str, Any]]:
-    """Fetch list of all stations from Huawei /getStationList endpoint."""
+    """
+    Fetch ALL stations from Huawei NBI Plant List API (/thirdData/stations).
+
+    Per doc 25.4.0:
+      - POST /thirdData/stations
+      - Body: {"pageNo": N} (pageSize ignored, max 100 per page)
+      - Response: {"success": true, "data": {"list": [...], "total": N, "pageCount": N, "pageNo": N, "pageSize": 100}, "failCode": 0}
+      - Fields: plantCode, plantName, plantAddress, longitude, latitude, capacity (kWp DC), contactPerson, contactMethod, gridConnectionDate
+
+    Pages cez všetky pageNo (1..pageCount) aby sa stiahli aj stanice 101+.
+    """
     token = huawei_login()
     if not token:
         return []
     base = _huawei_session.get("base") or HUAWEI_BASE
     url = f"{base}/stations"
     headers = {"XSRF-TOKEN": token, "Content-Type": "application/json"}
-    body = {"pageNo": 1, "pageSize": 100}
-    try:
-        r = requests.post(url, headers=headers, json=body, timeout=60)
-        if r.status_code != 200:
-            log.error("[huawei_get_station_list] %s %s", r.status_code, r.text[:300])
-            return []
-        data = r.json() or {}
-        # v6 returns {"data": {"list": [...]}}, v2 returns {"list": [...]}
-        if isinstance(data.get("data"), dict):
-            return data["data"].get("list", []) or []
-        return data.get("list", []) or []
-    except Exception as e:
-        log.exception("[huawei_get_station_list] failed")
-        return []
+
+    all_stations: List[Dict[str, Any]] = []
+    page_no = 1
+    max_pages = 50  # safety cap (5000 plants)
+
+    while page_no <= max_pages:
+        body = {"pageNo": page_no}
+        try:
+            r = requests.post(url, headers=headers, json=body, timeout=60)
+            if r.status_code != 200:
+                log.error("[huawei_get_station_list] page=%s HTTP %s %s", page_no, r.status_code, r.text[:300])
+                break
+            data = r.json() or {}
+            fail_code = data.get("failCode")
+            if fail_code and fail_code != 0:
+                log.error("[huawei_get_station_list] page=%s failCode=%s msg=%s", page_no, fail_code, data.get("message",""))
+                break
+
+            payload = data.get("data") or {}
+            # v6/25.x: {"data": {"list":[...], "pageCount": N}}
+            # v2/legacy: {"list":[...]}
+            if isinstance(payload, dict):
+                page_list = payload.get("list", []) or []
+                page_count = int(payload.get("pageCount") or 1)
+            else:
+                page_list = data.get("list", []) or []
+                page_count = 1
+
+            all_stations.extend(page_list)
+            log.info("[huawei_get_station_list] page %s/%s got %s plants (total so far %s)", page_no, page_count, len(page_list), len(all_stations))
+
+            if page_no >= page_count or len(page_list) == 0:
+                break
+            page_no += 1
+        except Exception as e:
+            log.exception("[huawei_get_station_list] page=%s failed: %s", page_no, e)
+            break
+
+    return all_stations
 
 
 def sync_huawei_stations() -> Dict[str, Any]:
     """
-    Pull station list from Huawei, upsert do inverter_sites.
-    Returns {added: N, updated: N, skipped: N}.
+    Pull station list from Huawei NBI, upsert do inverter_sites.
+
+    Mapping podľa SmartPVMS 25.4.0 NBI doc (5.1.1.1 Plant List API):
+      plantCode → vendor_station_id
+      plantName → site_name
+      capacity (kWp, DC) → dc_kwp        ⚠ NIE ac_kw (kWp je DC strana)
+      plantAddress → address
+      longitude → longitude
+      latitude → latitude
+      contactPerson → contact_person (notes ak stĺpec neexistuje)
+      contactMethod → contact_method
+      gridConnectionDate → grid_connection_date
+
+    Returns {ok, total_huawei, added, updated, skipped, details[]}.
     """
     stations = huawei_get_station_list()
     if not stations:
-        return {"ok": False, "error": "no stations returned (login fail alebo prázdny zoznam)"}
+        return {"ok": False, "error": "no stations returned (login fail, backoff aktívny alebo prázdny zoznam)"}
 
     existing = sb_get("inverter_sites", {
         "select": "id,vendor_station_id",
@@ -549,37 +720,53 @@ def sync_huawei_stations() -> Dict[str, Any]:
     details = []
 
     for st in stations:
-        code = st.get("stationCode") or st.get("plantCode")
+        code = st.get("plantCode") or st.get("stationCode")
         if not code:
             skipped += 1
             continue
-        name = st.get("stationName") or st.get("plantName") or code
-        ac_kw = float(st.get("capacity") or st.get("aidType") or 0)
-        addr = st.get("stationAddr") or st.get("plantAddress") or ""
+        name = st.get("plantName") or st.get("stationName") or code
+        dc_kwp = float(st.get("capacity") or 0)  # NBI capacity = kWp DC strana
+        addr = st.get("plantAddress") or st.get("stationAddr") or ""
+        lng = st.get("longitude")
+        lat = st.get("latitude")
+        contact_p = st.get("contactPerson") or ""
+        contact_m = st.get("contactMethod") or ""
+        grid_date = st.get("gridConnectionDate") or ""
 
-        row = {
+        # Bazálne polia, ktoré určite existujú v inverter_sites
+        base_row = {
             "vendor": "huawei",
             "vendor_station_id": code,
             "site_name": name,
-            "ac_kw": ac_kw,
+            "dc_kwp": dc_kwp,           # ✅ kWp DC (oprava: predtým sme to dávali do ac_kw)
             "address": addr,
             "monitoring_enabled": True,
         }
+        # Voliteľné polia (GPS, kontakt) - len ak hodnoty existujú, aby sa neprepisovali neprázdne hodnoty v DB
+        if lat is not None:
+            base_row["latitude"] = lat
+        if lng is not None:
+            base_row["longitude"] = lng
 
         if code in existing_map:
-            sb_patch(f"inverter_sites?id=eq.{existing_map[code]}", {
+            patch_row = {
                 "site_name": name,
-                "ac_kw": ac_kw,
+                "dc_kwp": dc_kwp,
                 "address": addr,
                 "last_sync_at": datetime.now(timezone.utc).isoformat(),
-            })
+            }
+            if lat is not None:
+                patch_row["latitude"] = lat
+            if lng is not None:
+                patch_row["longitude"] = lng
+            sb_patch(f"inverter_sites?id=eq.{existing_map[code]}", patch_row)
             updated += 1
-            details.append({"action": "updated", "code": code, "name": name})
+            details.append({"action": "updated", "code": code, "name": name, "dc_kwp": dc_kwp})
         else:
-            ok, err = sb_post("inverter_sites", [row])
+            ok, err = sb_post("inverter_sites", [base_row])
             if ok:
                 added += 1
-                details.append({"action": "added", "code": code, "name": name})
+                details.append({"action": "added", "code": code, "name": name, "dc_kwp": dc_kwp, "lat": lat, "lng": lng})
             else:
                 skipped += 1
                 details.append({"action": "skipped", "code": code, "name": name, "error": err})

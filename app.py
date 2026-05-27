@@ -5438,70 +5438,109 @@ def webhook_huawei_sync_stations():
 
 @app.route("/webhook/huawei-login-test", methods=["POST", "GET"])
 def webhook_huawei_login_test():
-    """Diagnostika — pokúsi sa o login do Huawei NBI, vráti presný error code (failCode, HTTP status, body)."""
+    """
+    Diagnostika - status Huawei NBI loginu.
+    - Vráti backoff status (next_login_allowed_at) ak je aktívny
+    - Vráti cached token info ak je platný
+    - Inak vyvolá fresh login a vráti presný error code
+    """
     if not _hs_auth_ok(request):
         return jsonify({"error": "unauthorized"}), 401
     if _hs is None:
         return jsonify({"ok": False, "error": "huawei_spot module not available"}), 500
     try:
-        import requests as _rq
-        from huawei_spot import HUAWEI_BASE, HUAWEI_USER, HUAWEI_PASS, _load_huawei_credentials_from_db
+        from huawei_spot import (
+            HUAWEI_BASE, HUAWEI_USER, HUAWEI_PASS,
+            _load_huawei_credentials_from_db, _huawei_login_backoff_active, huawei_login,
+        )
+        from datetime import datetime, timezone
 
-        base = HUAWEI_BASE
-        user = HUAWEI_USER
-        pwd = HUAWEI_PASS
-        source = "env"
-        if not pwd:
-            db_base, db_user, db_pwd = _load_huawei_credentials_from_db()
-            if db_pwd:
-                base = db_base or base
-                user = db_user or user
-                pwd = db_pwd
-                source = "db"
+        cred = _load_huawei_credentials_from_db()
+        base = HUAWEI_BASE or cred.get("base_url") or ""
+        user = HUAWEI_USER or cred.get("username") or ""
+        pwd = HUAWEI_PASS or cred.get("encrypted_password") or ""
+        source = "env" if HUAWEI_PASS else ("db" if cred.get("encrypted_password") else "none")
+
+        # Check backoff first - dont waste a login attempt if locked out
+        is_blocked, next_allowed = _huawei_login_backoff_active(cred)
+        if is_blocked:
+            return jsonify({
+                "ok": False,
+                "backoff_active": True,
+                "next_login_allowed_at": next_allowed,
+                "credential_source": source,
+                "username": user,
+                "base_url": base,
+                "error": f"Backoff aktívny - počkaj do {next_allowed} UTC (po failCode {cred.get('notes','{}')})",
+            })
 
         if not pwd:
             return jsonify({
                 "ok": False,
-                "error": "No password — env HUAWEI_PASS prázdny a v DB inverter_vendor_credentials nič",
+                "error": "No password - env HUAWEI_PASS prázdny a v DB inverter_vendor_credentials nič",
                 "credential_source": "none",
                 "username": user,
                 "base_url": base,
             })
 
-        url = f"{base}/login"
-        payload = {"userName": user, "systemCode": pwd}
-        r = _rq.post(url, json=payload, timeout=30)
-        body_preview = (r.text or "")[:500]
-        body_json = {}
-        try:
-            body_json = r.json()
-        except Exception:
-            pass
-        fail_code = body_json.get("failCode")
-        success = body_json.get("success")
-        token = r.headers.get("XSRF-TOKEN") or r.headers.get("xsrf-token")
+        # Check DB cached token
+        if cred.get("current_token") and cred.get("token_expires_at"):
+            try:
+                exp = datetime.fromisoformat(cred["token_expires_at"].replace("Z","+00:00"))
+                if datetime.now(timezone.utc) < exp:
+                    return jsonify({
+                        "ok": True,
+                        "credential_source": source,
+                        "username": user,
+                        "base_url": base,
+                        "token_source": "db_cache",
+                        "token_len": len(cred["current_token"]),
+                        "token_expires_at": cred["token_expires_at"],
+                    })
+            except Exception:
+                pass
 
-        if r.status_code == 200 and token:
+        # No cached token -> try login (uses backoff-aware huawei_login)
+        token = huawei_login(force=False)
+        # Re-read cred po login (token už uložený alebo backoff zapnutý)
+        cred = _load_huawei_credentials_from_db()
+        if token:
             return jsonify({
                 "ok": True,
                 "credential_source": source,
                 "username": user,
                 "base_url": base,
-                "http_status": r.status_code,
+                "token_source": "fresh_login",
                 "token_len": len(token),
-                "body_success": success,
+                "token_expires_at": cred.get("token_expires_at"),
             })
 
+        # Login failed - read backoff state for detailed error
+        import json as _pj
+        notes = cred.get("notes")
+        notes_obj = {}
+        try:
+            notes_obj = _pj.loads(notes) if isinstance(notes, str) else (notes or {})
+        except Exception:
+            pass
+        fail_code = notes_obj.get("last_login_fail_code")
+        next_iso = notes_obj.get("next_login_allowed_at")
+
+        err_map = {
+            407: "ACCESS_FREQUENCY_IS_TOO_HIGH - rate limit (max 5 loginov/10 min, lockout 30 min)",
+            401: "Account locked (5 nesprávnych hesiel za 10 min, lockout 30 min)",
+            305: "Wrong credentials (failCode 305)",
+            20400: "user.login.user_or_value_invalid - wrong username/password",
+        }
         return jsonify({
             "ok": False,
             "credential_source": source,
             "username": user,
             "base_url": base,
-            "http_status": r.status_code,
             "fail_code": fail_code,
-            "body_success": success,
-            "body_preview": body_preview,
-            "error": f"failCode={fail_code} (HTTP {r.status_code})" if fail_code else f"HTTP {r.status_code} bez XSRF tokenu",
+            "backoff_active": bool(next_iso),
+            "next_login_allowed_at": next_iso,
+            "error": err_map.get(fail_code, f"Login failed (failCode={fail_code})") if fail_code else "Login failed - check Render logs",
         })
     except Exception as e:
         log.exception("[huawei-login-test] crashed")
