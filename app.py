@@ -11947,14 +11947,46 @@ def ts_contract_generate():
         log.warning("ts contract storage upload zlyhal: %s %s", up.status_code, up.text)
         return jsonify({"error": "storage_upload_failed", "body": up.text}), 500
 
-    public_url = f"{SUPABASE_URL}/storage/v1/object/public/documents/{storage_path}"
+    public_docx_url = f"{SUPABASE_URL}/storage/v1/object/public/documents/{storage_path}"
 
-    # Update ts_contracts.signed_pdf_url (re-use field — DOCX zatiaľ kým nepridáme PDF)
+    # Generuj PDF cez mammoth + weasyprint
+    pdf_public_url = None
+    try:
+        import mammoth
+        from weasyprint import HTML
+        from io import BytesIO
+        with open(out_path, "rb") as f:
+            html_result = mammoth.convert_to_html(BytesIO(f.read()))
+        html_body = html_result.value
+        html_full = f"""<!DOCTYPE html><html lang="sk"><head><meta charset="utf-8"><style>
+@page {{ size: A4; margin: 18mm; }}
+body {{ font-family: 'Helvetica', sans-serif; font-size: 10pt; color: #1a1a1a; line-height: 1.45; }}
+h1 {{ font-size: 16pt; margin: 12pt 0 6pt; }}
+h2 {{ font-size: 13pt; margin: 10pt 0 5pt; }}
+h3 {{ font-size: 11pt; margin: 8pt 0 4pt; }}
+p {{ margin: 4pt 0; }}
+table {{ border-collapse: collapse; margin: 6pt 0; width: 100%; }}
+td, th {{ border: 0.5pt solid #ccc; padding: 4pt 6pt; }}
+strong {{ font-weight: 700; }}
+</style></head><body>{html_body}</body></html>"""
+        pdf_bytes = HTML(string=html_full).write_pdf()
+        pdf_storage_path = f"ts_contracts/{contract_id}/{out_path.stem}.pdf"
+        up_pdf = requests.post(
+            f"{SUPABASE_URL}/storage/v1/object/documents/{pdf_storage_path}",
+            headers={**sb_headers, "Content-Type": "application/pdf", "x-upsert": "true"},
+            data=pdf_bytes, timeout=30
+        )
+        if up_pdf.ok:
+            pdf_public_url = f"{SUPABASE_URL}/storage/v1/object/public/documents/{pdf_storage_path}"
+    except Exception as _e:
+        log.exception("PDF generation failed (DOCX OK)")
+
+    # Update ts_contracts
     requests.patch(
         f"{SUPABASE_URL}/rest/v1/ts_contracts",
         headers={**sb_headers, "Content-Type": "application/json"},
         params={"id": f"eq.{contract_id}"},
-        json={"signed_pdf_url": public_url},
+        json={"contract_docx_url": public_docx_url, "contract_pdf_url": pdf_public_url, "signed_pdf_url": pdf_public_url or public_docx_url},
         timeout=10
     )
 
@@ -11964,4 +11996,4 @@ def ts_contract_generate():
     except Exception:
         pass
 
-    return jsonify({"ok": True, "url": public_url, "filename": out_path.name, "contract_number": contract.get("contract_number")})
+    return jsonify({"ok": True, "url": pdf_public_url or public_docx_url, "docx_url": public_docx_url, "pdf_url": pdf_public_url, "filename": out_path.name, "contract_number": contract.get("contract_number")})
