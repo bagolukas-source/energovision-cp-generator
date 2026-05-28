@@ -152,7 +152,7 @@ def run_for_day(day: date, site_id: Optional[str] = None):
     if site_id:
         sites = [{"id": site_id}]
     else:
-        sites = sb.table("inverter_sites").select("id").eq("monitoring_active", True).execute().data or []
+        sites = sb.table("inverter_sites").select("id").eq("monitoring_enabled", True).execute().data or []
 
     for s in sites:
         try:

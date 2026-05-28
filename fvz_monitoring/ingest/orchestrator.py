@@ -142,7 +142,7 @@ def upsert_plants(plants: list[PlantInfo]):
             "lon": p.lon,
             "address": p.address,
             "commissioning_date": p.commissioning_date.isoformat() if p.commissioning_date else None,
-            "monitoring_active": True,
+            "monitoring_enabled": True,
         })
     sb.table("inverter_sites").upsert(rows, on_conflict="vendor,vendor_plant_code").execute()
     log.info(f"Upserted {len(rows)} plants")

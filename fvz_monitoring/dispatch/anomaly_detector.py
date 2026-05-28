@@ -146,7 +146,7 @@ def main():
         if args.site_id:
             sites = [{"id": args.site_id}]
         else:
-            sites = sb.table("inverter_sites").select("id").eq("monitoring_active", True).execute().data or []
+            sites = sb.table("inverter_sites").select("id").eq("monitoring_enabled", True).execute().data or []
         for s in sites:
             try:
                 run_ml_classifier(s["id"])

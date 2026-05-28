@@ -1,6 +1,6 @@
 """Zero-export breach detector.
 
-Pre stanice s `zero_export_required=TRUE` a `zero_export_limit_kw` skontroluje
+Pre stanice s `zero_export_enabled=TRUE` a `zero_export_setpoint` skontroluje
 v poslednom posuvnom 15-min okne či sa nedostala energia do siete nad toleranciu.
 
 Logika:
@@ -89,8 +89,8 @@ def main():
 
     sb = get_supabase()
     q = sb.table("inverter_sites").select(
-        "id, site_name, zero_export_limit_kw"
-    ).eq("zero_export_required", True).eq("monitoring_active", True)
+        "id, site_name, zero_export_setpoint"
+    ).eq("zero_export_enabled", True).eq("monitoring_enabled", True)
     if args.site_id:
         q = q.eq("id", args.site_id)
     sites = q.execute().data or []
@@ -98,7 +98,7 @@ def main():
     log.info(f"Checking zero-export breach for {len(sites)} sites")
     for s in sites:
         try:
-            check_site(s["id"], s.get("site_name", "?"), float(s.get("zero_export_limit_kw") or 0))
+            check_site(s["id"], s.get("site_name", "?"), float(s.get("zero_export_setpoint") or 0))
         except Exception as e:
             log.warning(f"Zero-export check fail for {s['id']}: {e}")
 
