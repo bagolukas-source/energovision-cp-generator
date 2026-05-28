@@ -13,6 +13,20 @@ import sys
 import json
 import logging
 import re
+
+try:
+    from error_tracker import track_error, track_warning, track_info
+except Exception:
+    def track_error(e, context=None): pass
+    def track_warning(m, context=None): pass
+    def track_info(m, context=None): pass
+
+try:
+    from rate_limiter import rate_limit
+except Exception:
+    def rate_limit(*args, **kwargs):
+        def wrap(fn): return fn
+        return wrap
 from typing import Dict, List, Tuple, Optional, Any
 import math
 import tempfile
@@ -1108,6 +1122,7 @@ def lead_to_notion_properties(lead):
 # ============================================================
 _BOOT_TIME = None
 
+@rate_limit(max_calls=120, window_seconds=60)
 @app.route("/health")
 def health():
     """Detailny health endpoint — uptime, env-check, version."""
@@ -7739,6 +7754,7 @@ def _to_float_safe(v) -> float:
         return None
 
 
+@rate_limit(max_calls=60, window_seconds=60)
 @app.route("/webhook/fleet-status", methods=["GET", "OPTIONS"])
 def webhook_fleet_status():
     """Live fleet snapshot for /admin/monitoring dashboard.
@@ -11161,6 +11177,7 @@ def webhook_huawei_pull_device_history_monthly():
     return jsonify({"ok": True, "year": year, "month": month, "sites": len(sites), "rows_upserted": total_rows})
 
 
+@rate_limit(max_calls=5, window_seconds=300)
 @app.route("/webhook/huawei-debug-stations-public", methods=["GET"])
 def webhook_huawei_debug_stations_public():
     """PUBLIC read-only diagnostika /stations - bez auth (dočasne, len pre debug session).
