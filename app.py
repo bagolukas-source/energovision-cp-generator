@@ -11261,3 +11261,301 @@ def webhook_huawei_debug_stations():
     except Exception as e:
         log.exception("[huawei-debug-stations] crashed")
         return jsonify({"ok": False, "error": f"crash: {type(e).__name__}: {e}"}), 500
+
+
+# ============================================================================
+# EVA DOCX + XLSX SUITE — generate/read ad-hoc Word a Excel
+# ============================================================================
+
+@app.route("/webhook/eva-generate-docx", methods=["POST"])
+def webhook_eva_generate_docx():
+    """Vygeneruje DOCX z JSON štruktúry. Vstup: {title, sections[{heading, content, level?}], filename?}"""
+    if not _hs_auth_ok(request):
+        return jsonify({"error": "unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    title = body.get("title") or "Eva Dokument"
+    sections = body.get("sections") or []
+    filename = body.get("filename") or f"eva_doc_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+
+    try:
+        from docx import Document
+        from docx.shared import Pt, RGBColor
+        from io import BytesIO
+        import base64 as _b64
+
+        doc = Document()
+        # Title
+        t = doc.add_heading(title, level=0)
+        for run in t.runs:
+            run.font.color.rgb = RGBColor(0x14, 0x83, 0x4A)  # Energovision green
+
+        for sec in sections:
+            heading = sec.get("heading", "")
+            content = sec.get("content", "")
+            level = int(sec.get("level", 1))
+            if heading:
+                doc.add_heading(heading, level=min(max(level, 1), 5))
+            if content:
+                # Multi-paragraph support
+                for para in str(content).split("\n\n"):
+                    if para.strip():
+                        doc.add_paragraph(para.strip())
+            # Bulletlist support
+            for bullet in sec.get("bullets", []) or []:
+                doc.add_paragraph(bullet, style="List Bullet")
+            # Table support
+            for table_data in sec.get("tables", []) or []:
+                if isinstance(table_data, dict) and table_data.get("rows"):
+                    rows = table_data["rows"]
+                    headers = table_data.get("headers", [])
+                    cols = max(len(headers), max(len(r) for r in rows) if rows else 0)
+                    tbl = doc.add_table(rows=len(rows) + (1 if headers else 0), cols=cols)
+                    tbl.style = "Light Grid Accent 1"
+                    if headers:
+                        for i, h in enumerate(headers):
+                            tbl.cell(0, i).text = str(h)
+                    for ri, row in enumerate(rows):
+                        for ci, val in enumerate(row):
+                            tbl.cell(ri + (1 if headers else 0), ci).text = str(val) if val is not None else ""
+
+        # Footer
+        doc.add_paragraph().add_run("\nEnergovision s.r.o. · IČO 53 036 280 · www.energovision.sk").italic = True
+
+        buf = BytesIO()
+        doc.save(buf)
+        buf.seek(0)
+        docx_b64 = _b64.b64encode(buf.read()).decode("ascii")
+
+        # Upload do Supabase eva-files bucket
+        storage_path = f"docx/{filename}"
+        try:
+            from supabase import create_client
+            sb = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_ROLE_KEY"])
+            sb.storage.from_("documents").upload(
+                storage_path,
+                _b64.b64decode(docx_b64),
+                {"content-type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "upsert": "true"},
+            )
+            public_url = sb.storage.from_("documents").get_public_url(storage_path)
+        except Exception as e:
+            log.warning("[eva-gen-docx] storage upload fail: %s", e)
+            public_url = None
+
+        return jsonify({
+            "ok": True,
+            "filename": filename,
+            "file_url": public_url,
+            "data_base64": docx_b64,
+            "size_kb": len(docx_b64) // 1024,
+        })
+    except Exception as e:
+        log.exception("[eva-generate-docx] crashed")
+        return jsonify({"ok": False, "error": str(e)[:300]}), 500
+
+
+@app.route("/webhook/eva-generate-xlsx", methods=["POST"])
+def webhook_eva_generate_xlsx():
+    """Vygeneruje XLSX z JSON. Vstup: {sheets:[{name, headers[], rows[][], column_widths?}], filename?}"""
+    if not _hs_auth_ok(request):
+        return jsonify({"error": "unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    sheets = body.get("sheets") or []
+    filename = body.get("filename") or f"eva_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment
+        from openpyxl.utils import get_column_letter
+        from io import BytesIO
+        import base64 as _b64
+
+        wb = Workbook()
+        # Remove default sheet
+        wb.remove(wb.active)
+
+        for sheet_def in sheets:
+            name = sheet_def.get("name", "Sheet1")[:31]
+            ws = wb.create_sheet(title=name)
+            headers = sheet_def.get("headers") or []
+            rows = sheet_def.get("rows") or []
+
+            # Headers s formátovaním (Energovision lime green)
+            if headers:
+                ws.append(headers)
+                hdr_fill = PatternFill(start_color="92D050", end_color="92D050", fill_type="solid")
+                for col in range(1, len(headers) + 1):
+                    cell = ws.cell(row=1, column=col)
+                    cell.font = Font(bold=True, color="FFFFFF")
+                    cell.fill = hdr_fill
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+
+            # Data rows
+            for row in rows:
+                ws.append(row if isinstance(row, list) else [row])
+
+            # Auto-width
+            for col_idx in range(1, max(len(headers), max((len(r) for r in rows), default=0)) + 1):
+                col_letter = get_column_letter(col_idx)
+                max_len = 10
+                for cell in ws[col_letter]:
+                    if cell.value is not None:
+                        max_len = max(max_len, min(50, len(str(cell.value))))
+                ws.column_dimensions[col_letter].width = max_len + 2
+
+            # Freeze headers
+            if headers:
+                ws.freeze_panes = "A2"
+
+        # Ak žiadny sheet, pridaj default
+        if len(wb.sheetnames) == 0:
+            wb.create_sheet("Data")
+
+        buf = BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        xlsx_b64 = _b64.b64encode(buf.read()).decode("ascii")
+
+        storage_path = f"xlsx/{filename}"
+        try:
+            from supabase import create_client
+            sb = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_ROLE_KEY"])
+            sb.storage.from_("documents").upload(
+                storage_path,
+                _b64.b64decode(xlsx_b64),
+                {"content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "upsert": "true"},
+            )
+            public_url = sb.storage.from_("documents").get_public_url(storage_path)
+        except Exception as e:
+            log.warning("[eva-gen-xlsx] storage upload fail: %s", e)
+            public_url = None
+
+        return jsonify({
+            "ok": True,
+            "filename": filename,
+            "file_url": public_url,
+            "data_base64": xlsx_b64,
+            "size_kb": len(xlsx_b64) // 1024,
+            "sheets_count": len(sheets),
+        })
+    except Exception as e:
+        log.exception("[eva-generate-xlsx] crashed")
+        return jsonify({"ok": False, "error": str(e)[:300]}), 500
+
+
+@app.route("/webhook/eva-read-docx", methods=["POST"])
+def webhook_eva_read_docx():
+    """Prečíta DOCX a vráti text + headings + tables. Vstup: {file_url} alebo {data_base64}"""
+    if not _hs_auth_ok(request):
+        return jsonify({"error": "unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    file_url = body.get("file_url")
+    data_b64 = body.get("data_base64")
+
+    try:
+        from docx import Document
+        from io import BytesIO
+        import base64 as _b64
+
+        if data_b64:
+            blob = _b64.b64decode(data_b64)
+        elif file_url:
+            r = requests.get(file_url, timeout=30)
+            if r.status_code != 200:
+                return jsonify({"ok": False, "error": f"Download HTTP {r.status_code}"}), 400
+            blob = r.content
+        else:
+            return jsonify({"ok": False, "error": "missing file_url or data_base64"}), 400
+
+        doc = Document(BytesIO(blob))
+        headings = []
+        paragraphs = []
+        tables = []
+        for p in doc.paragraphs:
+            if p.text.strip():
+                if p.style.name.startswith("Heading"):
+                    headings.append({"text": p.text, "level": int(p.style.name.replace("Heading ", "") or 1)})
+                paragraphs.append(p.text)
+        for tbl in doc.tables:
+            tbl_rows = []
+            for row in tbl.rows:
+                tbl_rows.append([cell.text.strip() for cell in row.cells])
+            if tbl_rows:
+                tables.append({"rows": tbl_rows, "rows_count": len(tbl_rows)})
+
+        full_text = "\n".join(paragraphs)
+        return jsonify({
+            "ok": True,
+            "text": full_text[:20000],   # safety cap pre Claude context
+            "headings": headings[:50],
+            "paragraphs_count": len(paragraphs),
+            "tables_count": len(tables),
+            "tables": tables[:5],         # prvých 5 tabuliek
+            "truncated": len(full_text) > 20000,
+        })
+    except Exception as e:
+        log.exception("[eva-read-docx] crashed")
+        return jsonify({"ok": False, "error": str(e)[:300]}), 500
+
+
+@app.route("/webhook/eva-read-xlsx", methods=["POST"])
+def webhook_eva_read_xlsx():
+    """Prečíta XLSX a vráti sheets s headers+rows. Vstup: {file_url} alebo {data_base64}, max_rows_per_sheet"""
+    if not _hs_auth_ok(request):
+        return jsonify({"error": "unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    file_url = body.get("file_url")
+    data_b64 = body.get("data_base64")
+    max_rows = int(body.get("max_rows_per_sheet", 1000))
+
+    try:
+        from openpyxl import load_workbook
+        from io import BytesIO
+        import base64 as _b64
+
+        if data_b64:
+            blob = _b64.b64decode(data_b64)
+        elif file_url:
+            r = requests.get(file_url, timeout=30)
+            if r.status_code != 200:
+                return jsonify({"ok": False, "error": f"Download HTTP {r.status_code}"}), 400
+            blob = r.content
+        else:
+            return jsonify({"ok": False, "error": "missing file_url or data_base64"}), 400
+
+        wb = load_workbook(BytesIO(blob), data_only=True)
+        sheets = []
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            all_rows = list(ws.iter_rows(values_only=True))
+            if not all_rows:
+                sheets.append({"name": sheet_name, "headers": [], "rows": [], "total_rows": 0})
+                continue
+            # Detekcia headerov: prvý riadok ak má string hodnoty
+            first_row = all_rows[0]
+            has_string_header = all(v is None or isinstance(v, str) for v in first_row)
+            if has_string_header:
+                headers = [str(v) if v is not None else "" for v in first_row]
+                data_rows = all_rows[1:max_rows + 1]
+            else:
+                headers = []
+                data_rows = all_rows[:max_rows]
+            # Convert cell values to JSON-safe
+            clean_rows = []
+            for row in data_rows:
+                clean_rows.append([str(v) if hasattr(v, "isoformat") else v for v in row])
+            sheets.append({
+                "name": sheet_name,
+                "headers": headers,
+                "rows": clean_rows,
+                "total_rows": len(all_rows) - (1 if has_string_header else 0),
+                "truncated": len(all_rows) > (max_rows + (1 if has_string_header else 0)),
+            })
+
+        return jsonify({
+            "ok": True,
+            "sheets_count": len(sheets),
+            "sheets": sheets,
+        })
+    except Exception as e:
+        log.exception("[eva-read-xlsx] crashed")
+        return jsonify({"ok": False, "error": str(e)[:300]}), 500
