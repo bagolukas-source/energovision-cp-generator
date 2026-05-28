@@ -99,6 +99,37 @@ def create_artifact(supabase: Client, artifact_type: str, title: str,
         return None
 
 
+def post_and_track(supabase: Client, content: str, action_type: str,
+                   artifact_type: str, artifact_title: str,
+                   related_type: Optional[str] = None, related_id: Optional[str] = None,
+                   preview_text: Optional[str] = None,
+                   actions: Optional[List[Dict]] = None,
+                   metadata: Optional[Dict] = None) -> Optional[str]:
+    """Pošli chat message + zaregistruj artifact do eva_artifacts (zásobník Eva pripravila)."""
+    mid = post_chat_message(
+        supabase, content, action_type=action_type,
+        related_type=related_type, related_id=related_id,
+        actions=actions,
+    )
+    if mid:
+        try:
+            artifact_row = {
+                "artifact_type": artifact_type,
+                "title": artifact_title,
+                "description": content[:500],
+                "preview_text": (preview_text or content)[:500],
+                "related_type": related_type,
+                "related_id": related_id,
+                "message_id": mid,
+                "status": "pending",
+                "metadata": metadata or {},
+            }
+            supabase.table("eva_artifacts").insert(artifact_row).execute()
+        except Exception as e:
+            log.warning(f"post_and_track artifact insert failed: {e}")
+    return mid
+
+
 def post_chat_message(supabase: Client, content: str, action_type: str = "task_prep",
                       related_type: Optional[str] = None, related_id: Optional[str] = None,
                       artifacts: Optional[List[Dict]] = None,
@@ -168,11 +199,14 @@ def hourly_autonomous_pass(supabase: Client) -> Dict[str, Any]:
             amount = float(m.get("payment_amount") or 0)
             content = f"Pre projekt {code} je splatná FA {m.get('fa_no','?')} o {days_left} dní ({amount:,.0f} €). Pripravila som draft pripomienky klientovi — pošlite jedným klikom."
 
-            mid = post_chat_message(
+            mid = post_and_track(
                 supabase, content,
                 action_type="reminder",
+                artifact_type="invoice_reminder",
+                artifact_title=f"Pripomienka FA pre {code} ({amount:,.0f} €)",
                 related_type="project", related_id=related_id,
-                actions=[{"label": "Otvor projekt", "action_key": "open_project", "payload": {"id": related_id}}]
+                actions=[{"label": "Otvor projekt", "action_key": "open_project", "payload": {"id": related_id}}],
+                metadata={"days_until_due": days_left, "amount_eur": amount, "fa_no": m.get("fa_no")},
             )
             log_action(supabase, "invoice_due", "project", related_id, "sent_message", message_id=mid, silence_hours=48)
             actions_taken.append({"type": "invoice_due", "project": code, "days": days_left})
@@ -190,10 +224,13 @@ def hourly_autonomous_pass(supabase: Client) -> Dict[str, Any]:
             if not check_silence(supabase, "external_response", "external_order", related_id, silence_hours=12):
                 continue
             content = f"Draft objednávky '{e.get('email_subject','?')}' ({e['service_type']}) čaká už viac ako 2 hodiny na odoslanie. Pošleme?"
-            mid = post_chat_message(
+            mid = post_and_track(
                 supabase, content, action_type="reminder",
+                artifact_type="external_draft",
+                artifact_title=f"Draft objednávky: {e.get('email_subject','?')}",
                 related_type="external_order", related_id=related_id,
-                actions=[{"label": "Pozri draft", "action_key": "open_project", "payload": {"id": e["project_id"]}}]
+                actions=[{"label": "Pozri draft", "action_key": "open_project", "payload": {"id": e["project_id"]}}],
+                metadata={"service_type": e.get("service_type"), "project_id": e.get("project_id")},
             )
             log_action(supabase, "external_response", "external_order", related_id, "sent_message", message_id=mid)
             actions_taken.append({"type": "external_pending", "id": related_id})
@@ -214,10 +251,13 @@ def hourly_autonomous_pass(supabase: Client) -> Dict[str, Any]:
             code = project.get("project_code", "?")
             days = (today - datetime.fromisoformat(t["due_date"]).date()).days
             content = f"[{code}] Úloha '{t.get('name','?')}' je {days} dní po termíne. Owner: {t.get('owner_role','?')}."
-            mid = post_chat_message(
+            mid = post_and_track(
                 supabase, content, action_type="alert",
+                artifact_type="task_overdue_alert",
+                artifact_title=f"Overdue úloha: {t.get('name','?')} ({code})",
                 related_type="project", related_id=related_id,
-                actions=[{"label": "Otvor projekt", "action_key": "open_project", "payload": {"id": related_id}}]
+                actions=[{"label": "Otvor projekt", "action_key": "open_project", "payload": {"id": related_id}}],
+                metadata={"days_overdue": days, "owner_role": t.get("owner_role"), "task_id": t.get("id")},
             )
             log_action(supabase, "task_overdue", "project", related_id, "sent_message", message_id=mid, silence_hours=48)
             actions_taken.append({"type": "task_overdue", "project": code, "days": days})
