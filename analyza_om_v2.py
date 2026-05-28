@@ -67,30 +67,84 @@ def _build_request_from_analyza(analyza: dict) -> dict:
     if hard_cap_kwp and optimal_kwp > hard_cap_kwp:
         optimal_kwp = hard_cap_kwp
     
-    # 4 PV varianty: 40%/65%/85%/100% (max = MRK × 1.2 = hard_cap)
-    pv_options = [
-        round(optimal_kwp * 0.4, 0),
-        round(optimal_kwp * 0.65, 0),
-        round(optimal_kwp * 0.85, 0),
-        round(optimal_kwp, 0),
-    ]
-    # Hard cap — žiadny variant nesmie prekročiť MRK × 1.2
-    if hard_cap_kwp:
-        pv_options = [min(p, hard_cap_kwp) for p in pv_options]
-    pv_options = [p for p in pv_options if p >= 5]
-    pv_options = sorted(set(pv_options))  # dedup + sort
+    # SCENÁR-AWARE SIZING ────────────────────────────────────────
+    scenario_type = (analyza.get("scenario_type") or "nova_fve").lower()
+    existing_kwp = float(analyza.get("existing_fve_kwp") or 0)
+    existing_bess = float(analyza.get("existing_bess_kwh") or 0)
     
-    # BESS variants — scaling podľa PV size
-    if optimal_kwp <= 30:
-        bess_options = [0, 10, 30]
-    elif optimal_kwp <= 100:
-        bess_options = [0, 50, 100]
-    elif optimal_kwp <= 300:
-        bess_options = [0, 100, 250]
-    elif optimal_kwp <= 800:
-        bess_options = [0, 200, 500]
+    if scenario_type == "iba_bess_arbitraz":
+        # Iba BESS arbitráž — žiadne FVE
+        pv_options = [0]
+        # BESS scale based on MRK power
+        max_bess_kwh = (mrk_kw or 100) * 4  # 4h kapacita
+        bess_options = [
+            round(max_bess_kwh * 0.25, 0),
+            round(max_bess_kwh * 0.5, 0),
+            round(max_bess_kwh * 0.75, 0),
+            round(max_bess_kwh, 0),
+        ]
+        bess_options = [b for b in bess_options if b >= 10]
+        bess_options = sorted(set(bess_options))
+    elif scenario_type == "pridanie_bess":
+        # Existujúca FVE — pridať len BESS, FVE size nemenná
+        pv_options = [existing_kwp] if existing_kwp > 0 else [round(optimal_kwp, 0)]
+        # BESS pridanie: 4-6h kapacita podľa FVE
+        base_fve = existing_kwp or optimal_kwp
+        bess_options = [
+            round(base_fve * 0.5, 0),
+            round(base_fve * 1.0, 0),
+            round(base_fve * 1.5, 0),
+            round(base_fve * 2.0, 0),
+        ]
+        bess_options = [b for b in bess_options if b >= 10]
+        bess_options = sorted(set(bess_options))
+    elif scenario_type == "rozsirenie_fve":
+        # Rozšírenie existujúcej FVE — generuj +ΔkWp varianty
+        # Engine simuluje TOTAL FVE size (existujúca + nová), ale varianty zobrazí v UI
+        # Available headroom = hard_cap - existing
+        headroom = (hard_cap_kwp or optimal_kwp * 1.5) - existing_kwp
+        if headroom < 20:
+            # Žiadny priestor na rozšírenie — fallback 1 variant = existing
+            pv_options = [existing_kwp]
+        else:
+            # 4 prírastky: 25%/50%/75%/100% headroom-u
+            deltas = [headroom * 0.25, headroom * 0.5, headroom * 0.75, headroom]
+            pv_options = [round(existing_kwp + d, 0) for d in deltas]
+            pv_options = sorted(set([p for p in pv_options if p > existing_kwp]))
+        # BESS scaling podľa total (zachované existujúce + možnosti add)
+        total_max = pv_options[-1] if pv_options else existing_kwp
+        if total_max <= 100:
+            bess_options = [existing_bess, existing_bess + 50, existing_bess + 100]
+        elif total_max <= 300:
+            bess_options = [existing_bess, existing_bess + 100, existing_bess + 250]
+        elif total_max <= 800:
+            bess_options = [existing_bess, existing_bess + 200, existing_bess + 500]
+        else:
+            bess_options = [existing_bess, existing_bess + 500, existing_bess + 1000]
+        bess_options = sorted(set([round(b, 0) for b in bess_options if b >= 0]))
     else:
-        bess_options = [0, 500, 1000]
+        # nova_fve / custom — default 4 PV × 3 BESS matrix
+        pv_options = [
+            round(optimal_kwp * 0.4, 0),
+            round(optimal_kwp * 0.65, 0),
+            round(optimal_kwp * 0.85, 0),
+            round(optimal_kwp, 0),
+        ]
+        if hard_cap_kwp:
+            pv_options = [min(p, hard_cap_kwp) for p in pv_options]
+        pv_options = [p for p in pv_options if p >= 5]
+        pv_options = sorted(set(pv_options))
+        
+        if optimal_kwp <= 30:
+            bess_options = [0, 10, 30]
+        elif optimal_kwp <= 100:
+            bess_options = [0, 50, 100]
+        elif optimal_kwp <= 300:
+            bess_options = [0, 100, 250]
+        elif optimal_kwp <= 800:
+            bess_options = [0, 200, 500]
+        else:
+            bess_options = [0, 500, 1000]
     
     if annual_kwh <= 0:
         annual_kwh = optimal_kwp * 1000  # ~1000 kWh/kWp rule of thumb
@@ -171,6 +225,89 @@ def _build_request_from_analyza(analyza: dict) -> dict:
     }
 
 
+def _generate_ai_narrative(analyza: dict, variants: list, top_picks: list) -> dict:
+    """Vygeneruje energetik-úvahu pre posudok pomocou Claude API.
+    Vracia 4-paragraph narrative + scenárový kontext."""
+    try:
+        import anthropic
+        import os
+        client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+        scenario_type = analyza.get("scenario_type") or "nova_fve"
+        scenario_desc = analyza.get("scenario_description") or ""
+        existing_kwp = float(analyza.get("existing_fve_kwp") or 0)
+        existing_samosp = float(analyza.get("existing_fve_samosp_pct") or 0)
+        mrk = analyza.get("om_mrk_kw")
+        rk = analyza.get("om_rk_kw")
+        annual = float(analyza.get("consumption_annual_mwh") or 0)
+
+        # Top 3 varianty pre referenciu
+        top_3 = sorted([v for v in variants if v.get("npv_eur") is not None],
+                       key=lambda x: x.get("npv_eur") or 0, reverse=True)[:3]
+        top_summary = [
+            {
+                "label": v.get("label", "?"),
+                "pv_kwp": v.get("pv_kwp"),
+                "bess_kwh": v.get("bess_kwh"),
+                "capex_eur": v.get("capex_total_eur"),
+                "npv_eur": v.get("npv_eur"),
+                "irr_pct": v.get("irr_pct"),
+                "payback_y": v.get("payback_simple_y"),
+                "samosp_pct": v.get("samospotreba_pct"),
+            }
+            for v in top_3
+        ]
+
+        scenario_label = {
+            "nova_fve": "Nová FVE (greenfield)",
+            "rozsirenie_fve": f"Rozšírenie existujúcej FVE ({existing_kwp:.0f} kWp v prevádzke, samosp. {existing_samosp:.0f}%)",
+            "pridanie_bess": f"Pridanie BESS k existujúcej FVE {existing_kwp:.0f} kWp",
+            "iba_bess_arbitraz": "Iba BESS arbitráž bez FVE",
+            "custom": "Custom scenár",
+        }.get(scenario_type, scenario_type)
+
+        prompt = f"""Si senior energetik s 15-ročnou praxou v dimenzovaní fotovoltických elektrární a BESS pre slovenský priemysel.
+
+Klient {analyza.get('name', 'OM')} prišiel s týmto scenárom:
+SCENÁR: {scenario_label}
+{f'POZNÁMKA OBCHODNÍKA: {scenario_desc}' if scenario_desc else ''}
+
+PARAMETRE ODBERNÉHO MIESTA:
+- Ročná spotreba: {annual:.0f} MWh
+- MRK (max rezerv. kapacita pre odber): {mrk} kW
+- RK (rez. kapacita pre dodávku): {rk or 'nie zadané'} kW
+- Sadzba: {analyza.get('om_sadzba', 'VN')}
+- Tarif klienta: nákup {analyza.get('tarif_buy', 0.146):.3f} €/kWh, výkup {analyza.get('tarif_sell', 0.06):.3f} €/kWh
+
+TOP 3 VARIANTY PODĽA NPV:
+{top_summary}
+
+Napíš 4 odseky úvahy v slovenčine pre TECHNICKO-EKONOMICKÝ POSUDOK (nie strojový dump):
+1. PREČO TÁTO FVE/BESS DIMENZIA — argument prečo top variant pasuje k profilu odberu
+2. PREČO BESS ÁNO/NIE — argument pre alebo proti batérií pri danej cene exportu a profile
+3. STRATEGICKÝ POHĽAD 5-r HORIZONT — budúce zmeny tarif, dotácie, regulácia
+4. ČO BY MOHLO ZLEPŠIŤ EKONOMIKU — konkrétne odporúčania (zmena tarif, optimizéry, etapizácia)
+
+Píš ako energetik radí klientovi pri káve, nie ako AI. Konkrétne čísla. Energovision štýl — vecne, bez marketingu."""
+
+        msg = client.messages.create(
+            model="claude-sonnet-4-5-20250929",
+            max_tokens=2000,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        narrative_text = msg.content[0].text if msg.content else ""
+
+        return {
+            "text": narrative_text,
+            "scenario_type": scenario_type,
+            "scenario_description": scenario_desc,
+            "top_3_used": top_summary,
+            "generated_at": datetime.now().isoformat(),
+        }
+    except Exception as e:
+        log.warning("[ai-narrative] generation failed: %s", e)
+        return {"error": str(e)[:200], "scenario_type": analyza.get("scenario_type")}
+
+
 def run_variants_premium(sb, analyza_id: str) -> dict:
     """
     Spustí VariantGenerator nad analyza_om → uloží varianty do analyza_om_variants.
@@ -234,6 +371,9 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
             })
         sb.table("analyza_om_variants").insert(rows).execute()
     
+    # AI NARRATIVE — Claude úvaha pre posudok (energetik perspective)
+    ai_narrative = _generate_ai_narrative(analyza, result.get("variants", []), result.get("top_picks", []))
+
     # Save sim + econ summary do analyza_om
     # full_response sa použije pri renderingu Premium DOCX posudku (musí mať bohatú schému variantov)
     sb.table("analyza_om").update({
@@ -243,7 +383,8 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
             "top_picks": result.get("top_picks", []),
             "variants_count": len(variants),
             "engine_version": result.get("engine_version", "0.9.5"),
-            "full_response": result,  # full build_run_variants_response output (variants+top_picks+manifest)
+            "full_response": result,
+            "ai_narrative": ai_narrative,
         },
         "updated_at": datetime.now().isoformat(),
     }).eq("id", analyza_id).execute()
