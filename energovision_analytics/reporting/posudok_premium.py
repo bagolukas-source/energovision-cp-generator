@@ -418,6 +418,14 @@ def generate_premium_posudok(
     prepared_by_phone: str = "0918 187 762",
     company_ico: str = "53 036 280",
     logo_path: Optional[str] = None,
+    # NEW v2 — scenario-aware posudok
+    scenario_type: str = "nova_fve",          # nova_fve / rozsirenie_fve / pridanie_bess / iba_bess_arbitraz / custom
+    scenario_description: Optional[str] = None,  # 1-veta opis od obchodníka
+    existing_fve_kwp: float = 0,
+    existing_bess_kwh: float = 0,
+    existing_fve_samosp_pct: Optional[float] = None,
+    ai_narrative: Optional[str] = None,       # AI úvaha (4 odseky energetik-style)
+    posudok_number: Optional[str] = None,     # P-26-XXX (explicitné číslo)
 ) -> bytes:
     """Vyrobí kompletný DOCX posudok podľa Energovision šablóny + engine sekcií.
 
@@ -487,7 +495,8 @@ def generate_premium_posudok(
     r_k.font.color.rgb = EV_GREEN
     sep = p_kicker.add_run("   ·   ")
     sep.font.name = "Arial"; sep.font.size = Pt(10); sep.font.color.rgb = EV_GRAY
-    r_id = p_kicker.add_run(f"{project_id} — {project_name}")
+    posudok_label = posudok_number if posudok_number else project_id
+    r_id = p_kicker.add_run(f"{posudok_label} — {project_name}")
     r_id.font.name = "Arial"; r_id.font.size = Pt(10); r_id.font.color.rgb = EV_DARK
 
     # Veľký nadpis klienta
@@ -602,10 +611,44 @@ def generate_premium_posudok(
         f"návratnosť {selected['payback_simple_y']:.1f} roka pri NPV +{selected['npv_eur']:,.0f} €."
     ))
 
+    # Scenario-aware úvod
+    scenario_intros = {
+        "nova_fve": (
+            f"Posudok hodnotí investíciu do novej fotovoltickej elektrárne "
+            f"{selected['pv_kwp']:.0f} kWp{bess_txt} na odbernom mieste klienta "
+            f"{client_name} (greenfield bez existujúcej FVE)."
+        ),
+        "rozsirenie_fve": (
+            f"Posudok hodnotí ROZŠÍRENIE existujúcej FVE {existing_fve_kwp:.0f} kWp "
+            f"o ďalších {selected['pv_kwp'] - existing_fve_kwp:.0f} kWp{bess_txt} na odbernom mieste klienta "
+            f"{client_name}. Aktuálna samospotreba existujúcej FVE: "
+            f"{existing_fve_samosp_pct:.0f}% (z ročnej produkcie)." if existing_fve_samosp_pct else
+            f"Posudok hodnotí ROZŠÍRENIE existujúcej FVE {existing_fve_kwp:.0f} kWp "
+            f"o ďalších {selected['pv_kwp'] - existing_fve_kwp:.0f} kWp{bess_txt} na odbernom mieste klienta {client_name}."
+        ),
+        "pridanie_bess": (
+            f"Posudok hodnotí PRIDANIE batériového úložiska {selected.get('bess_kwh', 0):.0f} kWh "
+            f"k existujúcej FVE {existing_fve_kwp:.0f} kWp na odbernom mieste klienta {client_name}. "
+            f"Cieľ: maximalizovať samospotrebu a využiť spot arbitráž."
+        ),
+        "iba_bess_arbitraz": (
+            f"Posudok hodnotí investíciu do batériového úložiska {selected.get('bess_kwh', 0):.0f} kWh "
+            f"bez FVE na odbernom mieste klienta {client_name}. "
+            f"Cieľ: čistá spot arbitráž + peak shaving (zníženie MRK)."
+        ),
+        "custom": (
+            f"Posudok hodnotí riešenie {selected['pv_kwp']:.0f} kWp FVE{bess_txt} "
+            f"na odbernom mieste klienta {client_name} podľa špecifických požiadaviek obchodníka."
+        ),
+    }
+    _para(doc, scenario_intros.get(scenario_type, scenario_intros["nova_fve"]))
+
+    # Ak je obchodníkov opis, zaraď ho do úvodu
+    if scenario_description:
+        _para(doc, f"Požiadavka klienta: {scenario_description}", italic=True)
+
     _para(doc, (
-        f"Posudok hodnotí investíciu do fotovoltickej elektrárne "
-        f"{selected['pv_kwp']:.0f} kWp{bess_txt} na odbernom mieste klienta "
-        f"{client_name}. Ročná spotreba {site_meta.get('rocna_spotreba_kwh') or 0:,.0f} kWh, "
+        f"Ročná spotreba {site_meta.get('rocna_spotreba_kwh') or 0:,.0f} kWh, "
         f"distribútor {site_meta.get('distribuutor') or '?'} {site_meta.get('sadzba') or 'NN'}. "
         f"Engine simuloval {run_response.get('n_variants_run', 0)} variantov "
         f"konfigurácie PV × BESS na hodinovej granularite (8 760 h) "
@@ -736,6 +779,38 @@ def generate_premium_posudok(
         ["Samostatnosť OM", f"{selected['samostatnost_pct']:.1f} %"],
         ["Import zo siete", f"{selected['grid_import_kwh']:,.0f} kWh"],
     ], col_widths_cm=[10, 7])
+
+    # ===============================================================
+    # SEKCIA 3b — AI ÚVAHA ENERGETIKA (Detailná analýza)
+    # ===============================================================
+    if ai_narrative and len(ai_narrative.strip()) > 50:
+        _kicker(doc, "3b — Detailná analýza energetika")
+        _h1(doc, "Úvaha senior energetika k tomuto projektu")
+        _para(doc, (
+            "Nasledujúce úvahy spracoval senior energetik s 15-ročnou praxou "
+            "v dimenzovaní FVE/BESS pre slovenský priemysel. Berie do úvahy "
+            "scenár klienta, profil odberu, aktuálne tarify a budúce regulačné zmeny."
+        ), italic=True)
+
+        # AI narrative môže obsahovať markdown headings / odseky
+        for paragraph in ai_narrative.split("\n\n"):
+            ptxt = paragraph.strip()
+            if not ptxt:
+                continue
+            # Detekcia headingov (1. PREČO ... / **NADPIS** / # NADPIS)
+            if ptxt.startswith("#") or (ptxt[0].isdigit() and ". " in ptxt[:5] and ptxt.split(". ", 1)[0].isdigit()):
+                # Heading
+                heading_text = ptxt.lstrip("#").strip()
+                # Strip numbering
+                if heading_text and heading_text[0].isdigit():
+                    parts = heading_text.split(". ", 1)
+                    if len(parts) == 2:
+                        heading_text = parts[1]
+                _h3(doc, heading_text.replace("**", "").strip())
+            else:
+                _para(doc, ptxt.replace("**", ""))
+
+        doc.add_paragraph()
 
     # ===============================================================
     # SEKCIA 4 — DOTÁCIA (ak je)

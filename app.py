@@ -11559,3 +11559,221 @@ def webhook_eva_read_xlsx():
     except Exception as e:
         log.exception("[eva-read-xlsx] crashed")
         return jsonify({"ok": False, "error": str(e)[:300]}), 500
+
+
+# ============================================================================
+# INTERNÝ KALKULAČNÝ DOKUMENT — Task #8
+# Detailný breakdown výpočtov pre Energovision INTERNÉ použitie
+# (nezdieľa sa s klientom — obsahuje raw čísla, sensitivity matrix, AI úvahy)
+# ============================================================================
+
+@app.route("/webhook/analyza-om-render-internal-calc", methods=["POST"])
+def webhook_aom_render_internal_calc():
+    """Vygeneruje INTERNÝ kalkulačný DOCX pre Energovision (nie pre klienta)."""
+    if not _hs_auth_ok(request):
+        return jsonify({"error": "unauthorized"}), 401
+    if not _aom_v2:
+        return jsonify({"ok": False, "error": "analyza_om_v2 not loaded"}), 500
+
+    body = request.get_json(silent=True) or {}
+    analyza_id = body.get("analyza_id")
+    if not analyza_id:
+        return jsonify({"ok": False, "error": "analyza_id required"}), 400
+
+    try:
+        result = _generate_internal_calc_doc(analyza_id)
+        return jsonify(result)
+    except Exception as e:
+        log.exception("[aom-internal-calc] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
+def _generate_internal_calc_doc(analyza_id: str) -> dict:
+    """Interná kalkulácia - raw data + step-by-step výpočet + sensitivity + AI thinking-out-loud."""
+    from docx import Document
+    from docx.shared import Pt, RGBColor, Cm
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from io import BytesIO
+    import base64 as _b64
+
+    sb = _sb()
+    a_res = sb.table("analyza_om").select("*").eq("id", analyza_id).single().execute()
+    analyza = a_res.data
+    if not analyza:
+        raise ValueError(f"Analyza {analyza_id} not found")
+
+    v_res = sb.table("analyza_om_variants").select("*").eq("analyza_id", analyza_id).order("position").execute()
+    variants = v_res.data or []
+
+    econ = analyza.get("econ_results") or {}
+    ai_narrative = econ.get("ai_narrative") or {}
+
+    doc = Document()
+    for section in doc.sections:
+        section.top_margin = Cm(2.0)
+        section.bottom_margin = Cm(2.0)
+        section.left_margin = Cm(2.0)
+        section.right_margin = Cm(2.0)
+
+    # CONFIDENTIAL header
+    header_p = doc.add_paragraph()
+    header_p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    hr = header_p.add_run("INTERNÉ — NEZDIEĽAŤ S KLIENTOM")
+    hr.font.size = Pt(9); hr.font.bold = True
+    hr.font.color.rgb = RGBColor(0xCC, 0x00, 0x00)
+
+    # Title
+    t = doc.add_heading(f"Interná kalkulácia · {analyza.get('posudok_number') or analyza.get('name', 'AOM-?')}", level=0)
+    for run in t.runs:
+        run.font.color.rgb = RGBColor(0x14, 0x83, 0x4A)
+
+    doc.add_paragraph(f"Vygenerované: {datetime.now().strftime('%d.%m.%Y %H:%M')}").italic = True
+
+    # 1. VSTUPNÉ DÁTA
+    doc.add_heading("1. Vstupné dáta", level=1)
+    inputs = [
+        ("Analyza ID", str(analyza_id)),
+        ("Klient (názov)", analyza.get("name", "—")),
+        ("Adresa", analyza.get("om_address", "—")),
+        ("PSČ", analyza.get("om_psc", "—")),
+        ("Sadzba", analyza.get("om_sadzba", "—")),
+        ("MRK (kW)", str(analyza.get("om_mrk_kw", "—"))),
+        ("RK (kW)", str(analyza.get("om_rk_kw", "—"))),
+        ("Max export (kW)", str(analyza.get("max_export_kw", "—"))),
+        ("Ročná spotreba (MWh)", str(analyza.get("consumption_annual_mwh", "—"))),
+        ("Tarif nákup (€/kWh)", str(analyza.get("tarif_buy", "—"))),
+        ("Tarif predaj (€/kWh)", str(analyza.get("tarif_sell", "—"))),
+        ("PVGIS yield (kWh/kWp)", str(analyza.get("pvgis_yield_kwh_per_kwp", "—"))),
+        ("Scenár", analyza.get("scenario_type", "nova_fve")),
+        ("Opis scenára", analyza.get("scenario_description") or "(nepovedané)"),
+        ("Existujúca FVE (kWp)", str(analyza.get("existing_fve_kwp", 0))),
+        ("Existujúce BESS (kWh)", str(analyza.get("existing_bess_kwh", 0))),
+        ("Dotácia zapnutá", "ÁNO" if analyza.get("dotacia_enabled") else "nie"),
+        ("Dotačná schéma", analyza.get("dotacia_scheme") or "—"),
+    ]
+    tbl = doc.add_table(rows=len(inputs), cols=2)
+    tbl.style = "Light List Accent 1"
+    for i, (k, v) in enumerate(inputs):
+        tbl.cell(i, 0).text = k
+        tbl.cell(i, 1).text = str(v)
+        tbl.cell(i, 0).paragraphs[0].runs[0].font.bold = True
+
+    # 2. PER-VARIANT VÝPOČTY
+    doc.add_paragraph()
+    doc.add_heading("2. Per-variant ekonomické výpočty", level=1)
+    if not variants:
+        doc.add_paragraph("Žiadne varianty zatiaľ nepočítané. Spusti VariantGenerator.").italic = True
+    else:
+        for v in variants:
+            doc.add_heading(f"{v.get('name', 'Variant')} — {v.get('fve_kwp', 0)} kWp + {v.get('bess_kwh', 0)} kWh", level=2)
+            calc_rows = [
+                ("FVE kWp", str(v.get("fve_kwp", 0))),
+                ("BESS kWh", str(v.get("bess_kwh", 0))),
+                ("BESS kW", str(v.get("bess_kw", 0))),
+                ("Topológia", v.get("fve_topology", "south")),
+                ("CAPEX (€)", f"{v.get('capex_eur', 0):,.0f}"),
+                ("Dotácia (€)", f"{v.get('result_dotacia_eur', 0):,.0f}"),
+                ("Net CAPEX (€)", f"{v.get('capex_eur', 0) - (v.get('result_dotacia_eur') or 0):,.0f}"),
+                ("Samospotreba (%)", str(v.get("result_samosp_pct", "—"))),
+                ("Samostatnosť (%)", str(v.get("result_samostat_pct", "—"))),
+                ("Import zo siete (MWh/r)", str(v.get("result_import_mwh", "—"))),
+                ("NPV 20r (€)", f"{v.get('result_npv_eur_base', 0):,.0f}"),
+                ("IRR (%)", str(v.get("result_irr_pct_base", "—"))),
+                ("Návratnosť (r)", str(v.get("result_payback_y_base", "—"))),
+            ]
+            t2 = doc.add_table(rows=len(calc_rows), cols=2)
+            t2.style = "Light List Accent 2"
+            for i, (k, vv) in enumerate(calc_rows):
+                t2.cell(i, 0).text = k
+                t2.cell(i, 1).text = str(vv)
+            doc.add_paragraph()
+
+    # 3. SENSITIVITY MATRIX
+    doc.add_heading("3. Sensitivity matrix (NPV pri rôznych cenách)", level=1)
+    doc.add_paragraph(
+        "Tabuľka ukazuje ako NPV najvýhodnejšieho variantu reaguje na zmeny ceny nákupu a výkupu energie. "
+        "Užitočné pre stress-test pri zmene tarif klienta alebo regulácie."
+    )
+    if variants:
+        best = max(variants, key=lambda x: float(x.get("result_npv_eur_base") or 0))
+        base_buy = float(analyza.get("tarif_buy") or 0.146)
+        base_sell = float(analyza.get("tarif_sell") or 0.06)
+        base_npv = float(best.get("result_npv_eur_base") or 0)
+        # 5x5 matrix
+        buy_modifiers = [-0.20, -0.10, 0, +0.10, +0.20]
+        sell_modifiers = [-0.20, -0.10, 0, +0.10, +0.20]
+        st = doc.add_table(rows=6, cols=6)
+        st.style = "Light Grid Accent 1"
+        st.cell(0, 0).text = "P_BUY \\ P_SELL"
+        for j, sm in enumerate(sell_modifiers):
+            st.cell(0, j + 1).text = f"{base_sell * (1 + sm):.3f}"
+        for i, bm in enumerate(buy_modifiers):
+            st.cell(i + 1, 0).text = f"{base_buy * (1 + bm):.3f}"
+            for j, sm in enumerate(sell_modifiers):
+                # Simplified: NPV scales linearly with prices (true sensitivity needs full re-sim)
+                scale = (1 + bm) * 0.7 + (1 + sm) * 0.3
+                npv_scaled = base_npv * scale
+                st.cell(i + 1, j + 1).text = f"{npv_scaled / 1000:,.0f} k€"
+
+    # 4. AI THINKING-OUT-LOUD
+    doc.add_paragraph()
+    doc.add_heading("4. AI úvaha (čo Eva rátala a prečo)", level=1)
+    if ai_narrative.get("text"):
+        doc.add_paragraph(
+            f"AI scenár: {ai_narrative.get('scenario_type', '—')} · "
+            f"opis: {ai_narrative.get('scenario_description') or '(nepovedané)'}"
+        ).italic = True
+        for para in (ai_narrative.get("text") or "").split("\n\n"):
+            if para.strip():
+                doc.add_paragraph(para.strip())
+    else:
+        doc.add_paragraph("AI narrative nebola vygenerovaná (skontroluj že VariantGenerator prešiel + ANTHROPIC_API_KEY je nastavený).").italic = True
+
+    # 5. METHODOLOGY
+    doc.add_paragraph()
+    doc.add_heading("5. Metodika výpočtov", level=1)
+    methods = [
+        "Diskontná sadzba (WACC): 6.0 % p.a. (štandard infraštruktúrnych projektov)",
+        "Životnosť projektu: 20 rokov (FVE LCOE 25-30 r typicky)",
+        "Inflácia cien energie: 2.5 % p.a. (regulačný štandard + uhlíkové ceny)",
+        "Reziduálna hodnota po 20r: 10 % CAPEX (FVE EOL 90 % výkonu)",
+        "OPEX: 1.5 % CAPEX/r (údržba, monitoring, poistenie)",
+        "Degradácia FVE: 0.5 %/r lineárna (Tier 1 LONGi/Jinko)",
+        "Degradácia BESS: 2 %/r (LFP chémia, 1 cyklus/deň priemer)",
+        "DPPO sadzba: 21 % (aktuálna SR)",
+        "Daňový odpis: 6 rokov rovnomerne (štandardný FVE odpis)",
+        "Spot ceny: OKTE DAM 2025 archív (8760 h, kalibrovaný)",
+        "PVGIS yield: zo zadaných lat/lon + sklon 35° juh (alebo custom topology)",
+        "BESS arbitráž: rule_based EMS, top-N spot rozdielových párov",
+    ]
+    for m in methods:
+        doc.add_paragraph(m, style="List Bullet")
+
+    # 6. AUDIT
+    doc.add_paragraph()
+    doc.add_heading("6. Audit trail", level=1)
+    doc.add_paragraph(f"Engine verzia: {econ.get('engine_version', '0.9.5')}")
+    doc.add_paragraph(f"Variantov v matrix: {econ.get('variants_count', len(variants))}")
+    doc.add_paragraph(f"AI model (narrative): claude-sonnet-4.5 (Anthropic)")
+    doc.add_paragraph(f"Posudok vygenerovaný: {datetime.now().isoformat()}")
+
+    # Footer disclaimer
+    doc.add_paragraph()
+    p = doc.add_paragraph()
+    fp = p.add_run("⚠ Tento dokument obsahuje raw výpočty a interné úvahy. NEZDIEĽAŤ s klientom. Pre klientsky posudok použi 'Premium DOCX'.")
+    fp.italic = True
+    fp.font.color.rgb = RGBColor(0xCC, 0x00, 0x00)
+
+    # Save + upload
+    buf = BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    blob = buf.read()
+    storage_path = f"analyza_om/{analyza_id}/internal_calc_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+    sb.storage.from_("documents").upload(
+        storage_path, blob,
+        {"content-type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "upsert": "true"}
+    )
+    public_url = sb.storage.from_("documents").get_public_url(storage_path)
+
+    return {"ok": True, "docx_url": public_url, "storage_path": storage_path, "size_kb": len(blob) // 1024}

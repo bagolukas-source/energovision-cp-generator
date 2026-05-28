@@ -492,22 +492,46 @@ def render_posudok_premium(sb, analyza_id: str) -> dict:
     # Project ID — engine_version pre manifest footer
     engine_version = econ.get("engine_version") or "0.9.5"
     project_id = analyza.get("name") or f"AOM-{str(analyza_id)[:8]}"
-    
+
+    # Posudok number — buď explicit z analyza alebo auto-generate
+    posudok_number = analyza.get("posudok_number")
+    if not posudok_number:
+        # Auto: P-YY-XXX format - počíta sa z poradia
+        yr = datetime.now().strftime("%y")
+        try:
+            count_res = sb.table("analyza_om").select("id", count="exact").execute()
+            seq = (count_res.count or 0)
+            posudok_number = f"P-{yr}-{seq:03d}"
+        except Exception:
+            posudok_number = f"P-{yr}-XXX"
+
+    # AI narrative + scenario z econ_results
+    ai_narrative_obj = econ.get("ai_narrative") or {}
+    ai_narrative_text = ai_narrative_obj.get("text", "") if isinstance(ai_narrative_obj, dict) else ""
+
     # Render DOCX — funkcia VRACIA bytes (žiadny output_path!)
     docx_bytes = generate_premium_posudok(
         client_name=client_name,
         project_id=project_id,
+        posudok_number=posudok_number,
         client_address=analyza.get("om_address") or "",
         client_contact=client_contact,
         project_name=analyza.get("name") or "Hybridné riešenie FVE + BESS",
         site_meta=site_meta,
         run_response=run_response,
         engine_version=engine_version,
-        manifest_footer=f"Engine v{engine_version} | Analýza OM {project_id}",
+        manifest_footer=f"Engine v{engine_version} | {posudok_number} | Analýza OM {project_id}",
         posudok_date=datetime.now().strftime("%d.%m.%Y"),
         prepared_by_name="Lukáš Bago",
         prepared_by_email="lukas.bago@energovision.sk",
         prepared_by_phone="0918 187 762",
+        # Scenario-aware
+        scenario_type=analyza.get("scenario_type") or "nova_fve",
+        scenario_description=analyza.get("scenario_description"),
+        existing_fve_kwp=float(analyza.get("existing_fve_kwp") or 0),
+        existing_bess_kwh=float(analyza.get("existing_bess_kwh") or 0),
+        existing_fve_samosp_pct=float(analyza["existing_fve_samosp_pct"]) if analyza.get("existing_fve_samosp_pct") else None,
+        ai_narrative=ai_narrative_text or None,
     )
     
     # Upload do Storage
