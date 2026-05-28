@@ -11794,3 +11794,174 @@ def _generate_internal_calc_doc(analyza_id: str) -> dict:
     public_url = sb.storage.from_("documents").get_public_url(storage_path)
 
     return {"ok": True, "docx_url": public_url, "storage_path": storage_path, "size_kb": len(blob) // 1024}
+
+
+# ============================================================
+# TS-CONTRACT-GENERATE — vygeneruje zmluvu o správe TS z templátu
+# Vstup: {"contract_id": "<uuid>"}
+# - Vytiahne ts_contracts + customer + stations
+# - Vyplní šablónu Zmluva_sprava_TS_template.docx
+# - Upload do Supabase Storage documents/ts_contracts/{id}/zmluva_<num>.docx
+# - Vráti public_url
+# ============================================================
+@app.route("/webhook/ts-contract-generate", methods=["POST"])
+def ts_contract_generate():
+    body = request.get_json(silent=True) or {}
+    contract_id = body.get("contract_id")
+    if not contract_id:
+        return jsonify({"error": "missing contract_id"}), 400
+
+    sb_headers = {
+        "apikey": SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+    }
+
+    # Načítaj zmluvu
+    r = requests.get(
+        f"{SUPABASE_URL}/rest/v1/ts_contracts",
+        headers=sb_headers,
+        params={"id": f"eq.{contract_id}", "select": "*"},
+        timeout=10
+    )
+    if not r.ok or not r.json():
+        return jsonify({"error": "contract_not_found"}), 404
+    contract = r.json()[0]
+
+    # Načítaj customer
+    cust_id = contract.get("customer_id")
+    r = requests.get(
+        f"{SUPABASE_URL}/rest/v1/customers",
+        headers=sb_headers,
+        params={"id": f"eq.{cust_id}", "select": "*"},
+        timeout=10
+    )
+    cust = (r.json() or [{}])[0] if r.ok else {}
+
+    # Načítaj stanice
+    station_ids = contract.get("station_ids") or []
+    stations = []
+    if station_ids:
+        # PostgREST IN syntax: id=in.(uuid1,uuid2,...)
+        ids_str = ",".join(station_ids)
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/transformer_stations",
+            headers=sb_headers,
+            params={"id": f"in.({ids_str})", "select": "id,ts_code,name,location_address,location_city,location_psc,rated_power_kva,notes", "order": "ts_code"},
+            timeout=10
+        )
+        if r.ok:
+            stations = r.json()
+
+    # Postavíme ctx
+    full_address = " ".join(filter(None, [
+        cust.get("address") or cust.get("street") or "",
+        cust.get("city") or "",
+        cust.get("psc") or cust.get("zip_code") or ""
+    ]))
+
+    from datetime import datetime as _dt
+    today = _dt.now().strftime("%d.%m.%Y")
+
+    ctx = {
+        "companyName": cust.get("company_name") or f"{cust.get('first_name','')} {cust.get('last_name','')}".strip(),
+        "companyRegNumber": cust.get("ico") or "",
+        "companyTaxNumber": cust.get("dic") or "",
+        "companyStreet": cust.get("address") or cust.get("street") or "",
+        "companyCity": cust.get("city") or "",
+        "companyZipCode": cust.get("psc") or cust.get("zip_code") or "",
+        # Konateľ — z Notion-style placeholders (legacy)
+        "businessCaseTitul_pred_0cfa0": "",
+        "businessCaseMeno_03a27": cust.get("first_name") or "",
+        "businessCasePriezvisko_8375b": cust.get("last_name") or "",
+        "businessCaseTelefonne__fa5fd": cust.get("phone") or "",
+        "businessCaseEmail_2c918": cust.get("email") or "",
+        "createdAtDate": today,
+        # Prílohy
+        "contact_primary_name": cust.get("contact_primary_name") or cust.get("first_name", "") + " " + cust.get("last_name", ""),
+        "contact_primary_role": cust.get("contact_primary_role") or "Zodpovedná osoba",
+        "contact_primary_phone": cust.get("phone") or "",
+        "contact_primary_email": cust.get("email") or "",
+        "contact_secondary_name": cust.get("contact_secondary_name") or "",
+        "contact_secondary_role": cust.get("contact_secondary_role") or "",
+        "contact_secondary_phone": cust.get("contact_secondary_phone") or "",
+        "contact_secondary_email": cust.get("contact_secondary_email") or "",
+        "ev_service_lead_name": os.environ.get("EV_SERVICE_LEAD_NAME", "Lukáš Bago (zatiaľ)"),
+        "ev_service_lead_phone": os.environ.get("EV_SERVICE_LEAD_PHONE", "+421 918 187 762"),
+        "ev_service_lead_email": os.environ.get("EV_SERVICE_LEAD_EMAIL", "lukas.bago@energovision.sk"),
+    }
+
+    # TS list pre Prílohu č. 1
+    ts_rows = []
+    cena_rows = []
+    monthly_fee = float(contract.get("monthly_fee_eur") or 0)
+    per_ts_fee = monthly_fee / max(1, len(stations)) if stations else monthly_fee
+    sla_h = int(contract.get("sla_response_hours") or 24)
+    havaria = "áno" if contract.get("havarijna_included") else "nie"
+
+    for idx, st in enumerate(stations):
+        addr = " ".join(filter(None, [st.get("location_address"), st.get("location_psc"), st.get("location_city")]))
+        ts_rows.append({
+            "poradie": idx + 1,
+            "oznacenie": st.get("ts_code") or st.get("name"),
+            "adresa": addr,
+            "kva": st.get("rated_power_kva") or "",
+            "poznamka": st.get("notes") or "",
+        })
+        cena_rows.append({
+            "poradie": idx + 1,
+            "mesacny_pausal": f"{per_ts_fee:.2f}".replace(".", ","),
+            "pohotovostna": havaria,
+            "reakcia_h": sla_h,
+            "poznamka": "",
+        })
+
+    ctx["ts_rows"] = ts_rows
+    ctx["cena_rows"] = cena_rows
+    ctx["celkovy_mesacny_pausal"] = monthly_fee
+
+    # Generuj
+    import tempfile
+    from pathlib import Path as _Path
+    tmpdir = _Path(tempfile.mkdtemp())
+    out_path = tmpdir / f"Zmluva_TS_{contract.get('contract_number') or contract_id[:8]}.docx"
+
+    try:
+        from generuj_dokumenty import naplnit_ts_zmluvu
+        naplnit_ts_zmluvu(ctx, str(out_path))
+    except Exception as e:
+        log.exception("naplnit_ts_zmluvu zlyhalo")
+        return jsonify({"error": f"generate_failed: {e}"}), 500
+
+    # Upload do Storage
+    with open(out_path, "rb") as f:
+        file_bytes = f.read()
+
+    storage_path = f"ts_contracts/{contract_id}/{out_path.name}"
+    up = requests.post(
+        f"{SUPABASE_URL}/storage/v1/object/documents/{storage_path}",
+        headers={**sb_headers, "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "x-upsert": "true"},
+        data=file_bytes,
+        timeout=30
+    )
+    if not up.ok:
+        log.warning("ts contract storage upload zlyhal: %s %s", up.status_code, up.text)
+        return jsonify({"error": "storage_upload_failed", "body": up.text}), 500
+
+    public_url = f"{SUPABASE_URL}/storage/v1/object/public/documents/{storage_path}"
+
+    # Update ts_contracts.signed_pdf_url (re-use field — DOCX zatiaľ kým nepridáme PDF)
+    requests.patch(
+        f"{SUPABASE_URL}/rest/v1/ts_contracts",
+        headers={**sb_headers, "Content-Type": "application/json"},
+        params={"id": f"eq.{contract_id}"},
+        json={"signed_pdf_url": public_url},
+        timeout=10
+    )
+
+    try:
+        out_path.unlink()
+        tmpdir.rmdir()
+    except Exception:
+        pass
+
+    return jsonify({"ok": True, "url": public_url, "filename": out_path.name, "contract_number": contract.get("contract_number")})

@@ -1431,3 +1431,131 @@ def vygeneruj_dodatok(lead_data, out_dir):
     ev_id = lead_data.get('ev_id', 'EV-XX')
 
     return {'dodatok': naplnif_dodatok(lead_data, out_dir / f"{ev_id}_Dodatok_{base}.docx")}
+
+
+# ============================================================
+# TS ZMLUVA — generuje zmluvu o správe a servise TS z templátu
+# Template: templates_zmluvy/Zmluva_sprava_TS_template.docx
+# Placeholdery: {companyName}, {companyRegNumber}, ..., {createdAtDate}, {ev_service_lead_name}, atď.
+# ============================================================
+def naplnit_ts_zmluvu(ctx, output_path):
+    """
+    Vyplní šablónu zmluvy o správe a servise TS.
+
+    ctx = {
+        # Objednávateľ (z customers + business_case)
+        "companyName": "...",
+        "companyRegNumber": "...",  # IČO
+        "companyTaxNumber": "...",   # DIČ
+        "companyStreet": "...",
+        "companyCity": "...",
+        "companyZipCode": "...",
+        "businessCaseTitul_pred_0cfa0": "...",
+        "businessCaseMeno_03a27": "...",
+        "businessCasePriezvisko_8375b": "...",
+        "businessCaseTelefonne__fa5fd": "...",
+        "businessCaseEmail_2c918": "...",
+        "createdAtDate": "28.05.2026",
+        # Príloha č. 2 kontakty
+        "contact_primary_name": "...",
+        "contact_primary_role": "...",
+        "contact_primary_phone": "...",
+        "contact_primary_email": "...",
+        "contact_secondary_name": "...",
+        "contact_secondary_role": "...",
+        "contact_secondary_phone": "...",
+        "contact_secondary_email": "...",
+        "ev_service_lead_name": "...",
+        "ev_service_lead_phone": "...",
+        "ev_service_lead_email": "...",
+        # Príloha 1 (TS list + ceny) — JSON arrays
+        "ts_rows": [{"poradie": 1, "oznacenie": "TS-26-001", "adresa": "...", "kva": 630, "poznamka": ""}, ...],
+        "cena_rows": [{"poradie": 1, "mesacny_pausal": 250, "pohotovostna": "áno", "reakcia_h": 12, "poznamka": ""}, ...],
+        "celkovy_mesacny_pausal": 530,  # EUR bez DPH
+    }
+    """
+    template = TEMPLATES_DIR / "Zmluva_sprava_TS_template.docx"
+    shutil.copy(template, output_path)
+
+    with zipfile.ZipFile(output_path, 'r') as z:
+        members = {n: z.read(n) for n in z.namelist()}
+    xml = members['word/document.xml'].decode('utf-8')
+
+    def esc(v):
+        if v is None:
+            return ""
+        s = str(v)
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    # Najprv replace všetkých {key} placeholderov
+    def repl(m):
+        key = m.group(1)
+        return esc(ctx.get(key, m.group(0)))  # ak neni v ctx, ostane placeholder
+
+    new_xml = re.sub(r'\{([a-zA-Z_][a-zA-Z0-9_]*)\}', repl, xml)
+
+    # Pripravím TS table content (Príloha 1, Table 2)
+    # Pôvodne tam je 5 prázdnych riadkov s poradím 1-5. Vyplnime ich z ctx["ts_rows"].
+    # Nájdeme tabulku s hlavičkou "Por. č. | Označenie TS | Umiestnenie | Výkon | Poznámka"
+    ts_rows = ctx.get("ts_rows", [])
+    cena_rows = ctx.get("cena_rows", [])
+
+    # Pre tabulkové dáta vykonáme manipuláciu cez python-docx (jednoduchšie ako XML regex)
+    members['word/document.xml'] = new_xml.encode('utf-8')
+    with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as z:
+        for name, data in members.items():
+            z.writestr(name, data)
+
+    # Teraz cez python-docx vyplníme tabulky
+    try:
+        from docx import Document
+        doc = Document(output_path)
+
+        for table in doc.tables:
+            if not table.rows:
+                continue
+            header_cells = [c.text.strip() for c in table.rows[0].cells]
+            header_join = " | ".join(header_cells)
+
+            # Table 2: Por. č. | Označenie TS | Umiestnenie | Výkon | Poznámka
+            if "Označenie TS" in header_join and "Umiestnenie" in header_join:
+                for i, ts_row in enumerate(ts_rows[:5]):  # max 5 row-ov v templati
+                    if i + 1 >= len(table.rows):
+                        break
+                    row = table.rows[i + 1]
+                    if len(row.cells) >= 5:
+                        row.cells[0].text = str(ts_row.get("poradie", i + 1))
+                        row.cells[1].text = str(ts_row.get("oznacenie", ""))
+                        row.cells[2].text = str(ts_row.get("adresa", ""))
+                        row.cells[3].text = str(ts_row.get("kva", ""))
+                        row.cells[4].text = str(ts_row.get("poznamka", ""))
+
+            # Table 3: Por. č. | Mesačný paušál | Pohotovostná | Reakčný čas | Poznámka
+            elif "Mesa" in header_join and "Reak" in header_join:
+                for i, cena_row in enumerate(cena_rows[:5]):
+                    if i + 1 >= len(table.rows):
+                        break
+                    row = table.rows[i + 1]
+                    if len(row.cells) >= 5:
+                        row.cells[0].text = str(cena_row.get("poradie", i + 1))
+                        row.cells[1].text = str(cena_row.get("mesacny_pausal", ""))
+                        row.cells[2].text = str(cena_row.get("pohotovostna", "nie"))
+                        row.cells[3].text = str(cena_row.get("reakcia_h", "24"))
+                        row.cells[4].text = str(cena_row.get("poznamka", ""))
+
+        # Doplníme aj "Celkový mesačný paušál" — nájdeme ten paragraf
+        celkovy = ctx.get("celkovy_mesacny_pausal")
+        if celkovy is not None:
+            for p in doc.paragraphs:
+                if "Celkový mesačný paušál" in p.text and "EUR" in p.text:
+                    for r in p.runs:
+                        r.text = ""
+                    if p.runs:
+                        p.runs[0].text = f"Celkový mesačný paušál za všetky TS: {celkovy:,.2f} EUR bez DPH".replace(",", " ").replace(".", ",")
+                    break
+
+        doc.save(output_path)
+    except Exception as _e:
+        # Tabulky sa nepodarili — log a pokračujeme s aspoň textovou náhradou
+        import traceback
+        traceback.print_exc()

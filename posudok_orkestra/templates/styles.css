@@ -1,0 +1,466 @@
+/* ============ ORKESTRA-STYLE POSUDOK · WeasyPrint A4 portrait ============ */
+@page {
+  size: A4 portrait;
+  margin: 18mm 15mm 16mm 15mm;
+  @bottom-center {
+    content: "Energovision · Technicko-ekonomický posudok · " counter(page) " / " counter(pages);
+    font-size: 8pt;
+    color: #9CA3AF;
+    font-family: 'Inter', -apple-system, sans-serif;
+  }
+}
+@page:first { @bottom-center { content: none; } }  /* žiadny footer na cover */
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif;
+  font-size: 10pt;
+  color: #1F2937;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+.page {
+  page-break-after: always;
+  min-height: calc(297mm - 34mm);
+  position: relative;
+}
+.page:last-child { page-break-after: avoid; }
+
+/* ====================== TYPOGRAPHY ====================== */
+.page-title {
+  font-size: 22pt;
+  font-weight: 800;
+  color: #0F172A;
+  letter-spacing: -0.02em;
+  margin-bottom: 4pt;
+}
+.page-subtitle {
+  font-size: 11pt;
+  color: #6B7280;
+  margin-bottom: 22pt;
+}
+.section-label {
+  font-size: 9pt;
+  font-weight: 600;
+  color: #6B7280;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 10pt;
+}
+.kpi-section-label { margin-top: 18pt; }
+
+/* ====================== COVER PAGE ====================== */
+.cover {
+  display: flex;
+  flex-direction: column;
+  height: calc(297mm - 34mm);
+  justify-content: space-between;
+}
+.cover-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding-bottom: 18pt;
+}
+.cover-header .logo {
+  height: 32pt;
+  width: auto;
+}
+.cover-meta { text-align: right; }
+.meta-label {
+  font-size: 8.5pt;
+  color: #9CA3AF;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 2pt;
+}
+.meta-value {
+  font-size: 11pt;
+  color: #1F2937;
+  font-weight: 600;
+}
+
+.cover-hero {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 24pt 0;
+  border-top: 1px solid #E5E7EB;
+  border-bottom: 1px solid #E5E7EB;
+}
+.cover-eyebrow {
+  font-size: 10pt;
+  color: #16A34A;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-bottom: 10pt;
+}
+.cover-title {
+  font-size: 34pt;
+  font-weight: 800;
+  color: #0F172A;
+  letter-spacing: -0.025em;
+  line-height: 1.1;
+  margin-bottom: 8pt;
+}
+.cover-subtitle {
+  font-size: 12pt;
+  color: #4B5563;
+  font-weight: 400;
+}
+
+.cover-pillars {
+  display: flex;
+  gap: 16pt;
+  margin: 28pt 0;
+}
+.pillar {
+  flex: 1;
+  background: #F5F6F8;
+  border-radius: 8pt;
+  padding: 18pt 14pt;
+  text-align: left;
+}
+.pillar-value {
+  font-size: 28pt;
+  font-weight: 800;
+  color: #0F172A;
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+.pillar-unit {
+  font-size: 14pt;
+  font-weight: 600;
+  color: #6B7280;
+}
+.pillar-label {
+  font-size: 9pt;
+  color: #6B7280;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-top: 6pt;
+}
+
+.cover-footer {
+  display: flex;
+  gap: 24pt;
+  padding-top: 18pt;
+  border-top: 1px solid #E5E7EB;
+}
+.cover-footer-col { flex: 1; }
+
+/* ====================== EQUIPMENT CARDS ====================== */
+.equipment-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10pt;
+  margin-bottom: 18pt;
+}
+.equipment-card {
+  background: #FFFFFF;
+  border: 1px solid #E5E7EB;
+  border-radius: 6pt;
+  padding: 12pt 14pt;
+}
+.eq-header {
+  display: flex;
+  align-items: center;
+  gap: 8pt;
+  margin-bottom: 8pt;
+  padding-bottom: 8pt;
+  border-bottom: 1px solid #F3F4F6;
+}
+.eq-icon {
+  font-size: 14pt;
+  color: #16A34A;
+}
+.eq-title {
+  font-size: 11pt;
+  font-weight: 700;
+  color: #0F172A;
+}
+.eq-details {
+  font-size: 9pt;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4pt 10pt;
+}
+.eq-details dt { color: #6B7280; }
+.eq-details dd { color: #1F2937; font-weight: 500; text-align: right; }
+
+/* ====================== KPI PANEL ====================== */
+.kpi-panel {
+  background: #F5F6F8;
+  border-radius: 8pt;
+  padding: 24pt 18pt;
+}
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 18pt 12pt;
+}
+.kpi-grid .kpi-cell:nth-child(5),
+.kpi-grid .kpi-cell:nth-child(6),
+.kpi-grid .kpi-cell:nth-child(7) {
+  /* row 2 keeps 4-col grid; 7 items leave 1 empty cell */
+}
+.kpi-cell { padding: 0 4pt; }
+.kpi-value {
+  font-size: 22pt;
+  font-weight: 800;
+  color: #0F172A;
+  letter-spacing: -0.02em;
+  line-height: 1.05;
+}
+.kpi-unit {
+  font-size: 12pt;
+  font-weight: 600;
+  color: #6B7280;
+}
+.kpi-label {
+  font-size: 8.5pt;
+  color: #6B7280;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-top: 4pt;
+}
+
+/* ====================== CHART CARDS ====================== */
+.chart-card {
+  background: #FFFFFF;
+  border: 1px solid #E5E7EB;
+  border-radius: 6pt;
+  padding: 14pt 16pt;
+  margin-bottom: 12pt;
+}
+.chart-card-full { padding: 16pt; }
+.chart-card-narrow { padding: 14pt; }
+.chart-title {
+  font-size: 12pt;
+  font-weight: 700;
+  color: #0F172A;
+  margin-bottom: 2pt;
+}
+.chart-sub {
+  font-size: 8.5pt;
+  color: #6B7280;
+  margin-bottom: 10pt;
+}
+.chart-card svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.two-col {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 12pt;
+}
+
+/* ====================== CALLOUT ====================== */
+.callout {
+  background: #F0F9FF;
+  border-left: 3pt solid #5B7CFA;
+  padding: 12pt 14pt;
+  border-radius: 4pt;
+  font-size: 9.5pt;
+  color: #1F2937;
+  margin-top: 14pt;
+}
+.callout strong { color: #0F172A; font-weight: 700; }
+.callout-green {
+  background: #F0FDF4;
+  border-left-color: #16A34A;
+}
+
+/* ====================== ENERGY SUMMARY ====================== */
+.energy-summary {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10pt;
+  margin-top: 14pt;
+}
+.es-cell {
+  background: #F5F6F8;
+  padding: 12pt;
+  border-radius: 6pt;
+  text-align: center;
+}
+.es-value {
+  display: block;
+  font-size: 16pt;
+  font-weight: 800;
+  color: #0F172A;
+  margin-bottom: 3pt;
+}
+.es-label {
+  display: block;
+  font-size: 8.5pt;
+  color: #6B7280;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ====================== LEGEND ====================== */
+.legend-list {
+  list-style: none;
+  font-size: 9pt;
+  margin-top: 8pt;
+}
+.legend-list li {
+  display: flex;
+  align-items: center;
+  gap: 6pt;
+  padding: 3pt 0;
+  color: #4B5563;
+}
+.legend-list strong { color: #0F172A; margin-left: auto; }
+.lg-dot {
+  width: 10pt; height: 10pt;
+  border-radius: 2pt;
+  display: inline-block;
+}
+
+/* ====================== CARBON ====================== */
+.carbon-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 14pt;
+  margin-top: 8pt;
+}
+.carbon-card {
+  background: #F5F6F8;
+  border-radius: 8pt;
+  padding: 24pt 20pt;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 100pt;
+}
+.carbon-card-primary {
+  background: linear-gradient(135deg, #15803D 0%, #16A34A 100%);
+}
+.carbon-card-primary .carbon-value,
+.carbon-card-primary .carbon-label { color: #FFFFFF; }
+.carbon-card-primary .carbon-unit { color: #BBF7D0; }
+.carbon-value {
+  font-size: 32pt;
+  font-weight: 800;
+  color: #0F172A;
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+.carbon-unit {
+  font-size: 16pt;
+  font-weight: 600;
+  color: #6B7280;
+}
+.carbon-label {
+  font-size: 10pt;
+  color: #4B5563;
+  margin-top: 8pt;
+  line-height: 1.4;
+}
+
+/* ====================== VARIANTS TABLE ====================== */
+.variants-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 9pt;
+  margin-top: 4pt;
+}
+.variants-table th {
+  background: #F5F6F8;
+  color: #6B7280;
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 8pt;
+  letter-spacing: 0.04em;
+  padding: 10pt 8pt;
+  text-align: left;
+  border-bottom: 1px solid #E5E7EB;
+}
+.variants-table th.num,
+.variants-table td.num { text-align: right; }
+.variants-table td {
+  padding: 10pt 8pt;
+  border-bottom: 1px solid #F3F4F6;
+}
+.variants-table .winner-row {
+  background: #F0FDF4;
+}
+.variants-table .winner-row td {
+  font-weight: 600;
+  color: #0F172A;
+  border-bottom: 1px solid #BBF7D0;
+}
+.winner-badge {
+  background: #16A34A;
+  color: white;
+  font-size: 7.5pt;
+  font-weight: 700;
+  padding: 2pt 6pt;
+  border-radius: 2pt;
+  margin-left: 6pt;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* ====================== METHODOLOGY ====================== */
+.methodology {
+  font-size: 9.5pt;
+  line-height: 1.6;
+  color: #4B5563;
+}
+.methodology p {
+  margin-bottom: 6pt;
+  padding-left: 14pt;
+  position: relative;
+}
+.methodology p:before {
+  content: "›";
+  position: absolute;
+  left: 0;
+  color: #16A34A;
+  font-weight: 700;
+}
+.methodology strong { color: #0F172A; font-weight: 600; }
+
+.contact-card {
+  background: #F5F6F8;
+  border-radius: 6pt;
+  padding: 14pt 16pt;
+  margin-top: 24pt;
+}
+.contact-card h3 {
+  font-size: 10pt;
+  font-weight: 700;
+  color: #0F172A;
+  margin-bottom: 8pt;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.contact-card p {
+  font-size: 9.5pt;
+  line-height: 1.5;
+  color: #4B5563;
+  margin-bottom: 6pt;
+}
+.contact-card .company-info {
+  font-size: 8.5pt;
+  color: #9CA3AF;
+  padding-top: 6pt;
+  border-top: 1px solid #E5E7EB;
+}
+.footer-disclaimer {
+  font-size: 8pt;
+  color: #9CA3AF;
+  text-align: center;
+  margin-top: 18pt;
+  font-style: italic;
+}

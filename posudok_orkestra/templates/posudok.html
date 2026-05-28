@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+<meta charset="UTF-8">
+<title>{{ project_name }} — Technicko-ekonomický posudok</title>
+<style>{{ css|safe }}</style>
+</head>
+<body>
+
+{# =========================================================================
+   PAGE 1 — COVER
+   ========================================================================= #}
+<section class="page cover">
+  <header class="cover-header">
+    <img src="data:image/png;base64,{{ logo_b64 }}" alt="Energovision" class="logo">
+    <div class="cover-meta">
+      <div class="meta-label">Pripravené pre</div>
+      <div class="meta-value">{{ client_name }}</div>
+    </div>
+  </header>
+
+  <div class="cover-hero">
+    <div class="cover-eyebrow">Technicko-ekonomický posudok</div>
+    <h1 class="cover-title">{{ project_name }}</h1>
+    <p class="cover-subtitle">Fotovoltika {{ pv_kwp|round|int }} kWp{% if bess_kwh > 0 %} + batériové úložisko {{ bess_kwh|round|int }} kWh{% endif %} · {{ site_address }}</p>
+  </div>
+
+  <div class="cover-pillars">
+    <div class="pillar">
+      <div class="pillar-value">{{ payback_years|round(1) }}<span class="pillar-unit"> r</span></div>
+      <div class="pillar-label">návratnosť</div>
+    </div>
+    <div class="pillar">
+      <div class="pillar-value">{{ irr_pct|round(1) }}<span class="pillar-unit"> %</span></div>
+      <div class="pillar-label">vnútorná miera výnosu</div>
+    </div>
+    <div class="pillar">
+      <div class="pillar-value">+{{ npv_eur|format_currency }}</div>
+      <div class="pillar-label">NPV 20 rokov</div>
+    </div>
+  </div>
+
+  <footer class="cover-footer">
+    <div class="cover-footer-col">
+      <div class="meta-label">Vystavené</div>
+      <div class="meta-value">{{ posudok_date }}</div>
+    </div>
+    <div class="cover-footer-col">
+      <div class="meta-label">Pripravil</div>
+      <div class="meta-value">{{ prepared_by_name }}<br>{{ prepared_by_email }}<br>{{ prepared_by_phone }}</div>
+    </div>
+    <div class="cover-footer-col">
+      <div class="meta-label">Identifikátor</div>
+      <div class="meta-value">{{ project_id }}</div>
+    </div>
+  </footer>
+</section>
+
+{# =========================================================================
+   PAGE 2 — KPI HERO (Orkestra Page 1 replika)
+   ========================================================================= #}
+<section class="page">
+  <h2 class="page-title">Kľúčové parametre</h2>
+  <p class="page-subtitle">Zhrnutie výsledkov simulácie pre vybraný variant</p>
+
+  <h3 class="section-label">Modelované zmeny v odbernom mieste</h3>
+  <div class="equipment-grid">
+    <div class="equipment-card">
+      <div class="eq-header">
+        <span class="eq-icon">☀</span>
+        <span class="eq-title">Fotovoltika</span>
+      </div>
+      <dl class="eq-details">
+        <dt>Inštalovaný výkon</dt><dd>{{ pv_kwp|round|int }} kWp</dd>
+        <dt>Menič</dt><dd>{{ inverter_kw|round|int }} kW</dd>
+        <dt>Topológia</dt><dd>{{ fve_topology }}</dd>
+      </dl>
+    </div>
+
+    {% if bess_kwh > 0 %}
+    <div class="equipment-card">
+      <div class="eq-header">
+        <span class="eq-icon">⚡</span>
+        <span class="eq-title">Batéria</span>
+      </div>
+      <dl class="eq-details">
+        <dt>Kapacita</dt><dd>{{ bess_kwh|round|int }} kWh / {{ bess_kw|round|int }} kW</dd>
+        <dt>Typ</dt><dd>LFP (AC-coupled)</dd>
+        <dt>Stratégia</dt><dd>{{ ems_strategy }}</dd>
+      </dl>
+    </div>
+    {% endif %}
+
+    <div class="equipment-card">
+      <div class="eq-header">
+        <span class="eq-icon">⌂</span>
+        <span class="eq-title">Odberné miesto</span>
+      </div>
+      <dl class="eq-details">
+        <dt>MRK</dt><dd>{{ mrk_kw|round|int }} kW</dd>
+        <dt>Ročná spotreba</dt><dd>{{ annual_kwh|format_kwh }}</dd>
+        <dt>Tarif</dt><dd>{{ tarif_typ }}</dd>
+      </dl>
+    </div>
+  </div>
+
+  <h3 class="section-label kpi-section-label">Kľúčové metriky</h3>
+  <div class="kpi-panel">
+    <div class="kpi-grid">
+      <div class="kpi-cell">
+        <div class="kpi-value">{{ capex_total_eur|format_currency }}</div>
+        <div class="kpi-label">Investícia</div>
+      </div>
+      <div class="kpi-cell">
+        <div class="kpi-value">{{ saving_y1_eur|format_currency }}</div>
+        <div class="kpi-label">Ročné úspory</div>
+      </div>
+      <div class="kpi-cell">
+        <div class="kpi-value">{{ payback_years|round(1) }} <span class="kpi-unit">rokov</span></div>
+        <div class="kpi-label">Návratnosť</div>
+      </div>
+      <div class="kpi-cell">
+        <div class="kpi-value">{{ irr_pct|round(1) }} <span class="kpi-unit">%</span></div>
+        <div class="kpi-label">Miera výnosu</div>
+      </div>
+      <div class="kpi-cell">
+        <div class="kpi-value">+{{ npv_eur|format_currency }}</div>
+        <div class="kpi-label">NPV 20 rokov</div>
+      </div>
+      <div class="kpi-cell">
+        <div class="kpi-value">{{ samospotreba_pct|round(1) }} <span class="kpi-unit">%</span></div>
+        <div class="kpi-label">Samospotreba</div>
+      </div>
+      <div class="kpi-cell">
+        <div class="kpi-value">{{ samostatnost_pct|round(1) }} <span class="kpi-unit">%</span></div>
+        <div class="kpi-label">Energetická nezávislosť</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+{# =========================================================================
+   PAGE 3 — CASHFLOW (financial)
+   ========================================================================= #}
+<section class="page">
+  <h2 class="page-title">Hotovostný tok</h2>
+  <p class="page-subtitle">Čisté a kumulované peňažné toky (€), všetkých {{ analysis_years }} rokov</p>
+  <div class="chart-card chart-card-full">
+    {{ chart_cashflow_svg|safe }}
+  </div>
+  <div class="callout">
+    <strong>Kumulovaný cash flow na konci {{ analysis_years }}. roka: {{ accumulated_cf_final|format_currency }}.</strong>
+    Investícia sa vráti v {{ payback_years|round(1) }}. roku prevádzky; po tomto bode generuje variant čistý zisk.
+  </div>
+</section>
+
+{# =========================================================================
+   PAGE 4 — ENERGY FLOW (4-circle Orkestra-style)
+   ========================================================================= #}
+<section class="page">
+  <h2 class="page-title">Ročný tok energie</h2>
+  <p class="page-subtitle">MWh ročne · {{ year_label }}</p>
+  <div class="chart-card chart-card-full">
+    {{ chart_energy_flow_svg|safe }}
+  </div>
+  <div class="energy-summary">
+    <div class="es-cell"><span class="es-value">{{ pv_total_mwh|round|int }} MWh</span><span class="es-label">Výroba FVE</span></div>
+    <div class="es-cell"><span class="es-value">{{ load_total_mwh|round|int }} MWh</span><span class="es-label">Spotreba OM</span></div>
+    <div class="es-cell"><span class="es-value">{{ grid_import_mwh|round|int }} MWh</span><span class="es-label">Import zo siete</span></div>
+    <div class="es-cell"><span class="es-value">{{ grid_export_mwh|round|int }} MWh</span><span class="es-label">Export do siete</span></div>
+  </div>
+</section>
+
+{# =========================================================================
+   PAGE 5 — DAILY LOAD + SOLAR CONSUMPTION (2-col)
+   ========================================================================= #}
+<section class="page">
+  <h2 class="page-title">Denný profil a využitie FVE</h2>
+  <div class="two-col">
+    <div class="chart-card">
+      <h3 class="chart-title">Denný profil odberu</h3>
+      <p class="chart-sub">Priemerný net load (kW), pred a po inštalácii FVE/BESS</p>
+      {{ chart_daily_load_svg|safe }}
+    </div>
+    <div class="chart-card">
+      <h3 class="chart-title">Spotreba FVE</h3>
+      <p class="chart-sub">Rozdelenie vyrobenej energie podľa cieľa</p>
+      {{ chart_solar_consumption_svg|safe }}
+      <ul class="legend-list">
+        <li><span class="lg-dot" style="background:#FFD645"></span> Priamo do odberu <strong>{{ direct_to_load_pct|round(1) }}%</strong></li>
+        <li><span class="lg-dot" style="background:#16A34A"></span> Nabíjanie batérie <strong>{{ charging_battery_pct|round(1) }}%</strong></li>
+        <li><span class="lg-dot" style="background:#5B7CFA"></span> Export do siete <strong>{{ exported_pct|round(1) }}%</strong></li>
+        <li><span class="lg-dot" style="background:#9CA3AF"></span> Curtailed <strong>{{ curtailed_pct|round(1) }}%</strong></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+{# =========================================================================
+   PAGE 6 — MONTHLY EARNINGS + UPFRONT COSTS
+   ========================================================================= #}
+<section class="page">
+  <h2 class="page-title">Mesačné úspory a vstupné náklady</h2>
+  <div class="two-col">
+    <div class="chart-card">
+      <h3 class="chart-title">Mesačné úspory</h3>
+      <p class="chart-sub">Úspory podľa zdroja, rok 1</p>
+      {{ chart_monthly_earnings_svg|safe }}
+    </div>
+    <div class="chart-card chart-card-narrow">
+      <h3 class="chart-title">Vstupné náklady</h3>
+      <p class="chart-sub">CAPEX v čase uvedenia do prevádzky</p>
+      {{ chart_upfront_costs_svg|safe }}
+    </div>
+  </div>
+  {% if dotacia_eur > 0 %}
+  <div class="callout callout-green">
+    <strong>Dotácia: {{ dotacia_eur|format_currency }}</strong> z {{ dotacia_scheme_name }} znižuje čistú investíciu na <strong>{{ net_capex_eur|format_currency }}</strong>.
+  </div>
+  {% endif %}
+</section>
+
+{# =========================================================================
+   PAGE 7 — CARBON IMPACT (sales appeal)
+   ========================================================================= #}
+<section class="page">
+  <h2 class="page-title">Environmentálny dopad</h2>
+  <p class="page-subtitle">Ročné zníženie uhlíkovej stopy odberného miesta</p>
+  <div class="carbon-grid">
+    <div class="carbon-card">
+      <div class="carbon-value">{{ co2_reduction_pct|round|int }}<span class="carbon-unit">%</span></div>
+      <div class="carbon-label">zníženie emisií CO₂</div>
+    </div>
+    <div class="carbon-card carbon-card-primary">
+      <div class="carbon-value">{{ co2_avoided_tonnes|round(1) }}<span class="carbon-unit"> t</span></div>
+      <div class="carbon-label">CO₂ ekvivalent ušetrený ročne</div>
+    </div>
+    <div class="carbon-card">
+      <div class="carbon-value">{{ trees_equivalent|round|int }}</div>
+      <div class="carbon-label">ekvivalent vysadených stromov<br>(20-ročná životnosť)</div>
+    </div>
+    <div class="carbon-card">
+      <div class="carbon-value">{{ barrels_oil|round|int }}</div>
+      <div class="carbon-label">barelov ropy nespálenej ročne</div>
+    </div>
+  </div>
+</section>
+
+{# =========================================================================
+   PAGE 8 — VARIANT COMPARISON (Energovision-specific)
+   ========================================================================= #}
+{% if other_variants and other_variants|length > 0 %}
+<section class="page">
+  <h2 class="page-title">Porovnanie variantov</h2>
+  <p class="page-subtitle">Top picks z engine simulácie ({{ n_variants_run }} variantov vyhodnotených)</p>
+  <table class="variants-table">
+    <thead>
+      <tr>
+        <th>Variant</th>
+        <th class="num">FVE (kWp)</th>
+        <th class="num">BESS (kWh)</th>
+        <th class="num">CAPEX</th>
+        <th class="num">Dotácia</th>
+        <th class="num">NPV 20r</th>
+        <th class="num">IRR</th>
+        <th class="num">Návratnosť</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr class="winner-row">
+        <td><strong>{{ label }}</strong> <span class="winner-badge">VYBRANÝ</span></td>
+        <td class="num">{{ pv_kwp|round|int }}</td>
+        <td class="num">{{ bess_kwh|round|int }}</td>
+        <td class="num">{{ capex_total_eur|format_currency }}</td>
+        <td class="num">{{ dotacia_eur|format_currency }}</td>
+        <td class="num">+{{ npv_eur|format_currency }}</td>
+        <td class="num">{{ irr_pct|round(1) }} %</td>
+        <td class="num">{{ payback_years|round(1) }} r</td>
+      </tr>
+      {% for v in other_variants %}
+      <tr>
+        <td>{{ v.label }}</td>
+        <td class="num">{{ v.pv_kwp|round|int }}</td>
+        <td class="num">{{ v.bess_kwh|round|int }}</td>
+        <td class="num">{{ v.capex_total_eur|format_currency }}</td>
+        <td class="num">{{ v.dotacia_eur|format_currency }}</td>
+        <td class="num">{{ v.npv_eur|format_currency }}</td>
+        <td class="num">{{ v.irr_pct|round(1) }} %</td>
+        <td class="num">{{ v.payback_simple_y|round(1) }} r</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{# =========================================================================
+   PAGE 9 — METHODOLOGY + CONTACT (petit print)
+   ========================================================================= #}
+<section class="page">
+  <h2 class="page-title">Metodika a východiská</h2>
+  <div class="methodology">
+    <p><strong>Hodinová bilančná simulácia</strong> 8 760 hodín s využitím reálneho profilu odberu klienta (alebo syntetického profilu B2B).</p>
+    <p><strong>FVE produkcia</strong> — PVGIS-kalibrovaný analytický model pre GPS lokáciu klienta.</p>
+    <p><strong>BESS</strong> — Naumann-Schimpe degradačný model LFP (kalibrovaný 2026-05-24), warranty constraint.</p>
+    <p><strong>EMS</strong> — rule-based dispatch s multi-cycle stratégiou (samospotreba + arbitráž BS + peak shaving).</p>
+    <p><strong>Spot ceny</strong> — OKTE DAM 2025 hodinové (priemer {{ spot_avg_eur_mwh|round|int }} €/MWh).</p>
+    <p><strong>Tarify</strong> — ÚRSO 2026 (distribúcia + TPS + nájomné + straty).</p>
+    <p><strong>Ekonomika</strong> — NPV {{ analysis_years }} r., diskont 6 %, OPEX 1.5–2.0 % CAPEX/rok, degradácia FVE 0.5 %/rok, BESS 2 %/rok.</p>
+    <p><strong>Daňový odpis</strong> — lineárny 6 r. pri DPPO 22 % (novela 2025 pre MSP).</p>
+  </div>
+
+  <div class="contact-card">
+    <h3>Kontakt</h3>
+    <p><strong>{{ prepared_by_name }}</strong><br>
+    {{ prepared_by_email }}<br>
+    {{ prepared_by_phone }}</p>
+    <p class="company-info">Energovision s.r.o. · IČO {{ company_ico }} · app.energovision.sk</p>
+  </div>
+  <div class="footer-disclaimer">
+    Posudok je nezáväzný odhad. Engine v{{ engine_version }}. Generated {{ posudok_date }}.
+  </div>
+</section>
+
+</body>
+</html>
