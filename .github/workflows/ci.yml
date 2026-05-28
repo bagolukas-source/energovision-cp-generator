@@ -1,0 +1,44 @@
+name: Render CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  syntax-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Syntax check (AST parse)
+        run: |
+          python -c "
+          import ast, os
+          errors = []
+          for root, _, files in os.walk('.'):
+              if any(x in root for x in ['.git', '__pycache__', 'node_modules', 'analyza_om/__pycache__']):
+                  continue
+              for f in files:
+                  if not f.endswith('.py'):
+                      continue
+                  p = os.path.join(root, f)
+                  try:
+                      ast.parse(open(p, encoding='utf-8').read())
+                  except SyntaxError as e:
+                      errors.append(f'{p}: {e}')
+          if errors:
+              print('SYNTAX ERRORS:')
+              for e in errors: print('  ' + e)
+              raise SystemExit(1)
+          print(f'OK — všetky .py súbory parsujú')
+          "
+
+      - name: Pip install (dry-run dependencies)
+        run: |
+          pip install --dry-run -r requirements.txt 2>&1 | tail -5 || true
