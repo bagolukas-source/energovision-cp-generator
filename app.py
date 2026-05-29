@@ -12448,3 +12448,31 @@ def eva_learning_start():
     except Exception as e:
         log.exception("eva learning failed")
         return jsonify({"error": str(e)}), 500
+
+
+# ============================================================
+# EVA LEARNING FROM FOLDER — parse .eml/.msg/.mbox z lokálneho priečinka
+# Tento endpoint sa NEPOUŽÍVA cez HTTP — Render nemá prístup k lokálnemu Mac priečinku.
+# Pre folder parsing treba spustiť priamo z notebooku Lukáša (cez Cowork agent / lokálny Python).
+# Tento endpoint slúži len ako wrapper ak by sa dáta nahrali na server.
+# ============================================================
+@app.route("/webhook/eva-learning-from-folder", methods=["POST"])
+def eva_learning_from_folder():
+    body = request.get_json(silent=True) or {}
+    root = body.get("root", "/tmp/eva_emails")
+    dry_run = bool(body.get("dry_run"))
+    focus = body.get("focus", ["admin", "support"])
+
+    if not os.path.exists(root):
+        return jsonify({"error": f"folder_not_found: {root}"}), 404
+
+    try:
+        from eva_email_parse_folder import process_folder, extract_templates_after
+        from pathlib import Path as _Path
+        stats = process_folder(_Path(root), dry_run, focus)
+        if not dry_run:
+            stats["templates_extracted"] = extract_templates_after(focus)
+        return jsonify({"ok": True, **stats})
+    except Exception as e:
+        log.exception("folder parse failed")
+        return jsonify({"error": str(e)}), 500
