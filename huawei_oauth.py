@@ -384,7 +384,7 @@ HUAWEI_OAUTH_AUTHORIZE_URL = "https://oauth2.fusionsolar.huawei.com/rest/dp/uidm
 HUAWEI_OAUTH_TOKEN_URL = "https://oauth2.fusionsolar.huawei.com/rest/dp/uidm/oauth2/v1/token"
 
 
-def build_authorize_url(state: str, redirect_uri: str, scope: str = "pvms.openapi.basic,pvms.openapi.control") -> str:
+def build_authorize_url(state: str, redirect_uri: str, scope: str = "pvms.openapi.basic pvms.openapi.control") -> str:
     """
     Vyrobí URL na ktorý sa user (klient) zredirectuje aby autorizoval Energovision-EMS.
     
