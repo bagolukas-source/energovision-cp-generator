@@ -12424,3 +12424,27 @@ def raynet_import_endpoint():
                 timeout=10,
             )
         return jsonify({"error": str(e), "log_id": log_id}), 500
+
+
+# ============================================================
+# EVA LEARNING — start M365 email training pipeline
+# Vstup: {mailboxes, months_back, categories_focus}
+# Vracia: {batch_id, summary}
+# ============================================================
+@app.route("/webhook/eva-learning-start", methods=["POST"])
+def eva_learning_start():
+    body = request.get_json(silent=True) or {}
+    mailboxes = body.get("mailboxes") or []
+    months_back = int(body.get("months_back", 6))
+    categories_focus = body.get("categories_focus") or ["admin", "support"]
+
+    if not mailboxes:
+        return jsonify({"error": "no_mailboxes"}), 400
+
+    try:
+        from eva_email_learning import run_learning
+        result = run_learning(mailboxes, months_back, categories_focus)
+        return jsonify({"ok": True, **result})
+    except Exception as e:
+        log.exception("eva learning failed")
+        return jsonify({"error": str(e)}), 500
