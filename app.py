@@ -12212,3 +12212,55 @@ Energovision s.r.o. · Moderné energetické riešenia, ktoré hľadáte · www.
     )
 
     return jsonify({"ok": True, "url": public_url, "filename": filename})
+
+
+# ============================================================
+# RAYNET IMPORT — spustí raynet_import.py
+# Vstup: {dry_run: bool, entities: ["companies","persons","leads",...]}
+# Výstup: {ok, result: {...}}
+# ============================================================
+@app.route("/webhook/raynet-import", methods=["POST"])
+def raynet_import_endpoint():
+    body = request.get_json(silent=True) or {}
+    dry_run = bool(body.get("dry_run"))
+    entities = body.get("entities") or ["companies", "persons", "leads"]
+
+    # Log start
+    sb_headers = {
+        "apikey": SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation",
+    }
+    log_resp = requests.post(
+        f"{SUPABASE_URL}/rest/v1/raynet_import_log",
+        headers=sb_headers,
+        json={"dry_run": dry_run, "entity_types": entities},
+        timeout=10,
+    )
+    log_id = (log_resp.json() or [{}])[0].get("id") if log_resp.ok else None
+
+    try:
+        from raynet_import import run as raynet_run
+        result = raynet_run(entities, dry_run)
+        # Update log
+        if log_id:
+            requests.patch(
+                f"{SUPABASE_URL}/rest/v1/raynet_import_log",
+                headers=sb_headers,
+                params={"id": f"eq.{log_id}"},
+                json={"finished_at": "now()", "result": result},
+                timeout=10,
+            )
+        return jsonify({"ok": True, "result": result, "log_id": log_id})
+    except Exception as e:
+        log.exception("raynet import failed")
+        if log_id:
+            requests.patch(
+                f"{SUPABASE_URL}/rest/v1/raynet_import_log",
+                headers=sb_headers,
+                params={"id": f"eq.{log_id}"},
+                json={"finished_at": "now()", "error": str(e)},
+                timeout=10,
+            )
+        return jsonify({"error": str(e), "log_id": log_id}), 500
