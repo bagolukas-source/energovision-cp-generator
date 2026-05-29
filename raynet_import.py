@@ -242,33 +242,238 @@ def import_leads(dry_run: bool = False) -> dict:
     return {"fetched": len(rows), "skipped": skipped, "upserted": n}
 
 
+def _customer_map(workspace: Optional[str] = None) -> dict:
+    """Mapa raynet_id → supabase customer_id."""
+    headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+    cust_map = {}
+    offset = 0
+    while True:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/customers",
+            headers={**headers, "Range": f"{offset}-{offset+999}"},
+            params={"select": "id,external_id,external_source", "external_source": "eq.raynet"},
+            timeout=30,
+        )
+        data = r.json()
+        if not data:
+            break
+        for c in data:
+            raw = c["external_id"].replace("person_", "")
+            cust_map[raw] = c["id"]
+        if len(data) < 1000:
+            break
+        offset += 1000
+    return cust_map
+
+
+def raynet_business_case_to_lead(bc: dict, cust_map: dict) -> Optional[dict]:
+    """Raynet business case → leads row (otvorené obchodné prípady)."""
+    cust_ext = bc.get("company") or bc.get("person") or bc.get("primaryRole", {}).get("company")
+    if not cust_ext:
+        return None
+    cust_id = cust_map.get(str(cust_ext.get("id")))
+    if not cust_id:
+        return None
+    state = (bc.get("state") or "").lower()
+    # Mapovanie raynet state → naša pipeline
+    status_map = {
+        "open": "obhliadka",
+        "won": "vyhra",
+        "lost": "zamietnute",
+        "deferred": "neaktualne",
+    }
+    status = status_map.get(state, "dosly_lead")
+    amount = bc.get("amount") or {}
+    return {
+        "external_source": "raynet",
+        "external_id": f"bc_{bc.get('id')}",
+        "external_synced_at": "now()",
+        "customer_id": cust_id,
+        "status": status,
+        "estimated_value": amount.get("amount") if isinstance(amount, dict) else None,
+        "source": "raynet_business_case",
+        "notes": bc.get("title") or bc.get("notice") or "",
+        "workspace": "b2c" if bc.get("person") else "b2b",
+    }
+
+
 def import_business_cases(dry_run: bool = False) -> dict:
-    """Business cases v Raynete = obchodné prípady (môže byť ekvivalent leadov v pokrocilom stave)."""
     log.info("Stahujem business cases z Raynetu...")
+    cust_map = _customer_map()
     rows = []
-    count = 0
+    skipped = 0
     for bc in raynet_iter("businessCase/"):
-        count += 1
-    log.info("Načítaných %d business cases (zatiaľ len count, nemapujem)", count)
-    return {"fetched": count, "upserted": 0, "note": "business_cases zatiaľ neimportujem — počkať na rozhodnutie kde ich dať"}
+        mapped = raynet_business_case_to_lead(bc, cust_map)
+        if mapped:
+            rows.append(mapped)
+        else:
+            skipped += 1
+    log.info("Načítaných %d business cases (skipped %d bez customera)", len(rows), skipped)
+    if dry_run:
+        return {"fetched": len(rows), "skipped": skipped, "upserted": 0}
+    # Upsert na external_source + external_id (s prefixom bc_)
+    n = sb_upsert("leads", rows)
+    return {"fetched": len(rows), "skipped": skipped, "upserted": n}
+
+
+def raynet_offer_to_imported_quote(o: dict, cust_map: dict) -> dict:
+    """Raynet offer → imported_quotes row."""
+    cust_ext = o.get("company") or o.get("person") or {}
+    cust_id = cust_map.get(str(cust_ext.get("id"))) if cust_ext else None
+    amount = o.get("totalAmount") or {}
+    if not isinstance(amount, dict):
+        amount = {"amount": amount}
+    return {
+        "external_source": "raynet",
+        "external_id": str(o.get("id")),
+        "customer_id": cust_id,
+        "quote_number": o.get("code") or o.get("offerNumber"),
+        "title": o.get("title") or o.get("name"),
+        "status": o.get("rowState") or o.get("state"),
+        "rowState": o.get("rowState"),
+        "total_no_vat": amount.get("amount"),
+        "total_with_vat": (o.get("totalAmountWithVat") or {}).get("amount") if isinstance(o.get("totalAmountWithVat"), dict) else None,
+        "currency": amount.get("currency", "EUR"),
+        "issued_at": o.get("creationDate") or o.get("createdAt"),
+        "valid_until": o.get("validUntil") or o.get("expirationDate"),
+        "owner_name": (o.get("owner") or {}).get("fullName") if isinstance(o.get("owner"), dict) else None,
+        "business_case_id": str((o.get("businessCase") or {}).get("id")) if o.get("businessCase") else None,
+        "raw_data": o,
+    }
+
+
+def raynet_offer_item_to_row(item: dict, quote_id: str, position: int) -> dict:
+    """Raynet offer item → imported_quote_items row."""
+    return {
+        "quote_id": quote_id,
+        "external_id": str(item.get("id")) if item.get("id") else None,
+        "position": position,
+        "product_code": (item.get("product") or {}).get("code") if isinstance(item.get("product"), dict) else item.get("code"),
+        "product_name": (item.get("product") or {}).get("name") if isinstance(item.get("product"), dict) else item.get("name"),
+        "description": item.get("description") or item.get("name"),
+        "quantity": item.get("count") or item.get("quantity"),
+        "unit": item.get("unitName") or item.get("unit"),
+        "unit_price": item.get("price"),
+        "vat_rate": item.get("vatRate") or item.get("vat"),
+        "total_no_vat": item.get("totalPrice") or item.get("priceTotal"),
+        "discount_pct": item.get("discount") or item.get("discountPercent"),
+        "raw_data": item,
+    }
 
 
 def import_offers(dry_run: bool = False) -> dict:
-    log.info("Stahujem offers z Raynetu...")
-    count = 0
+    log.info("Stahujem offers + items z Raynetu...")
+    cust_map = _customer_map()
+    quotes_to_upsert = []
+    items_to_insert = []  # tieto vložíme až po upsert quotes (potrebujeme id)
+    offer_items_raw = {}  # external_id → [items]
+
     for o in raynet_iter("offer/"):
-        count += 1
-    log.info("Načítaných %d offers (počítam len)", count)
-    return {"fetched": count, "upserted": 0, "note": "offers zatiaľ len count"}
+        q_row = raynet_offer_to_imported_quote(o, cust_map)
+        quotes_to_upsert.append(q_row)
+        items = o.get("items") or o.get("offerItems") or []
+        offer_items_raw[q_row["external_id"]] = items
+
+    log.info("Načítaných %d offers", len(quotes_to_upsert))
+    if dry_run:
+        total_items = sum(len(v) for v in offer_items_raw.values())
+        return {"fetched": len(quotes_to_upsert), "items_fetched": total_items, "upserted": 0}
+
+    # Upsert quotes
+    n_q = sb_upsert("imported_quotes", quotes_to_upsert)
+
+    # Pre items potrebujeme získať quote_id (po upsert)
+    headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+    quote_id_map = {}
+    offset = 0
+    while True:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/imported_quotes",
+            headers={**headers, "Range": f"{offset}-{offset+999}"},
+            params={"select": "id,external_id", "external_source": "eq.raynet"},
+            timeout=30,
+        )
+        data = r.json()
+        if not data:
+            break
+        for c in data:
+            quote_id_map[c["external_id"]] = c["id"]
+        if len(data) < 1000:
+            break
+        offset += 1000
+
+    # Najprv zmaž staré položky pre tieto cenovky (idempotency)
+    for ext_id in offer_items_raw.keys():
+        qid = quote_id_map.get(ext_id)
+        if qid:
+            requests.delete(
+                f"{SUPABASE_URL}/rest/v1/imported_quote_items",
+                headers=headers,
+                params={"quote_id": f"eq.{qid}"},
+                timeout=10,
+            )
+
+    # Insert nové items
+    items_to_insert = []
+    for ext_id, items in offer_items_raw.items():
+        qid = quote_id_map.get(ext_id)
+        if not qid:
+            continue
+        for pos, item in enumerate(items, 1):
+            items_to_insert.append(raynet_offer_item_to_row(item, qid, pos))
+
+    n_i = 0
+    if items_to_insert:
+        BATCH = 100
+        for i in range(0, len(items_to_insert), BATCH):
+            batch = items_to_insert[i:i+BATCH]
+            r = requests.post(
+                f"{SUPABASE_URL}/rest/v1/imported_quote_items",
+                headers={**headers, "Content-Type": "application/json", "Prefer": "return=minimal"},
+                json=batch,
+                timeout=60,
+            )
+            if r.ok:
+                n_i += len(batch)
+    return {"fetched": len(quotes_to_upsert), "items_fetched": len(items_to_insert), "upserted": n_q, "items_inserted": n_i}
+
+
+def raynet_invoice_to_imported(inv: dict, cust_map: dict) -> dict:
+    cust_ext = inv.get("company") or inv.get("person") or {}
+    cust_id = cust_map.get(str(cust_ext.get("id"))) if cust_ext else None
+    amount = inv.get("totalAmount") or {}
+    if not isinstance(amount, dict):
+        amount = {"amount": amount}
+    return {
+        "external_source": "raynet",
+        "external_id": str(inv.get("id")),
+        "customer_id": cust_id,
+        "invoice_number": inv.get("code") or inv.get("invoiceNumber"),
+        "invoice_type": inv.get("documentType") or "faktura",
+        "status": inv.get("rowState") or inv.get("state"),
+        "total_no_vat": amount.get("amount"),
+        "total_with_vat": (inv.get("totalAmountWithVat") or {}).get("amount") if isinstance(inv.get("totalAmountWithVat"), dict) else None,
+        "currency": amount.get("currency", "EUR"),
+        "issued_at": inv.get("issuedAt") or inv.get("issueDate"),
+        "due_at": inv.get("dueDate") or inv.get("dueAt"),
+        "paid_at": inv.get("paidAt"),
+        "paid_amount": (inv.get("paidAmount") or {}).get("amount") if isinstance(inv.get("paidAmount"), dict) else inv.get("paidAmount"),
+        "variable_symbol": inv.get("variableSymbol"),
+        "raw_data": inv,
+    }
 
 
 def import_invoices(dry_run: bool = False) -> dict:
     log.info("Stahujem invoices z Raynetu...")
-    count = 0
-    for i in raynet_iter("invoice/"):
-        count += 1
-    log.info("Načítaných %d invoices (počítam len)", count)
-    return {"fetched": count, "upserted": 0, "note": "invoices zatiaľ len count"}
+    cust_map = _customer_map()
+    rows = []
+    for inv in raynet_iter("invoice/"):
+        rows.append(raynet_invoice_to_imported(inv, cust_map))
+    log.info("Načítaných %d invoices", len(rows))
+    if dry_run:
+        return {"fetched": len(rows), "upserted": 0}
+    n = sb_upsert("imported_invoices", rows)
+    return {"fetched": len(rows), "upserted": n}
 
 
 # ============================================================
