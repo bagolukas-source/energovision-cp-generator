@@ -576,6 +576,10 @@ WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-5-20250929")
 
+# Globálne Supabase konstanty (pre TS endpointy, raynet import atď.)
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://uzwajrpebblafuhrtuwn.supabase.co")
+SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "") or os.environ.get("SUPABASE_SERVICE_KEY", "")
+
 # Default spotreba ak nezadaná zákazníkom (priemer SK domácnosti)
 DEFAULT_SPOTREBA_KWH = 8000
 
