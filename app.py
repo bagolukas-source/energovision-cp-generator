@@ -11997,3 +11997,218 @@ strong {{ font-weight: 700; }}
         pass
 
     return jsonify({"ok": True, "url": pdf_public_url or public_docx_url, "docx_url": public_docx_url, "pdf_url": pdf_public_url, "filename": out_path.name, "contract_number": contract.get("contract_number")})
+
+
+# ============================================================
+# TS-QUOTE-GENERATE-PDF — vyrobí PDF cenovku TS servisu
+# Vstup: {"quote_id": "<uuid>"}
+# Výstup: { ok, url, filename }
+# - Pull ts_quotes + customer
+# - Render HTML → PDF cez WeasyPrint
+# - Upload do Storage documents/ts_quotes/{id}/cenovka_<num>.pdf
+# - Update ts_quotes.generated_docx_url = pdf_url (re-use field zatiaľ)
+# ============================================================
+@app.route("/webhook/ts-quote-generate-pdf", methods=["POST"])
+def ts_quote_generate_pdf():
+    body = request.get_json(silent=True) or {}
+    quote_id = body.get("quote_id")
+    if not quote_id:
+        return jsonify({"error": "missing quote_id"}), 400
+
+    sb_headers = {
+        "apikey": SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+    }
+
+    # Načítaj cenovku
+    r = requests.get(
+        f"{SUPABASE_URL}/rest/v1/ts_quotes",
+        headers=sb_headers,
+        params={"id": f"eq.{quote_id}", "select": "*"},
+        timeout=10
+    )
+    if not r.ok or not r.json():
+        return jsonify({"error": "quote_not_found"}), 404
+    q = r.json()[0]
+
+    # Načítaj customer
+    cust_id = q.get("customer_id")
+    r = requests.get(
+        f"{SUPABASE_URL}/rest/v1/customers",
+        headers=sb_headers,
+        params={"id": f"eq.{cust_id}", "select": "*"},
+        timeout=10
+    )
+    cust = (r.json() or [{}])[0] if r.ok else {}
+
+    from datetime import datetime as _dt
+    today = _dt.now().strftime("%d.%m.%Y")
+    klient = cust.get("company_name") or f"{cust.get('first_name','')} {cust.get('last_name','')}".strip() or "Klient"
+    ico = cust.get("ico") or ""
+    address = " ".join(filter(None, [cust.get("address") or cust.get("street") or "", cust.get("psc") or "", cust.get("city") or ""]))
+
+    items = q.get("ts_items") or []
+    variants = q.get("variants") or []
+    has_variants = q.get("has_variants") and len(variants) > 0
+    monthly_total = float(q.get("monthly_total_eur") or 0)
+    contract_months = q.get("contract_duration_months") or 24
+    setup_fee = float(q.get("one_time_setup_eur") or 0)
+    valid_until = q.get("valid_until") or ""
+    notes = q.get("notes") or ""
+
+    TYPE_LABEL = {"basic": "Basic", "komplet": "Komplet", "havarijna_24_7": "Havarijná 24/7"}
+
+    # TS list HTML
+    ts_rows_html = ""
+    for i, it in enumerate(items, 1):
+        ts_rows_html += f"""<tr>
+<td>{i}</td>
+<td>{(it.get('code') or '')}</td>
+<td>{(it.get('name') or '')}</td>
+<td>{(it.get('address') or '')}</td>
+<td style="text-align:right">{(it.get('kva') or '')}</td>
+</tr>"""
+
+    # Variants HTML
+    variants_html = ""
+    if has_variants:
+        cards = ""
+        for v in variants:
+            badge = '<span class="badge">⭐ Odporúčané</span>' if v.get("highlight") else ""
+            included = "".join(f'<li>{s}</li>' for s in (v.get("included_items") or []))
+            cards += f"""<div class="variant-card {'highlight' if v.get('highlight') else ''}">
+<h3>{badge} {v.get('label', '')}</h3>
+<div class="price">{float(v.get('monthly_total', 0)):,.2f} €/mes</div>
+<div class="sub">SLA {v.get('sla_response_hours')}h{' · 24/7' if v.get('has_24_7') else ''}</div>
+<ul class="included">{included}</ul>
+</div>""".replace(",", " ").replace(".", ",", 1)
+        variants_html = f'<h2>Vyberte si úroveň servisu</h2><div class="variants">{cards}</div>'
+    else:
+        contract_label = TYPE_LABEL.get(q.get("contract_type"), q.get("contract_type", ""))
+        variants_html = f"""<h2>Cenová špecifikácia</h2>
+<div class="single-price">
+<div><strong>Typ zmluvy:</strong> {contract_label}</div>
+<div class="price-big">{monthly_total:,.2f} € / mes bez DPH</div>
+<div class="sub">Ročne: {monthly_total * 12:,.2f} € · za {contract_months} mes: {monthly_total * contract_months:,.2f} €</div>
+</div>""".replace(",", " ").replace(".", ",", 1)
+
+    setup_html = f'<p style="margin-top:8pt"><strong>Jednorázový setup fee:</strong> {setup_fee:,.2f} € bez DPH</p>'.replace(",", " ").replace(".", ",", 1) if setup_fee > 0 else ""
+    notes_html = f'<div class="notes"><strong>Poznámky:</strong><br>{notes.replace(chr(10), "<br>")}</div>' if notes else ""
+
+    html = f"""<!DOCTYPE html><html lang="sk"><head><meta charset="utf-8"><style>
+@page {{ size: A4; margin: 18mm 16mm; @bottom-right {{ content: counter(page) " / " counter(pages); font-size: 9pt; color: #999; }} }}
+body {{ font-family: 'Helvetica', sans-serif; font-size: 10pt; color: #1a1a1a; line-height: 1.45; }}
+.header {{ background: #92D050; color: #fff; padding: 16pt; border-radius: 4pt; margin-bottom: 16pt; }}
+.header h1 {{ margin: 0; font-size: 20pt; }}
+.header .subtitle {{ font-size: 10pt; opacity: 0.95; margin-top: 4pt; }}
+h2 {{ font-size: 13pt; color: #10b981; margin: 16pt 0 8pt; border-bottom: 1pt solid #e5e7eb; padding-bottom: 3pt; }}
+h3 {{ font-size: 11pt; margin: 6pt 0 4pt; }}
+table {{ border-collapse: collapse; width: 100%; margin: 6pt 0; font-size: 9pt; }}
+th, td {{ border: 0.5pt solid #e5e7eb; padding: 5pt 7pt; }}
+th {{ background: #f8fafc; text-align: left; font-weight: 600; color: #475569; }}
+.party {{ display: table; width: 100%; margin-bottom: 14pt; }}
+.party > div {{ display: table-cell; width: 50%; padding: 8pt; background: #f8fafc; border-radius: 3pt; vertical-align: top; }}
+.party h3 {{ margin-top: 0; color: #475569; font-size: 9pt; text-transform: uppercase; letter-spacing: 0.5pt; }}
+.variants {{ display: flex; gap: 8pt; flex-wrap: wrap; margin-top: 8pt; }}
+.variant-card {{ flex: 1; min-width: 145pt; border: 1.5pt solid #e5e7eb; border-radius: 4pt; padding: 10pt; }}
+.variant-card.highlight {{ border: 2pt solid #10b981; background: #ecfdf5; }}
+.variant-card h3 {{ margin: 0 0 4pt; }}
+.variant-card .price {{ font-size: 18pt; font-weight: bold; color: #047857; margin: 4pt 0; }}
+.variant-card .sub {{ font-size: 8pt; color: #64748b; margin-bottom: 6pt; }}
+.variant-card .included {{ margin: 0; padding-left: 14pt; font-size: 8.5pt; }}
+.variant-card .included li {{ margin: 1pt 0; }}
+.badge {{ background: #10b981; color: #fff; font-size: 7pt; padding: 1pt 4pt; border-radius: 2pt; vertical-align: middle; }}
+.single-price {{ padding: 12pt; background: #ecfdf5; border: 1.5pt solid #10b981; border-radius: 4pt; }}
+.single-price .price-big {{ font-size: 22pt; font-weight: bold; color: #047857; margin: 6pt 0; }}
+.single-price .sub {{ font-size: 9pt; color: #64748b; }}
+.notes {{ background: #fef3c7; border-left: 3pt solid #f59e0b; padding: 8pt 12pt; margin: 12pt 0; font-size: 9pt; }}
+.footer {{ margin-top: 24pt; padding-top: 12pt; border-top: 0.5pt solid #e5e7eb; font-size: 8pt; color: #64748b; text-align: center; }}
+.terms {{ background: #f8fafc; padding: 10pt; margin-top: 14pt; font-size: 9pt; border-radius: 3pt; }}
+.terms ul {{ margin: 4pt 0 0; padding-left: 16pt; }}
+.terms li {{ margin: 2pt 0; }}
+</style></head><body>
+
+<div class="header">
+  <h1>⚡ Cenová ponuka servisu trafostaníc</h1>
+  <div class="subtitle">{q.get('quote_number', '')} · {today}</div>
+</div>
+
+<div class="party">
+  <div>
+    <h3>Poskytovateľ</h3>
+    <strong>Energovision s.r.o.</strong><br>
+    Lamačská cesta 1738/111, 841 03 Bratislava<br>
+    IČO: 53 036 280 · DIČ: 2121238526<br>
+    IČ DPH: SK2121238526<br>
+    Lukáš Bago · +421 918 187 762<br>
+    lukas.bago@energovision.sk
+  </div>
+  <div>
+    <h3>Objednávateľ</h3>
+    <strong>{klient}</strong><br>
+    {address}<br>
+    {f'IČO: {ico}<br>' if ico else ''}
+    {f'Email: {cust.get("email")}<br>' if cust.get("email") else ''}
+    {f'Telefón: {cust.get("phone")}' if cust.get("phone") else ''}
+  </div>
+</div>
+
+<h2>Predmet ponuky — {len(items)} trafostaníc</h2>
+<table>
+<thead><tr><th>Por.</th><th>Označenie</th><th>Názov</th><th>Adresa</th><th style="text-align:right">kVA</th></tr></thead>
+<tbody>{ts_rows_html}</tbody>
+</table>
+
+{variants_html}
+{setup_html}
+
+<div class="terms">
+<strong>Podmienky ponuky:</strong>
+<ul>
+<li>Doba viazanosti: <strong>{contract_months} mesiacov</strong></li>
+<li>Splatnosť faktúr: 14 dní od doručenia</li>
+<li>Ceny sú uvedené bez DPH (21 % bude pripočítané)</li>
+<li>Inflačná indexácia: max +3 % ročne podľa ŠÚ SR (len pri inflácii &gt; 2 %)</li>
+{f'<li>Platnosť ponuky do: <strong>{valid_until}</strong></li>' if valid_until else ''}
+</ul>
+</div>
+
+{notes_html}
+
+<div class="footer">
+Energovision s.r.o. · Moderné energetické riešenia, ktoré hľadáte · www.energovision.sk
+</div>
+
+</body></html>"""
+
+    # HTML → PDF
+    try:
+        from weasyprint import HTML
+        pdf_bytes = HTML(string=html).write_pdf()
+    except Exception as e:
+        log.exception("weasyprint failed")
+        return jsonify({"error": f"pdf_render_failed: {e}"}), 500
+
+    # Upload do Storage
+    filename = f"Cenovka_{q.get('quote_number') or quote_id[:8]}.pdf"
+    storage_path = f"ts_quotes/{quote_id}/{filename}"
+    up = requests.post(
+        f"{SUPABASE_URL}/storage/v1/object/documents/{storage_path}",
+        headers={**sb_headers, "Content-Type": "application/pdf", "x-upsert": "true"},
+        data=pdf_bytes, timeout=30
+    )
+    if not up.ok:
+        return jsonify({"error": "storage_upload_failed", "body": up.text}), 500
+
+    public_url = f"{SUPABASE_URL}/storage/v1/object/public/documents/{storage_path}"
+
+    # Update quote
+    requests.patch(
+        f"{SUPABASE_URL}/rest/v1/ts_quotes",
+        headers={**sb_headers, "Content-Type": "application/json"},
+        params={"id": f"eq.{quote_id}"},
+        json={"generated_docx_url": public_url},
+        timeout=10
+    )
+
+    return jsonify({"ok": True, "url": public_url, "filename": filename})
