@@ -12099,91 +12099,247 @@ def ts_quote_generate_pdf():
     setup_html = f'<p style="margin-top:8pt"><strong>Jednorázový setup fee:</strong> {setup_fee:,.2f} € bez DPH</p>'.replace(",", " ").replace(".", ",", 1) if setup_fee > 0 else ""
     notes_html = f'<div class="notes"><strong>Poznámky:</strong><br>{notes.replace(chr(10), "<br>")}</div>' if notes else ""
 
+        # Pre-render dynamické časti
+    APP_URL_FOR_QR = "https://app.energovision.sk"
+    public_link = f"{APP_URL_FOR_QR}/p/ts/{q.get('public_token', '')}"
+    total_kva = sum(float(it.get("kva") or 0) for it in items)
+    ts_count_label = "trafostanicu" if len(items) == 1 else ("trafostanice" if 2 <= len(items) <= 4 else "trafostaníc")
+    verb_singular = "ktorá je" if len(items) == 1 else "ktoré sú"
+    verb_pov = "á" if len(items) == 1 else "é"
+
+    # Recommended variant
+    rec_variant_label = "Komplet"
+    rec_variant_price = monthly_total
+    if has_variants and variants:
+        rec = next((v for v in variants if v.get("highlight")), variants[0])
+        rec_variant_label = rec.get("label", "Komplet")
+        rec_variant_price = float(rec.get("monthly_total") or 0)
+
+    # Variants HTML
+    variants_section = ""
+    if has_variants and variants:
+        order = ["basic", "komplet", "havarijna_24_7"]
+        sorted_v = sorted(variants, key=lambda v: order.index(v.get("contract_type", "basic")) if v.get("contract_type") in order else 99)
+        cards = ""
+        for v in sorted_v:
+            hl = v.get("highlight")
+            badge_html = '<div class="badge-top">⭐ ODPORÚČAME</div>' if hl else ""
+            included_html = "".join(f"<li>{s}</li>" for s in (v.get("included_items") or []))
+            price_str = f"{float(v.get('monthly_total', 0)):,.0f} €".replace(",", " ")
+            sla_t = f"SLA {v.get('sla_response_hours')}h"
+            if v.get("has_24_7"):
+                sla_t += " · 24/7"
+            cards += f'<div class="variant-card {"highlight" if hl else ""}">{badge_html}<div class="vlabel">{v.get("label", "")}</div><div class="vprice">{price_str}</div><div class="vunit">mesačne bez DPH</div><div class="vsla">{sla_t}</div><ul>{included_html}</ul></div>'
+        variants_section = f'<div class="variants-row">{cards}</div><p style="font-size: 8.5pt; color: #64748b; text-align: center; margin-top: -4pt;">Pri zmluve na 24 mesiacov sa cena nemení (mimo zákonnej indexácie max +3 %/rok)</p>'
+    else:
+        contract_label = TYPE_LABEL.get(q.get("contract_type"), q.get("contract_type", ""))
+        annual = monthly_total * 12
+        price_str = f"{monthly_total:,.0f} €".replace(",", " ")
+        annual_str = f"{annual:,.0f} €".replace(",", " ")
+        variants_section = f'<div style="background: #ecfdf5; border: 2pt solid #10b981; border-radius: 6pt; padding: 18pt; text-align: center;"><div style="font-size: 11pt; color: #475569; text-transform: uppercase; letter-spacing: 0.5pt;">{contract_label}</div><div style="font-size: 32pt; font-weight: 700; color: #047857; margin: 8pt 0;">{price_str}</div><div style="font-size: 10pt; color: #475569;">mesačne bez DPH · ročne {annual_str}</div></div>'
+
+    # TS rows
+    ts_rows_html = ""
+    for i, it in enumerate(items, 1):
+        ts_rows_html += f'<tr><td style="width:30pt;">{i}.</td><td><strong>{(it.get("code") or "—")}</strong></td><td>{(it.get("name") or "")}</td><td>{(it.get("address") or "")}</td><td style="text-align:right; font-weight:600;">{(it.get("kva") or "")}</td></tr>'
+
+    # Terms extras
+    terms_extras = ""
+    if setup_fee > 0:
+        sf_str = f"{setup_fee:,.0f} €".replace(",", " ")
+        terms_extras += f'<li>Jednorázový setup fee: <strong>{sf_str}</strong> bez DPH (vstupný audit, inventarizácia)</li>'
+    if valid_until:
+        terms_extras += f'<li>Platnosť ponuky do: <strong>{valid_until}</strong></li>'
+
+    # Notes
+    notes_html = ""
+    if notes:
+        notes_safe = notes.replace(chr(10), "<br>")
+        notes_html = f'<div style="background: #fef3c7; border-left: 3pt solid #f59e0b; padding: 10pt 14pt; margin: 12pt 0; border-radius: 3pt; font-size: 9pt;"><strong style="color: #78350f;">📝 Špeciálne podmienky pre Vás:</strong><p style="color: #78350f; margin: 4pt 0 0;">{notes_safe}</p></div>'
+
+    rec_price_str = f"{rec_variant_price:,.0f} €".replace(",", " ")
+    total_kva_str = f"{total_kva:,.0f}".replace(",", " ")
+
     html = f"""<!DOCTYPE html><html lang="sk"><head><meta charset="utf-8"><style>
-@page {{ size: A4; margin: 18mm 16mm; @bottom-right {{ content: counter(page) " / " counter(pages); font-size: 9pt; color: #999; }} }}
-body {{ font-family: 'Helvetica', sans-serif; font-size: 10pt; color: #1a1a1a; line-height: 1.45; }}
-.header {{ background: #92D050; color: #fff; padding: 16pt; border-radius: 4pt; margin-bottom: 16pt; }}
-.header h1 {{ margin: 0; font-size: 20pt; }}
-.header .subtitle {{ font-size: 10pt; opacity: 0.95; margin-top: 4pt; }}
-h2 {{ font-size: 13pt; color: #10b981; margin: 16pt 0 8pt; border-bottom: 1pt solid #e5e7eb; padding-bottom: 3pt; }}
-h3 {{ font-size: 11pt; margin: 6pt 0 4pt; }}
-table {{ border-collapse: collapse; width: 100%; margin: 6pt 0; font-size: 9pt; }}
-th, td {{ border: 0.5pt solid #e5e7eb; padding: 5pt 7pt; }}
-th {{ background: #f8fafc; text-align: left; font-weight: 600; color: #475569; }}
-.party {{ display: table; width: 100%; margin-bottom: 14pt; }}
-.party > div {{ display: table-cell; width: 50%; padding: 8pt; background: #f8fafc; border-radius: 3pt; vertical-align: top; }}
-.party h3 {{ margin-top: 0; color: #475569; font-size: 9pt; text-transform: uppercase; letter-spacing: 0.5pt; }}
-.variants {{ display: flex; gap: 8pt; flex-wrap: wrap; margin-top: 8pt; }}
-.variant-card {{ flex: 1; min-width: 145pt; border: 1.5pt solid #e5e7eb; border-radius: 4pt; padding: 10pt; }}
-.variant-card.highlight {{ border: 2pt solid #10b981; background: #ecfdf5; }}
-.variant-card h3 {{ margin: 0 0 4pt; }}
-.variant-card .price {{ font-size: 18pt; font-weight: bold; color: #047857; margin: 4pt 0; }}
-.variant-card .sub {{ font-size: 8pt; color: #64748b; margin-bottom: 6pt; }}
-.variant-card .included {{ margin: 0; padding-left: 14pt; font-size: 8.5pt; }}
-.variant-card .included li {{ margin: 1pt 0; }}
-.badge {{ background: #10b981; color: #fff; font-size: 7pt; padding: 1pt 4pt; border-radius: 2pt; vertical-align: middle; }}
-.single-price {{ padding: 12pt; background: #ecfdf5; border: 1.5pt solid #10b981; border-radius: 4pt; }}
-.single-price .price-big {{ font-size: 22pt; font-weight: bold; color: #047857; margin: 6pt 0; }}
-.single-price .sub {{ font-size: 9pt; color: #64748b; }}
-.notes {{ background: #fef3c7; border-left: 3pt solid #f59e0b; padding: 8pt 12pt; margin: 12pt 0; font-size: 9pt; }}
-.footer {{ margin-top: 24pt; padding-top: 12pt; border-top: 0.5pt solid #e5e7eb; font-size: 8pt; color: #64748b; text-align: center; }}
-.terms {{ background: #f8fafc; padding: 10pt; margin-top: 14pt; font-size: 9pt; border-radius: 3pt; }}
-.terms ul {{ margin: 4pt 0 0; padding-left: 16pt; }}
-.terms li {{ margin: 2pt 0; }}
-</style></head><body>
+    @page {{ size: A4; margin: 0; @bottom-right {{ content: counter(page) " / " counter(pages); font-size: 8pt; color: #94a3b8; margin: 8mm 14mm; }} }}
+    * {{ box-sizing: border-box; }}
+    body {{ font-family: 'Helvetica', sans-serif; font-size: 10pt; color: #1e293b; line-height: 1.5; margin: 0; padding: 0; }}
+    .page {{ padding: 16mm 14mm; page-break-after: always; }}
+    .page:last-child {{ page-break-after: auto; }}
+    h1, h2, h3 {{ margin: 0 0 8pt; font-weight: 700; }}
+    h2 {{ font-size: 14pt; color: #047857; padding-bottom: 4pt; border-bottom: 2pt solid #92D050; margin-bottom: 12pt; }}
+    h3 {{ font-size: 11pt; color: #1e293b; }}
+    p {{ margin: 4pt 0; }}
+    .cover {{ height: 100vh; padding: 0; display: flex; flex-direction: column; }}
+    .cover-hero {{ background: linear-gradient(135deg, #92D050 0%, #10b981 100%); color: #fff; padding: 24mm 14mm 18mm; }}
+    .cover-hero .brand {{ font-size: 14pt; font-weight: 700; letter-spacing: 1pt; opacity: 0.95; }}
+    .cover-hero .tagline {{ font-size: 9pt; margin-top: 2pt; opacity: 0.85; }}
+    .cover-hero h1 {{ font-size: 28pt; margin: 12pt 0 8pt; line-height: 1.15; color: #fff; }}
+    .cover-hero .quote-meta {{ font-size: 10pt; opacity: 0.95; }}
+    .cover-body {{ padding: 14mm; flex: 1; }}
+    .cover-target {{ background: #f8fafc; border-left: 3pt solid #92D050; padding: 12pt 14pt; margin-bottom: 14pt; }}
+    .cover-target .label {{ font-size: 8pt; text-transform: uppercase; letter-spacing: 1pt; color: #64748b; }}
+    .cover-target .name {{ font-size: 16pt; font-weight: 700; color: #1e293b; margin: 3pt 0; }}
+    .cover-target .meta {{ font-size: 9pt; color: #64748b; }}
+    .exec-summary {{ background: #ecfdf5; border: 1pt solid #10b981; padding: 14pt; margin-top: 8pt; border-radius: 4pt; }}
+    .exec-summary h3 {{ color: #047857; margin-top: 0; }}
+    .exec-summary .lead {{ font-size: 11pt; line-height: 1.6; color: #064e3b; }}
+    .signature-block {{ margin-top: 18pt; padding-top: 10pt; border-top: 1pt solid #e5e7eb; }}
+    .signature-block .label {{ font-size: 8pt; text-transform: uppercase; letter-spacing: 1pt; color: #64748b; }}
+    .signature-block .name {{ font-size: 12pt; font-weight: 700; margin-top: 4pt; }}
+    .signature-block .role {{ font-size: 9pt; color: #64748b; }}
+    .why-us-row {{ display: flex; gap: 8pt; margin: 12pt 0; }}
+    .why-card {{ flex: 1; background: #f8fafc; border-radius: 4pt; padding: 12pt 10pt; text-align: center; }}
+    .why-card .num {{ font-size: 20pt; font-weight: 700; color: #047857; }}
+    .why-card .label {{ font-size: 9pt; color: #475569; margin-top: 2pt; }}
+    .variants-row {{ display: flex; gap: 6pt; margin: 8pt 0 14pt; align-items: stretch; }}
+    .variant-card {{ flex: 1; border: 1.5pt solid #e5e7eb; border-radius: 6pt; padding: 12pt 10pt 14pt; position: relative; background: #fff; }}
+    .variant-card.highlight {{ border: 2.5pt solid #10b981; background: #ecfdf5; }}
+    .variant-card .vlabel {{ font-size: 10pt; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: 0.5pt; }}
+    .variant-card.highlight .vlabel {{ color: #047857; }}
+    .variant-card .vprice {{ font-size: 22pt; font-weight: 700; color: #1e293b; margin: 6pt 0 2pt; }}
+    .variant-card.highlight .vprice {{ color: #047857; }}
+    .variant-card .vunit {{ font-size: 8pt; color: #94a3b8; margin-bottom: 8pt; }}
+    .variant-card .vsla {{ font-size: 8pt; background: #f1f5f9; color: #334155; padding: 3pt 6pt; border-radius: 12pt; display: inline-block; margin-bottom: 8pt; }}
+    .variant-card.highlight .vsla {{ background: #d1fae5; color: #047857; }}
+    .variant-card .badge-top {{ position: absolute; top: -10pt; left: 50%; transform: translateX(-50%); background: #10b981; color: #fff; font-size: 8pt; font-weight: 700; padding: 3pt 10pt; border-radius: 12pt; }}
+    .variant-card ul {{ margin: 0; padding-left: 14pt; font-size: 8.5pt; line-height: 1.5; }}
+    .variant-card li {{ margin: 2pt 0; color: #334155; }}
+    .variant-card.highlight li {{ color: #064e3b; }}
+    table.ts-table {{ width: 100%; border-collapse: collapse; font-size: 9pt; margin: 6pt 0 14pt; }}
+    .ts-table th {{ background: #f1f5f9; text-align: left; padding: 6pt 8pt; font-weight: 600; color: #475569; border-bottom: 2pt solid #cbd5e1; }}
+    .ts-table td {{ padding: 6pt 8pt; border-bottom: 1pt solid #e5e7eb; }}
+    .ts-table tr:last-child td {{ border-bottom: none; }}
+    .risk-value-row {{ display: flex; gap: 10pt; margin: 12pt 0; }}
+    .risk-box, .value-box {{ flex: 1; padding: 12pt; border-radius: 4pt; }}
+    .risk-box {{ background: #fef2f2; border-left: 3pt solid #ef4444; }}
+    .risk-box h3 {{ color: #991b1b; }}
+    .value-box {{ background: #ecfdf5; border-left: 3pt solid #10b981; }}
+    .value-box h3 {{ color: #047857; }}
+    .risk-box ul, .value-box ul {{ margin: 4pt 0 0; padding-left: 14pt; font-size: 9pt; line-height: 1.6; }}
+    .risk-box li {{ color: #7f1d1d; }}
+    .value-box li {{ color: #064e3b; }}
+    .guarantee {{ background: linear-gradient(90deg, #047857 0%, #10b981 100%); color: #fff; padding: 14pt 16pt; border-radius: 4pt; margin: 14pt 0; }}
+    .guarantee h3 {{ color: #fff; margin: 0 0 2pt; }}
+    .guarantee p {{ margin: 0; font-size: 9pt; opacity: 0.95; }}
+    .cta-block {{ background: #f8fafc; border: 1pt solid #e5e7eb; padding: 16pt; border-radius: 4pt; margin: 12pt 0; }}
+    .cta-block ol {{ counter-reset: cta; padding-left: 0; list-style: none; }}
+    .cta-block ol li {{ counter-increment: cta; padding: 8pt 0 8pt 32pt; position: relative; font-size: 10pt; }}
+    .cta-block ol li::before {{ content: counter(cta); position: absolute; left: 0; top: 6pt; width: 22pt; height: 22pt; background: #10b981; color: #fff; border-radius: 50%; text-align: center; line-height: 22pt; font-weight: 700; font-size: 10pt; }}
+    .contact-card {{ background: #1e293b; color: #fff; padding: 18pt; border-radius: 6pt; margin-top: 14pt; }}
+    .contact-card h3 {{ color: #fff; margin-top: 0; }}
+    .contact-card .row {{ margin: 6pt 0; font-size: 10pt; }}
+    .contact-card .info-grid {{ margin-top: 10pt; padding-top: 10pt; border-top: 1pt solid #334155; font-size: 8pt; color: #94a3b8; }}
+    .terms {{ background: #f8fafc; padding: 10pt 14pt; margin: 14pt 0; border-radius: 4pt; font-size: 8.5pt; }}
+    .terms ul {{ margin: 4pt 0; padding-left: 14pt; }}
+    .terms li {{ margin: 2pt 0; color: #475569; }}
+    .footer-mini {{ margin-top: 18pt; padding-top: 10pt; border-top: 1pt solid #e5e7eb; font-size: 7.5pt; color: #94a3b8; text-align: center; }}
+    </style></head><body>
 
-<div class="header">
-  <h1>⚡ Cenová ponuka servisu trafostaníc</h1>
-  <div class="subtitle">{q.get('quote_number', '')} · {today}</div>
-</div>
+    <div class="page cover">
+      <div class="cover-hero">
+        <div class="brand">⚡ ENERGOVISION s.r.o.</div>
+        <div class="tagline">Moderné energetické riešenia, ktoré hľadáte</div>
+        <h1>Cenová ponuka<br>na servis trafostaníc</h1>
+        <div class="quote-meta">{q.get('quote_number', '')} · {today}</div>
+      </div>
+      <div class="cover-body">
+        <div class="cover-target">
+          <div class="label">Pripravené pre</div>
+          <div class="name">{klient}</div>
+          <div class="meta">{('IČO ' + ico + ' · ') if ico else ''}{address}</div>
+        </div>
+        <div class="exec-summary">
+          <h3>📋 Vaša situácia v skratke</h3>
+          <p class="lead">Vlastníte <strong>{len(items)} {ts_count_label}</strong> ({total_kva_str} kVA spolu), {verb_singular} podľa vyhl. 508/2009 Z. z. legislatívne povinn{verb_pov} pravidelne revidovať. Pripravili sme pre Vás <strong>3 úrovne servisných paušálov</strong>, ktoré pokrývajú všetky zákonné požiadavky a chránia Vašu prevádzku pred neplánovanými výpadkami.</p>
+          <p class="lead" style="margin-top: 8pt;">Naša odporúčaná voľba: <strong style="background: #10b981; color: #fff; padding: 2pt 6pt; border-radius: 3pt;">{rec_variant_label}</strong> za <strong>{rec_price_str}/mes</strong> bez DPH.</p>
+        </div>
+        <div class="signature-block">
+          <div class="label">Pripravil pre Vás</div>
+          <div class="name">Lukáš Bago</div>
+          <div class="role">Konateľ · +421 918 187 762 · lukas.bago@energovision.sk</div>
+        </div>
+      </div>
+    </div>
 
-<div class="party">
-  <div>
-    <h3>Poskytovateľ</h3>
-    <strong>Energovision s.r.o.</strong><br>
-    Lamačská cesta 1738/111, 841 03 Bratislava<br>
-    IČO: 53 036 280 · DIČ: 2121238526<br>
-    IČ DPH: SK2121238526<br>
-    Lukáš Bago · +421 918 187 762<br>
-    lukas.bago@energovision.sk
-  </div>
-  <div>
-    <h3>Objednávateľ</h3>
-    <strong>{klient}</strong><br>
-    {address}<br>
-    {f'IČO: {ico}<br>' if ico else ''}
-    {f'Email: {cust.get("email")}<br>' if cust.get("email") else ''}
-    {f'Telefón: {cust.get("phone")}' if cust.get("phone") else ''}
-  </div>
-</div>
+    <div class="page">
+      <h2>Prečo si vybrať Energovision</h2>
+      <div class="why-us-row">
+        <div class="why-card"><div class="num">200+</div><div class="label">spravovaných FVE a trafostaníc<br>od roku 2020</div></div>
+        <div class="why-card"><div class="num">4h</div><div class="label">garantovaný on-site príchod<br>pri Havarijnej zmluve 24/7</div></div>
+        <div class="why-card"><div class="num">24/7</div><div class="label">dispečing po celom Slovensku<br>· Hotline +421 948 302 137</div></div>
+      </div>
+      <p style="font-size: 9.5pt; color: #475569; margin: 4pt 0 12pt;">Sme jediný poskytovateľ na Slovensku, ktorý <strong>spája expertízu na trafostanice, fotovoltiku aj batériové úložiská pod jednou strechou</strong> — vrátane integrovaného monitoringu a klientskeho portálu s prístupom k Vašej dokumentácii 24/7.</p>
+      <h2>Vyberte si úroveň servisu</h2>
+      {variants_section}
+    </div>
 
-<h2>Predmet ponuky — {len(items)} trafostaníc</h2>
-<table>
-<thead><tr><th>Por.</th><th>Označenie</th><th>Názov</th><th>Adresa</th><th style="text-align:right">kVA</th></tr></thead>
-<tbody>{ts_rows_html}</tbody>
-</table>
+    <div class="page">
+      <h2>Predmet ponuky</h2>
+      <table class="ts-table"><thead><tr><th>#</th><th>Označenie TS</th><th>Vlastník / názov</th><th>Lokalita</th><th style="text-align:right">kVA</th></tr></thead><tbody>{ts_rows_html}</tbody></table>
+      <h2>Riziko vs. hodnota servisu</h2>
+      <div class="risk-value-row">
+        <div class="risk-box">
+          <h3>⚠️ Bez aktívneho servisu</h3>
+          <ul>
+            <li><strong>Pokuta NIP až 33 000 €</strong> za nevykonané periodické revízie (508/2009 Z. z.)</li>
+            <li><strong>Riziko odpojenia od distribučnej sústavy</strong> pri zistení neplnenia povinností</li>
+            <li><strong>Neplánovaný výpadok výroby</strong> — 1 deň priemyselnej prevádzky = 25 000 – 100 000 €</li>
+            <li><strong>Skryté poruchy</strong> bez termovízie sa prejavia až haváriou</li>
+            <li><strong>Pomalá reakcia</strong> pri havárii bez 24/7 zmluvy (24–48 h)</li>
+          </ul>
+        </div>
+        <div class="value-box">
+          <h3>✅ S našou Komplet zmluvou</h3>
+          <ul>
+            <li><strong>Plnenie legislatívy 508/2009 Z. z.</strong> a 124/2006 Z. z. zabezpečené</li>
+            <li><strong>On-site reakcia do 24 h</strong> v pracovných dňoch (4 h pri 24/7 variante)</li>
+            <li><strong>Predikčná údržba</strong> termovízia 1× ročne + štvrťročné kontroly</li>
+            <li><strong>Digitálna dokumentácia 24/7</strong> na app.energovision.sk/portal</li>
+            <li><strong>Jeden partner</strong> pre TS, FVE aj BESS — bez koordinácie 3 firiem</li>
+          </ul>
+        </div>
+      </div>
+      <div class="guarantee">
+        <h3>🛡️ Záruka SLA</h3>
+        <p>Ak nedodržíme dohodnutý reakčný čas pri havárii, <strong>mesačný paušál za daný mesiac vraciame v plnej výške</strong>. Bez výhovoriek.</p>
+      </div>
+      <div class="terms">
+        <strong>Obchodné podmienky:</strong>
+        <ul>
+          <li>Doba viazanosti: <strong>{contract_months} mesiacov</strong> · možnosť výpovede 3 mesiace dopredu</li>
+          <li>Splatnosť faktúr: 14 dní od doručenia</li>
+          <li>Ceny sú uvedené bez DPH (21 % bude pripočítané)</li>
+          <li>Inflačná indexácia: max +3 % ročne (len pri inflácii nad 2 % podľa ŠÚ SR)</li>
+          {terms_extras}
+        </ul>
+      </div>
+      {notes_html}
+    </div>
 
-{variants_html}
-{setup_html}
+    <div class="page">
+      <h2>Ďalšie kroky</h2>
+      <div class="cta-block">
+        <ol>
+          <li><strong>Pozrite si interaktívnu verziu</strong> ponuky na <code style="background:#e5e7eb; padding:2pt 5pt; border-radius:2pt; font-size:9pt;">{public_link}</code> — vyberte si Vašu úroveň servisu a kliknite „Prijímam ponuku".</li>
+          <li><strong>Po Vašom potvrdení</strong> Vám zašleme zmluvu o správe a servise (DOCX + PDF) na podpis. Akceptujeme elektronický podpis aj skenovanú kópiu.</li>
+          <li><strong>Po obojstrannom podpise</strong> automaticky naplánujeme prvú revíziu (do 30 dní) a získate prístup do klientskeho portálu, kde uvidíte všetky dokumenty a harmonogram revízií.</li>
+        </ol>
+      </div>
+      <h2>Máte otázky?</h2>
+      <p style="font-size: 10pt; color: #475569;">Som Vám k dispozícii kedykoľvek — kľudne ma kontaktujte priamo na telefóne alebo emailom. Pre rýchlu konzultáciu si môžete rezervovať 30-minútový videohovor.</p>
+      <div class="contact-card">
+        <h3>📞 Lukáš Bago · Konateľ Energovision s.r.o.</h3>
+        <div class="row">📱 <strong>+421 918 187 762</strong> (mobil, WhatsApp, Signal)</div>
+        <div class="row">✉️ <strong>lukas.bago@energovision.sk</strong></div>
+        <div class="row">🌐 <strong>www.energovision.sk</strong></div>
+        <div class="row">🏢 Lamačská cesta 1738/111, 841 03 Bratislava</div>
+        <div class="info-grid">IČO: 53 036 280 · DIČ: 2121238526 · IČ DPH: SK2121238526 · ORSR BA I, oddiel Sro, vložka 158744/B</div>
+      </div>
+      <div class="footer-mini">Energovision s.r.o. · Moderné energetické riešenia, ktoré hľadáte<br>Servis trafostaníc · Fotovoltika · BESS · Revízie · Projekcia</div>
+    </div>
 
-<div class="terms">
-<strong>Podmienky ponuky:</strong>
-<ul>
-<li>Doba viazanosti: <strong>{contract_months} mesiacov</strong></li>
-<li>Splatnosť faktúr: 14 dní od doručenia</li>
-<li>Ceny sú uvedené bez DPH (21 % bude pripočítané)</li>
-<li>Inflačná indexácia: max +3 % ročne podľa ŠÚ SR (len pri inflácii &gt; 2 %)</li>
-{f'<li>Platnosť ponuky do: <strong>{valid_until}</strong></li>' if valid_until else ''}
-</ul>
-</div>
-
-{notes_html}
-
-<div class="footer">
-Energovision s.r.o. · Moderné energetické riešenia, ktoré hľadáte · www.energovision.sk
-</div>
-
-</body></html>"""
+    </body></html>"""
 
     # HTML → PDF
     try:
