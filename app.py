@@ -12552,49 +12552,80 @@ def huawei_test_token():
 @app.route("/api/huawei/plants", methods=["GET"])
 def huawei_list_plants():
     """
-    Po úspešnom Client Credentials → skús zavolať Plant List API.
-    Použitie: GET /api/huawei/plants
-    Skúsi viac variantov URL aby sme zistili správny Service Provider OpenAPI path.
+    Diagnostika auth headera — pre 1 URL skúsi viac variantov auth headera.
     """
     try:
         from huawei_oauth import get_valid_access_token
         token = get_valid_access_token("huawei")
         if not token:
-            return jsonify({"success": False, "error": "no valid token — call /api/huawei/test-token first"}), 401
+            return jsonify({"success": False, "error": "no valid token"}), 401
 
-        # Kandidáti pre Service Provider Plant List endpoint
-        # (Huawei má 3 svety: NBI thirdData, openapi pvms, openapi)
-        candidates = [
-            ("openapi pvms stations", "https://intl.fusionsolar.huawei.com/rest/openapi/pvms/v1/stations"),
-            ("openapi pvms stations EU5", "https://eu5.fusionsolar.huawei.com/rest/openapi/pvms/v1/stations"),
-            ("openapi pvms station/list", "https://intl.fusionsolar.huawei.com/rest/openapi/pvms/v1/station/list"),
-            ("oauth2 host pvms stations", "https://oauth2.fusionsolar.huawei.com/rest/openapi/pvms/v1/stations"),
-            ("NBI thirdData stations EU5", "https://eu5.fusionsolar.huawei.com/thirdData/stations"),
-            ("NBI thirdData getStationList EU5", "https://eu5.fusionsolar.huawei.com/thirdData/getStationList"),
+        # URL kandidáti (známe Huawei Plant List endpointy)
+        url_candidates = [
+            "https://intl.fusionsolar.huawei.com/rest/pvms/web/station/v1/station/station-list",
+            "https://intl.fusionsolar.huawei.com/rest/openapi/pvms/v1/stations",
+            "https://intl.fusionsolar.huawei.com/thirdData/stations",
+            "https://eu5.fusionsolar.huawei.com/thirdData/stations",
         ]
+
+        # Auth-style kandidáti
+        auth_styles = [
+            ("Bearer", lambda t: {"Authorization": f"Bearer {t}"}),
+            ("XSRF-TOKEN header", lambda t: {"XSRF-TOKEN": t}),
+            ("X-Access-Token", lambda t: {"X-Access-Token": t}),
+            ("access_token header", lambda t: {"access_token": t}),
+            ("XSRF cookie", lambda t: {"Cookie": f"XSRF-TOKEN={t}", "XSRF-TOKEN": t}),
+            ("Bearer + XSRF", lambda t: {"Authorization": f"Bearer {t}", "XSRF-TOKEN": t}),
+        ]
+
         attempts = []
-        for label, url in candidates:
-            headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-            try:
-                r = requests.post(url, headers=headers, json={"pageNo": 1}, timeout=20)
-                snippet = r.text[:400]
-                attempts.append({"label": label, "url": url, "status": r.status_code, "snippet": snippet})
-                if r.ok:
+        for url in url_candidates:
+            for label, hdr_fn in auth_styles:
+                for method in ["POST", "GET"]:
+                    headers = {**hdr_fn(token), "Content-Type": "application/json"}
                     try:
-                        j = r.json()
-                        # NBI format
-                        if j.get("success") and j.get("data"):
-                            return jsonify({"success": True, "endpoint": label, "data": j}), 200
-                        # OpenAPI format (môže byť priamo array alebo {list:[]})
-                        if isinstance(j, dict) and ("list" in j or "data" in j or "stations" in j):
-                            return jsonify({"success": True, "endpoint": label, "data": j}), 200
-                        if isinstance(j, list):
-                            return jsonify({"success": True, "endpoint": label, "data": j}), 200
-                    except Exception:
-                        pass
-            except Exception as ex:
-                attempts.append({"label": label, "url": url, "error": str(ex)[:200]})
-        return jsonify({"success": False, "attempts": attempts}), 502
+                        if method == "POST":
+                            r = requests.post(url, headers=headers, json={"pageNo": 1, "pageSize": 10}, timeout=15)
+                        else:
+                            r = requests.get(url, headers=headers, params={"pageNo": 1, "pageSize": 10}, timeout=15)
+                        snippet = r.text[:300]
+                        fail_code = None
+                        try:
+                            j = r.json()
+                            fail_code = j.get("failCode")
+                            # Úspech = nemá failCode, alebo má dáta
+                            if r.ok and not fail_code and (j.get("data") or j.get("list") or isinstance(j, list) or "stations" in str(j).lower()):
+                                return jsonify({
+                                    "success": True,
+                                    "url": url,
+                                    "method": method,
+                                    "auth_style": label,
+                                    "data": j,
+                                }), 200
+                        except Exception:
+                            pass
+                        attempts.append({
+                            "url": url.replace("https://", "").split(".")[0] + "..." + url.split("/")[-1],
+                            "method": method,
+                            "auth": label,
+                            "status": r.status_code,
+                            "fail_code": fail_code,
+                            "snippet": snippet[:120],
+                        })
+                    except Exception as ex:
+                        attempts.append({"url": url, "method": method, "auth": label, "error": str(ex)[:100]})
+
+        # Filtrovať len unikátne chyby aby výstup nebol obrovský
+        seen = set()
+        uniq = []
+        for a in attempts:
+            key = (a.get("status"), a.get("fail_code"), a.get("snippet", "")[:60])
+            if key not in seen:
+                seen.add(key)
+                uniq.append(a)
+
+        return jsonify({"success": False, "total_attempts": len(attempts), "unique_errors": uniq}), 502
     except Exception as e:
         log.exception("plants error")
         return jsonify({"success": False, "error": str(e)}), 500
+
