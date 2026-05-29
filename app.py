@@ -12554,36 +12554,46 @@ def huawei_list_plants():
     """
     Po úspešnom Client Credentials → skús zavolať Plant List API.
     Použitie: GET /api/huawei/plants
+    Skúsi viac variantov URL aby sme zistili správny Service Provider OpenAPI path.
     """
     try:
-        from huawei_oauth import get_valid_access_token, load_oauth_credentials
+        from huawei_oauth import get_valid_access_token
         token = get_valid_access_token("huawei")
         if not token:
             return jsonify({"success": False, "error": "no valid token — call /api/huawei/test-token first"}), 401
 
-        cred = load_oauth_credentials()
-        base = (cred.get("base_url") or "").rstrip("/")
-        # base_url v DB je už https://eu5.fusionsolar.huawei.com/thirdData
-        url = f"{base}/stations"
-        # Pre starý NBI: header XSRF-TOKEN; pre OAuth2: Bearer
+        # Kandidáti pre Service Provider Plant List endpoint
+        # (Huawei má 3 svety: NBI thirdData, openapi pvms, openapi)
+        candidates = [
+            ("openapi pvms stations", "https://intl.fusionsolar.huawei.com/rest/openapi/pvms/v1/stations"),
+            ("openapi pvms stations EU5", "https://eu5.fusionsolar.huawei.com/rest/openapi/pvms/v1/stations"),
+            ("openapi pvms station/list", "https://intl.fusionsolar.huawei.com/rest/openapi/pvms/v1/station/list"),
+            ("oauth2 host pvms stations", "https://oauth2.fusionsolar.huawei.com/rest/openapi/pvms/v1/stations"),
+            ("NBI thirdData stations EU5", "https://eu5.fusionsolar.huawei.com/thirdData/stations"),
+            ("NBI thirdData getStationList EU5", "https://eu5.fusionsolar.huawei.com/thirdData/getStationList"),
+        ]
         attempts = []
-        for label, headers in [
-            ("Bearer", {"Authorization": f"Bearer {token}"}),
-            ("XSRF-TOKEN", {"XSRF-TOKEN": token, "Cookie": f"XSRF-TOKEN={token}"}),
-        ]:
-            r = requests.post(url, headers=headers, json={"pageNo": 1}, timeout=20)
-            attempts.append({
-                "auth_style": label,
-                "status": r.status_code,
-                "snippet": r.text[:500],
-            })
-            if r.ok:
-                try:
-                    j = r.json()
-                    if j.get("success") or j.get("data"):
-                        return jsonify({"success": True, "auth_style": label, "data": j}), 200
-                except Exception:
-                    pass
+        for label, url in candidates:
+            headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+            try:
+                r = requests.post(url, headers=headers, json={"pageNo": 1}, timeout=20)
+                snippet = r.text[:400]
+                attempts.append({"label": label, "url": url, "status": r.status_code, "snippet": snippet})
+                if r.ok:
+                    try:
+                        j = r.json()
+                        # NBI format
+                        if j.get("success") and j.get("data"):
+                            return jsonify({"success": True, "endpoint": label, "data": j}), 200
+                        # OpenAPI format (môže byť priamo array alebo {list:[]})
+                        if isinstance(j, dict) and ("list" in j or "data" in j or "stations" in j):
+                            return jsonify({"success": True, "endpoint": label, "data": j}), 200
+                        if isinstance(j, list):
+                            return jsonify({"success": True, "endpoint": label, "data": j}), 200
+                    except Exception:
+                        pass
+            except Exception as ex:
+                attempts.append({"label": label, "url": url, "error": str(ex)[:200]})
         return jsonify({"success": False, "attempts": attempts}), 502
     except Exception as e:
         log.exception("plants error")

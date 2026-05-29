@@ -67,35 +67,40 @@ def _decrypt_secret(encrypted: str) -> str:
 
 def request_new_token(cred: Dict) -> Tuple[bool, Optional[Dict]]:
     """
-    Client credentials flow:
-    POST {base_url}/thirdData/token
-    Body: {client_id, client_secret, grant_type: 'client_credentials'}
+    OAuth2 Client Credentials flow (Service Provider).
+    Overene 2026-05-29: POST oauth2.fusionsolar.huawei.com/rest/dp/uidm/oauth2/v1/token
+    Form body, scope=pvms.openapi.basic pvms.openapi.control, TTL 3600s.
     """
-    base_url = cred.get("base_url", "").rstrip("/")
-    if not base_url:
-        return False, {"error": "missing base_url in DB"}
-
     client_id = cred.get("client_id", "")
     secret = _decrypt_secret(cred.get("encrypted_client_secret", ""))
+    scope = cred.get("oauth_scope") or "pvms.openapi.basic pvms.openapi.control"
 
     if not client_id or not secret:
         return False, {"error": "missing client_id or client_secret"}
 
-    url = f"{base_url}/thirdData/token"
+    url = "https://oauth2.fusionsolar.huawei.com/rest/dp/uidm/oauth2/v1/token"
     payload = {
+        "grant_type": "client_credentials",
         "client_id": client_id,
         "client_secret": secret,
-        "grant_type": "client_credentials",
+        "scope": scope,
     }
 
     try:
-        r = requests.post(url, json=payload, timeout=30)
+        r = requests.post(url, data=payload, timeout=30)
         if not r.ok:
             log.error("Token request failed: %s %s", r.status_code, r.text[:300])
             return False, {"error": f"HTTP {r.status_code}", "body": r.text[:300]}
 
         data = r.json()
-        # Huawei response format: {success, failCode, data: {accessToken, expiresIn, refreshToken?}}
+        # OAuth2 RFC 6749 format: {access_token, token_type, expires_in, scope}
+        if "access_token" in data:
+            return True, {
+                "access_token": data["access_token"],
+                "refresh_token": data.get("refresh_token"),
+                "expires_in_sec": data.get("expires_in", DEFAULT_TOKEN_TTL_SECONDS),
+            }
+        # Fallback — legacy NBI format (shouldn't reach this branch)
         if not data.get("success"):
             return False, {"error": f"Huawei failCode {data.get('failCode')}", "msg": data.get("message")}
 
