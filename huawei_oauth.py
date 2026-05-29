@@ -373,3 +373,235 @@ def dispatch_plan(station_code: str, dispatch_points: List[Dict],
         triggered_by=triggered_by,
         source=source,
     )
+
+
+# ============================================================
+# AUTHORIZATION CODE FLOW (3-legged OAuth — per-customer)
+# ============================================================
+
+# Huawei OAuth endpoints (EU region):
+HUAWEI_OAUTH_AUTHORIZE_URL = "https://oauth2.fusionsolar.huawei.com/rest/dp/uidm/oauth2/v1/authorize"
+HUAWEI_OAUTH_TOKEN_URL = "https://oauth2.fusionsolar.huawei.com/rest/dp/uidm/oauth2/v1/token"
+
+
+def build_authorize_url(state: str, redirect_uri: str, scope: str = "pvms.openapi.basic,pvms.openapi.control") -> str:
+    """
+    Vyrobí URL na ktorý sa user (klient) zredirectuje aby autorizoval Energovision-EMS.
+    
+    Args:
+        state: CSRF token (uložiť do huawei_customer_authorizations.state)
+        redirect_uri: callback URL po authorizácii
+        scope: comma-separated permission scopes
+    """
+    cred = load_oauth_credentials()
+    if not cred:
+        return ""
+    
+    from urllib.parse import urlencode
+    params = {
+        "response_type": "code",
+        "client_id": cred["client_id"],
+        "redirect_uri": redirect_uri,
+        "scope": scope,
+        "state": state,
+    }
+    return f"{HUAWEI_OAUTH_AUTHORIZE_URL}?{urlencode(params)}"
+
+
+def exchange_code_for_tokens(code: str, redirect_uri: str) -> Tuple[bool, Optional[Dict]]:
+    """
+    Po callback: vymení authorization code za access_token + refresh_token.
+    """
+    cred = load_oauth_credentials()
+    if not cred:
+        return False, {"error": "no_credentials"}
+    
+    secret = _decrypt_secret(cred.get("encrypted_client_secret", ""))
+    payload = {
+        "grant_type": "authorization_code",
+        "code": code,
+        "client_id": cred["client_id"],
+        "client_secret": secret,
+        "redirect_uri": redirect_uri,
+    }
+    
+    try:
+        r = requests.post(HUAWEI_OAUTH_TOKEN_URL, data=payload, timeout=30)
+        if not r.ok:
+            log.error("Code exchange failed: %s %s", r.status_code, r.text[:300])
+            return False, {"error": f"HTTP {r.status_code}", "body": r.text[:300]}
+        data = r.json()
+        return True, {
+            "access_token": data.get("access_token"),
+            "refresh_token": data.get("refresh_token"),
+            "expires_in_sec": data.get("expires_in", DEFAULT_TOKEN_TTL_SECONDS),
+            "scope": data.get("scope"),
+            "huawei_user_id": data.get("openid") or data.get("uid"),
+        }
+    except Exception as e:
+        log.exception("Code exchange exception")
+        return False, {"error": str(e)}
+
+
+def refresh_customer_token(customer_id: str) -> Tuple[bool, Optional[str]]:
+    """
+    Refresh access_token pre konkrétneho klienta cez jeho refresh_token.
+    """
+    r = requests.get(
+        f"{SUPABASE_URL}/rest/v1/huawei_customer_authorizations",
+        headers=_sb_headers(),
+        params={
+            "select": "id,refresh_token",
+            "customer_id": f"eq.{customer_id}",
+            "revoked_at": "is.null",
+        },
+        timeout=10,
+    )
+    if not r.ok or not r.json():
+        return False, None
+    
+    auth_row = r.json()[0]
+    refresh_token = auth_row.get("refresh_token")
+    if not refresh_token:
+        return False, None
+    
+    cred = load_oauth_credentials()
+    if not cred:
+        return False, None
+    secret = _decrypt_secret(cred.get("encrypted_client_secret", ""))
+    
+    try:
+        resp = requests.post(
+            HUAWEI_OAUTH_TOKEN_URL,
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "client_id": cred["client_id"],
+                "client_secret": secret,
+            },
+            timeout=30,
+        )
+        if not resp.ok:
+            log.error("Refresh failed: %s", resp.text[:300])
+            return False, None
+        data = resp.json()
+        
+        # Persist new tokens
+        new_access = data.get("access_token")
+        new_refresh = data.get("refresh_token", refresh_token)  # keep old ak nový nie je daný
+        expires_in = data.get("expires_in", DEFAULT_TOKEN_TTL_SECONDS)
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in - 60)
+        
+        requests.patch(
+            f"{SUPABASE_URL}/rest/v1/huawei_customer_authorizations",
+            headers=_sb_headers(),
+            params={"id": f"eq.{auth_row['id']}"},
+            json={
+                "access_token": new_access,
+                "refresh_token": new_refresh,
+                "token_expires_at": expires_at.isoformat(),
+                "last_refresh_at": datetime.now(timezone.utc).isoformat(),
+            },
+            timeout=10,
+        )
+        return True, new_access
+    except Exception as e:
+        log.exception("Refresh exception")
+        return False, None
+
+
+def get_customer_access_token(customer_id: str) -> Optional[str]:
+    """Vráti platný access_token pre konkrétneho klienta. Auto-refresh ak vypršal."""
+    r = requests.get(
+        f"{SUPABASE_URL}/rest/v1/huawei_customer_authorizations",
+        headers=_sb_headers(),
+        params={
+            "select": "access_token,token_expires_at",
+            "customer_id": f"eq.{customer_id}",
+            "revoked_at": "is.null",
+        },
+        timeout=10,
+    )
+    if not r.ok or not r.json():
+        return None
+    
+    auth_row = r.json()[0]
+    token = auth_row.get("access_token")
+    expires_str = auth_row.get("token_expires_at")
+    
+    if token and expires_str:
+        try:
+            expires_at = datetime.fromisoformat(expires_str.replace("Z", "+00:00"))
+            if expires_at > datetime.now(timezone.utc):
+                return token
+        except Exception:
+            pass
+    
+    # Expired → refresh
+    ok, new_token = refresh_customer_token(customer_id)
+    return new_token if ok else None
+
+
+def save_customer_authorization(customer_id: str, state: str, tokens: Dict, initiated_by: Optional[str] = None) -> str:
+    """Uloží nového customer-a po úspešnej OAuth authorizácii."""
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=tokens.get("expires_in_sec", DEFAULT_TOKEN_TTL_SECONDS) - 60)
+    
+    # Najprv check či customer už má aktívnu authorization (nie revoked) — update miesto insert
+    r = requests.get(
+        f"{SUPABASE_URL}/rest/v1/huawei_customer_authorizations",
+        headers=_sb_headers(),
+        params={
+            "select": "id",
+            "customer_id": f"eq.{customer_id}",
+            "revoked_at": "is.null",
+        },
+        timeout=10,
+    )
+    existing = r.json() if r.ok else []
+    
+    payload = {
+        "customer_id": customer_id,
+        "huawei_user_id": tokens.get("huawei_user_id"),
+        "access_token": tokens["access_token"],
+        "refresh_token": tokens.get("refresh_token"),
+        "token_expires_at": expires_at.isoformat(),
+        "scope_granted": tokens.get("scope"),
+        "state": state,
+        "authorized_at": datetime.now(timezone.utc).isoformat(),
+        "initiated_by": initiated_by,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    
+    if existing:
+        # Update
+        requests.patch(
+            f"{SUPABASE_URL}/rest/v1/huawei_customer_authorizations",
+            headers={**_sb_headers(), "Prefer": "return=representation"},
+            params={"id": f"eq.{existing[0]['id']}"},
+            json=payload,
+            timeout=10,
+        )
+        return existing[0]["id"]
+    else:
+        # Insert
+        r2 = requests.post(
+            f"{SUPABASE_URL}/rest/v1/huawei_customer_authorizations",
+            headers={**_sb_headers(), "Prefer": "return=representation"},
+            json=payload,
+            timeout=10,
+        )
+        if r2.ok:
+            return r2.json()[0]["id"]
+    return None
+
+
+def revoke_customer_authorization(customer_id: str) -> bool:
+    """Klient revokoval prístup. Označiť ako revoked."""
+    r = requests.patch(
+        f"{SUPABASE_URL}/rest/v1/huawei_customer_authorizations",
+        headers=_sb_headers(),
+        params={"customer_id": f"eq.{customer_id}", "revoked_at": "is.null"},
+        json={"revoked_at": datetime.now(timezone.utc).isoformat()},
+        timeout=10,
+    )
+    return r.ok

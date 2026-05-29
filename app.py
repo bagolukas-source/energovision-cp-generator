@@ -12476,3 +12476,56 @@ def eva_learning_from_folder():
     except Exception as e:
         log.exception("folder parse failed")
         return jsonify({"error": str(e)}), 500
+
+
+# ============================================================
+# HUAWEI OAUTH CALLBACK — exchange code za tokens, save per customer
+# ============================================================
+@app.route("/api/auth/huawei/callback", methods=["GET"])
+def huawei_oauth_callback():
+    code = request.args.get("code")
+    state = request.args.get("state")
+    error = request.args.get("error")
+    redirect_uri = "https://energovision-cp-generator.onrender.com/api/auth/huawei/callback"
+    
+    if error:
+        return f"<h1>Authorization Error</h1><p>{error}</p>", 400
+    if not code or not state:
+        return "<h1>Missing code or state</h1>", 400
+    
+    # Validate state against DB (CSRF)
+    sb_headers = {
+        "apikey": SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+    }
+    r = requests.get(
+        f"{SUPABASE_URL}/rest/v1/huawei_customer_authorizations",
+        headers=sb_headers,
+        params={"select": "id,customer_id,initiated_by", "state": f"eq.{state}"},
+        timeout=10,
+    )
+    if not r.ok or not r.json():
+        return "<h1>Invalid state — possible CSRF</h1>", 400
+    pending = r.json()[0]
+    
+    # Exchange code for tokens
+    from huawei_oauth import exchange_code_for_tokens, save_customer_authorization
+    ok, tokens = exchange_code_for_tokens(code, redirect_uri)
+    if not ok:
+        return f"<h1>Token exchange failed</h1><pre>{tokens}</pre>", 500
+    
+    # Save tokens
+    save_customer_authorization(
+        customer_id=pending["customer_id"],
+        state=state,
+        tokens=tokens,
+        initiated_by=pending.get("initiated_by"),
+    )
+    
+    # Redirect to CRM success page
+    return """<html><head><title>Huawei prepojené</title></head>
+<body style="font-family:sans-serif;text-align:center;padding:50px">
+<h1>✅ Huawei FusionSolar prepojené</h1>
+<p>Vaša žiadosť o povolenie bola úspešne spracovaná. Môžete zatvoriť toto okno.</p>
+<a href="https://app.energovision.sk/admin/integrations/huawei" style="background:#10b981;color:white;padding:10px 20px;text-decoration:none;border-radius:6px">Späť do CRM</a>
+</body></html>"""
