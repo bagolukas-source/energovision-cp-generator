@@ -12529,3 +12529,62 @@ def huawei_oauth_callback():
 <p>Vaša žiadosť o povolenie bola úspešne spracovaná. Môžete zatvoriť toto okno.</p>
 <a href="https://app.energovision.sk/admin/integrations/huawei" style="background:#10b981;color:white;padding:10px 20px;text-decoration:none;border-radius:6px">Späť do CRM</a>
 </body></html>"""
+
+
+# ============================================================
+# HUAWEI CLIENT CREDENTIALS — diagnostický endpoint
+# ============================================================
+@app.route("/api/huawei/test-token", methods=["GET"])
+def huawei_test_token():
+    """
+    Diagnostika: skúsi všetky známe Huawei token endpointy a vráti výsledok.
+    Použitie: GET /api/huawei/test-token
+    """
+    try:
+        from huawei_oauth import try_client_credentials_smart
+        result = try_client_credentials_smart()
+        return jsonify(result), (200 if result.get("success") else 502)
+    except Exception as e:
+        log.exception("test-token error")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/huawei/plants", methods=["GET"])
+def huawei_list_plants():
+    """
+    Po úspešnom Client Credentials → skús zavolať Plant List API.
+    Použitie: GET /api/huawei/plants
+    """
+    try:
+        from huawei_oauth import get_valid_access_token, load_oauth_credentials
+        token = get_valid_access_token("huawei")
+        if not token:
+            return jsonify({"success": False, "error": "no valid token — call /api/huawei/test-token first"}), 401
+
+        cred = load_oauth_credentials()
+        base = (cred.get("base_url") or "").rstrip("/")
+        # base_url v DB je už https://eu5.fusionsolar.huawei.com/thirdData
+        url = f"{base}/stations"
+        # Pre starý NBI: header XSRF-TOKEN; pre OAuth2: Bearer
+        attempts = []
+        for label, headers in [
+            ("Bearer", {"Authorization": f"Bearer {token}"}),
+            ("XSRF-TOKEN", {"XSRF-TOKEN": token, "Cookie": f"XSRF-TOKEN={token}"}),
+        ]:
+            r = requests.post(url, headers=headers, json={"pageNo": 1}, timeout=20)
+            attempts.append({
+                "auth_style": label,
+                "status": r.status_code,
+                "snippet": r.text[:500],
+            })
+            if r.ok:
+                try:
+                    j = r.json()
+                    if j.get("success") or j.get("data"):
+                        return jsonify({"success": True, "auth_style": label, "data": j}), 200
+                except Exception:
+                    pass
+        return jsonify({"success": False, "attempts": attempts}), 502
+    except Exception as e:
+        log.exception("plants error")
+        return jsonify({"success": False, "error": str(e)}), 500

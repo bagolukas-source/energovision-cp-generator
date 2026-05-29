@@ -605,3 +605,171 @@ def revoke_customer_authorization(customer_id: str) -> bool:
         timeout=10,
     )
     return r.ok
+
+
+# ============================================================
+# CLIENT CREDENTIALS — SMART DIAGNOSTIC (try multiple endpoints)
+# ============================================================
+def try_client_credentials_smart() -> Dict:
+    """
+    Skúsi viac endpointov + auth štýlov a vráti detailný report.
+    Použité diagnostické rozhranie pre app.py /api/huawei/test-token.
+
+    Vráti: {"success": True, "endpoint_used": "...", "access_token": "...",
+            "attempts": [{endpoint, method, status, snippet}, ...]}
+    """
+    cred = load_oauth_credentials()
+    if not cred:
+        return {"success": False, "error": "no credentials in DB"}
+
+    client_id = cred.get("client_id", "")
+    secret = _decrypt_secret(cred.get("encrypted_client_secret", ""))
+    scope = cred.get("oauth_scope") or "pvms.openapi.basic pvms.openapi.control"
+
+    if not client_id or not secret:
+        return {"success": False, "error": "missing client_id/secret"}
+
+    # Kandidáti — Huawei má 2 paralelné svety: NBI thirdData a OAuth2
+    candidates = [
+        # NBI legacy — JSON body
+        {
+            "name": "NBI eu5 thirdData/login (userName)",
+            "url": "https://eu5.fusionsolar.huawei.com/thirdData/login",
+            "method": "POST",
+            "json": {"userName": client_id, "systemCode": secret},
+        },
+        {
+            "name": "NBI intl thirdData/login (userName)",
+            "url": "https://intl.fusionsolar.huawei.com/thirdData/login",
+            "method": "POST",
+            "json": {"userName": client_id, "systemCode": secret},
+        },
+        # NBI token endpoint (Service Provider)
+        {
+            "name": "NBI eu5 thirdData/token (client_credentials)",
+            "url": "https://eu5.fusionsolar.huawei.com/thirdData/token",
+            "method": "POST",
+            "json": {
+                "client_id": client_id,
+                "client_secret": secret,
+                "grant_type": "client_credentials",
+            },
+        },
+        # OAuth2 — form body
+        {
+            "name": "OAuth2 token (form body)",
+            "url": "https://oauth2.fusionsolar.huawei.com/rest/dp/uidm/oauth2/v1/token",
+            "method": "POST",
+            "data": {
+                "grant_type": "client_credentials",
+                "client_id": client_id,
+                "client_secret": secret,
+                "scope": scope,
+            },
+        },
+        # OAuth2 — Basic auth + form body
+        {
+            "name": "OAuth2 token (Basic auth)",
+            "url": "https://oauth2.fusionsolar.huawei.com/rest/dp/uidm/oauth2/v1/token",
+            "method": "POST",
+            "data": {
+                "grant_type": "client_credentials",
+                "scope": scope,
+            },
+            "auth": (client_id, secret),
+        },
+    ]
+
+    attempts = []
+    success_attempt = None
+
+    for c in candidates:
+        try:
+            kwargs = {"timeout": 30}
+            if "json" in c:
+                kwargs["json"] = c["json"]
+            if "data" in c:
+                kwargs["data"] = c["data"]
+            if "auth" in c:
+                kwargs["auth"] = c["auth"]
+
+            r = requests.request(c["method"], c["url"], **kwargs)
+            body = r.text[:500]
+            attempt = {
+                "name": c["name"],
+                "url": c["url"],
+                "status": r.status_code,
+                "snippet": body,
+            }
+
+            # Skús extrahovať token
+            token = None
+            ttl = None
+            try:
+                j = r.json()
+                # OAuth2 format
+                if "access_token" in j:
+                    token = j["access_token"]
+                    ttl = j.get("expires_in", DEFAULT_TOKEN_TTL_SECONDS)
+                # NBI format
+                elif j.get("success") and isinstance(j.get("data"), dict):
+                    d = j["data"]
+                    token = d.get("accessToken") or d.get("access_token")
+                    ttl = d.get("expiresIn", DEFAULT_TOKEN_TTL_SECONDS)
+                # NBI login cookie response
+                elif j.get("success") is True:
+                    # XSRF-TOKEN cookie based — use cookie value
+                    xsrf = r.cookies.get("XSRF-TOKEN")
+                    if xsrf:
+                        token = xsrf
+                        ttl = 30 * 60  # ~30 min
+                attempt["fail_code"] = j.get("failCode")
+                attempt["fail_msg"] = j.get("message") or j.get("data")
+            except Exception:
+                pass
+
+            if token:
+                attempt["token_preview"] = token[:20] + "..."
+                attempt["ttl_sec"] = ttl
+                attempts.append(attempt)
+                success_attempt = {**attempt, "access_token": token, "ttl_sec": ttl}
+                break
+
+            attempts.append(attempt)
+        except Exception as e:
+            attempts.append({
+                "name": c["name"],
+                "url": c["url"],
+                "error": str(e)[:200],
+            })
+
+    result = {
+        "success": success_attempt is not None,
+        "attempts": attempts,
+        "credentials_used": {
+            "client_id": client_id,
+            "client_id_len": len(client_id),
+            "secret_len": len(secret),
+            "scope": scope,
+            "base_url_in_db": cred.get("base_url"),
+        },
+    }
+    if success_attempt:
+        result["endpoint_used"] = success_attempt["name"]
+        result["token_preview"] = success_attempt["token_preview"]
+        result["ttl_sec"] = success_attempt["ttl_sec"]
+
+        # Persist token do DB
+        try:
+            save_tokens(
+                cred_id=cred["id"],
+                access_token=success_attempt["access_token"],
+                refresh_token=None,
+                expires_in_sec=success_attempt.get("ttl_sec") or DEFAULT_TOKEN_TTL_SECONDS,
+            )
+            result["saved_to_db"] = True
+        except Exception as e:
+            result["saved_to_db"] = False
+            result["save_error"] = str(e)[:200]
+
+    return result
