@@ -12493,7 +12493,34 @@ def huawei_oauth_callback():
     if not code or not state:
         return "<h1>Missing code or state</h1>", 400
     
-    # Validate state against DB (CSRF)
+    from huawei_oauth import exchange_code_for_tokens, save_customer_authorization, save_tokens, load_oauth_credentials
+    
+    # TEST MASTER mode: state=test_master_* — uloží token do inverter_vendor_credentials
+    if state.startswith("test_master_"):
+        ok, tokens = exchange_code_for_tokens(code, redirect_uri)
+        if not ok:
+            return f"<h1>Token exchange failed</h1><pre>{tokens}</pre>", 500
+        
+        cred = load_oauth_credentials("huawei")
+        if not cred:
+            return "<h1>No huawei credentials in DB</h1>", 500
+        
+        save_tokens(
+            cred_id=cred["id"],
+            access_token=tokens.get("access_token"),
+            refresh_token=tokens.get("refresh_token"),
+            expires_in_sec=tokens.get("expires_in_sec", 3600),
+        )
+        
+        return f"""<html><head><title>Huawei master prepojené</title></head>
+<body style="font-family:sans-serif;text-align:center;padding:50px">
+<h1>✅ Master Owner authorization OK</h1>
+<p>Access token uložený. TTL: {tokens.get("expires_in_sec", 3600)}s. Scope: {tokens.get("scope") or "basic+control"}.</p>
+<p>Ďalší krok: otvor <a href="https://energovision-cp-generator.onrender.com/api/huawei/plants">/api/huawei/plants</a> na test Plant List API.</p>
+<a href="https://app.energovision.sk/admin/integrations/huawei" style="background:#10b981;color:white;padding:10px 20px;text-decoration:none;border-radius:6px;display:inline-block;margin-top:20px">Späť do CRM</a>
+</body></html>"""
+    
+    # PER-CUSTOMER mode: validate state against DB (CSRF)
     sb_headers = {
         "apikey": SUPABASE_SERVICE_KEY,
         "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
@@ -12508,13 +12535,10 @@ def huawei_oauth_callback():
         return "<h1>Invalid state — possible CSRF</h1>", 400
     pending = r.json()[0]
     
-    # Exchange code for tokens
-    from huawei_oauth import exchange_code_for_tokens, save_customer_authorization
     ok, tokens = exchange_code_for_tokens(code, redirect_uri)
     if not ok:
         return f"<h1>Token exchange failed</h1><pre>{tokens}</pre>", 500
     
-    # Save tokens
     save_customer_authorization(
         customer_id=pending["customer_id"],
         state=state,
@@ -12522,7 +12546,6 @@ def huawei_oauth_callback():
         initiated_by=pending.get("initiated_by"),
     )
     
-    # Redirect to CRM success page
     return """<html><head><title>Huawei prepojené</title></head>
 <body style="font-family:sans-serif;text-align:center;padding:50px">
 <h1>✅ Huawei FusionSolar prepojené</h1>
