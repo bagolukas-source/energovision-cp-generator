@@ -12786,7 +12786,7 @@ def huawei_v1_stations():
         import time
         end_ms = int(time.time() * 1000)
         # Default 30d back, override via ?days=X
-        days = int(request.args.get("days", "30"))
+        days = int(request.args.get("days", "365"))
         start_ms = end_ms - days * 86400 * 1000
         
         r = requests.post(
@@ -12814,7 +12814,7 @@ def huawei_v1_realtime(plant_code):
             return jsonify({"success": False, "error": "no token"}), 401
         
         r = requests.post(
-            "https://intl.fusionsolar.huawei.com/thirdData/stations/realKpi",
+            "https://intl.fusionsolar.huawei.com/thirdData/getStationRealKpi",
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
             json={"stationCodes": plant_code},
             timeout=20,
@@ -12826,7 +12826,7 @@ def huawei_v1_realtime(plant_code):
 
 @app.route("/api/huawei/v1/devices/<plant_code>", methods=["GET"])
 def huawei_v1_devices(plant_code):
-    """Zoznam inverterov + baterí pre stanicu."""
+    """Zoznam inverterov + baterí pre stanicu (getDevList)."""
     try:
         from huawei_oauth import get_valid_access_token
         token = get_valid_access_token("huawei")
@@ -12834,7 +12834,7 @@ def huawei_v1_devices(plant_code):
             return jsonify({"success": False, "error": "no token"}), 401
         
         r = requests.post(
-            "https://intl.fusionsolar.huawei.com/thirdData/stations/devices",
+            "https://intl.fusionsolar.huawei.com/thirdData/getDevList",
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
             json={"stationCodes": plant_code},
             timeout=20,
@@ -12846,7 +12846,7 @@ def huawei_v1_devices(plant_code):
 
 @app.route("/api/huawei/v1/alarms/<plant_code>", methods=["GET"])
 def huawei_v1_alarms(plant_code):
-    """Aktívne alarmy pre stanicu (posledných 7 dní)."""
+    """Aktívne alarmy pre stanicu (getAlarmList, posledných 7 dní)."""
     try:
         from huawei_oauth import get_valid_access_token
         token = get_valid_access_token("huawei")
@@ -12858,13 +12858,12 @@ def huawei_v1_alarms(plant_code):
         start_ms = end_ms - 7 * 86400 * 1000
         
         r = requests.post(
-            "https://intl.fusionsolar.huawei.com/thirdData/alarm/stations",
+            "https://intl.fusionsolar.huawei.com/thirdData/getAlarmList",
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
             json={
                 "stationCodes": plant_code,
                 "beginTime": start_ms,
                 "endTime": end_ms,
-                "pageNo": 1,
             },
             timeout=20,
         )
