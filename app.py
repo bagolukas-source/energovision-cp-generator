@@ -12870,3 +12870,296 @@ def huawei_v1_alarms(plant_code):
         return jsonify(r.json() if r.ok else {"error": r.text[:500]}), r.status_code
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ============================================================
+# HUAWEI v1 — CRM INTEGRATION endpointy
+# ============================================================
+@app.route("/api/huawei/v1/sync", methods=["POST", "GET"])
+def huawei_v1_sync():
+    """
+    Sync stanice z Huawei OpenAPI → inverter_sites tabuľka.
+    Pre každú Huawei stanicu vyrobí/aktualizuje záznam s plantCode, capacity, address, gridConnected.
+    """
+    try:
+        from huawei_oauth import get_valid_access_token
+        token = get_valid_access_token("huawei")
+        if not token:
+            return jsonify({"success": False, "error": "no token"}), 401
+        
+        import time
+        days = int(request.args.get("days", "365"))
+        end_ms = int(time.time() * 1000)
+        start_ms = end_ms - days * 86400 * 1000
+        
+        r = requests.post(
+            "https://intl.fusionsolar.huawei.com/thirdData/stations",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json={"pageNo": 1, "gridConnectedStartTime": start_ms, "gridConnectedEndTime": end_ms},
+            timeout=20,
+        )
+        if not r.ok:
+            return jsonify({"success": False, "error": r.text[:500]}), 502
+        
+        plants = r.json().get("data", {}).get("list", [])
+        
+        sb_headers = {
+            "apikey": SUPABASE_SERVICE_KEY,
+            "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+            "Content-Type": "application/json",
+            "Prefer": "return=representation,resolution=merge-duplicates",
+        }
+        
+        created = 0
+        updated = 0
+        errors = []
+        
+        for p in plants:
+            plant_code = p.get("plantCode")
+            if not plant_code:
+                continue
+            
+            # Skontroluj či existuje
+            check = requests.get(
+                f"{SUPABASE_URL}/rest/v1/inverter_sites",
+                headers={"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"},
+                params={
+                    "select": "id,vendor_plant_code",
+                    "vendor": "eq.huawei",
+                    "vendor_plant_code": f"eq.{plant_code}",
+                },
+                timeout=10,
+            )
+            existing = check.json() if check.ok else []
+            
+            # Parse gridConnectedDate
+            grid_date = p.get("gridConnectionDate")
+            commissioning = None
+            if grid_date:
+                try:
+                    commissioning = grid_date.split("T")[0]
+                except Exception:
+                    pass
+            
+            payload = {
+                "vendor": "huawei",
+                "vendor_plant_code": plant_code,
+                "vendor_station_id": plant_code,
+                "site_name": p.get("plantName") or plant_code,
+                "dc_kwp": p.get("capacity"),
+                "address": p.get("plantAddress"),
+                "latitude": p.get("latitude"),
+                "longitude": p.get("longitude"),
+                "monitoring_enabled": True,
+                "metadata": p,
+            }
+            if commissioning:
+                payload["commissioning_date"] = commissioning
+            
+            if existing:
+                # Update existujúci záznam
+                site_id = existing[0]["id"]
+                ur = requests.patch(
+                    f"{SUPABASE_URL}/rest/v1/inverter_sites",
+                    headers=sb_headers,
+                    params={"id": f"eq.{site_id}"},
+                    json=payload,
+                    timeout=10,
+                )
+                if ur.ok:
+                    updated += 1
+                else:
+                    errors.append({"plantCode": plant_code, "error": ur.text[:200]})
+            else:
+                # Insert nový
+                ir = requests.post(
+                    f"{SUPABASE_URL}/rest/v1/inverter_sites",
+                    headers=sb_headers,
+                    json=payload,
+                    timeout=10,
+                )
+                if ir.ok:
+                    created += 1
+                else:
+                    errors.append({"plantCode": plant_code, "error": ir.text[:200]})
+        
+        return jsonify({
+            "success": True,
+            "plants_found": len(plants),
+            "created": created,
+            "updated": updated,
+            "errors": errors,
+        }), 200
+    except Exception as e:
+        log.exception("sync error")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/huawei/v1/full-status/<plant_code>", methods=["GET"])
+def huawei_v1_full_status(plant_code):
+    """
+    Kombinovaný snapshot pre 1 stanicu — real-time KPI + devices + alarms.
+    Slúži pre CRM stránku.
+    """
+    try:
+        from huawei_oauth import get_valid_access_token
+        token = get_valid_access_token("huawei")
+        if not token:
+            return jsonify({"success": False, "error": "no token"}), 401
+        
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        import time
+        end_ms = int(time.time() * 1000)
+        alarm_start_ms = end_ms - 7 * 86400 * 1000
+        
+        result = {"plantCode": plant_code, "success": True}
+        
+        # Real-time
+        try:
+            r = requests.post(
+                "https://intl.fusionsolar.huawei.com/thirdData/getStationRealKpi",
+                headers=headers, json={"stationCodes": plant_code}, timeout=15,
+            )
+            if r.ok:
+                j = r.json()
+                if j.get("success") and j.get("data"):
+                    result["realtime"] = j["data"][0].get("dataItemMap", {})
+                else:
+                    result["realtime_error"] = j.get("message") or j.get("failCode")
+        except Exception as e:
+            result["realtime_error"] = str(e)[:200]
+        
+        # Devices
+        try:
+            r = requests.post(
+                "https://intl.fusionsolar.huawei.com/thirdData/getDevList",
+                headers=headers, json={"stationCodes": plant_code}, timeout=15,
+            )
+            if r.ok:
+                j = r.json()
+                if j.get("success"):
+                    result["devices"] = j.get("data") or []
+        except Exception as e:
+            result["devices_error"] = str(e)[:200]
+        
+        # Alarms (7 dní)
+        try:
+            r = requests.post(
+                "https://intl.fusionsolar.huawei.com/thirdData/getAlarmList",
+                headers=headers,
+                json={"stationCodes": plant_code, "beginTime": alarm_start_ms, "endTime": end_ms},
+                timeout=15,
+            )
+            if r.ok:
+                j = r.json()
+                if j.get("success"):
+                    result["alarms"] = j.get("data") or []
+        except Exception as e:
+            result["alarms_error"] = str(e)[:200]
+        
+        return jsonify(result), 200
+    except Exception as e:
+        log.exception("full-status error")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/huawei/v1/customer-oauth-init", methods=["POST"])
+def huawei_v1_customer_oauth_init():
+    """
+    Servisák klikne 'Pridať stanicu' → vyrobí pending OAuth záznam +
+    vráti authorize URL na zdielanie zákazníkovi.
+    
+    Body: {"customer_id": "uuid", "customer_name": "...", "initiated_by": "uuid"}
+    Returns: {"authorize_url": "...", "state": "..."}
+    """
+    try:
+        import secrets
+        import json as json_module
+        
+        body = request.get_json(force=True) or {}
+        customer_id = body.get("customer_id")
+        customer_name = body.get("customer_name") or "Customer"
+        initiated_by = body.get("initiated_by")
+        
+        if not customer_id:
+            return jsonify({"success": False, "error": "customer_id required"}), 400
+        
+        # Alphanumeric state (Huawei spec: letters + digits only)
+        state = "cust" + secrets.token_hex(16)
+        
+        # Insert pending záznam do huawei_customer_authorizations
+        ir = requests.post(
+            f"{SUPABASE_URL}/rest/v1/huawei_customer_authorizations",
+            headers={
+                "apikey": SUPABASE_SERVICE_KEY,
+                "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+                "Content-Type": "application/json",
+                "Prefer": "return=representation",
+            },
+            json={
+                "customer_id": customer_id,
+                "state": state,
+                "initiated_by": initiated_by,
+                "scope_requested": "pvms.openapi.basic pvms.openapi.control",
+            },
+            timeout=10,
+        )
+        if not ir.ok:
+            return jsonify({"success": False, "error": "DB insert failed", "detail": ir.text[:300]}), 500
+        
+        # Vyrobí authorize URL
+        from urllib.parse import urlencode
+        params = {
+            "response_type": "code",
+            "client_id": "368482576",
+            "redirect_uri": "https://energovision-cp-generator.onrender.com/api/auth/huawei/callback",
+            "scope": "pvms.openapi.basic pvms.openapi.control",
+            "state": state,
+        }
+        authorize_url = "https://oauth2.fusionsolar.huawei.com/rest/dp/uidm/oauth2/v1/authorize?" + urlencode(params)
+        
+        return jsonify({
+            "success": True,
+            "authorize_url": authorize_url,
+            "state": state,
+            "customer_id": customer_id,
+            "customer_name": customer_name,
+        }), 200
+    except Exception as e:
+        log.exception("customer-oauth-init error")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/huawei/v1/customer-status/<customer_id>", methods=["GET"])
+def huawei_v1_customer_status(customer_id):
+    """Status OAuth integrácie pre konkrétneho zákazníka."""
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/huawei_customer_authorizations",
+            headers={"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"},
+            params={
+                "select": "id,state,scope_granted,created_at,authorized_at,revoked_at,token_expires_at",
+                "customer_id": f"eq.{customer_id}",
+                "order": "created_at.desc",
+            },
+            timeout=10,
+        )
+        if not r.ok:
+            return jsonify({"success": False, "error": r.text[:300]}), 500
+        rows = r.json()
+        if not rows:
+            return jsonify({"success": False, "status": "not_initiated"}), 200
+        latest = rows[0]
+        if latest.get("revoked_at"):
+            status = "revoked"
+        elif latest.get("authorized_at"):
+            status = "authorized"
+        else:
+            status = "pending"
+        return jsonify({
+            "success": True,
+            "status": status,
+            "data": latest,
+        }), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
