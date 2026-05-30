@@ -12715,10 +12715,10 @@ def huawei_plants_v2():
         if not token:
             return jsonify({"success": False, "error": "no token"}), 401
         
-        # 5 rokov späť — dnes (aby sme našli všetky priradené stanice)
+        # 30 dní späť — dnes (úspešne otestované 2026-05-30)
         import time
         end_ms = int(time.time() * 1000)
-        start_ms = end_ms - 5 * 365 * 86400 * 1000
+        start_ms = end_ms - 30 * 86400 * 1000
         
         attempts = []
         # 3 URL na test
@@ -12768,5 +12768,106 @@ def huawei_plants_v2():
             "token_preview": token[:30] + "...",
             "attempts": attempts,
         }), 502
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+# ============================================================
+# HUAWEI v1 — PROD-READY endpointy (overé funkčné 2026-05-30)
+# ============================================================
+@app.route("/api/huawei/v1/stations", methods=["GET"])
+def huawei_v1_stations():
+    """Plant List API — overený funkčný endpoint."""
+    try:
+        from huawei_oauth import get_valid_access_token
+        token = get_valid_access_token("huawei")
+        if not token:
+            return jsonify({"success": False, "error": "no token — re-authorize"}), 401
+        
+        import time
+        end_ms = int(time.time() * 1000)
+        # Default 30d back, override via ?days=X
+        days = int(request.args.get("days", "30"))
+        start_ms = end_ms - days * 86400 * 1000
+        
+        r = requests.post(
+            "https://intl.fusionsolar.huawei.com/thirdData/stations",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json={
+                "pageNo": 1,
+                "gridConnectedStartTime": start_ms,
+                "gridConnectedEndTime": end_ms,
+            },
+            timeout=20,
+        )
+        return jsonify(r.json() if r.ok else {"error": r.text[:500]}), r.status_code
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/huawei/v1/realtime/<plant_code>", methods=["GET"])
+def huawei_v1_realtime(plant_code):
+    """Real-time výroba, SOC, výkon pre konkrétnu stanicu."""
+    try:
+        from huawei_oauth import get_valid_access_token
+        token = get_valid_access_token("huawei")
+        if not token:
+            return jsonify({"success": False, "error": "no token"}), 401
+        
+        r = requests.post(
+            "https://intl.fusionsolar.huawei.com/thirdData/stations/realKpi",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json={"stationCodes": plant_code},
+            timeout=20,
+        )
+        return jsonify(r.json() if r.ok else {"error": r.text[:500]}), r.status_code
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/huawei/v1/devices/<plant_code>", methods=["GET"])
+def huawei_v1_devices(plant_code):
+    """Zoznam inverterov + baterí pre stanicu."""
+    try:
+        from huawei_oauth import get_valid_access_token
+        token = get_valid_access_token("huawei")
+        if not token:
+            return jsonify({"success": False, "error": "no token"}), 401
+        
+        r = requests.post(
+            "https://intl.fusionsolar.huawei.com/thirdData/stations/devices",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json={"stationCodes": plant_code},
+            timeout=20,
+        )
+        return jsonify(r.json() if r.ok else {"error": r.text[:500]}), r.status_code
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/huawei/v1/alarms/<plant_code>", methods=["GET"])
+def huawei_v1_alarms(plant_code):
+    """Aktívne alarmy pre stanicu (posledných 7 dní)."""
+    try:
+        from huawei_oauth import get_valid_access_token
+        token = get_valid_access_token("huawei")
+        if not token:
+            return jsonify({"success": False, "error": "no token"}), 401
+        
+        import time
+        end_ms = int(time.time() * 1000)
+        start_ms = end_ms - 7 * 86400 * 1000
+        
+        r = requests.post(
+            "https://intl.fusionsolar.huawei.com/thirdData/alarm/stations",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json={
+                "stationCodes": plant_code,
+                "beginTime": start_ms,
+                "endTime": end_ms,
+                "pageNo": 1,
+            },
+            timeout=20,
+        )
+        return jsonify(r.json() if r.ok else {"error": r.text[:500]}), r.status_code
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
