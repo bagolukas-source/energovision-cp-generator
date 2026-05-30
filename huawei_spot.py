@@ -414,12 +414,19 @@ def huawei_send_command(station_code: str, command_type: str, params: Dict[str, 
     
     if command_type in ("enable_zero_export", "set_active_power_limit_zero"):
         # Active Power Control: limited feed-in 0 kW = zero export
+        # Per Huawei SmartPVMS 25.4.0 §5.2.7:
+        # controlMode "6" = limited feed-in (kW)
+        # controlInfo.maxGridFeedInPower = kW
+        # controlInfo.limitationMode "0" = total power, "1" = single-phase
         url = f"{api_base}/rest/openapi/pvms/nbi/v2/control/active-power-control/async-task"
         payload = {
             "tasks": [{
                 "plantCode": station_code,
-                "controlMode": "6",  # 6 = limited feed-in (kW)
-                "controlInfo": {"powerCap": 0},
+                "controlMode": "6",
+                "controlInfo": {
+                    "maxGridFeedInPower": 0,
+                    "limitationMode": "0",
+                },
             }]
         }
     elif command_type in ("disable_zero_export", "normal_export"):
@@ -428,19 +435,27 @@ def huawei_send_command(station_code: str, command_type: str, params: Dict[str, 
         payload = {
             "tasks": [{
                 "plantCode": station_code,
-                "controlMode": "0",  # 0 = unlimited
+                "controlMode": "0",
             }]
         }
     elif command_type == "set_active_power_limit":
         limit_pct = float(params.get("limit_pct", 100))
+        url = f"{api_base}/rest/openapi/pvms/nbi/v2/control/active-power-control/async-task"
         if limit_pct >= 100:
             payload = {"tasks": [{"plantCode": station_code, "controlMode": "0"}]}
         else:
-            # Convert pct to kW — predpokladá že pct sa vzťahuje na DC kapacitu
-            ac_kw_cap = float(params.get("ac_kw_cap", 9.68))  # default Tekov
-            power_cap_kw = (limit_pct / 100.0) * ac_kw_cap
-            payload = {"tasks": [{"plantCode": station_code, "controlMode": "6", "controlInfo": {"powerCap": power_cap_kw}}]}
-        url = f"{api_base}/rest/openapi/pvms/nbi/v2/control/active-power-control/async-task"
+            ac_kw_cap = float(params.get("ac_kw_cap", 9.68))
+            power_kw = (limit_pct / 100.0) * ac_kw_cap
+            payload = {
+                "tasks": [{
+                    "plantCode": station_code,
+                    "controlMode": "6",
+                    "controlInfo": {
+                        "maxGridFeedInPower": power_kw,
+                        "limitationMode": "0",
+                    },
+                }]
+            }
     elif command_type == "set_battery_mode_grid_charge":
         # thirdPartyDispatch mode → následne sendCommand pre forced charge
         url = f"{api_base}/rest/openapi/pvms/nbi/v1/control/battery/mode/async-task"
