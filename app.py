@@ -13728,3 +13728,106 @@ def huawei_backfill_hourly(plant_code):
     except Exception as e:
         log.exception("backfill-hourly")
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ============================================================
+# HUAWEI FULL FLEET REFRESH — pre Vercel cron 3× denne
+# Pre KAŽDÚ Huawei stanicu spustí refresh-station + hourly backfill (dnešok)
+# ============================================================
+@app.route("/api/huawei/v1/full-fleet-refresh", methods=["POST", "GET"])
+def huawei_full_fleet_refresh():
+    """
+    Auto cron 3× denne (06/14/22 UTC).
+    Pre každú Huawei stanicu:
+      1. refresh-station (5 pulls: realtime+devices+strings+battery+alarms)
+      2. backfill-hourly?days=1 (dnešok hodinová granularita)
+    
+    Quota per stanica: 6 calls/run × 3×/deň = 18 calls/deň. Pri 1000/deň/owner = veľa rezervy.
+    """
+    if not _hs_auth_ok(request):
+        return jsonify({"error": "unauthorized"}), 401
+    
+    try:
+        # Get all Huawei sites
+        sr = requests.get(
+            f"{SUPABASE_URL}/rest/v1/inverter_sites",
+            headers={"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"},
+            params={
+                "select": "id,site_name,vendor_plant_code,vendor_station_id",
+                "vendor": "eq.huawei",
+                "monitoring_enabled": "eq.true",
+                "archived_at": "is.null",
+            },
+            timeout=10,
+        )
+        if not sr.ok:
+            return jsonify({"success": False, "error": "DB query failed"}), 500
+        sites = sr.json()
+        
+        results = []
+        total_realtime_ok = 0
+        total_strings_recorded = 0
+        total_packs = 0
+        total_hourly_records = 0
+        total_api_calls = 0
+        
+        import time as _t
+        for site in sites:
+            plant_code = site.get("vendor_plant_code") or site.get("vendor_station_id")
+            if not plant_code:
+                continue
+            
+            # 1. Realtime refresh
+            try:
+                from urllib.parse import quote
+                rr = requests.get(
+                    f"http://localhost:{os.environ.get('PORT', '10000')}/api/huawei/v1/refresh-station/{quote(plant_code, safe='=')}",
+                    timeout=120,
+                )
+                if rr.ok:
+                    rdata = rr.json()
+                    rresults = rdata.get("results", {})
+                    if rresults.get("realtime", {}).get("ok"):
+                        total_realtime_ok += 1
+                    total_strings_recorded += rresults.get("strings", {}).get("recorded", 0)
+                    total_packs += rresults.get("battery", {}).get("packs", 0)
+                    total_api_calls += 5
+            except Exception as e:
+                log.warning("[full-fleet-refresh] %s refresh failed: %s", plant_code, e)
+            
+            _t.sleep(0.5)  # ratelimit politeness
+            
+            # 2. Hourly backfill (today)
+            try:
+                br = requests.get(
+                    f"http://localhost:{os.environ.get('PORT', '10000')}/api/huawei/v1/backfill-hourly/{quote(plant_code, safe='=')}?days=1",
+                    timeout=60,
+                )
+                if br.ok:
+                    bdata = br.json()
+                    total_hourly_records += bdata.get("records_inserted", 0)
+                    total_api_calls += bdata.get("api_calls", 1)
+            except Exception as e:
+                log.warning("[full-fleet-refresh] %s hourly failed: %s", plant_code, e)
+            
+            results.append({
+                "plant_code": plant_code,
+                "site_name": site["site_name"],
+                "refreshed": True,
+            })
+            
+            _t.sleep(1)  # politeness between sites
+        
+        return jsonify({
+            "success": True,
+            "sites_processed": len(results),
+            "total_realtime_ok": total_realtime_ok,
+            "total_strings_recorded": total_strings_recorded,
+            "total_battery_packs": total_packs,
+            "total_hourly_records": total_hourly_records,
+            "total_api_calls": total_api_calls,
+            "results": results[:20],  # max 20 in response
+        }), 200
+    except Exception as e:
+        log.exception("full-fleet-refresh")
+        return jsonify({"success": False, "error": str(e)}), 500
