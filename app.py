@@ -13620,3 +13620,111 @@ def huawei_backfill_station(plant_code):
     except Exception as e:
         log.exception("backfill-station")
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ============================================================
+# HUAWEI BACKFILL HOURLY — 1-hour granularita za N dní
+# ============================================================
+@app.route("/api/huawei/v1/backfill-hourly/<plant_code>", methods=["POST", "GET"])
+def huawei_backfill_hourly(plant_code):
+    """
+    Backfill HODINOVEJ histórie cez getKpiStationHour.
+    1 call/deň → 24 vzoriek/deň. 
+    Pre 30 dní = 30 API calls, 720 vzoriek do telemetry_5min.
+    """
+    try:
+        days = int(request.args.get("days", "7"))
+        days = min(max(days, 1), 90)  # max 90 dní safety
+        
+        base, headers, auth_method = _huawei_get_auth()
+        if not base or not headers:
+            return jsonify({"success": False, "error": "Huawei auth failed"}), 503
+        
+        sr = requests.get(
+            f"{SUPABASE_URL}/rest/v1/inverter_sites",
+            headers={"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"},
+            params={"select": "id,site_name", "vendor": "eq.huawei", "vendor_plant_code": f"eq.{plant_code}"},
+            timeout=10,
+        )
+        if not sr.ok or not sr.json():
+            return jsonify({"success": False, "error": "site not found"}), 404
+        site = sr.json()[0]
+        
+        import time as _t
+        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+        
+        today = _dt.now(_tz.utc).date()
+        records_inserted = 0
+        api_calls = 0
+        errors = []
+        
+        for d_offset in range(days):
+            d = today - _td(days=d_offset)
+            collect_ms = int(_dt(d.year, d.month, d.day, tzinfo=_tz.utc).timestamp() * 1000)
+            
+            try:
+                r = requests.post(
+                    f"{base}/getKpiStationHour",
+                    headers=headers,
+                    json={"stationCodes": plant_code, "collectTime": collect_ms},
+                    timeout=20,
+                )
+                api_calls += 1
+                if r.ok:
+                    j = r.json()
+                    if j.get("success") and j.get("data"):
+                        rows = j["data"]
+                        batch = []
+                        for row in rows:
+                            ts_ms = row.get("collectTime")
+                            kpi = row.get("dataItemMap") or {}
+                            if not ts_ms or not kpi:
+                                continue
+                            ts_iso = _dt.fromtimestamp(ts_ms / 1000, tz=_tz.utc).isoformat()
+                            batch.append({
+                                "site_id": site["id"],
+                                "ts": ts_iso,
+                                "ac_energy_today_kwh": kpi.get("inverter_power"),
+                                "grid_export_kwh_today": kpi.get("ongrid_power"),
+                                "battery_soc_pct": None,
+                                "raw_payload": kpi,
+                                "ingested_at": _dt.now(_tz.utc).isoformat(),
+                            })
+                        if batch:
+                            try:
+                                ir = requests.post(
+                                    f"{SUPABASE_URL}/rest/v1/telemetry_5min",
+                                    headers={
+                                        "apikey": SUPABASE_SERVICE_KEY,
+                                        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+                                        "Content-Type": "application/json",
+                                        "Prefer": "resolution=merge-duplicates",
+                                    },
+                                    json=batch,
+                                    timeout=15,
+                                )
+                                if ir.ok:
+                                    records_inserted += len(batch)
+                                else:
+                                    errors.append({"date": str(d), "db_error": ir.text[:200]})
+                            except Exception as e:
+                                errors.append({"date": str(d), "db_error": str(e)[:200]})
+                else:
+                    errors.append({"date": str(d), "http_status": r.status_code, "body": r.text[:200]})
+            except Exception as e:
+                errors.append({"date": str(d), "error": str(e)[:200]})
+            
+            if api_calls % 50 == 0 and api_calls > 0:
+                _t.sleep(2)
+        
+        return jsonify({
+            "success": True,
+            "site_id": site["id"],
+            "days_requested": days,
+            "api_calls": api_calls,
+            "records_inserted": records_inserted,
+            "errors": errors[:10],  # max 10 v response
+        }), 200
+    except Exception as e:
+        log.exception("backfill-hourly")
+        return jsonify({"success": False, "error": str(e)}), 500
