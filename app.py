@@ -12495,8 +12495,8 @@ def huawei_oauth_callback():
     
     from huawei_oauth import exchange_code_for_tokens, save_customer_authorization, save_tokens, load_oauth_credentials
     
-    # TEST MASTER mode: state=test_master_* — uloží token do inverter_vendor_credentials
-    if state.startswith("test_master_"):
+    # TEST MASTER mode: state=testmaster* — uloží token do inverter_vendor_credentials (alphanumeric only per Huawei spec)
+    if state.startswith("testmaster"):
         ok, tokens = exchange_code_for_tokens(code, redirect_uri)
         if not ok:
             return f"<h1>Token exchange failed</h1><pre>{tokens}</pre>", 500
