@@ -13831,3 +13831,18 @@ def huawei_full_fleet_refresh():
     except Exception as e:
         log.exception("full-fleet-refresh")
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/webhook/spot-clear-override", methods=["POST"])
+def webhook_spot_clear_override():
+    """Zruší manual override pre stanicu — SPOT reactor opäť ovláda."""
+    if not _hs_auth_ok(request):
+        return jsonify({"error": "unauthorized"}), 401
+    if _hs is None:
+        return jsonify({"ok": False, "error": "huawei_spot not loaded"}), 500
+    body = request.get_json(silent=True) or {}
+    site_id = body.get("site_id")
+    if not site_id:
+        return jsonify({"ok": False, "error": "site_id required"}), 400
+    result = _hs.clear_manual_override(site_id)
+    return jsonify(result)

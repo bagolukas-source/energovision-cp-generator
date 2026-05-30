@@ -590,9 +590,12 @@ def execute_transition(site: Dict[str, Any], from_state: str, to_state: str, spo
         commands.append({"type": "enable_zero_export", "params": {}})
         commands.append({"type": "set_active_power_limit", "params": {"limit_pct": 100}})
     elif to_state == "FULL_SHUTDOWN":
+        # FULL_SHUTDOWN = zero export + battery dispatch + forced charge (FVE ide do BESS namiesto siete)
         commands.append({"type": "set_active_power_limit", "params": {"limit_pct": 0}})
-        if grid_charge:
-            commands.append({"type": "set_battery_mode_grid_charge", "params": {}})
+        if has_bess:
+            commands.append({"type": "set_battery_mode_grid_charge", "params": {}})  # thirdPartyDispatch
+            # Force charge batérie na 100% (BESS spotrebuje PV + import zo siete pri záporných cenách)
+            commands.append({"type": "forced_charge", "params": {"target_soc": 100}})
 
     results = []
     for cmd in commands:
@@ -634,9 +637,44 @@ def spot_reactor(dry_run_override: Optional[bool] = None) -> Dict[str, Any]:
         return {"ok": False, "error": "No current SPOT price (run okte_ingest first)"}
 
     sites = sb_get("inverter_sites", {
-        "select": "id,site_name,vendor_station_id,bess_kwh,spot_control_enabled,spot_distribution_fee_eur_mwh,spot_threshold_zero_export,spot_threshold_full_shutdown,spot_hysteresis_eur,spot_current_state,spot_bess_grid_charge_enabled,spot_dry_run,spot_customer_revenue_share_pct",
+        "select": "id,site_name,vendor_station_id,bess_kwh,spot_control_enabled,spot_distribution_fee_eur_mwh,spot_threshold_zero_export,spot_threshold_full_shutdown,spot_hysteresis_eur,spot_current_state,spot_bess_grid_charge_enabled,spot_dry_run,spot_customer_revenue_share_pct,spot_manual_override_state,spot_manual_override_until",
         "spot_control_enabled": "eq.true",
     })
+
+    # Manual override filter: skip stations s aktívnym manual override (servisák klikol manual command)
+    from datetime import datetime as _dt_ovr, timezone as _tz_ovr
+    now_ovr = _dt_ovr.now(_tz_ovr.utc)
+    sites_filtered = []
+    for s in (sites or []):
+        ov_state = s.get("spot_manual_override_state")
+        ov_until = s.get("spot_manual_override_until")
+        if ov_state:
+            if ov_until:
+                try:
+                    until_dt = _dt_ovr.fromisoformat(ov_until.replace("Z", "+00:00"))
+                    if until_dt > now_ovr:
+                        log.info("[reactor] SKIP %s — manual override aktívny (%s do %s)", s.get("site_name"), ov_state, ov_until)
+                        continue
+                    else:
+                        # Override expired — auto-clear
+                        try:
+                            requests.patch(
+                                f"{SUPABASE_URL}/rest/v1/inverter_sites",
+                                headers=_sb_headers(),
+                                params={"id": f"eq.{s['id']}"},
+                                json={"spot_manual_override_state": None, "spot_manual_override_until": None},
+                                timeout=10,
+                            )
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+            else:
+                # Permanent (until=NULL) — vždy skip
+                log.info("[reactor] SKIP %s — permanentný override (%s)", s.get("site_name"), ov_state)
+                continue
+        sites_filtered.append(s)
+    sites = sites_filtered
 
     transitions = []
     for site in sites:
@@ -718,6 +756,25 @@ def manual_force_state(site_id: str, target_state: str, issued_by: str = "manual
     if not sites:
         return {"ok": False, "error": "site not found"}
     site = sites[0]
+
+    # Manual override: zapíš state + zaeviduj do DB aby SPOT reactor toto skipoval
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+    override_until = (_dt.now(_tz.utc) + _td(hours=24)).isoformat()  # default 24h override
+    try:
+        requests.patch(
+            f"{SUPABASE_URL}/rest/v1/inverter_sites",
+            headers=_sb_headers(),
+            params={"id": f"eq.{site_id}"},
+            json={
+                "spot_manual_override_state": target_state,
+                "spot_manual_override_until": override_until,
+                "spot_manual_override_by": issued_by,
+                "spot_manual_override_at": _dt.now(_tz.utc).isoformat(),
+            },
+            timeout=10,
+        )
+    except Exception as e:
+        log.warning("[manual_force_state] override save failed: %s", e)
 
     current_spot = get_current_spot() or 0.0
     current_state = site.get("spot_current_state") or "NORMAL"
@@ -997,3 +1054,23 @@ def sync_huawei_stations() -> Dict[str, Any]:
         "skipped": skipped,
         "details": details[:30],
     }
+
+
+def clear_manual_override(site_id: str) -> Dict[str, Any]:
+    """Zruší manual override → SPOT reactor opäť ovláda stanicu."""
+    try:
+        requests.patch(
+            f"{SUPABASE_URL}/rest/v1/inverter_sites",
+            headers=_sb_headers(),
+            params={"id": f"eq.{site_id}"},
+            json={
+                "spot_manual_override_state": None,
+                "spot_manual_override_until": None,
+                "spot_manual_override_by": None,
+                "spot_manual_override_at": None,
+            },
+            timeout=10,
+        )
+        return {"ok": True, "site_id": site_id, "message": "Manual override zrušený"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
