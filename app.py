@@ -12715,10 +12715,10 @@ def huawei_plants_v2():
         if not token:
             return jsonify({"success": False, "error": "no token"}), 401
         
-        # 30 dní späť — dnes
+        # 5 rokov späť — dnes (aby sme našli všetky priradené stanice)
         import time
         end_ms = int(time.time() * 1000)
-        start_ms = end_ms - 30 * 86400 * 1000
+        start_ms = end_ms - 5 * 365 * 86400 * 1000
         
         attempts = []
         # 3 URL na test
