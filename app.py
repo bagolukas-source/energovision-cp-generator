@@ -13401,3 +13401,222 @@ def solinteg_save_credentials():
     except Exception as e:
         log.exception("solinteg save-credentials")
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ============================================================
+# HUAWEI MANUAL REFRESH — pre 1 stanicu naraz
+# ============================================================
+@app.route("/api/huawei/v1/refresh-station/<plant_code>", methods=["POST", "GET"])
+def huawei_refresh_station(plant_code):
+    """
+    Pre konkrétnu stanicu spustí všetkých 6 data pulls naraz.
+    Volá sa z CRM "Refresh teraz" button.
+    """
+    try:
+        # Internal call — bypass external auth, ale skontrolujeme že request je z náš
+        # Pre teraz: prijímame z CRM (Render -> Render same host)
+        sb = _sb() if _hs else None
+        
+        # Get site_id from plant_code
+        sr = requests.get(
+            f"{SUPABASE_URL}/rest/v1/inverter_sites",
+            headers={"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"},
+            params={
+                "select": "id,site_name",
+                "vendor": "eq.huawei",
+                "vendor_plant_code": f"eq.{plant_code}",
+            },
+            timeout=10,
+        )
+        if not sr.ok or not sr.json():
+            return jsonify({"success": False, "error": f"site not found for plant {plant_code}"}), 404
+        site = sr.json()[0]
+        site_id = site["id"]
+        
+        results = {}
+        # Each subcall — same logic ako webhooky, ale per-site filter
+        base, headers, auth_method = _huawei_get_auth()
+        if not base or not headers:
+            return jsonify({"success": False, "error": "Huawei auth failed"}), 503
+        
+        # 1. Realtime KPI
+        try:
+            r = requests.post(f"{base}/getStationRealKpi", headers=headers, json={"stationCodes": plant_code}, timeout=15)
+            results["realtime"] = {"ok": r.ok, "status": r.status_code}
+            if r.ok:
+                j = r.json()
+                if j.get("success") and j.get("data"):
+                    kpi = j["data"][0].get("dataItemMap", {})
+                    requests.patch(
+                        f"{SUPABASE_URL}/rest/v1/inverter_sites",
+                        headers={"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}", "Content-Type": "application/json"},
+                        params={"id": f"eq.{site_id}"},
+                        json={
+                            "last_sync_at": datetime.now(timezone.utc).isoformat(),
+                            "metadata": {"last_kpi": kpi},
+                        },
+                        timeout=10,
+                    )
+                    results["realtime"]["kpi"] = {k: kpi.get(k) for k in ["day_power", "month_power", "total_power", "real_health_state"]}
+        except Exception as e:
+            results["realtime"] = {"ok": False, "error": str(e)[:200]}
+        
+        # 2. Devices
+        try:
+            r = requests.post(f"{base}/getDevList", headers=headers, json={"stationCodes": plant_code}, timeout=15)
+            results["devices"] = {"ok": r.ok, "count": len((r.json() or {}).get("data") or []) if r.ok else 0}
+            devices = (r.json() or {}).get("data") or [] if r.ok else []
+        except Exception as e:
+            results["devices"] = {"ok": False, "error": str(e)[:200]}
+            devices = []
+        
+        # 3. Strings (per devTypeId=1) — využijeme existing _pull_strings_for_site
+        if _hs and devices:
+            try:
+                site_dict = {"id": site_id, "site_name": site["site_name"], "vendor_station_id": plant_code}
+                from app import _pull_strings_for_site  # use local function
+                sres = _pull_strings_for_site(site_dict, base, headers, devices)
+                results["strings"] = {"ok": sres.get("ok"), "recorded": sres.get("strings_recorded", 0)}
+            except Exception as e:
+                results["strings"] = {"ok": False, "error": str(e)[:200]}
+        
+        # 4. Battery (per devTypeId=39)
+        if _hs:
+            try:
+                site_dict = {"id": site_id, "site_name": site["site_name"], "vendor_station_id": plant_code}
+                from app import _pull_battery_health_for_site
+                bres = _pull_battery_health_for_site(site_dict, base, headers)
+                results["battery"] = {"ok": bres.get("ok"), "packs": bres.get("packs_upserted", 0)}
+            except Exception as e:
+                results["battery"] = {"ok": False, "error": str(e)[:200]}
+        
+        # 5. Alarms
+        try:
+            import time as _t
+            end_ms = int(_t.time() * 1000)
+            start_ms = end_ms - 7 * 86400 * 1000
+            r = requests.post(f"{base}/getAlarmList", headers=headers, json={"stationCodes": plant_code, "beginTime": start_ms, "endTime": end_ms}, timeout=15)
+            results["alarms"] = {"ok": r.ok, "count": len((r.json() or {}).get("data") or []) if r.ok else 0}
+        except Exception as e:
+            results["alarms"] = {"ok": False, "error": str(e)[:200]}
+        
+        # Update last_manual_refresh_at
+        requests.patch(
+            f"{SUPABASE_URL}/rest/v1/inverter_sites",
+            headers={"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}", "Content-Type": "application/json"},
+            params={"id": f"eq.{site_id}"},
+            json={"last_sync_at": datetime.now(timezone.utc).isoformat()},
+            timeout=10,
+        )
+        
+        # Count successes
+        successful = sum(1 for v in results.values() if v.get("ok"))
+        return jsonify({
+            "success": successful >= 3,
+            "site_id": site_id,
+            "site_name": site["site_name"],
+            "results": results,
+            "successful_pulls": f"{successful}/{len(results)}",
+        }), 200
+    except Exception as e:
+        log.exception("refresh-station")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ============================================================
+# HUAWEI BACKFILL — historical data za N dní
+# ============================================================
+@app.route("/api/huawei/v1/backfill-station/<plant_code>", methods=["POST", "GET"])
+def huawei_backfill_station(plant_code):
+    """
+    Backfill historical hourly data za zvolených N dní pre 1 stanicu.
+    getKpiStationHour s každým dňom × N.
+    """
+    try:
+        days = int(request.args.get("days", "30"))
+        days = min(max(days, 1), 365)  # safety: 1-365
+        
+        base, headers, auth_method = _huawei_get_auth()
+        if not base or not headers:
+            return jsonify({"success": False, "error": "Huawei auth failed"}), 503
+        
+        # Get site
+        sr = requests.get(
+            f"{SUPABASE_URL}/rest/v1/inverter_sites",
+            headers={"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"},
+            params={"select": "id,site_name", "vendor": "eq.huawei", "vendor_plant_code": f"eq.{plant_code}"},
+            timeout=10,
+        )
+        if not sr.ok or not sr.json():
+            return jsonify({"success": False, "error": "site not found"}), 404
+        site = sr.json()[0]
+        
+        import time as _t
+        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+        
+        today = _dt.now(_tz.utc).date()
+        days_processed = 0
+        days_with_data = 0
+        api_calls = 0
+        
+        for d_offset in range(days):
+            d = today - _td(days=d_offset)
+            collect_ms = int(_dt(d.year, d.month, d.day, tzinfo=_tz.utc).timestamp() * 1000)
+            
+            try:
+                r = requests.post(
+                    f"{base}/getKpiStationDay",
+                    headers=headers,
+                    json={"stationCodes": plant_code, "collectTime": collect_ms},
+                    timeout=20,
+                )
+                api_calls += 1
+                if r.ok:
+                    j = r.json()
+                    if j.get("success") and j.get("data"):
+                        rows = j["data"]
+                        for row in rows:
+                            kpi = row.get("dataItemMap") or {}
+                            if kpi.get("inverter_power") is not None or kpi.get("day_power") is not None:
+                                days_with_data += 1
+                                # Upsert do device_history_daily
+                                payload = {
+                                    "site_id": site["id"],
+                                    "date": d.isoformat(),
+                                    "product_power_kwh": kpi.get("inverter_power") or kpi.get("day_power") or 0,
+                                    "raw_json": kpi,
+                                    "computed_at": _dt.now(_tz.utc).isoformat(),
+                                }
+                                try:
+                                    requests.post(
+                                        f"{SUPABASE_URL}/rest/v1/device_history_daily",
+                                        headers={
+                                            "apikey": SUPABASE_SERVICE_KEY,
+                                            "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+                                            "Content-Type": "application/json",
+                                            "Prefer": "resolution=merge-duplicates",
+                                        },
+                                        json=payload,
+                                        timeout=10,
+                                    )
+                                except Exception:
+                                    pass
+                days_processed += 1
+            except Exception as e:
+                log.warning("[backfill] day %s failed: %s", d, e)
+            
+            # Rate limit safety: pauza každých 50 callov
+            if api_calls % 50 == 0 and api_calls > 0:
+                _t.sleep(2)
+        
+        return jsonify({
+            "success": True,
+            "site_id": site["id"],
+            "days_requested": days,
+            "days_processed": days_processed,
+            "days_with_data": days_with_data,
+            "api_calls": api_calls,
+        }), 200
+    except Exception as e:
+        log.exception("backfill-station")
+        return jsonify({"success": False, "error": str(e)}), 500
