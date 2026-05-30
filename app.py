@@ -7576,20 +7576,21 @@ def _fleet_status_compute() -> dict:
             except Exception as oe:
                 log.warning("[fleet-status] OAuth token unavailable: %s", oe)
 
+            base = None
+            headers = None
             if oauth_token:
                 base = "https://intl.fusionsolar.huawei.com/thirdData"
                 headers = {"Authorization": f"Bearer {oauth_token}", "Content-Type": "application/json"}
                 log.info("[fleet-status] Using OAuth Bearer for Huawei")
             else:
                 token = _hs.huawei_login()
-                if not token:
-                    huawei_error = "Huawei login failed (no NBI token + no OAuth token)"
-                else:
+                if token:
                     base = _hs._huawei_session.get("base") or _hs.HUAWEI_BASE
                     headers = {"XSRF-TOKEN": token, "Content-Type": "application/json"}
                     log.info("[fleet-status] Using NBI XSRF-TOKEN for Huawei (fallback)")
-            if not (oauth_token or token):
-                pass  # already set huawei_error
+                else:
+                    huawei_error = "Huawei login failed (no NBI token + no OAuth token)"
+            if base and headers:
                 # Huawei API: batch >10 stations zlyháva s data:[] (rate-limit či iný safeguard).
                 # Robíme menšie chunks po 8 + retry per-station ak batch vráti 0 rows.
                 CHUNK_SIZE = 8
