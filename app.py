@@ -12652,3 +12652,121 @@ def huawei_list_plants():
         log.exception("plants error")
         return jsonify({"success": False, "error": str(e)}), 500
 
+# ============================================================
+# HUAWEI — REFRESH TOKEN test
+# ============================================================
+@app.route("/api/huawei/refresh", methods=["GET"])
+def huawei_refresh_token():
+    """Overí refresh_token flow — vyrobí nový access_token cez refresh."""
+    try:
+        from huawei_oauth import load_oauth_credentials, save_tokens, _decrypt_secret
+        cred = load_oauth_credentials("huawei")
+        if not cred or not cred.get("refresh_token"):
+            return jsonify({"success": False, "error": "no refresh_token in DB"}), 400
+        
+        secret = _decrypt_secret(cred.get("encrypted_client_secret", ""))
+        payload = {
+            "grant_type": "refresh_token",
+            "refresh_token": cred["refresh_token"],
+            "client_id": cred["client_id"],
+            "client_secret": secret,
+        }
+        r = requests.post(
+            "https://oauth2.fusionsolar.huawei.com/rest/dp/uidm/oauth2/v1/token",
+            data=payload,
+            timeout=30,
+        )
+        result = {
+            "status": r.status_code,
+            "response": r.text[:600],
+        }
+        if r.ok:
+            try:
+                j = r.json()
+                if "access_token" in j:
+                    save_tokens(
+                        cred_id=cred["id"],
+                        access_token=j["access_token"],
+                        refresh_token=j.get("refresh_token", cred["refresh_token"]),
+                        expires_in_sec=j.get("expires_in", 3600),
+                    )
+                    result["success"] = True
+                    result["scope"] = j.get("scope")
+                    result["token_preview"] = j["access_token"][:30]
+            except Exception:
+                pass
+        return jsonify(result), (200 if r.ok else 502)
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ============================================================
+# HUAWEI — Plant List API s exaktným payloadom z dokumentácie
+# ============================================================
+@app.route("/api/huawei/plants-v2", methods=["GET"])
+def huawei_plants_v2():
+    """
+    Plant List API s exaktným payloadom z Huawei dokumentácie sekcie 5.1.1.1.
+    Vyžaduje OAuth Bearer token (čerstvý).
+    """
+    try:
+        from huawei_oauth import get_valid_access_token
+        token = get_valid_access_token("huawei")
+        if not token:
+            return jsonify({"success": False, "error": "no token"}), 401
+        
+        # 30 dní späť — dnes
+        import time
+        end_ms = int(time.time() * 1000)
+        start_ms = end_ms - 30 * 86400 * 1000
+        
+        attempts = []
+        # 3 URL na test
+        for url in [
+            "https://intl.fusionsolar.huawei.com/thirdData/stations",
+            "https://eu5.fusionsolar.huawei.com/thirdData/stations",
+            "https://oauth2.fusionsolar.huawei.com/thirdData/stations",
+        ]:
+            for body in [
+                {"pageNo": 1, "gridConnectedStartTime": start_ms, "gridConnectedEndTime": end_ms},
+                {"pageNo": 1, "pageSize": 100, "gridConnectedStartTime": start_ms, "gridConnectedEndTime": end_ms},
+                {"pageNo": 1},
+            ]:
+                headers = {
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, */*",
+                }
+                try:
+                    r = requests.post(url, headers=headers, json=body, timeout=20)
+                    snippet = r.text[:400]
+                    fail_code = None
+                    try:
+                        j = r.json()
+                        fail_code = j.get("failCode")
+                        if r.ok and (fail_code == 0 or j.get("success")):
+                            return jsonify({
+                                "success": True,
+                                "url": url,
+                                "body": body,
+                                "data": j,
+                            }), 200
+                    except Exception:
+                        pass
+                    attempts.append({
+                        "url": url.split(".")[0].replace("https://", "") + "...stations",
+                        "body_keys": list(body.keys()),
+                        "status": r.status_code,
+                        "fail_code": fail_code,
+                        "snippet": snippet[:200],
+                    })
+                except Exception as ex:
+                    attempts.append({"url": url, "error": str(ex)[:200]})
+        
+        return jsonify({
+            "success": False,
+            "token_preview": token[:30] + "...",
+            "attempts": attempts,
+        }), 502
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
