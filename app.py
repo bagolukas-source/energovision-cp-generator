@@ -13163,3 +13163,143 @@ def huawei_v1_customer_status(customer_id):
         }), 200
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ============================================================
+# SOLINTEG endpointy
+# ============================================================
+@app.route("/api/solinteg/v1/test-login", methods=["GET"])
+def solinteg_test_login():
+    """Diagnostic — skúsi prihlásiť cez všetky base URL kandidátov."""
+    try:
+        from solinteg_oauth import load_credentials, try_login
+        cred = load_credentials()
+        if not cred:
+            return jsonify({"success": False, "error": "no solinteg credentials in DB"}), 500
+        ok, result = try_login(cred)
+        return jsonify({"success": ok, **(result or {})}), (200 if ok else 502)
+    except Exception as e:
+        log.exception("solinteg test-login")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/solinteg/v1/devices", methods=["GET"])
+def solinteg_devices():
+    try:
+        from solinteg_oauth import list_devices
+        ok, result = list_devices()
+        return jsonify({"success": ok, **(result or {})}), (200 if ok else 502)
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ============================================================
+# UNIFIED multi-vendor INTEGRATIONS API
+# (vendor-agnostic, single contract pre CRM)
+# ============================================================
+@app.route("/api/integrations/v1/vendors", methods=["GET"])
+def integrations_vendors():
+    """Vendor catalog — pre CRM dropdown 'Pridať stanicu'."""
+    return jsonify({
+        "success": True,
+        "vendors": [
+            {
+                "key": "huawei",
+                "name": "Huawei FusionSolar",
+                "logo": "huawei",
+                "description": "LUNA2000 batérie, SUN2000 invertery. OAuth 2.0 Service Provider.",
+                "auth_method": "oauth_redirect",
+                "supports": {"realtime": True, "control": True, "alarms": True, "devices": True},
+                "instructions": "Vyžaduje Owner FusionSolar account zákazníka. OAuth redirect flow s Authorize klik.",
+            },
+            {
+                "key": "solinteg",
+                "name": "Solinteg Cloud",
+                "logo": "solinteg",
+                "description": "Solinteg hybrid invertery. REST API + MQTT real-time.",
+                "auth_method": "password",
+                "supports": {"realtime": True, "control": False, "alarms": True, "devices": True},
+                "instructions": "Vyžaduje email + password + ClientId. Treba zaslať žiadosť cez open API support s device SN.",
+            },
+            {
+                "key": "sungrow",
+                "name": "Sungrow iSolarCloud",
+                "logo": "sungrow",
+                "description": "Sungrow string invertery a hybrid invertery.",
+                "auth_method": "appkey",
+                "supports": {"realtime": True, "control": False, "alarms": True, "devices": True},
+                "instructions": "Vyžaduje appkey + secret z iSolarCloud developer portal + user account.",
+            },
+            {
+                "key": "goodwe",
+                "name": "GoodWe SEMS",
+                "logo": "goodwe",
+                "description": "GoodWe SEMS Portal API.",
+                "auth_method": "password",
+                "supports": {"realtime": True, "control": False, "alarms": True, "devices": True},
+                "instructions": "SEMS Portal account + plant ID.",
+            },
+            {
+                "key": "solaredge",
+                "name": "SolarEdge Monitoring",
+                "logo": "solaredge",
+                "description": "SolarEdge optimizers a invertery.",
+                "auth_method": "apikey",
+                "supports": {"realtime": True, "control": False, "alarms": True, "devices": True},
+                "instructions": "Vyžaduje SolarEdge Monitoring API key.",
+            },
+        ],
+    })
+
+
+@app.route("/api/integrations/v1/status", methods=["GET"])
+def integrations_status():
+    """Súhrn stavu všetkých vendorov pre Integrácie hub page."""
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/inverter_vendor_credentials",
+            headers={"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"},
+            params={"select": "vendor,base_url,client_id,is_active,token_expires_at,last_token_refresh_at,auth_type"},
+            timeout=10,
+        )
+        vendors = r.json() if r.ok else []
+        
+        # Pre každého vendor počet staníc v inverter_sites
+        site_counts = {}
+        sr = requests.get(
+            f"{SUPABASE_URL}/rest/v1/inverter_sites",
+            headers={"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"},
+            params={"select": "vendor"},
+            timeout=10,
+        )
+        if sr.ok:
+            for row in sr.json():
+                v = row.get("vendor")
+                if v:
+                    site_counts[v] = site_counts.get(v, 0) + 1
+        
+        # Token health
+        import time
+        now_iso = datetime.now(timezone.utc).isoformat()
+        for v in vendors:
+            expires_str = v.get("token_expires_at")
+            v["token_valid"] = False
+            v["minutes_until_expiry"] = 0
+            if expires_str:
+                try:
+                    expires_at = datetime.fromisoformat(expires_str.replace("Z", "+00:00"))
+                    delta = expires_at - datetime.now(timezone.utc)
+                    if delta.total_seconds() > 0:
+                        v["token_valid"] = True
+                        v["minutes_until_expiry"] = int(delta.total_seconds() / 60)
+                except Exception:
+                    pass
+            v["site_count"] = site_counts.get(v["vendor"], 0)
+        
+        return jsonify({
+            "success": True,
+            "vendors": vendors,
+            "total_sites": sum(site_counts.values()),
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
