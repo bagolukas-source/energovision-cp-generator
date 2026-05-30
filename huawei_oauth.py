@@ -157,11 +157,41 @@ def get_valid_access_token(vendor: str = "huawei", force_refresh: bool = False) 
             except Exception:
                 pass
 
-    # Cache expired alebo neexistuje → nový token
-    log.info("Requesting fresh OAuth token for %s", vendor)
+    # Cache expired → najprv skús refresh_token (owner-authorized) ak je v DB
+    refresh_token = cred.get("refresh_token")
+    if refresh_token:
+        log.info("Refreshing OAuth token via refresh_token for %s", vendor)
+        secret = _decrypt_secret(cred.get("encrypted_client_secret", ""))
+        try:
+            r = requests.post(
+                "https://oauth2.fusionsolar.huawei.com/rest/dp/uidm/oauth2/v1/token",
+                data={
+                    "grant_type": "refresh_token",
+                    "refresh_token": refresh_token,
+                    "client_id": cred["client_id"],
+                    "client_secret": secret,
+                },
+                timeout=30,
+            )
+            if r.ok:
+                j = r.json()
+                if "access_token" in j:
+                    save_tokens(
+                        cred_id=cred["id"],
+                        access_token=j["access_token"],
+                        refresh_token=j.get("refresh_token", refresh_token),
+                        expires_in_sec=j.get("expires_in", DEFAULT_TOKEN_TTL_SECONDS),
+                    )
+                    return j["access_token"]
+            log.warning("refresh_token failed: %s %s", r.status_code, r.text[:200])
+        except Exception as e:
+            log.exception("refresh_token exception: %s", e)
+    
+    # Fallback: client_credentials (NIE owner-authorized, posledná možnosť)
+    log.info("Falling back to client_credentials for %s", vendor)
     ok, result = request_new_token(cred)
     if not ok:
-        log.error("Token refresh failed: %s", result)
+        log.error("Token request failed: %s", result)
         return None
 
     access_token = result.get("access_token")
