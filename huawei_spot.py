@@ -376,37 +376,106 @@ def huawei_login(force: bool = False) -> Optional[str]:
 
 
 def huawei_send_command(station_code: str, command_type: str, params: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
-    token = huawei_login()
-    if not token:
-        return False, {"error": "no XSRF token"}
-    base = _huawei_session.get("base") or HUAWEI_BASE
-
-    huawei_command_codes = {
-        "enable_zero_export":      {"code": "PCS_REVERSE_POWER_FLOW", "value": "1"},
-        "disable_zero_export":     {"code": "PCS_REVERSE_POWER_FLOW", "value": "0"},
-        "set_active_power_limit":  {"code": "ACTIVE_POWER_CTRL", "value": str(params.get("limit_pct", 100))},
-        "set_battery_mode_grid_charge": {"code": "BATTERY_WORKING_MODE", "value": "FORCE_CHARGE"},
-        "set_battery_mode_self":   {"code": "BATTERY_WORKING_MODE", "value": "SELF_USE"},
+    """
+    OAuth Service Provider control commands (SmartPVMS 25.4.0 sekcie 5.2.1, 5.2.3, 5.2.7).
+    
+    Required scope: pvms.openapi.control
+    Endpoints (POST):
+      - Active Power Control: /rest/openapi/pvms/nbi/v2/control/active-power-control/async-task
+      - Battery Working Mode: /rest/openapi/pvms/nbi/v1/control/battery/mode/async-task
+      - Battery Charge/Discharge: /rest/openapi/pvms/nbi/v2/control/charge-and-discharge/async-task
+    
+    Auth: Authorization: Bearer {oauth_access_token}
+    """
+    # OAuth Bearer token (Service Provider scope=control)
+    oauth_token = None
+    try:
+        from huawei_oauth import get_valid_access_token
+        oauth_token = get_valid_access_token("huawei")
+    except Exception as oe:
+        log.warning("[huawei_send_command] OAuth token unavailable: %s", oe)
+    
+    if not oauth_token:
+        return False, {
+            "error": "no OAuth Bearer token — Owner authorization required",
+            "fix": "Otvor /admin/integrations a re-authorize Huawei OAuth",
+        }
+    
+    # Base URL pre OpenAPI control endpoints (NIE /thirdData)
+    api_base = "https://intl.fusionsolar.huawei.com"
+    headers = {
+        "Authorization": f"Bearer {oauth_token}",
+        "Content-Type": "application/json",
     }
-    cmd = huawei_command_codes.get(command_type)
-    if not cmd:
+    
+    # Map command_type → (endpoint_path, payload_builder)
+    url = None
+    payload = None
+    
+    if command_type in ("enable_zero_export", "set_active_power_limit_zero"):
+        # Active Power Control: limited feed-in 0 kW = zero export
+        url = f"{api_base}/rest/openapi/pvms/nbi/v2/control/active-power-control/async-task"
+        payload = {
+            "tasks": [{
+                "plantCode": station_code,
+                "controlMode": "6",  # 6 = limited feed-in (kW)
+                "controlInfo": {"powerCap": 0},
+            }]
+        }
+    elif command_type in ("disable_zero_export", "normal_export"):
+        # Active Power Control: unlimited
+        url = f"{api_base}/rest/openapi/pvms/nbi/v2/control/active-power-control/async-task"
+        payload = {
+            "tasks": [{
+                "plantCode": station_code,
+                "controlMode": "0",  # 0 = unlimited
+            }]
+        }
+    elif command_type == "set_active_power_limit":
+        limit_pct = float(params.get("limit_pct", 100))
+        if limit_pct >= 100:
+            payload = {"tasks": [{"plantCode": station_code, "controlMode": "0"}]}
+        else:
+            # Convert pct to kW — predpokladá že pct sa vzťahuje na DC kapacitu
+            ac_kw_cap = float(params.get("ac_kw_cap", 9.68))  # default Tekov
+            power_cap_kw = (limit_pct / 100.0) * ac_kw_cap
+            payload = {"tasks": [{"plantCode": station_code, "controlMode": "6", "controlInfo": {"powerCap": power_cap_kw}}]}
+        url = f"{api_base}/rest/openapi/pvms/nbi/v2/control/active-power-control/async-task"
+    elif command_type == "set_battery_mode_grid_charge":
+        # thirdPartyDispatch mode → následne sendCommand pre forced charge
+        url = f"{api_base}/rest/openapi/pvms/nbi/v1/control/battery/mode/async-task"
+        payload = {"tasks": [{"plantCode": station_code, "operationMode": "thirdPartyDispatch"}]}
+    elif command_type == "set_battery_mode_self":
+        url = f"{api_base}/rest/openapi/pvms/nbi/v1/control/battery/mode/async-task"
+        payload = {"tasks": [{"plantCode": station_code, "operationMode": "maximumSelfConsumption"}]}
+    elif command_type == "forced_charge":
+        url = f"{api_base}/rest/openapi/pvms/nbi/v2/control/charge-and-discharge/async-task"
+        payload = {"tasks": [{"plantCode": station_code, "dispatchSwitch": 1, "controlType": 1, "soc": int(params.get("target_soc", 100))}]}
+    elif command_type == "forced_discharge":
+        url = f"{api_base}/rest/openapi/pvms/nbi/v2/control/charge-and-discharge/async-task"
+        payload = {"tasks": [{"plantCode": station_code, "dispatchSwitch": 2, "controlType": 1, "soc": int(params.get("target_soc", 20))}]}
+    elif command_type == "stop_forced_charge_discharge":
+        url = f"{api_base}/rest/openapi/pvms/nbi/v2/control/charge-and-discharge/async-task"
+        payload = {"tasks": [{"plantCode": station_code, "dispatchSwitch": 0}]}
+    else:
         return False, {"error": f"unknown command_type: {command_type}"}
-
-    url = f"{base}/sendCommand"
-    headers = {"XSRF-TOKEN": token, "Content-Type": "application/json"}
-    payload = {
-        "stationCode": station_code,
-        "commandCode": cmd["code"],
-        "commandValue": cmd["value"],
-    }
+    
     try:
         r = requests.post(url, headers=headers, json=payload, timeout=60)
-        result = r.json() if r.status_code == 200 else {"http_status": r.status_code, "body": r.text[:500]}
-        success = r.status_code == 200 and result.get("success", False)
+        try:
+            result = r.json()
+        except Exception:
+            result = {"http_status": r.status_code, "body": r.text[:500]}
+        # Huawei OpenAPI success: r.ok + result.success=true + failCode=0
+        success = r.ok and result.get("success", False) and (result.get("failCode") in (None, 0))
+        result["endpoint_used"] = url
+        result["auth_method"] = "oauth_bearer"
+        if not success:
+            log.warning("[huawei_send_command] %s → %s", command_type, str(result)[:300])
         return success, result
     except Exception as e:
         log.exception("[huawei_send_command] failed")
-        return False, {"error": str(e)}
+        return False, {"error": str(e), "endpoint_attempted": url}
 
 
 # ---------------- SPOT 3-state Reactor ----------------
