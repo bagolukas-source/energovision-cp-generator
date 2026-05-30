@@ -13303,3 +13303,77 @@ def integrations_status():
         })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ============================================================
+# SOLINTEG — save credentials per customer
+# ============================================================
+@app.route("/api/solinteg/v1/save-credentials", methods=["POST"])
+def solinteg_save_credentials():
+    """
+    Wizard volá tento endpoint pre uloženie Solinteg credentials.
+    Body: {customer_id, email, password, client_id, topic}
+    
+    POZOR: pre teraz ukladá do shared inverter_vendor_credentials (master).
+    Per-customer Solinteg auth treba separate table (solinteg_customer_credentials).
+    """
+    try:
+        body = request.get_json(force=True) or {}
+        email = body.get("email", "").strip()
+        password = body.get("password", "").strip()
+        client_id = body.get("client_id", "").strip()
+        topic = body.get("topic", "").strip()
+        customer_id = body.get("customer_id")
+        
+        if not email or not password or not client_id:
+            return jsonify({"success": False, "error": "missing email/password/client_id"}), 400
+        
+        # Test login pred uložením
+        from solinteg_oauth import try_login
+        test_cred = {
+            "base_url": "https://openapi.solinteg-cloud.com",
+            "username": email,
+            "encrypted_password": password,
+            "client_id": client_id,
+        }
+        ok, result = try_login(test_cred)
+        if not ok:
+            return jsonify({
+                "success": False,
+                "error": "Login zlyhal — overí credentials",
+                "diagnostic": result,
+            }), 400
+        
+        # Save to DB (overwrite master Solinteg config)
+        sb_headers = {
+            "apikey": SUPABASE_SERVICE_KEY,
+            "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+            "Content-Type": "application/json",
+        }
+        r = requests.patch(
+            f"{SUPABASE_URL}/rest/v1/inverter_vendor_credentials",
+            headers=sb_headers,
+            params={"vendor": "eq.solinteg"},
+            json={
+                "username": email,
+                "encrypted_password": password,
+                "client_id": client_id,
+                "oauth_scope": topic,
+                "base_url": result.get("base_url_used", "https://openapi.solinteg-cloud.com"),
+                "current_token": result.get("token"),
+                "is_active": True,
+                "notes": f"Updated via wizard 2026-05-30. Customer ID: {customer_id or 'master'}. Token path: {result.get('path_used')}",
+            },
+            timeout=10,
+        )
+        
+        return jsonify({
+            "success": True,
+            "message": "Solinteg credentials uložené",
+            "token_preview": (result.get("token") or "")[:30] + "...",
+            "base_url_used": result.get("base_url_used"),
+            "path_used": result.get("path_used"),
+        }), 200
+    except Exception as e:
+        log.exception("solinteg save-credentials")
+        return jsonify({"success": False, "error": str(e)}), 500
