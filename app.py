@@ -7776,6 +7776,45 @@ def _to_float_safe(v) -> float:
 
 
 @rate_limit(max_calls=60, window_seconds=60)
+
+
+# ============================================================
+# UNIFIED Huawei auth helper — OAuth Bearer first, NBI fallback
+# Použij ho v každom webhook ktorý ťahá Huawei dáta.
+# Returns: (base, headers, auth_method) alebo (None, None, None) ak nič nefunguje
+# ============================================================
+def _huawei_get_auth():
+    """OAuth-first auth pre Huawei calls. Vráti (base, headers, auth_method)."""
+    # Preferovane: OAuth Bearer (Service Provider, owner-authorized)
+    try:
+        from huawei_oauth import get_valid_access_token
+        oauth_token = get_valid_access_token("huawei")
+        if oauth_token:
+            return (
+                "https://intl.fusionsolar.huawei.com/thirdData",
+                {"Authorization": f"Bearer {oauth_token}", "Content-Type": "application/json"},
+                "oauth_bearer",
+            )
+    except Exception as e:
+        log.warning("[_huawei_get_auth] OAuth unavailable: %s", e)
+    
+    # Fallback: NBI password login (XSRF-TOKEN)
+    try:
+        if _hs:
+            token = _hs.huawei_login()
+            if token:
+                base = _hs._huawei_session.get("base") or _hs.HUAWEI_BASE
+                return (
+                    base,
+                    {"XSRF-TOKEN": token, "Content-Type": "application/json"},
+                    "nbi_xsrf",
+                )
+    except Exception as e:
+        log.warning("[_huawei_get_auth] NBI fallback failed: %s", e)
+    
+    return None, None, None
+
+
 @app.route("/webhook/fleet-status", methods=["GET", "OPTIONS"])
 def webhook_fleet_status():
     """Live fleet snapshot for /admin/monitoring dashboard.
@@ -7872,12 +7911,9 @@ def _station_kpi_compute(station_code: str) -> dict:
     if not _hs:
         return {"ok": False, "error": "huawei_spot module not loaded"}
 
-    token = _hs.huawei_login()
-    if not token:
-        return {"ok": False, "error": "Huawei login failed"}
-
-    base = _hs._huawei_session.get("base") or _hs.HUAWEI_BASE
-    headers = {"XSRF-TOKEN": token, "Content-Type": "application/json"}
+    base, headers, auth_method = _huawei_get_auth()
+    if not base or not headers:
+        return {"ok": False, "error": "Huawei auth failed (OAuth + NBI fallback both failed)"}
 
     import datetime as _dt
     now_ts_ms = int(_dt.datetime.utcnow().timestamp() * 1000)
@@ -8073,12 +8109,9 @@ def _fleet_trend_compute() -> dict:
     if not station_codes:
         return {"ok": True, "trend": [], "stations_count": 0}
 
-    token = _hs.huawei_login()
-    if not token:
-        return {"ok": False, "error": "Huawei login failed"}
-
-    base = _hs._huawei_session.get("base") or _hs.HUAWEI_BASE
-    headers = {"XSRF-TOKEN": token, "Content-Type": "application/json"}
+    base, headers, auth_method = _huawei_get_auth()
+    if not base or not headers:
+        return {"ok": False, "error": "Huawei auth failed (OAuth + NBI fallback both failed)"}
 
     import datetime as _dt
     today_start = _dt.datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -10228,12 +10261,9 @@ def webhook_huawei_pull_battery_health():
     if _hs is None:
         return jsonify({"ok": False, "error": "huawei_spot module not available"}), 500
 
-    token = _hs.huawei_login()
-    if not token:
-        return jsonify({"ok": False, "error": "huawei login failed (check backoff / credentials)"}), 503
-
-    base = _hs._huawei_session.get("base") or _hs.HUAWEI_BASE
-    headers = {"XSRF-TOKEN": token, "Content-Type": "application/json"}
+    base, headers, auth_method = _huawei_get_auth()
+    if not base or not headers:
+        return jsonify({"ok": False, "error": "Huawei auth failed (OAuth + NBI fallback both failed)"}), 503
 
     sb = _sb()
     sites = sb.table("inverter_sites").select(
@@ -10444,12 +10474,9 @@ def webhook_huawei_pull_strings():
     if _hs is None:
         return jsonify({"ok": False, "error": "huawei_spot module not available"}), 500
 
-    token = _hs.huawei_login()
-    if not token:
-        return jsonify({"ok": False, "error": "huawei login failed (check backoff)"}), 503
-
-    base = _hs._huawei_session.get("base") or _hs.HUAWEI_BASE
-    headers = {"XSRF-TOKEN": token, "Content-Type": "application/json"}
+    base, headers, auth_method = _huawei_get_auth()
+    if not base or not headers:
+        return jsonify({"ok": False, "error": "Huawei auth failed (OAuth + NBI fallback both failed)"}), 503
 
     sb = _sb()
     sites = sb.table("inverter_sites").select(
@@ -10510,12 +10537,9 @@ def webhook_huawei_pull_environment():
     if _hs is None:
         return jsonify({"ok": False, "error": "huawei_spot module not available"}), 500
 
-    token = _hs.huawei_login()
-    if not token:
-        return jsonify({"ok": False, "error": "huawei login failed"}), 503
-
-    base = _hs._huawei_session.get("base") or _hs.HUAWEI_BASE
-    headers = {"XSRF-TOKEN": token, "Content-Type": "application/json"}
+    base, headers, auth_method = _huawei_get_auth()
+    if not base or not headers:
+        return jsonify({"ok": False, "error": "Huawei auth failed (OAuth + NBI fallback both failed)"}), 503
 
     sb = _sb()
     sites = sb.table("inverter_sites").select(
@@ -10741,12 +10765,9 @@ def webhook_huawei_pull_grid_meter():
     if _hs is None:
         return jsonify({"ok": False, "error": "huawei_spot module not available"}), 500
 
-    token = _hs.huawei_login()
-    if not token:
-        return jsonify({"ok": False, "error": "huawei login failed"}), 503
-
-    base = _hs._huawei_session.get("base") or _hs.HUAWEI_BASE
-    headers = {"XSRF-TOKEN": token, "Content-Type": "application/json"}
+    base, headers, auth_method = _huawei_get_auth()
+    if not base or not headers:
+        return jsonify({"ok": False, "error": "Huawei auth failed (OAuth + NBI fallback both failed)"}), 503
 
     sb = _sb()
     sites = sb.table("inverter_sites").select(
@@ -10843,12 +10864,9 @@ def webhook_huawei_pull_detailed_inverters():
     if _hs is None:
         return jsonify({"ok": False, "error": "huawei_spot module not available"}), 500
 
-    token = _hs.huawei_login()
-    if not token:
-        return jsonify({"ok": False, "error": "huawei login failed"}), 503
-
-    base = _hs._huawei_session.get("base") or _hs.HUAWEI_BASE
-    headers = {"XSRF-TOKEN": token, "Content-Type": "application/json"}
+    base, headers, auth_method = _huawei_get_auth()
+    if not base or not headers:
+        return jsonify({"ok": False, "error": "Huawei auth failed (OAuth + NBI fallback both failed)"}), 503
 
     sb = _sb()
     sites = sb.table("inverter_sites").select(
@@ -11014,12 +11032,9 @@ def webhook_huawei_pull_device_history_daily():
     if _hs is None:
         return jsonify({"ok": False, "error": "huawei_spot module not available"}), 500
 
-    token = _hs.huawei_login()
-    if not token:
-        return jsonify({"ok": False, "error": "huawei login failed"}), 503
-
-    base = _hs._huawei_session.get("base") or _hs.HUAWEI_BASE
-    headers = {"XSRF-TOKEN": token, "Content-Type": "application/json"}
+    base, headers, auth_method = _huawei_get_auth()
+    if not base or not headers:
+        return jsonify({"ok": False, "error": "Huawei auth failed (OAuth + NBI fallback both failed)"}), 503
 
     sb = _sb()
     sites = sb.table("inverter_sites").select(
@@ -11111,12 +11126,9 @@ def webhook_huawei_pull_device_history_monthly():
     if _hs is None:
         return jsonify({"ok": False, "error": "huawei_spot module not available"}), 500
 
-    token = _hs.huawei_login()
-    if not token:
-        return jsonify({"ok": False, "error": "huawei login failed"}), 503
-
-    base = _hs._huawei_session.get("base") or _hs.HUAWEI_BASE
-    headers = {"XSRF-TOKEN": token, "Content-Type": "application/json"}
+    base, headers, auth_method = _huawei_get_auth()
+    if not base or not headers:
+        return jsonify({"ok": False, "error": "Huawei auth failed (OAuth + NBI fallback both failed)"}), 503
 
     body = request.get_json(silent=True) or {}
     # Predošlý mesiac (1. dňa nasledujúceho mesiaca pre kompletné dáta)
@@ -11205,11 +11217,9 @@ def webhook_huawei_debug_stations_public():
     Vracia len Huawei API response info, žiadne mutácie."""
     if _hs is None:
         return jsonify({"ok": False, "error": "huawei_spot module not available"}), 500
-    token = _hs.huawei_login()
-    if not token:
-        return jsonify({"ok": False, "error": "huawei login failed"}), 503
-    base = _hs._huawei_session.get("base") or _hs.HUAWEI_BASE
-    headers = {"XSRF-TOKEN": token, "Content-Type": "application/json"}
+    base, headers, auth_method = _huawei_get_auth()
+    if not base or not headers:
+        return jsonify({"ok": False, "error": "Huawei auth failed (OAuth + NBI fallback both failed)"}), 503
     page_no = int(request.args.get("page") or "1")
     try:
         r = requests.post(f"{base}/stations", headers=headers, json={"pageNo": page_no}, timeout=60)
@@ -11253,12 +11263,9 @@ def webhook_huawei_debug_stations():
     if _hs is None:
         return jsonify({"ok": False, "error": "huawei_spot module not available"}), 500
 
-    token = _hs.huawei_login()
-    if not token:
-        return jsonify({"ok": False, "error": "huawei login failed (check backoff)"}), 503
-
-    base = _hs._huawei_session.get("base") or _hs.HUAWEI_BASE
-    headers = {"XSRF-TOKEN": token, "Content-Type": "application/json"}
+    base, headers, auth_method = _huawei_get_auth()
+    if not base or not headers:
+        return jsonify({"ok": False, "error": "Huawei auth failed (OAuth + NBI fallback both failed)"}), 503
 
     page_no = int(request.args.get("page") or "1")
     body = {"pageNo": page_no}
