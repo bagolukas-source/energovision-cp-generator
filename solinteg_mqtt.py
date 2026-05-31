@@ -172,3 +172,4 @@ def get_status():
         "topic": MQTT_TOPIC,
         "tls": MQTT_USE_TLS,
     }
+# build trigger Sun May 31 13:38:47 UTC 2026
