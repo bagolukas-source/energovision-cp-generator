@@ -24,10 +24,14 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://uzwajrpebblafuhrtuwn.supa
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "") or os.environ.get("SUPABASE_SERVICE_KEY", "")
 
 # Broker config — z Solinteg dokumentácie / DB credentials
-MQTT_BROKER_HOST = os.environ.get("SOLINTEG_MQTT_HOST", "openapi-mqtt.solinteg-cloud.com")
-MQTT_BROKER_PORT = int(os.environ.get("SOLINTEG_MQTT_PORT", "8883"))  # 8883 TLS, 1883 plain
-MQTT_USE_TLS = os.environ.get("SOLINTEG_MQTT_TLS", "true").lower() == "true"
-MQTT_TOPIC = os.environ.get("SOLINTEG_MQTT_TOPIC", "/cBFQ7PMTpG")  # default z Lukášovho účtu
+# Z docs (subscription-of-real-time-data):
+#   Remote Address: mqtt.solinteg-cloud.com
+#   Remote Port: 7783
+#   Protocol: mqtt:// (plain, nie mqtts://)
+MQTT_BROKER_HOST = os.environ.get("SOLINTEG_MQTT_HOST", "mqtt.solinteg-cloud.com")
+MQTT_BROKER_PORT = int(os.environ.get("SOLINTEG_MQTT_PORT", "7783"))
+MQTT_USE_TLS = os.environ.get("SOLINTEG_MQTT_TLS", "false").lower() == "true"  # port 7783 = plain
+MQTT_TOPIC = os.environ.get("SOLINTEG_MQTT_TOPIC", "/cBFQ7PMTpG")  # Lukášov topic
 
 # Worker stav
 _worker_thread = None
