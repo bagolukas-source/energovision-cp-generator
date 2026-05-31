@@ -591,11 +591,11 @@ def execute_transition(site: Dict[str, Any], from_state: str, to_state: str, spo
         commands.append({"type": "enable_zero_export", "params": {}})
         commands.append({"type": "set_active_power_limit", "params": {"limit_pct": 100}})
     elif to_state == "FULL_SHUTDOWN":
-        # FULL_SHUTDOWN = zero export + battery dispatch + forced charge (FVE ide do BESS namiesto siete)
+        # FULL_SHUTDOWN = zero export. Battery charge len ak je checkbox v UI ON.
         commands.append({"type": "set_active_power_limit", "params": {"limit_pct": 0}})
-        if has_bess:
+        if grid_charge:
+            # Rešpektuje "Pri FULL_SHUTDOWN nabíjať BESS zo siete" checkbox
             commands.append({"type": "set_battery_mode_grid_charge", "params": {}})  # thirdPartyDispatch
-            # Force charge batérie na 100% (BESS spotrebuje PV + import zo siete pri záporných cenách)
             commands.append({"type": "forced_charge", "params": {"target_soc": 100}})
 
     results = []
@@ -684,8 +684,12 @@ def spot_reactor(dry_run_override: Optional[bool] = None) -> Dict[str, Any]:
             t_ze = float(site.get("spot_threshold_zero_export") or -50)
             t_shut = float(site.get("spot_threshold_full_shutdown") or -60)
             hys = float(site.get("spot_hysteresis_eur") or 5)
+            # Efektívna predajná cena = SPOT - distribučný poplatok klienta
+            # Pri kladnej SPOT klient zarobí (spot - fee), pri zápornej platí (|spot|+fee)
+            dist_fee = float(site.get("spot_distribution_fee_eur_mwh") or 50)
+            effective_spot = current_spot - dist_fee
 
-            target = determine_target_state(current_spot, t_ze, t_shut)
+            target = determine_target_state(effective_spot, t_ze, t_shut)
             if not should_transition(current, target, current_spot, t_ze, t_shut, hys):
                 continue
 
