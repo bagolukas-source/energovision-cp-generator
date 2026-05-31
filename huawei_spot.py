@@ -502,30 +502,40 @@ def get_current_spot() -> Optional[float]:
     return None
 
 
-def determine_target_state(spot: float, threshold_ze: float, threshold_shut: float) -> str:
-    if spot < threshold_shut:
+def determine_target_state(effective_spot: float, threshold_ze: float, threshold_shut: float) -> str:
+    """
+    Rozhoduje target stav na základe efektívnej SPOT ceny (SPOT - dist_fee).
+    Semantika: "ak effective spadol NA alebo POD hranicu → aktivuj reštrikciu" (<=).
+    """
+    if effective_spot <= threshold_shut:
         return "FULL_SHUTDOWN"
-    elif spot < threshold_ze:
+    if effective_spot <= threshold_ze:
         return "ZERO_EXPORT_ONLY"
     return "NORMAL"
 
 
-def should_transition(current: str, target: str, spot: float, threshold_ze: float, threshold_shut: float, hys: float) -> bool:
+def should_transition(current: str, target: str, effective_spot: float, threshold_ze: float, threshold_shut: float, hys: float) -> bool:
+    """
+    Anti-flap: pri spätnom prechode (uvoľnenie reštrikcie) treba prekročiť threshold + hysterezis.
+    Vždy používa effective_spot (= raw SPOT - distribučný poplatok klienta).
+    """
     if current == target:
         return False
+    # smerom DO reštrikcie (aktivuj):
     if current == "NORMAL" and target == "ZERO_EXPORT_ONLY":
-        return spot < threshold_ze
-    if current == "ZERO_EXPORT_ONLY" and target == "NORMAL":
-        return spot >= (threshold_ze + hys)
+        return effective_spot <= threshold_ze
     if current == "ZERO_EXPORT_ONLY" and target == "FULL_SHUTDOWN":
-        return spot < threshold_shut
-    if current == "FULL_SHUTDOWN" and target == "ZERO_EXPORT_ONLY":
-        return spot >= (threshold_shut + hys)
-    if current == "FULL_SHUTDOWN" and target == "NORMAL":
-        return spot >= (threshold_ze + hys)
+        return effective_spot <= threshold_shut
     if current == "NORMAL" and target == "FULL_SHUTDOWN":
-        return spot < threshold_shut
-    return True
+        return effective_spot <= threshold_shut
+    # smerom Z reštrikcie (uvoľni — vyžaduje hysterezis):
+    if current == "ZERO_EXPORT_ONLY" and target == "NORMAL":
+        return effective_spot > (threshold_ze + hys)
+    if current == "FULL_SHUTDOWN" and target == "ZERO_EXPORT_ONLY":
+        return effective_spot > (threshold_shut + hys)
+    if current == "FULL_SHUTDOWN" and target == "NORMAL":
+        return effective_spot > (threshold_ze + hys)
+    return False
 
 
 def slack_notify(text: str) -> None:
@@ -638,7 +648,7 @@ def spot_reactor(dry_run_override: Optional[bool] = None) -> Dict[str, Any]:
         return {"ok": False, "error": "No current SPOT price (run okte_ingest first)"}
 
     sites = sb_get("inverter_sites", {
-        "select": "id,site_name,vendor_station_id,bess_kwh,spot_control_enabled,spot_distribution_fee_eur_mwh,spot_threshold_zero_export,spot_threshold_full_shutdown,spot_hysteresis_eur,spot_current_state,spot_bess_grid_charge_enabled,spot_dry_run,spot_customer_revenue_share_pct,spot_manual_override_state,spot_manual_override_until",
+        "select": "id,site_name,vendor_station_id,bess_kwh,spot_control_enabled,spot_distribution_fee_eur_mwh,spot_threshold_zero_export,spot_threshold_full_shutdown,spot_hysteresis_eur,spot_current_state,spot_bess_grid_charge_enabled,spot_dry_run,spot_customer_revenue_share_pct,spot_manual_override_state,spot_manual_override_until,spot_last_transition_at,spot_min_dwell_minutes",
         "spot_control_enabled": "eq.true",
     })
 
@@ -678,26 +688,46 @@ def spot_reactor(dry_run_override: Optional[bool] = None) -> Dict[str, Any]:
     sites = sites_filtered
 
     transitions = []
+    skipped_dwell = []
+    from datetime import datetime as _dt_d, timezone as _tz_d
+    now_for_dwell = _dt_d.now(_tz_d.utc)
     for site in sites:
         try:
             current = site.get("spot_current_state") or "NORMAL"
             t_ze = float(site.get("spot_threshold_zero_export") or -50)
             t_shut = float(site.get("spot_threshold_full_shutdown") or -60)
             hys = float(site.get("spot_hysteresis_eur") or 5)
-            # Efektívna predajná cena = SPOT - distribučný poplatok klienta
-            # Pri kladnej SPOT klient zarobí (spot - fee), pri zápornej platí (|spot|+fee)
             dist_fee = float(site.get("spot_distribution_fee_eur_mwh") or 50)
+            min_dwell = int(site.get("spot_min_dwell_minutes") or 10)
             effective_spot = current_spot - dist_fee
 
             target = determine_target_state(effective_spot, t_ze, t_shut)
-            if not should_transition(current, target, current_spot, t_ze, t_shut, hys):
+            log.info(
+                "[reactor] %s current=%s target=%s SPOT=%.2f eff=%.2f t_ze=%.1f t_shut=%.1f hys=%.1f",
+                site.get("site_name"), current, target, current_spot, effective_spot, t_ze, t_shut, hys
+            )
+            if not should_transition(current, target, effective_spot, t_ze, t_shut, hys):
                 continue
+
+            # Anti-flap: respektuj min_dwell_minutes od posledného prepnutia
+            last_at_raw = site.get("spot_last_transition_at")
+            if last_at_raw:
+                try:
+                    last_dt = _dt_d.fromisoformat(str(last_at_raw).replace("Z", "+00:00"))
+                    age_min = (now_for_dwell - last_dt).total_seconds() / 60.0
+                    if age_min < min_dwell:
+                        log.info("[reactor] SKIP DWELL %s — %s->%s blocked, last %.1f min ago (<%d)",
+                                 site.get("site_name"), current, target, age_min, min_dwell)
+                        skipped_dwell.append({"site": site.get("site_name"), "wanted": target, "age_min": round(age_min,1)})
+                        continue
+                except Exception:
+                    pass
 
             site_dry_run = bool(site.get("spot_dry_run"))
             if dry_run_override is True:
                 site_dry_run = True
 
-            reason = f"SPOT={current_spot:.2f}/MWh"
+            reason = f"SPOT={current_spot:.2f}/MWh eff={effective_spot:.2f}"
             result = execute_transition(site, current, target, current_spot, site_dry_run)
             cmd_id = (result["details"][0].get("command_id") if result["details"] else None)
             log_state_transition(site, current, target, current_spot, reason, site_dry_run, cmd_id)
@@ -735,6 +765,7 @@ def spot_reactor(dry_run_override: Optional[bool] = None) -> Dict[str, Any]:
         "sites_evaluated": len(sites),
         "transitions": transitions,
         "transition_count": sum(1 for t in transitions if not t.get("error")),
+        "skipped_dwell": skipped_dwell,
     }
 
 
@@ -764,7 +795,7 @@ def manual_force_state(site_id: str, target_state: str, issued_by: str = "manual
 
     # Manual override: zapíš state + zaeviduj do DB aby SPOT reactor toto skipoval
     from datetime import datetime as _dt, timezone as _tz, timedelta as _td
-    override_until = (_dt.now(_tz.utc) + _td(hours=24)).isoformat()  # default 24h override
+    override_until = (_dt.now(_tz.utc) + _td(hours=4)).isoformat()  # default 4h override (skratene z 24h, aby reactor prevzal kontrolu rychlejsie)
     try:
         requests.patch(
             f"{SUPABASE_URL}/rest/v1/inverter_sites",
