@@ -7500,11 +7500,10 @@ def _huawei_fetch_active_power_per_station(station_codes: list, base: str, heade
                     kpi = row.get("dataItemMap") or {}
                     if not isinstance(kpi, dict):
                         continue
-                    # User očakáva "výkon FVE" = PV výroba (DC strana z panelov).
-                    # mppt_total_power = total DC power z PV (správna metrika pre user)
-                    # active_power = AC výkon do siete + záťaže (pri hybrid + nabíjajúca batéria je malý)
-                    mppt = kpi.get("mppt_total_power") or kpi.get("mppt_total_cap")
-                    ap = mppt if mppt is not None else kpi.get("active_power")
+                    # active_power = AC active power per inverter (spoľahlivý field)
+                    # Pre hybrid systémy s DC-coupled batériou pri nabíjaní môže byť nízky
+                    # (PV → DC → batéria nejde cez AC).
+                    ap = kpi.get("active_power")
                     if ap is None:
                         continue
                     try:
@@ -12929,7 +12928,24 @@ def huawei_v1_sync():
         if not r.ok:
             return jsonify({"success": False, "error": r.text[:500]}), 502
         
-        plants = r.json().get("data", {}).get("list", [])
+        try:
+            resp = r.json()
+        except Exception as je:
+            return jsonify({"success": False, "error": f"invalid JSON: {je}", "raw": r.text[:300]}), 502
+        
+        if not isinstance(resp, dict):
+            return jsonify({"success": False, "error": f"unexpected response type: {type(resp).__name__}", "raw": str(resp)[:300]}), 502
+        
+        if not resp.get("success", False):
+            return jsonify({"success": False, "error": f"Huawei failCode {resp.get('failCode')}: {resp.get('message') or 'unknown'}"}), 502
+        
+        data_obj = resp.get("data")
+        if not isinstance(data_obj, dict):
+            return jsonify({"success": False, "error": f"data is not dict: {type(data_obj).__name__}", "snippet": str(data_obj)[:200]}), 502
+        
+        plants = data_obj.get("list", [])
+        if not isinstance(plants, list):
+            plants = []
         
         sb_headers = {
             "apikey": SUPABASE_SERVICE_KEY,
@@ -12943,8 +12959,10 @@ def huawei_v1_sync():
         errors = []
         
         for p in plants:
+            if not isinstance(p, dict):
+                continue
             plant_code = p.get("plantCode")
-            if not plant_code:
+            if not plant_code or not isinstance(plant_code, str):
                 continue
             
             # Skontroluj či existuje
