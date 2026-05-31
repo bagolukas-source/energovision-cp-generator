@@ -34,12 +34,10 @@ TOKEN_TTL_SECONDS = 60 * 60  # 60 min per docs
 
 # {{EU}} candidate hostnames (DNS-resolveable kandidáti pre EU OpenAPI)
 BASE_URL_CANDIDATES = [
-    "https://mqtt.solinteg-cloud.com",   # potvrdený DNS (MQTT host)
+    "https://lb.solinteg-cloud.com/openapi/v2",  # ✓ POTVRDENÝ live (login OK, devices OK, realtime OK)
+    "https://lb.solinteg-cloud.com",
+    "https://mqtt.solinteg-cloud.com",
     "https://openapi.solinteg-cloud.com",
-    "https://api.solinteg-cloud.com",
-    "https://eu-openapi.solinteg-cloud.com",
-    "https://eu.solinteg-cloud.com",
-    "https://www.solinteg-cloud.com",
 ]
 
 
@@ -162,7 +160,7 @@ def _headers(token: str) -> Dict[str, str]:
 
 def _base() -> str:
     cred = load_credentials()
-    return (cred.get("base_url") if cred else "") or "https://mqtt.solinteg-cloud.com"
+    return (cred.get("base_url") if cred else "") or "https://lb.solinteg-cloud.com/openapi/v2"
 
 
 def _ok(j) -> bool:
