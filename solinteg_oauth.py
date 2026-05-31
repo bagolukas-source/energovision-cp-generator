@@ -634,31 +634,58 @@ def sync_alarms(device_sn: str, days: int = 7) -> Tuple[bool, Dict]:
 
 
 def diagnose_login() -> Dict:
-    """Diagnostic: 1 explicit POST + return raw response (bez token validation)."""
+    """Diagnostic: POST login na viacero candidate hostnames + return raw responses."""
     import requests as _rq
     cred = load_credentials()
     if not cred:
         return {"error": "no credentials in DB"}
-    base = cred.get("base_url", "https://openapi.solinteg-cloud.com").rstrip("/")
-    url = f"{base}/openapi/login"
     body = {
         "email": cred.get("username"),
         "password": cred.get("encrypted_password"),
         "clientId": cred.get("client_id"),
     }
-    try:
-        r = _rq.post(url, json=body, headers={"Content-Type": "application/json"}, timeout=10)
+    # Multi-host fan-out — z DNS hľadanie ktorý hostname funguje pre OpenAPI
+    candidate_urls = [
+        "https://openapi.solinteg-cloud.com/openapi/login",
+        "https://api.solinteg-cloud.com/openapi/login",
+        "https://eu-openapi.solinteg-cloud.com/openapi/login",
+        "https://www.solinteg-cloud.com/openapi/login",
+        "https://solinteg-cloud.com/openapi/login",
+        "https://gateway.solinteg-cloud.com/openapi/login",
+        "https://openapi-eu.solinteg-cloud.com/openapi/login",
+    ]
+    attempts = []
+    success_attempt = None
+    for url in candidate_urls:
+        attempt = {"url": url}
         try:
-            j = r.json()
-        except Exception:
-            j = None
-        return {
-            "url": url,
-            "body_sent": {k: (v if k != "password" else "***") for k, v in body.items()},
-            "status": r.status_code,
-            "raw_text": r.text[:2000],
-            "json": j,
-            "headers": dict(r.headers),
-        }
-    except Exception as e:
-        return {"url": url, "error": str(e)}
+            r = _rq.post(url, json=body, headers={"Content-Type": "application/json"}, timeout=8)
+            try:
+                j = r.json()
+            except Exception:
+                j = None
+            attempt["status"] = r.status_code
+            attempt["text_preview"] = r.text[:300]
+            attempt["json"] = j
+            # Solinteg success: {code:0, data:{token: "..."}} alebo {errorCode:0, body:{token}}
+            if isinstance(j, dict):
+                token = None
+                d = j.get("data") or j.get("body")
+                if isinstance(d, dict):
+                    token = d.get("token") or d.get("accessToken")
+                if not token:
+                    token = j.get("token") or j.get("accessToken")
+                if token:
+                    attempt["token_found"] = True
+                    success_attempt = attempt
+                    attempts.append(attempt)
+                    break
+        except Exception as e:
+            attempt["error"] = str(e)[:200]
+        attempts.append(attempt)
+    return {
+        "body_sent": {k: (v if k != "password" else "***") for k, v in body.items()},
+        "attempts": attempts,
+        "success": success_attempt is not None,
+        "winning_url": success_attempt["url"] if success_attempt else None,
+    }
