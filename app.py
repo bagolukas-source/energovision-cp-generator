@@ -13426,6 +13426,201 @@ def solinteg_save_credentials():
 
 
 # ============================================================
+# SOLINTEG read + write endpointy — parity s Huawei
+# ============================================================
+
+@app.route("/api/solinteg/v1/realtime/<device_sn>", methods=["GET"])
+def solinteg_realtime(device_sn):
+    """Aktuálne realtime dáta pre 1 zariadenie (analóg Huawei /realtime/<plant>)."""
+    try:
+        from solinteg_oauth import get_realtime
+        ok, result = get_realtime(device_sn)
+        return jsonify({"success": ok, "deviceSn": device_sn, **(result or {})}), (200 if ok else 502)
+    except Exception as e:
+        log.exception("solinteg realtime")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/solinteg/v1/status/<device_sn>", methods=["GET"])
+def solinteg_status(device_sn):
+    """Online/offline status zariadenia."""
+    try:
+        from solinteg_oauth import get_device_status
+        ok, result = get_device_status(device_sn)
+        return jsonify({"success": ok, "deviceSn": device_sn, **(result or {})}), (200 if ok else 502)
+    except Exception as e:
+        log.exception("solinteg status")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/solinteg/v1/history/<device_sn>", methods=["GET"])
+def solinteg_history(device_sn):
+    """Historicka telemetria za N dni (default 1)."""
+    try:
+        from solinteg_oauth import get_history
+        days = int(request.args.get("days", 1))
+        import time as _time
+        end_ms = int(_time.time() * 1000)
+        start_ms = end_ms - days * 86400 * 1000
+        ok, result = get_history(device_sn, start_ms, end_ms)
+        return jsonify({"success": ok, "deviceSn": device_sn, "days": days, **(result or {})}), (200 if ok else 502)
+    except Exception as e:
+        log.exception("solinteg history")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/solinteg/v1/alarms/<device_sn>", methods=["GET"])
+def solinteg_alarms(device_sn):
+    """Alarmy za N dni (default 7)."""
+    try:
+        from solinteg_oauth import get_alarms
+        days = int(request.args.get("days", 7))
+        import time as _time
+        end_ms = int(_time.time() * 1000)
+        start_ms = end_ms - days * 86400 * 1000
+        ok, result = get_alarms(device_sn, start_ms, end_ms)
+        return jsonify({"success": ok, "deviceSn": device_sn, "days": days, **(result or {})}), (200 if ok else 502)
+    except Exception as e:
+        log.exception("solinteg alarms")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/solinteg/v1/verify-sn", methods=["POST"])
+def solinteg_verify_sn_route():
+    """Overit deviceSn + checkCode pred bind (onboarding wizard krok 2)."""
+    try:
+        from solinteg_oauth import verify_sn
+        body = request.get_json(silent=True) or {}
+        device_sn = body.get("deviceSn") or body.get("device_sn")
+        check_code = body.get("checkCode") or body.get("check_code")
+        if not device_sn or not check_code:
+            return jsonify({"success": False, "error": "deviceSn + checkCode required"}), 400
+        ok, result = verify_sn(device_sn, check_code)
+        return jsonify({"success": ok, **(result or {})}), (200 if ok else 502)
+    except Exception as e:
+        log.exception("solinteg verify-sn")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/solinteg/v1/bind", methods=["POST"])
+def solinteg_bind_route():
+    """Pridat device do Energovision uctu (onboarding wizard krok 3)."""
+    try:
+        from solinteg_oauth import bind_device
+        body = request.get_json(silent=True) or {}
+        device_sn = body.get("deviceSn") or body.get("device_sn")
+        check_code = body.get("checkCode") or body.get("check_code")
+        if not device_sn or not check_code:
+            return jsonify({"success": False, "error": "deviceSn + checkCode required"}), 400
+        ok, result = bind_device(device_sn, check_code)
+        return jsonify({"success": ok, **(result or {})}), (200 if ok else 502)
+    except Exception as e:
+        log.exception("solinteg bind")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/solinteg/v1/sync/<device_sn>", methods=["POST", "GET"])
+def solinteg_sync_station(device_sn):
+    """Sync realtime -> zapise 1 row do inverter_measurements."""
+    try:
+        from solinteg_oauth import get_realtime, map_realtime_to_measurement
+        sb_url = f"{SUPABASE_URL}/rest/v1/inverter_sites"
+        sb_headers = {
+            "apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Content-Type": "application/json",
+        }
+        r = requests.get(sb_url, headers=sb_headers,
+                         params={"select": "id,vendor_plant_code,site_name",
+                                 "vendor": "eq.solinteg",
+                                 "vendor_plant_code": f"eq.{device_sn}",
+                                 "limit": 1},
+                         timeout=15)
+        sites = r.json() if r.ok else []
+        if not sites:
+            return jsonify({"success": False, "error": f"site not found for deviceSn {device_sn}"}), 404
+        site = sites[0]
+        ok, result = get_realtime(device_sn)
+        if not ok:
+            return jsonify({"success": False, "error": "realtime fetch failed", **(result or {})}), 502
+        body_data = (result or {}).get("body")
+        measurement = map_realtime_to_measurement(body_data, site["id"])
+        if not measurement:
+            return jsonify({"success": False, "error": "no measurement mapped"}), 500
+        ins_url = f"{SUPABASE_URL}/rest/v1/inverter_measurements"
+        ir = requests.post(ins_url, headers=sb_headers, json=[measurement], timeout=15)
+        if ir.status_code not in (200, 201):
+            return jsonify({"success": False, "error": "insert failed",
+                            "status": ir.status_code, "snippet": ir.text[:300]}), 500
+        requests.patch(sb_url, headers=sb_headers,
+                       params={"id": f"eq.{site['id']}"},
+                       json={"last_online_at": datetime.now(timezone.utc).isoformat()},
+                       timeout=10)
+        return jsonify({"success": True, "site_id": site["id"], "site_name": site["site_name"],
+                        "measurement": {k: v for k, v in measurement.items() if k != "raw_json"}}), 200
+    except Exception as e:
+        log.exception("solinteg sync")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/solinteg/v1/full-fleet-refresh", methods=["POST", "GET"])
+def solinteg_full_fleet_refresh():
+    """Sync vsetky Solinteg stanice (3x denny cron)."""
+    try:
+        sb_url = f"{SUPABASE_URL}/rest/v1/inverter_sites"
+        sb_headers = {
+            "apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Content-Type": "application/json",
+        }
+        r = requests.get(sb_url, headers=sb_headers,
+                         params={"select": "id,vendor_plant_code,site_name",
+                                 "vendor": "eq.solinteg",
+                                 "archived_at": "is.null"},
+                         timeout=15)
+        sites = r.json() if r.ok else []
+        results = []
+        for site in sites:
+            device_sn = site.get("vendor_plant_code")
+            if not device_sn:
+                continue
+            try:
+                from solinteg_oauth import get_realtime, map_realtime_to_measurement
+                ok, result = get_realtime(device_sn)
+                if not ok:
+                    results.append({"site": site["site_name"], "ok": False, "error": "realtime failed"})
+                    continue
+                measurement = map_realtime_to_measurement((result or {}).get("body"), site["id"])
+                if measurement:
+                    requests.post(f"{SUPABASE_URL}/rest/v1/inverter_measurements",
+                                  headers=sb_headers, json=[measurement], timeout=15)
+                results.append({"site": site["site_name"], "ok": True})
+            except Exception as ex:
+                results.append({"site": site["site_name"], "ok": False, "error": str(ex)[:200]})
+        return jsonify({"success": True, "sites_synced": len(results),
+                        "succeeded": sum(1 for r in results if r["ok"]),
+                        "details": results}), 200
+    except Exception as e:
+        log.exception("solinteg full-fleet-refresh")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/solinteg/v1/command/<device_sn>", methods=["POST"])
+def solinteg_command(device_sn):
+    """Vendor-agnostic command pre Solinteg (analog Huawei sendCommand)."""
+    try:
+        from solinteg_oauth import send_command
+        body = request.get_json(silent=True) or {}
+        command_type = body.get("command_type") or body.get("type")
+        params = body.get("params") or {}
+        if not command_type:
+            return jsonify({"success": False, "error": "command_type required"}), 400
+        ok, result = send_command(device_sn, command_type, params)
+        return jsonify({"success": ok, "deviceSn": device_sn, "command_type": command_type, **(result or {})}), (200 if ok else 502)
+    except Exception as e:
+        log.exception("solinteg command")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ============================================================
 # HUAWEI MANUAL REFRESH — pre 1 stanicu naraz
 # ============================================================
 @app.route("/api/huawei/v1/refresh-station/<plant_code>", methods=["POST", "GET"])

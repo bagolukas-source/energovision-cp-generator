@@ -220,3 +220,312 @@ def list_devices() -> Tuple[bool, Optional[Dict]]:
             attempts.append({"url": f"{base}{path}", "error": str(ex)[:200]})
 
     return False, {"error": "no working endpoint", "attempts": attempts}
+
+
+# ============================================================================
+# Vendor-agnostic API: get_realtime / get_history / get_alarms / send_command
+# Pre Energovision CRM — Solinteg parity s Huawei (read + write).
+#
+# Pattern: token v header "Token: <token>" (alebo "Authorization" fallback).
+# Response shape: {"errorCode":0, "body": <data>, "successful":true}
+# alebo {"code":0, "data": <data>, "success":true}
+#
+# Discovery: pre každý endpoint skúšame N candidate paths, prvý úspešný
+# si zapamätáme do credentials.last_endpoints (JSON) pre next runs.
+# ============================================================================
+
+def _headers(token: str) -> Dict[str, str]:
+    """Solinteg používa 'Token' header. Niektoré inštancie akceptujú aj 'Authorization'."""
+    return {"Token": token, "Authorization": token, "Content-Type": "application/json"}
+
+
+def _ok_response(resp_json: Dict) -> bool:
+    """Solinteg má viacero response shape variantov — všetky validujem."""
+    if not isinstance(resp_json, dict):
+        return False
+    if resp_json.get("errorCode") == 0 or resp_json.get("errorCode") == "0":
+        return True
+    if resp_json.get("code") == 0 or resp_json.get("code") == "0":
+        return True
+    if resp_json.get("successful") is True or resp_json.get("success") is True:
+        return True
+    return False
+
+
+def _extract_body(resp_json: Dict):
+    """Extrahuje payload z Solinteg response — body | data | result."""
+    if not isinstance(resp_json, dict):
+        return None
+    return resp_json.get("body") or resp_json.get("data") or resp_json.get("result")
+
+
+def _try_paths(base: str, method: str, paths: List[str], headers: Dict, json_body=None, params=None, timeout: int = 20) -> Tuple[bool, Optional[Dict]]:
+    """Generická discovery — skúsi paths kým nedostaneme success response."""
+    attempts = []
+    for path in paths:
+        url = f"{base.rstrip('/')}{path}"
+        try:
+            if method == "GET":
+                r = requests.get(url, headers=headers, params=params, timeout=timeout)
+            else:
+                r = requests.post(url, headers=headers, json=json_body, params=params, timeout=timeout)
+            try:
+                j = r.json()
+            except Exception:
+                j = None
+            ok = r.ok and _ok_response(j) if j is not None else False
+            attempts.append({"url": url, "status": r.status_code, "ok": ok})
+            if ok:
+                return True, {"path_used": path, "body": _extract_body(j), "raw": j, "attempts": attempts}
+        except Exception as ex:
+            attempts.append({"url": url, "error": str(ex)[:200]})
+    return False, {"attempts": attempts}
+
+
+def get_realtime(device_sn: str) -> Tuple[bool, Optional[Dict]]:
+    """Aktuálne realtime hodnoty z invertora — analóg getStationRealKpi pre Huawei."""
+    cred = load_credentials()
+    token = get_valid_token()
+    if not token or not cred:
+        return False, {"error": "no token"}
+    base = cred.get("base_url", "https://openapi.solinteg-cloud.com")
+    paths = [
+        "/openapi/v2/device/realtime",
+        "/openapi/device/realtime",
+        "/openapi/v2/realtime",
+        "/wrapper/device/realtime",
+        "/api/device/realtime",
+    ]
+    # Skús najprv POST s body
+    ok, res = _try_paths(base, "POST", paths, _headers(token), json_body={"deviceSn": device_sn})
+    if ok:
+        return True, res
+    # Fallback GET s query param
+    return _try_paths(base, "GET", paths, _headers(token), params={"deviceSn": device_sn})
+
+
+def get_history(device_sn: str, start_ms: int, end_ms: int) -> Tuple[bool, Optional[Dict]]:
+    """Historická telemetria (5-min/15-min granularita)."""
+    cred = load_credentials()
+    token = get_valid_token()
+    if not token or not cred:
+        return False, {"error": "no token"}
+    base = cred.get("base_url", "https://openapi.solinteg-cloud.com")
+    paths = [
+        "/openapi/v2/device/history",
+        "/openapi/device/history",
+        "/wrapper/device/history",
+    ]
+    body = {"deviceSn": device_sn, "startTime": start_ms, "endTime": end_ms}
+    return _try_paths(base, "POST", paths, _headers(token), json_body=body, timeout=45)
+
+
+def get_device_status(device_sn: str) -> Tuple[bool, Optional[Dict]]:
+    """Stav zariadenia (online/offline, last seen)."""
+    cred = load_credentials()
+    token = get_valid_token()
+    if not token or not cred:
+        return False, {"error": "no token"}
+    base = cred.get("base_url", "https://openapi.solinteg-cloud.com")
+    paths = [
+        "/openapi/v2/device/status",
+        "/openapi/device/status",
+        "/wrapper/device/status",
+    ]
+    return _try_paths(base, "POST", paths, _headers(token), json_body={"deviceSn": device_sn})
+
+
+def get_alarms(device_sn: str, start_ms: int, end_ms: int) -> Tuple[bool, Optional[Dict]]:
+    """Zoznam alarmov za obdobie."""
+    cred = load_credentials()
+    token = get_valid_token()
+    if not token or not cred:
+        return False, {"error": "no token"}
+    base = cred.get("base_url", "https://openapi.solinteg-cloud.com")
+    paths = [
+        "/openapi/v2/alarm/list",
+        "/openapi/alarm/list",
+        "/wrapper/alarm/list",
+    ]
+    body = {"deviceSn": device_sn, "startTime": start_ms, "endTime": end_ms}
+    return _try_paths(base, "POST", paths, _headers(token), json_body=body, timeout=30)
+
+
+def verify_sn(device_sn: str, check_code: str) -> Tuple[bool, Optional[Dict]]:
+    """Overiť že deviceSn + checkCode patria do existujúceho zariadenia (pred bind)."""
+    cred = load_credentials()
+    token = get_valid_token()
+    if not token or not cred:
+        return False, {"error": "no token"}
+    base = cred.get("base_url", "https://openapi.solinteg-cloud.com")
+    paths = [
+        "/openapi/v2/device/verify",
+        "/openapi/device/verify",
+        "/wrapper/device/verify",
+    ]
+    body = {"deviceSn": device_sn, "checkCode": check_code}
+    return _try_paths(base, "POST", paths, _headers(token), json_body=body)
+
+
+def bind_device(device_sn: str, check_code: str) -> Tuple[bool, Optional[Dict]]:
+    """Pridať device do nášho účtu — MQTT push začne ísť na náš topic."""
+    cred = load_credentials()
+    token = get_valid_token()
+    if not token or not cred:
+        return False, {"error": "no token"}
+    base = cred.get("base_url", "https://openapi.solinteg-cloud.com")
+    paths = [
+        "/openapi/v2/device/bind",
+        "/openapi/device/bind",
+        "/wrapper/device/bind",
+    ]
+    body = {"deviceSn": device_sn, "checkCode": check_code}
+    return _try_paths(base, "POST", paths, _headers(token), json_body=body)
+
+
+# ============================================================================
+# Device control (write commands)
+# ============================================================================
+
+# Mapping: vendor-agnostic command_type → Solinteg setting codes / direct paths
+# Inšpirované huawei_spot.py.execute_transition aby UI ostalo identické.
+COMMAND_MAP = {
+    "disable_zero_export": [
+        {"settingCode": "antiCounterCurrentStartStop", "value": "0"},
+        {"settingCode": "antiReverseCurrentPowerSetting", "value": "100"},
+    ],
+    "enable_zero_export": [
+        {"settingCode": "antiCounterCurrentStartStop", "value": "1"},
+        {"settingCode": "antiReverseCurrentPowerSetting", "value": "0"},
+    ],
+    "set_active_power_limit": None,  # dynamic: limit_pct → antiReverseCurrentPowerSetting
+    "set_battery_mode_self": [
+        {"settingCode": "hybridWorkMode", "value": "1#1"},  # General Mode = self-consumption
+    ],
+    "set_battery_mode_economic": [
+        {"settingCode": "hybridWorkMode", "value": "1#2"},  # Economic Mode (ToU arbitráž)
+    ],
+    "set_battery_mode_grid_charge": [
+        {"settingCode": "hybridWorkMode", "value": "3#3"},  # EMS BattCtrl
+    ],
+}
+
+
+def send_command(device_sn: str, command_type: str, params: Optional[Dict] = None) -> Tuple[bool, Optional[Dict]]:
+    """
+    Vendor-agnostic command rozhraním — analóg huawei_send_command.
+    Vracia (ok, response_dict).
+    """
+    cred = load_credentials()
+    token = get_valid_token()
+    if not token or not cred:
+        return False, {"error": "no token"}
+    base = cred.get("base_url", "https://openapi.solinteg-cloud.com")
+    params = params or {}
+
+    # Direct on/off commands (wrapper/cmd/{action})
+    if command_type == "full_shutdown":
+        return _try_paths(base, "GET", ["/wrapper/cmd/stop"], _headers(token), params={"deviceSn": device_sn})
+    if command_type == "start" or command_type == "full_restore":
+        return _try_paths(base, "GET", ["/wrapper/cmd/start"], _headers(token), params={"deviceSn": device_sn})
+    if command_type == "restart":
+        return _try_paths(base, "GET", ["/wrapper/cmd/restart"], _headers(token), params={"deviceSn": device_sn})
+
+    # Setting commands (wrapper/cmd/set)
+    setting_items = COMMAND_MAP.get(command_type)
+    if setting_items is None:
+        # Dynamic — set_active_power_limit
+        if command_type == "set_active_power_limit":
+            pct = float(params.get("limit_pct") or params.get("pct") or 100)
+            setting_items = [{"settingCode": "antiReverseCurrentPowerSetting", "value": str(pct)}]
+        elif command_type == "forced_charge":
+            # Solinteg nemá priamy forced_charge ako Huawei — riešime cez Economic mode
+            # (Zatiaľ vrátime "not supported", treba implementovať cez ToU mode group)
+            return False, {"error": "forced_charge not yet implemented for Solinteg — use Economic mode + ToU groups"}
+        else:
+            return False, {"error": f"unknown command_type: {command_type}"}
+
+    paths = [
+        "/wrapper/cmd/set",
+        "/openapi/cmd/set",
+        "/cmd/set",
+    ]
+    body = {"deviceSn": device_sn, "sendSettingItemList": setting_items}
+    ok, res = _try_paths(base, "POST", paths, _headers(token), json_body=body, timeout=30)
+    if ok and res:
+        record_id = res.get("body")
+        if isinstance(record_id, str):
+            res["record_id"] = record_id
+    return ok, res
+
+
+def check_control_result(record_id: str) -> Tuple[bool, Optional[Dict]]:
+    """Verify výsledok command setu — TTL 1 min, polling pattern."""
+    cred = load_credentials()
+    token = get_valid_token()
+    if not token or not cred:
+        return False, {"error": "no token"}
+    base = cred.get("base_url", "https://openapi.solinteg-cloud.com")
+    paths = [
+        "/cmd/checkControlResult",
+        "/wrapper/cmd/checkControlResult",
+        "/openapi/cmd/checkControlResult",
+    ]
+    return _try_paths(base, "GET", paths, _headers(token), params={"recordId": record_id})
+
+
+# ============================================================================
+# Field mapping: Solinteg realtime → inverter_measurements columns
+# ============================================================================
+
+def map_realtime_to_measurement(realtime_body, site_id: str) -> Dict:
+    """
+    Map Solinteg realtime fields → inverter_measurements row.
+    Zdroj: Inverter Realtime Data appendix.
+    """
+    if isinstance(realtime_body, list) and len(realtime_body) > 0:
+        d = realtime_body[0]
+    elif isinstance(realtime_body, dict):
+        d = realtime_body
+    else:
+        return {}
+
+    def f(key):
+        v = d.get(key)
+        try:
+            return float(v) if v is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    # workStatus: 0/1/4 Standby, 2 On-Grid, 3 Fault, 5 Off-Grid
+    work_status = d.get("workStatus")
+    state_map = {0: "Standby", 1: "Standby", 4: "Standby", 2: "Grid-connected", 3: "Fault", 5: "Off-Grid"}
+    state_label = state_map.get(work_status, str(work_status) if work_status is not None else None)
+
+    return {
+        "site_id": site_id,
+        "measured_at": d.get("rtcTime") or d.get("creationDate") or datetime.now(timezone.utc).isoformat(),
+        "active_power_kw": f("pac"),
+        "mppt_total_power_kw": f("totalPvPower") or f("ppvInput"),
+        "pv_yield_kw": f("totalPvPower") or f("ppvInput"),
+        "consumption_kw": f("pload"),
+        "grid_power_kw": f("pMeterTotal"),
+        "battery_soc_pct": f("soc"),
+        # Pozor: Solinteg má batteryP >0 vybíja, <0 nabíja — invertujeme aby bolo konzistentné s Huawei (>0 nabíja)
+        "battery_power_kw": -f("batteryP") if f("batteryP") is not None else None,
+        "daily_energy_kwh": f("epvDay") or f("eDay"),
+        "total_energy_kwh": f("eTotalPv") or f("eTotal"),
+        "ac_voltage": f("vGridPhaseA"),
+        "phase_a_voltage_v": f("vGridPhaseA"),
+        "phase_b_voltage_v": f("vGridPhaseB"),
+        "phase_c_voltage_v": f("vGridPhaseC"),
+        "phase_a_current_a": f("iGridPhaseA"),
+        "phase_b_current_a": f("iGridPhaseB"),
+        "grid_frequency_hz": f("fGrid"),
+        "temperature_c": f("temperature1"),
+        "power_factor": f("pf"),
+        "inverter_state_code": int(work_status) if work_status is not None else None,
+        "inverter_state_label": state_label,
+        "inverter_state_category": "running" if work_status == 2 else ("fault" if work_status == 3 else "standby"),
+        "raw_json": d,
+    }
