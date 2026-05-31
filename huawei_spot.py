@@ -464,11 +464,12 @@ def huawei_send_command(station_code: str, command_type: str, params: Dict[str, 
         url = f"{api_base}/rest/openapi/pvms/nbi/v1/control/battery/mode/async-task"
         payload = {"tasks": [{"plantCode": station_code, "operationMode": "maximumSelfConsumption"}]}
     elif command_type == "forced_charge":
+        # Per Huawei §5.2.1: targetSOC (capital SOC) for SOC control, type Double
         url = f"{api_base}/rest/openapi/pvms/nbi/v2/control/charge-and-discharge/async-task"
-        payload = {"tasks": [{"plantCode": station_code, "dispatchSwitch": 1, "controlType": 1, "soc": int(params.get("target_soc", 100))}]}
+        payload = {"tasks": [{"plantCode": station_code, "dispatchSwitch": 1, "controlType": 1, "targetSOC": float(params.get("target_soc", 100))}]}
     elif command_type == "forced_discharge":
         url = f"{api_base}/rest/openapi/pvms/nbi/v2/control/charge-and-discharge/async-task"
-        payload = {"tasks": [{"plantCode": station_code, "dispatchSwitch": 2, "controlType": 1, "soc": int(params.get("target_soc", 20))}]}
+        payload = {"tasks": [{"plantCode": station_code, "dispatchSwitch": 2, "controlType": 1, "targetSOC": float(params.get("target_soc", 20))}]}
     elif command_type == "stop_forced_charge_discharge":
         url = f"{api_base}/rest/openapi/pvms/nbi/v2/control/charge-and-discharge/async-task"
         payload = {"tasks": [{"plantCode": station_code, "dispatchSwitch": 0}]}
