@@ -13537,7 +13537,7 @@ def solinteg_sync_station(device_sn):
         from solinteg_oauth import get_realtime, map_realtime_to_measurement
         sb_url = f"{SUPABASE_URL}/rest/v1/inverter_sites"
         sb_headers = {
-            "apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}",
+            "apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
             "Content-Type": "application/json",
         }
         r = requests.get(sb_url, headers=sb_headers,
@@ -13579,7 +13579,7 @@ def solinteg_full_fleet_refresh():
     try:
         sb_url = f"{SUPABASE_URL}/rest/v1/inverter_sites"
         sb_headers = {
-            "apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}",
+            "apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
             "Content-Type": "application/json",
         }
         r = requests.get(sb_url, headers=sb_headers,
@@ -13650,7 +13650,7 @@ def solinteg_refresh_station(device_sn):
         from solinteg_oauth import get_realtime, map_realtime_to_measurement, sync_alarms
         sb_url = f"{SUPABASE_URL}/rest/v1/inverter_sites"
         sb_headers = {
-            "apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}",
+            "apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
             "Content-Type": "application/json",
         }
         r = requests.get(sb_url, headers=sb_headers,
