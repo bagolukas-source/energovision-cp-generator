@@ -90,15 +90,11 @@ def try_login(cred: Dict) -> Tuple[bool, Optional[Dict]]:
     paths = [
         "/openapi/login",
         "/openapi/v2/login",
-        "/v2/login",
-        "/login",
-        "/api/login",
+        "/openapi/account/login",
     ]
     # Známe body varianty
     bodies = [
         {"email": email, "password": password, "clientId": client_id},
-        {"email": email, "password": password, "client_id": client_id},
-        {"userName": email, "password": password, "clientId": client_id},
     ]
 
     for base in candidates:
@@ -110,7 +106,7 @@ def try_login(cred: Dict) -> Tuple[bool, Optional[Dict]]:
                         url,
                         json=body,
                         headers={"Content-Type": "application/json"},
-                        timeout=15,
+                        timeout=5,
                     )
                     snippet = r.text[:300]
                     attempt = {"url": url, "body_keys": list(body.keys()), "status": r.status_code, "snippet": snippet[:200]}
@@ -634,3 +630,35 @@ def sync_alarms(device_sn: str, days: int = 7) -> Tuple[bool, Dict]:
         if ir.status_code not in (200, 201):
             return False, {"error": "insert failed", "status": ir.status_code, "snippet": ir.text[:300]}
     return True, {"site_id": site_id, "alarms_count": len(rows)}
+
+
+
+def diagnose_login() -> Dict:
+    """Diagnostic: 1 explicit POST + return raw response (bez token validation)."""
+    import requests as _rq
+    cred = load_credentials()
+    if not cred:
+        return {"error": "no credentials in DB"}
+    base = cred.get("base_url", "https://openapi.solinteg-cloud.com").rstrip("/")
+    url = f"{base}/openapi/login"
+    body = {
+        "email": cred.get("username"),
+        "password": cred.get("encrypted_password"),
+        "clientId": cred.get("client_id"),
+    }
+    try:
+        r = _rq.post(url, json=body, headers={"Content-Type": "application/json"}, timeout=10)
+        try:
+            j = r.json()
+        except Exception:
+            j = None
+        return {
+            "url": url,
+            "body_sent": {k: (v if k != "password" else "***") for k, v in body.items()},
+            "status": r.status_code,
+            "raw_text": r.text[:2000],
+            "json": j,
+            "headers": dict(r.headers),
+        }
+    except Exception as e:
+        return {"url": url, "error": str(e)}

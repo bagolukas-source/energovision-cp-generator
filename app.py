@@ -13440,6 +13440,17 @@ def solinteg_save_credentials():
 # SOLINTEG read + write endpointy — parity s Huawei
 # ============================================================
 
+@app.route("/api/solinteg/v1/diag", methods=["GET"])
+def solinteg_diag():
+    """Diagnostic: 1 explicit POST /openapi/login + return raw response."""
+    try:
+        from solinteg_oauth import diagnose_login
+        return jsonify({"success": True, **diagnose_login()}), 200
+    except Exception as e:
+        log.exception("solinteg diag")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route("/api/solinteg/v1/realtime/<device_sn>", methods=["GET"])
 def solinteg_realtime(device_sn):
     """Aktuálne realtime dáta pre 1 zariadenie (analóg Huawei /realtime/<plant>)."""
