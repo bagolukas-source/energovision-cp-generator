@@ -7500,7 +7500,11 @@ def _huawei_fetch_active_power_per_station(station_codes: list, base: str, heade
                     kpi = row.get("dataItemMap") or {}
                     if not isinstance(kpi, dict):
                         continue
-                    ap = kpi.get("active_power")
+                    # User očakáva "výkon FVE" = PV výroba (DC strana z panelov).
+                    # mppt_total_power = total DC power z PV (správna metrika pre user)
+                    # active_power = AC výkon do siete + záťaže (pri hybrid + nabíjajúca batéria je malý)
+                    mppt = kpi.get("mppt_total_power") or kpi.get("mppt_total_cap")
+                    ap = mppt if mppt is not None else kpi.get("active_power")
                     if ap is None:
                         continue
                     try:
