@@ -529,3 +529,108 @@ def map_realtime_to_measurement(realtime_body, site_id: str) -> Dict:
         "inverter_state_category": "running" if work_status == 2 else ("fault" if work_status == 3 else "standby"),
         "raw_json": d,
     }
+
+
+# ============================================================================
+# Backfill helpers — pre paralelu k huawei backfill cron
+# ============================================================================
+
+def backfill_history(device_sn: str, days: int = 30) -> Tuple[bool, Dict]:
+    """
+    Pull historical telemetria za N dní -> inverter_measurements.
+    Volá get_history v cykle po dňoch (Solinteg môže mať limit max range).
+    """
+    import os
+    import time as _time
+    SB_URL = os.environ.get("SUPABASE_URL", "https://uzwajrpebblafuhrtuwn.supabase.co")
+    SB_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "") or os.environ.get("SUPABASE_SERVICE_KEY", "")
+    sb_headers = {"apikey": SB_KEY, "Authorization": f"Bearer {SB_KEY}", "Content-Type": "application/json"}
+
+    # Najdi site_id
+    sr = requests.get(f"{SB_URL}/rest/v1/inverter_sites", headers=sb_headers,
+                      params={"select": "id,site_name", "vendor": "eq.solinteg",
+                              "vendor_plant_code": f"eq.{device_sn}", "limit": 1}, timeout=15)
+    sites = sr.json() if sr.ok else []
+    if not sites:
+        return False, {"error": f"site not found for {device_sn}"}
+    site_id = sites[0]["id"]
+
+    total_inserted = 0
+    failed_days = []
+    now_ms = int(_time.time() * 1000)
+    for d in range(days):
+        end_ms = now_ms - d * 86400 * 1000
+        start_ms = end_ms - 86400 * 1000
+        ok, result = get_history(device_sn, start_ms, end_ms)
+        if not ok:
+            failed_days.append({"day_offset": d, "error": "history fetch failed"})
+            continue
+        body = (result or {}).get("body")
+        rows = []
+        # Solinteg history typically returns list of data points
+        if isinstance(body, list):
+            for point in body:
+                m = map_realtime_to_measurement(point, site_id)
+                if m and m.get("measured_at"):
+                    rows.append(m)
+        elif isinstance(body, dict) and isinstance(body.get("list"), list):
+            for point in body["list"]:
+                m = map_realtime_to_measurement(point, site_id)
+                if m and m.get("measured_at"):
+                    rows.append(m)
+        if rows:
+            ir = requests.post(f"{SB_URL}/rest/v1/inverter_measurements",
+                               headers={**sb_headers, "Prefer": "resolution=ignore-duplicates"},
+                               json=rows, timeout=30)
+            if ir.status_code in (200, 201):
+                total_inserted += len(rows)
+    return True, {"site_id": site_id, "days_attempted": days, "rows_inserted": total_inserted, "failed_days": failed_days}
+
+
+def sync_alarms(device_sn: str, days: int = 7) -> Tuple[bool, Dict]:
+    """Pull alarmov za N dní -> inverter_alarms."""
+    import os
+    import time as _time
+    SB_URL = os.environ.get("SUPABASE_URL", "https://uzwajrpebblafuhrtuwn.supabase.co")
+    SB_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "") or os.environ.get("SUPABASE_SERVICE_KEY", "")
+    sb_headers = {"apikey": SB_KEY, "Authorization": f"Bearer {SB_KEY}", "Content-Type": "application/json"}
+
+    sr = requests.get(f"{SB_URL}/rest/v1/inverter_sites", headers=sb_headers,
+                      params={"select": "id", "vendor": "eq.solinteg",
+                              "vendor_plant_code": f"eq.{device_sn}", "limit": 1}, timeout=15)
+    sites = sr.json() if sr.ok else []
+    if not sites:
+        return False, {"error": f"site not found for {device_sn}"}
+    site_id = sites[0]["id"]
+
+    end_ms = int(_time.time() * 1000)
+    start_ms = end_ms - days * 86400 * 1000
+    ok, result = get_alarms(device_sn, start_ms, end_ms)
+    if not ok:
+        return False, {"error": "alarms fetch failed", **(result or {})}
+    body = (result or {}).get("body") or []
+    if isinstance(body, dict):
+        body = body.get("list") or body.get("data") or []
+
+    rows = []
+    for a in body if isinstance(body, list) else []:
+        if not isinstance(a, dict):
+            continue
+        # Solinteg alarm field guesses (treba potvrdiť pri prvom real run)
+        rows.append({
+            "site_id": site_id,
+            "alarm_code": str(a.get("alarmCode") or a.get("code") or a.get("faultCode") or "unknown"),
+            "alarm_name": str(a.get("alarmName") or a.get("name") or a.get("description") or "—")[:200],
+            "severity": str(a.get("severity") or a.get("level") or "info"),
+            "raised_at": a.get("startTime") or a.get("alarmTime") or a.get("createTime"),
+            "resolved_at": a.get("endTime") or a.get("resolveTime"),
+            "status": "resolved" if (a.get("endTime") or a.get("resolved")) else "active",
+            "raw_description": str(a)[:1000],
+        })
+    if rows:
+        ir = requests.post(f"{SB_URL}/rest/v1/inverter_alarms",
+                           headers={**sb_headers, "Prefer": "resolution=ignore-duplicates"},
+                           json=rows, timeout=30)
+        if ir.status_code not in (200, 201):
+            return False, {"error": "insert failed", "status": ir.status_code, "snippet": ir.text[:300]}
+    return True, {"site_id": site_id, "alarms_count": len(rows)}

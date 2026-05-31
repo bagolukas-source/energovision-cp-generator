@@ -585,9 +585,30 @@ def log_state_transition(site: Dict[str, Any], from_state: str, to_state: str, s
     sb_post("spot_state_transitions", payload)
 
 
+def vendor_send_command(vendor: str, station_code: str, command_type: str, params: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
+    """
+    Vendor-agnostic command router. Vyberie správny adapter podľa inverter_sites.vendor.
+    Pre 'huawei' používa huawei_send_command (OAuth Bearer).
+    Pre 'solinteg' používa solinteg_oauth.send_command (Token header).
+    Pre neznámy vendor vráti error.
+    """
+    if vendor == "huawei":
+        return huawei_send_command(station_code, command_type, params)
+    elif vendor == "solinteg":
+        try:
+            from solinteg_oauth import send_command as solinteg_send
+            return solinteg_send(station_code, command_type, params)
+        except Exception as e:
+            return False, {"error": f"solinteg send_command failed: {str(e)[:300]}"}
+    else:
+        return False, {"error": f"unknown vendor: {vendor}"}
+
+
 def execute_transition(site: Dict[str, Any], from_state: str, to_state: str, spot: float, dry_run: bool) -> Dict[str, Any]:
     site_id = site["id"]
-    station_code = site.get("vendor_station_id")
+    vendor = site.get("vendor") or "huawei"  # default huawei pre legacy rows
+    # Pre Solinteg je station_code = deviceSn (uložený v vendor_station_id alebo vendor_plant_code)
+    station_code = site.get("vendor_station_id") or site.get("vendor_plant_code")
     has_bess = float(site.get("bess_kwh") or 0) > 0
     grid_charge = bool(site.get("spot_bess_grid_charge_enabled")) and has_bess
 
@@ -601,11 +622,14 @@ def execute_transition(site: Dict[str, Any], from_state: str, to_state: str, spo
         commands.append({"type": "enable_zero_export", "params": {}})
         commands.append({"type": "set_active_power_limit", "params": {"limit_pct": 100}})
     elif to_state == "FULL_SHUTDOWN":
-        # FULL_SHUTDOWN = zero export. Battery charge len ak je checkbox v UI ON.
-        commands.append({"type": "set_active_power_limit", "params": {"limit_pct": 0}})
+        # FULL_SHUTDOWN — Huawei: power_limit=0; Solinteg: priamy stop endpoint.
+        if vendor == "solinteg":
+            commands.append({"type": "full_shutdown", "params": {}})
+        else:
+            commands.append({"type": "set_active_power_limit", "params": {"limit_pct": 0}})
         if grid_charge:
             # Rešpektuje "Pri FULL_SHUTDOWN nabíjať BESS zo siete" checkbox
-            commands.append({"type": "set_battery_mode_grid_charge", "params": {}})  # thirdPartyDispatch
+            commands.append({"type": "set_battery_mode_grid_charge", "params": {}})
             commands.append({"type": "forced_charge", "params": {"target_soc": 100}})
 
     results = []
@@ -628,7 +652,7 @@ def execute_transition(site: Dict[str, Any], from_state: str, to_state: str, spo
             results.append({"type": cmd["type"], "command_id": cmd_id, "dry_run": dry_run})
 
             if not dry_run and station_code:
-                ok, resp = huawei_send_command(station_code, cmd["type"], cmd["params"])
+                ok, resp = vendor_send_command(vendor, station_code, cmd["type"], cmd["params"])
                 status = "success" if ok else "failed"
                 sb_patch(f"inverter_commands?id=eq.{cmd_id}", {
                     "status": status,
@@ -648,7 +672,7 @@ def spot_reactor(dry_run_override: Optional[bool] = None) -> Dict[str, Any]:
         return {"ok": False, "error": "No current SPOT price (run okte_ingest first)"}
 
     sites = sb_get("inverter_sites", {
-        "select": "id,site_name,vendor_station_id,bess_kwh,spot_control_enabled,spot_distribution_fee_eur_mwh,spot_threshold_zero_export,spot_threshold_full_shutdown,spot_hysteresis_eur,spot_current_state,spot_bess_grid_charge_enabled,spot_dry_run,spot_customer_revenue_share_pct,spot_manual_override_state,spot_manual_override_until,spot_last_transition_at,spot_min_dwell_minutes",
+        "select": "id,site_name,vendor,vendor_station_id,vendor_plant_code,bess_kwh,spot_control_enabled,spot_distribution_fee_eur_mwh,spot_threshold_zero_export,spot_threshold_full_shutdown,spot_hysteresis_eur,spot_current_state,spot_bess_grid_charge_enabled,spot_dry_run,spot_customer_revenue_share_pct,spot_manual_override_state,spot_manual_override_until,spot_last_transition_at,spot_min_dwell_minutes",
         "spot_control_enabled": "eq.true",
     })
 
@@ -786,7 +810,7 @@ def manual_force_state(site_id: str, target_state: str, issued_by: str = "manual
         return {"ok": False, "error": f"invalid target_state: {target_state}"}
 
     sites = sb_get("inverter_sites", {
-        "select": "id,site_name,vendor_station_id,bess_kwh,spot_current_state,spot_dry_run,spot_bess_grid_charge_enabled",
+        "select": "id,site_name,vendor,vendor_station_id,vendor_plant_code,bess_kwh,spot_current_state,spot_dry_run,spot_bess_grid_charge_enabled",
         "id": f"eq.{site_id}",
     })
     if not sites:

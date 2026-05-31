@@ -5288,6 +5288,17 @@ VRÁŤ LEN JSON (žiadny iný text):
 
 
 
+
+# Auto-start Solinteg MQTT subscriber pri boot (ak je v env)
+if os.environ.get("SOLINTEG_MQTT_AUTOSTART", "false").lower() == "true":
+    try:
+        from solinteg_mqtt import start_worker
+        if start_worker():
+            log.info("[boot] Solinteg MQTT worker started")
+    except Exception as e:
+        log.warning("[boot] Solinteg MQTT auto-start failed: %s", str(e)[:200])
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
@@ -13603,6 +13614,83 @@ def solinteg_full_fleet_refresh():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@app.route("/api/solinteg/v1/backfill-station/<device_sn>", methods=["POST", "GET"])
+def solinteg_backfill_station(device_sn):
+    """Backfill historicke 5-min dat za N dni (default 30)."""
+    try:
+        from solinteg_oauth import backfill_history
+        days = int(request.args.get("days", 30))
+        ok, result = backfill_history(device_sn, days)
+        return jsonify({"success": ok, "deviceSn": device_sn, "days": days, **(result or {})}), (200 if ok else 502)
+    except Exception as e:
+        log.exception("solinteg backfill")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/solinteg/v1/sync-alarms/<device_sn>", methods=["POST", "GET"])
+def solinteg_sync_alarms_route(device_sn):
+    """Sync alarmy za N dni (default 7) do inverter_alarms."""
+    try:
+        from solinteg_oauth import sync_alarms
+        days = int(request.args.get("days", 7))
+        ok, result = sync_alarms(device_sn, days)
+        return jsonify({"success": ok, "deviceSn": device_sn, "days": days, **(result or {})}), (200 if ok else 502)
+    except Exception as e:
+        log.exception("solinteg sync-alarms")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/solinteg/v1/refresh-station/<device_sn>", methods=["POST", "GET"])
+def solinteg_refresh_station(device_sn):
+    """
+    KOMPLETNY refresh 1 Solinteg stanice — analog Huawei refresh-station.
+    Spusti: realtime sync + alarms sync (7 dni) + status check.
+    """
+    try:
+        from solinteg_oauth import get_realtime, map_realtime_to_measurement, sync_alarms
+        sb_url = f"{SUPABASE_URL}/rest/v1/inverter_sites"
+        sb_headers = {
+            "apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Content-Type": "application/json",
+        }
+        r = requests.get(sb_url, headers=sb_headers,
+                         params={"select": "id,vendor_plant_code,site_name",
+                                 "vendor": "eq.solinteg",
+                                 "vendor_plant_code": f"eq.{device_sn}",
+                                 "limit": 1}, timeout=15)
+        sites = r.json() if r.ok else []
+        if not sites:
+            return jsonify({"success": False, "error": f"site not found"}), 404
+        site = sites[0]
+
+        # 1. Realtime sync
+        ok_rt, rt = get_realtime(device_sn)
+        if ok_rt:
+            measurement = map_realtime_to_measurement((rt or {}).get("body"), site["id"])
+            if measurement:
+                requests.post(f"{SUPABASE_URL}/rest/v1/inverter_measurements",
+                              headers=sb_headers, json=[measurement], timeout=15)
+                requests.patch(sb_url, headers=sb_headers,
+                               params={"id": f"eq.{site['id']}"},
+                               json={"last_online_at": datetime.now(timezone.utc).isoformat()},
+                               timeout=10)
+
+        # 2. Alarms sync (7 dni)
+        ok_al, al_result = sync_alarms(device_sn, days=7)
+
+        return jsonify({
+            "success": True,
+            "site_id": site["id"],
+            "site_name": site["site_name"],
+            "realtime_ok": ok_rt,
+            "alarms_ok": ok_al,
+            "alarms_count": (al_result or {}).get("alarms_count", 0),
+        }), 200
+    except Exception as e:
+        log.exception("solinteg refresh-station")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route("/api/solinteg/v1/command/<device_sn>", methods=["POST"])
 def solinteg_command(device_sn):
     """Vendor-agnostic command pre Solinteg (analog Huawei sendCommand)."""
@@ -13617,6 +13705,28 @@ def solinteg_command(device_sn):
         return jsonify({"success": ok, "deviceSn": device_sn, "command_type": command_type, **(result or {})}), (200 if ok else 502)
     except Exception as e:
         log.exception("solinteg command")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/solinteg/v1/mqtt/start", methods=["POST", "GET"])
+def solinteg_mqtt_start():
+    """Spusti MQTT subscriber thread (real-time push z Solinteg cloud)."""
+    try:
+        from solinteg_mqtt import start_worker, get_status
+        started = start_worker()
+        return jsonify({"success": True, "started_now": started, "status": get_status()}), 200
+    except Exception as e:
+        log.exception("solinteg mqtt start")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/solinteg/v1/mqtt/status", methods=["GET"])
+def solinteg_mqtt_status():
+    """Vrati stav MQTT subscribera (alive + message_count + last_message_at)."""
+    try:
+        from solinteg_mqtt import get_status
+        return jsonify({"success": True, "status": get_status()}), 200
+    except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
 
