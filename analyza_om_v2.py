@@ -547,6 +547,148 @@ def render_posudok_premium(sb, analyza_id: str) -> dict:
     return {"ok": True, "docx_url": public_url, "storage_path": storage_path}
 
 
+def _generate_ai_expert_commentary(context: dict, analyza: dict) -> dict:
+    """
+    Vygeneruje AI Expert posúdenie pre Orkestra posudok.
+
+    Volá Claude Sonnet 4.5 (anthropic SDK, model claude-sonnet-4-5-20250929)
+    s štruktúrovaným JSON o projekte. Output: 4 sekcie:
+      - commentary: 3-4 paragrafov expert posúdenia (HTML s <p> tagmi)
+      - recommendations: 5-7 konkrétnych odporúčaní
+      - anomalies: 0-4 anomálie/quick wins
+      - open_questions: 5-7 tailored otázok pre klienta
+
+    Pri zlyhaní (timeout, parse error, network) vráti prázdne defaults
+    a posudok sa vygeneruje BEZ AI sekcie (fail-safe).
+    """
+    import json
+    try:
+        from anthropic import Anthropic
+        client = Anthropic()  # API key z ANTHROPIC_API_KEY env
+
+        # Pripraviť čisté input data (skrátiť dlhé polia, zaokrúhliť čísla)
+        input_data = {
+            "klient": context.get("client_name"),
+            "lokalita": context.get("site_address"),
+            "om": {
+                "mrk_kw": context.get("mrk_kw"),
+                "rocna_spotreba_mwh": round(context.get("annual_kwh", 0) / 1000, 1),
+                "tarif": context.get("tarif_typ"),
+            },
+            "vybrany_variant": {
+                "nazov": context.get("label"),
+                "fve_kwp": context.get("pv_kwp"),
+                "bess_kwh": context.get("bess_kwh"),
+                "bess_kw": context.get("bess_kw"),
+                "capex_eur": round(context.get("capex_total_eur", 0)),
+                "dotacia_eur": round(context.get("dotacia_eur", 0)),
+                "net_capex_eur": round(context.get("net_capex_eur", 0)),
+                "saving_y1_eur": round(context.get("saving_y1_eur", 0)),
+                "payback_y": round(context.get("payback_years", 0), 1),
+                "npv_20r_eur": round(context.get("npv_eur", 0)),
+                "irr_pct": round(context.get("irr_pct", 0), 1),
+                "samospotreba_pct": round(context.get("samospotreba_pct", 0), 1),
+                "samostatnost_pct": round(context.get("samostatnost_pct", 0), 1),
+            },
+            "energia_mwh": {
+                "fve_vyroba": round(context.get("pv_total_mwh", 0), 1),
+                "samospotreba_fve_do_odberu": round(context.get("pv_to_load_mwh", 0), 1),
+                "export_do_siete": round(context.get("pv_to_grid_mwh", 0), 1),
+                "import_zo_siete": round(context.get("grid_to_load_mwh", 0), 1),
+                "celkova_spotreba": round(context.get("load_total_mwh", 0), 1),
+            },
+            "scenare_ekonomiky": [
+                {
+                    "nazov": s.get("name"),
+                    "rocne_uspory_eur": round(s.get("annual_save_eur", 0)),
+                    "payback_y": round(s.get("payback_years", 0), 1),
+                    "npv_eur": round(s.get("npv_eur", 0)),
+                    "irr_pct": round(s.get("irr_pct", 0), 1),
+                } for s in context.get("scenarios", [])
+            ],
+            "alternativne_varianty_top": [
+                {
+                    "nazov": v.get("label"),
+                    "fve_kwp": v.get("pv_kwp"),
+                    "bess_kwh": v.get("bess_kwh"),
+                    "capex_eur": round(v.get("capex_total_eur", 0)),
+                    "npv_eur": round(v.get("npv_eur", 0)),
+                    "irr_pct": round(v.get("irr_pct", 0), 1),
+                    "payback_y": round(v.get("payback_years", 0), 1),
+                } for v in context.get("other_variants", [])[:4]
+            ],
+            "dotacia": {
+                "schema": context.get("dotacia_scheme_name"),
+                "max_eur": context.get("dotacia_max_eur"),
+                "ziska_dotaciu": context.get("dotacia_eur", 0) > 0,
+            },
+            "co2": {
+                "usetrene_t_rocne": round(context.get("co2_avoided_tonnes", 0), 1),
+                "redukcia_pct": round(context.get("co2_reduction_pct", 0), 1),
+            },
+        }
+
+        system_prompt = (
+            "Si senior energetický konzultant Energovision (slovenský EPC dodávateľ FVE/BESS/trafostaníc/elektroprác).\n"
+            "Tvoja úloha — vyrobiť expert posúdenie technicko-ekonomického posudku pre B2B klienta.\n\n"
+            "Tón: vecný, technický, ako KEMA / Frost & Sullivan. Slovenčina.\n"
+            "ŽIADNE marketingové frázy. Bez superlatívov ('vynikajúce', 'najlepšie', 'skvelé').\n"
+            "Vždy fakt + dôsledok. NEHALUCINUJ — drž sa iba k poslaným dátam.\n\n"
+            "Output STRIKTNÝ JSON s 4 kľúčmi:\n"
+            "{\n"
+            "  \"commentary\": \"3-4 paragrafov expertného posúdenia (HTML s <p> tagmi)\",\n"
+            "  \"recommendations\": [{\"title\": \"krátky názov\", \"detail\": \"1-2 vety\"}, ... 5-7 položiek],\n"
+            "  \"anomalies\": [{\"title\": \"krátky názov\", \"detail\": \"1-2 vety\"}, ... 0-4 (môže byť prázdne)],\n"
+            "  \"open_questions\": [{\"title\": \"krátka otázka\", \"detail\": \"prečo to overiť\"}, ... 5-7]\n"
+            "}\n\n"
+            "PRAVIDLÁ:\n"
+            "- commentary: zhodnoť výber variantu vs alternatívy, samospotrebu vs export, ekonomiku, dotácia áno/nie. ŽIADNY predaj.\n"
+            "- recommendations: konkrétne ČO MÁ KLIENT UROBIŤ (technické a finančné kroky pre TENTO projekt).\n"
+            "- anomalies: čo je v dátach NEZVYČAJNÉ (príliš podimenzované, ekonomické anomálie, lepšie alternatívy v top-piku).\n"
+            "- open_questions: NIE generický checklist (tarif, MRK, statika) — TAILORED pre TENTO projekt s ohľadom na konkrétne čísla.\n\n"
+            "Iba JSON, nič iné. Žiadne markdown fences."
+        )
+
+        msg = client.messages.create(
+            model="claude-sonnet-4-5-20250929",
+            max_tokens=3500,
+            temperature=0.3,
+            system=system_prompt,
+            messages=[
+                {"role": "user", "content": f"Vstupné dáta projektu:\n{json.dumps(input_data, ensure_ascii=False, indent=2)}\n\nVyrob expert posúdenie podľa štandardu Energovision."}
+            ]
+        )
+
+        text = msg.content[0].text.strip()
+        # Strip optional markdown code fences
+        if text.startswith("```"):
+            lines = text.split("
+")
+            lines = lines[1:]  # drop opening fence
+            if lines and lines[-1].strip().startswith("```"):
+                lines = lines[:-1]
+            text = "
+".join(lines).strip()
+        if text.startswith("json"):
+            text = text[4:].strip()
+
+        result = json.loads(text)
+        return {
+            "ai_commentary": result.get("commentary", ""),
+            "ai_recommendations": result.get("recommendations", []),
+            "ai_anomalies": result.get("anomalies", []),
+            "ai_open_questions": result.get("open_questions", []),
+        }
+    except Exception as e:
+        logging.error(f"AI Expert commentary generation failed: {e}")
+        return {
+            "ai_commentary": "",
+            "ai_recommendations": [],
+            "ai_anomalies": [],
+            "ai_open_questions": [],
+        }
+
+
 def render_posudok_orkestra(sb, analyza_id: str) -> dict:
     """
     NOVÝ posudok — Orkestra HTML šablóna → PDF (WeasyPrint) + DOCX (LibreOffice).
@@ -856,6 +998,11 @@ def render_posudok_orkestra(sb, analyza_id: str) -> dict:
         "n_variants_run": len(variants),
         "spot_avg_eur_mwh": 103,
     }
+
+    # === Generate AI Expert commentary (Claude Sonnet 4.5) ===
+    # Pri zlyhaní vráti prázdne defaults → posudok sa vygeneruje bez AI sekcie
+    ai_data = _generate_ai_expert_commentary(context, analyza)
+    context.update(ai_data)
 
     # === Generate PDF ===
     pdf_bytes = generate_orkestra_pdf(context)
