@@ -167,6 +167,20 @@ def _build_context(user_ctx: dict[str, Any]) -> dict[str, Any]:
 
         # Dotacia info
         "dotacia_scheme_name": "Zelená podnikom",
+        "dotacia_max_eur": 50000,
+        "dotacia_intensity_pct": 45,
+        # Porovnanie s/bez dotácie (vplyv dotácie sekcia)
+        "payback_without_dotacia": 0,
+        "npv_without_dotacia": 0,
+        "irr_without_dotacia": 0,
+
+        # 3 cenové scenáre (Báza / Nízky výkup / Spot s arbitrážou)
+        # Každý prvok: {name, is_base, tarif_buy_eur_kwh, tarif_sell_eur_kwh, annual_save_eur, payback_years, npv_eur, irr_pct, note}
+        "scenarios": [],
+
+        # Otvorené otázky pre klienta (defaults sa použijú ak nie sú custom)
+        # Každý prvok: {title, detail}
+        "open_questions": [],
 
         # Cashflow series
         "cf_array": [],

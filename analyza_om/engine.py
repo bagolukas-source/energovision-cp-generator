@@ -278,18 +278,32 @@ def run_simulation(analyza_id: str, profile_path: str, om: Dict[str, Any], varia
 # ---------------- Economics ----------------
 def calc_economics(sim_results: Dict[str, Any], tarif_buy: float, tarif_sell: float,
                    variants_capex: List[Dict[str, Any]], scenarios: Optional[List[str]] = None) -> Dict[str, Any]:
-    """NPV/IRR/payback pre každý variant × scenár."""
+    """NPV/IRR/payback pre každý variant × scenár.
+
+    3 cenové scenáre podľa Energovision skill štandardu:
+    - base: ÚRSO 2026 tarifa, výkup 0.060 €/kWh, BS arbitráž 110 €/MWh/r per kWh BESS
+    - low_sell: výkup polovica (0.030 €/kWh), konzervatívny scenár ak ZA-cena klesne
+    - spot_arb: vyššia BS arbitráž (140 €/MWh/r), optimistický scenár pri aktívnom dispatch
+    """
     from . import economics as ec
     sc_list = scenarios or ["base", "low_sell", "spot_arb"]
 
     sim_variants = {v["id"]: v for v in sim_results.get("variants", [])}
     capex_map = {c["id"]: c for c in variants_capex}
 
+    # Arbitráž BS €/MWh/rok per kWh BESS (skill štandard)
+    ARB_BONUS_PER_KWH_BESS = {
+        "base": 110.0,       # Realistický spread (€/MWh × cykly/r)
+        "low_sell": 85.0,    # Konzervatívny (menej cyklov alebo nižší spread)
+        "spot_arb": 140.0,   # Optimistický (vyšší spread + aktívny dispatch)
+    }
+
     out = []
     for vid, sim_v in sim_variants.items():
         cap = capex_map.get(vid, {})
         capex = float(cap.get("capex_eur", 0))
         dotacia = float(cap.get("dotacia_eur", 0))
+        bess_kwh = float(sim_v.get("bess_kwh", 0))
         if capex == 0:
             continue
         scenarios_results = {}
@@ -298,12 +312,15 @@ def calc_economics(sim_results: Dict[str, Any], tarif_buy: float, tarif_sell: fl
             ts = tarif_sell
             if sc == "low_sell":
                 ts = tarif_sell * 0.5
-            elif sc == "spot_arb":
-                tb = tarif_buy * 0.9  # spot arbitrage assumption
+            # spot_arb scenár: nepoužíva sa nasilu znížený tarif_buy,
+            # ale vyššia arbitráž BS cez ARB_BONUS_PER_KWH_BESS — fyzicky správnejší model
 
-            annual_save = ec.calc_savings(sim_v, tb, ts)
+            # BS arbitráž €/rok = bess_kwh × spread €/MWh
+            arb_bonus_per_year = bess_kwh * ARB_BONUS_PER_KWH_BESS.get(sc, 110.0) / 1000.0 * 1000.0
+            # Pozn: bess_kwh × €/MWh/rok = €/rok lebo MWh sa nakoniec ráta na kWh
+
+            annual_save = ec.calc_savings(sim_v, tb, ts, arb_bonus=arb_bonus_per_year)
             npv_calc = ec.calc_npv(capex, annual_save, dotacia=dotacia)
-            # economics vracia "irr"/"payback", defensive fallback aj na nové "irr_pct"/"payback_y"
             irr_val = npv_calc.get("irr_pct", npv_calc.get("irr", 0))
             payback_val = npv_calc.get("payback_y", npv_calc.get("payback", 0))
             scenarios_results[sc] = {
@@ -311,6 +328,9 @@ def calc_economics(sim_results: Dict[str, Any], tarif_buy: float, tarif_sell: fl
                 "npv_eur": round(npv_calc["npv"], 0),
                 "irr_pct": round(float(irr_val), 2),
                 "payback_y": round(float(payback_val), 2),
+                "tarif_buy_eur_kwh": round(tb, 3),
+                "tarif_sell_eur_kwh": round(ts, 3),
+                "arb_bonus_eur_y": round(arb_bonus_per_year, 0),
             }
         out.append({"id": vid, "name": sim_v["name"], "capex_eur": capex, "dotacia_eur": dotacia, "scenarios": scenarios_results})
 

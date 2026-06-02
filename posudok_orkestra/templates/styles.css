@@ -411,6 +411,180 @@ body {
   letter-spacing: 0.05em;
 }
 
+/* ====================== 3 CENOVÉ SCENÁRE ====================== */
+.scenarios-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12pt 0 18pt 0;
+  font-size: 9.5pt;
+}
+.scenarios-table th {
+  background: #F5F6F8;
+  text-align: left;
+  font-size: 8pt;
+  font-weight: 600;
+  color: #4B5563;
+  padding: 8pt 6pt;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1pt solid #E5E7EB;
+}
+.scenarios-table th.num,
+.scenarios-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.scenarios-table td {
+  padding: 9pt 6pt;
+  border-bottom: 1px solid #E5E7EB;
+  color: #1F2937;
+}
+.scenarios-table .base-row {
+  background: #F0FDF4;
+}
+.scenarios-table .base-row td {
+  font-weight: 600;
+  color: #0F172A;
+}
+.base-badge {
+  background: #16A34A;
+  color: white;
+  font-size: 7pt;
+  font-weight: 700;
+  padding: 1.5pt 5pt;
+  border-radius: 2pt;
+  margin-left: 6pt;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.scenario-note {
+  font-size: 8pt;
+  color: #6B7280;
+  margin-top: 2pt;
+  font-style: italic;
+}
+.scenarios-explainer {
+  font-size: 9pt;
+  color: #4B5563;
+  margin-top: 14pt;
+  padding: 12pt 14pt;
+  background: #F9FAFB;
+  border-left: 3pt solid #16A34A;
+  border-radius: 0 4pt 4pt 0;
+}
+.scenarios-explainer p {
+  margin-bottom: 5pt;
+  line-height: 1.5;
+}
+.scenarios-explainer strong { color: #0F172A; }
+
+/* ====================== VPLYV DOTÁCIE ====================== */
+.dotacia-formula {
+  background: #FFFBEB;
+  border: 1px solid #FDE68A;
+  border-radius: 6pt;
+  padding: 14pt 16pt;
+  margin-bottom: 16pt;
+  font-size: 10pt;
+  color: #1F2937;
+  line-height: 1.55;
+}
+.dotacia-formula p { margin-bottom: 6pt; }
+.dotacia-formula strong { color: #0F172A; font-weight: 600; }
+.dotacia-formula .info-line {
+  margin-top: 8pt;
+  padding-top: 8pt;
+  border-top: 1px dashed #FDE68A;
+  font-size: 9pt;
+  color: #92400E;
+}
+
+.dotacia-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 10pt;
+  margin-bottom: 16pt;
+}
+.dotacia-table th {
+  background: #F5F6F8;
+  text-align: left;
+  padding: 9pt 8pt;
+  font-size: 8.5pt;
+  font-weight: 600;
+  color: #4B5563;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1pt solid #E5E7EB;
+}
+.dotacia-table th.num,
+.dotacia-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.dotacia-table td {
+  padding: 9pt 8pt;
+  border-bottom: 1px solid #F3F4F6;
+  color: #1F2937;
+}
+.dotacia-table tr:last-child td { border-bottom: none; }
+
+.dotacia-disclaimer {
+  font-size: 9pt;
+  color: #6B7280;
+  margin-top: 12pt;
+  font-style: italic;
+  line-height: 1.55;
+}
+
+/* ====================== ZÁVER ====================== */
+.zaver-fakty {
+  margin-top: 12pt;
+}
+.zaver-item {
+  padding: 10pt 12pt;
+  margin-bottom: 6pt;
+  background: #F9FAFB;
+  border-left: 3pt solid #16A34A;
+  border-radius: 0 4pt 4pt 0;
+  font-size: 10pt;
+  color: #1F2937;
+  line-height: 1.5;
+}
+.zaver-item strong {
+  color: #0F172A;
+  font-weight: 600;
+  margin-right: 4pt;
+}
+.zaver-note {
+  margin-top: 18pt;
+  padding: 12pt 14pt;
+  background: #FFFBEB;
+  border-radius: 4pt;
+  font-size: 9pt;
+  color: #92400E;
+  line-height: 1.6;
+}
+
+/* ====================== OTVORENÉ OTÁZKY ====================== */
+.open-questions {
+  margin-top: 10pt;
+  padding-left: 22pt;
+  font-size: 10pt;
+  line-height: 1.55;
+  color: #1F2937;
+  counter-reset: oq-counter;
+}
+.open-questions li {
+  margin-bottom: 12pt;
+  padding-left: 6pt;
+  position: relative;
+}
+.open-questions li strong {
+  color: #0F172A;
+  font-weight: 600;
+}
+.open-questions .oq-detail {
+  font-size: 9pt;
+  color: #4B5563;
+  margin-top: 3pt;
+  line-height: 1.55;
+  padding-right: 8pt;
+}
+
 /* ====================== METHODOLOGY ====================== */
 .methodology {
   font-size: 9.5pt;

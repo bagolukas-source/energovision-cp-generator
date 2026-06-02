@@ -295,6 +295,199 @@
 {% endif %}
 
 {# =========================================================================
+   PAGE 8b — 3 CENOVÉ SCENÁRE (Báza / Nízky výkup / Spot s arbitrážou BS)
+   Skill štandard: každý variant musí mať 3 scenáre, klient vidí cashflow rozsah.
+   ========================================================================= #}
+{% if scenarios and scenarios|length > 0 %}
+<section class="page">
+  <h2 class="page-title">Tri cenové scenáre</h2>
+  <p class="page-subtitle">Citlivosť ekonomiky na tarif a arbitráž BS — vybraný variant</p>
+
+  <table class="scenarios-table">
+    <thead>
+      <tr>
+        <th>Scenár</th>
+        <th class="num">Tarif nákup</th>
+        <th class="num">Tarif výkup</th>
+        <th class="num">Ročná úspora</th>
+        <th class="num">Návratnosť</th>
+        <th class="num">NPV 20 r</th>
+        <th class="num">IRR</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for sc in scenarios %}
+      <tr {% if sc.is_base %}class="base-row"{% endif %}>
+        <td>
+          <strong>{{ sc.name }}</strong>{% if sc.is_base %} <span class="base-badge">BÁZA</span>{% endif %}
+          {% if sc.note %}<div class="scenario-note">{{ sc.note }}</div>{% endif %}
+        </td>
+        <td class="num">{{ sc.tarif_buy_eur_kwh|round(3) }} €/kWh</td>
+        <td class="num">{{ sc.tarif_sell_eur_kwh|round(3) }} €/kWh</td>
+        <td class="num">{{ sc.annual_save_eur|format_currency }}</td>
+        <td class="num">{{ sc.payback_years|round(1) }} r</td>
+        <td class="num">{{ sc.npv_eur|format_currency }}</td>
+        <td class="num">{{ sc.irr_pct|round(1) }} %</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="scenarios-explainer">
+    <p><strong>Báza</strong> — predpokladaná ÚRSO 2026 tarifa nákupu, výkup prebytkov za 60 €/MWh.</p>
+    <p><strong>Nízky výkup</strong> — defenzívny scenár, výkupné prebytkov zníženy o 50 % (~30 €/MWh) ak ZA-cena spotu klesne.</p>
+    <p><strong>Spot s arbitrážou BS</strong> — proaktívna stratégia v bilančnej skupine, vyššie príjmy z dispatch BESS v drahých hodinách OKTE DAM (110–140 €/MWh spread × cykly).</p>
+  </div>
+</section>
+{% endif %}
+
+{# =========================================================================
+   PAGE 8c — VPLYV DOTÁCIE ZELENÁ PODNIKOM
+   Skill: porovnanie s/bez dotácie, formula min(50k, 45 % × CAPEX).
+   ========================================================================= #}
+{% if dotacia_eur > 0 %}
+<section class="page">
+  <h2 class="page-title">Vplyv dotácie Zelená podnikom</h2>
+  <p class="page-subtitle">Porovnanie ekonomiky s dotáciou a bez nej</p>
+
+  <div class="dotacia-formula">
+    <p><strong>Mechanizmus:</strong> Zelená podnikom kryje <strong>min({{ dotacia_max_eur|format_currency }}, {{ dotacia_intensity_pct|round|int }} % × CAPEX)</strong>.</p>
+    <p>Pre tento projekt: <strong>{{ dotacia_eur|format_currency }}</strong> ({{ (dotacia_eur / capex_total_eur * 100)|round(1) }} % z CAPEX {{ capex_total_eur|format_currency }}).</p>
+    <p class="info-line">⚠ <strong>Daňový odpis</strong> sa pri prijatí dotácie počíta lineárne 6 r. <strong>iba z Net CAPEX</strong> ({{ net_capex_eur|format_currency }}), nie z plnej investície.</p>
+  </div>
+
+  <table class="dotacia-table">
+    <thead>
+      <tr>
+        <th>Ukazovateľ</th>
+        <th class="num">Bez dotácie</th>
+        <th class="num">S dotáciou</th>
+        <th class="num">Rozdiel</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Vstupná investícia (Net CAPEX)</td>
+        <td class="num">{{ capex_total_eur|format_currency }}</td>
+        <td class="num">{{ net_capex_eur|format_currency }}</td>
+        <td class="num">−{{ dotacia_eur|format_currency }}</td>
+      </tr>
+      <tr>
+        <td>Návratnosť</td>
+        <td class="num">{{ payback_without_dotacia|round(1) }} r</td>
+        <td class="num">{{ payback_years|round(1) }} r</td>
+        <td class="num">−{{ (payback_without_dotacia - payback_years)|round(1) }} r</td>
+      </tr>
+      <tr>
+        <td>NPV 20 r</td>
+        <td class="num">{{ npv_without_dotacia|format_currency }}</td>
+        <td class="num">+{{ npv_eur|format_currency }}</td>
+        <td class="num">+{{ (npv_eur - npv_without_dotacia)|format_currency }}</td>
+      </tr>
+      <tr>
+        <td>IRR</td>
+        <td class="num">{{ irr_without_dotacia|round(1) }} %</td>
+        <td class="num">{{ irr_pct|round(1) }} %</td>
+        <td class="num">+{{ (irr_pct - irr_without_dotacia)|round(1) }} p.b.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p class="dotacia-disclaimer">
+    Žiadosť o dotáciu sa podáva v rámci výzvy 73.04/05/07 (Zelená podnikom). Reálne preplatenie typicky 6–9 mesiacov po ukončení diela. Pri kalkulácii sa dotácia považuje za nadobudnutú v roku uvedenia do prevádzky.
+  </p>
+</section>
+{% endif %}
+
+{# =========================================================================
+   PAGE 8d — ZÁVER (fakticky, bez "odporúčame")
+   Skill: žiadne subjektívne formulácie, len fakty per variant.
+   ========================================================================= #}
+<section class="page">
+  <h2 class="page-title">Záver</h2>
+  <p class="page-subtitle">Sumár faktov pre rozhodnutie klienta</p>
+
+  <div class="zaver-fakty">
+    <div class="zaver-item">
+      <strong>Vybraný variant:</strong> {{ label }} — {{ pv_kwp|round|int }} kWp{% if bess_kwh > 0 %} FVE + {{ bess_kwh|round|int }} kWh BESS{% endif %}.
+    </div>
+    <div class="zaver-item">
+      <strong>Investícia:</strong> {{ capex_total_eur|format_currency }} bez DPH (Net CAPEX po dotácii: {{ net_capex_eur|format_currency }}).
+    </div>
+    <div class="zaver-item">
+      <strong>Ročná úspora roku 1:</strong> {{ saving_y1_eur|format_currency }} pri báze, citlivosť ±15 % podľa scenárov vyššie.
+    </div>
+    <div class="zaver-item">
+      <strong>Návratnosť:</strong> {{ payback_years|round(1) }} rokov{% if payback_without_dotacia and payback_without_dotacia > 0 %} (bez dotácie {{ payback_without_dotacia|round(1) }} r){% endif %}.
+    </div>
+    <div class="zaver-item">
+      <strong>NPV 20 r:</strong> {{ npv_eur|format_currency }} pri diskonte 6 %, IRR {{ irr_pct|round(1) }} %.
+    </div>
+    <div class="zaver-item">
+      <strong>Samospotreba:</strong> {{ samospotreba_pct|round|int }} % FVE produkcie, samostatnosť OM {{ samostatnost_pct|round|int }} %.
+    </div>
+    {% if co2_avoided_tonnes > 0 %}
+    <div class="zaver-item">
+      <strong>Environmentálny dopad:</strong> {{ co2_avoided_tonnes|round|int }} t CO₂/r vyhnutých (~{{ trees_equivalent|round|int }} stromov ekvivalent).
+    </div>
+    {% endif %}
+  </div>
+
+  <p class="zaver-note">
+    Posudok obsahuje technické a ekonomické čísla bez subjektívneho hodnotenia. Záverečné rozhodnutie je na klientovi po porovnaní s vlastnými strategickými prioritami.
+  </p>
+</section>
+
+{# =========================================================================
+   PAGE 8e — OTVORENÉ OTÁZKY PRE KLIENTA
+   Skill: checklist čo si klient musí overiť alebo doplniť pred podpisom.
+   ========================================================================= #}
+<section class="page">
+  <h2 class="page-title">Otvorené otázky pre klienta</h2>
+  <p class="page-subtitle">Údaje ktoré odporúčame overiť pred finálnym rozhodnutím</p>
+
+  <ol class="open-questions">
+    {% if open_questions and open_questions|length > 0 %}
+      {% for q in open_questions %}
+      <li>
+        <strong>{{ q.title }}</strong>
+        {% if q.detail %}<div class="oq-detail">{{ q.detail }}</div>{% endif %}
+      </li>
+      {% endfor %}
+    {% else %}
+      <li>
+        <strong>Tarif za nákup a výkup elektriny</strong>
+        <div class="oq-detail">Posudok pracuje s odhadom tarifu (ÚRSO 2026 + spotová cena ~{{ spot_avg_eur_mwh|round|int }} €/MWh). Reálnu zmluvu s dodávateľom prosíme priložiť — citlivosť posudku je významná (viď scenáre).</div>
+      </li>
+      <li>
+        <strong>Maximálna rezervovaná kapacita (MRK) a možnosť navýšenia</strong>
+        <div class="oq-detail">Aktuálne MRK {{ mrk_kw|round|int }} kW. Pri FVE {{ pv_kwp|round|int }} kWp v daný moment max export ≤ MRK − odber. Overenie limitu u distribútora.</div>
+      </li>
+      <li>
+        <strong>Vlastnícke pomery a súhlasy</strong>
+        <div class="oq-detail">Strecha/pozemok vo vlastníctve klienta? Pri prenájme — súhlas vlastníka so zriadením vecného bremena alebo nájomnej zmluvy.</div>
+      </li>
+      <li>
+        <strong>Statika strechy / únosnosť pozemku</strong>
+        <div class="oq-detail">Pri FVE > 50 kWp typicky vyžaduje statický posudok strechy. Pri zemnej inštalácii — únosnosť podložia a územný plán.</div>
+      </li>
+      <li>
+        <strong>Pripojenie do distribučnej sústavy</strong>
+        <div class="oq-detail">Termín a podmienky pripojenia VN/NN od distribútora ({{ site_address }}). Možnosť integrácie do bilančnej skupiny pre arbitráž.</div>
+      </li>
+      <li>
+        <strong>Žiadosť o dotáciu Zelená podnikom</strong>
+        <div class="oq-detail">Termín výzvy a splnenie kritérií (min 80 % samospotreby, MSP klasifikácia, splnená povinnosť 10 % na OZE). Posudok pripravuje len ekonomický rámec, samotná žiadosť je samostatný proces.</div>
+      </li>
+      <li>
+        <strong>Daňové dôsledky</strong>
+        <div class="oq-detail">Odporúčame konzultáciu s daňovým poradcom: lineárny 6 r. odpis z Net CAPEX pri dotácii, DPPO 21 %, prípadný odpočet DPH.</div>
+      </li>
+    {% endif %}
+  </ol>
+</section>
+
+{# =========================================================================
    PAGE 9 — METHODOLOGY + CONTACT (petit print)
    ========================================================================= #}
 <section class="page">

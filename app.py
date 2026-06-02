@@ -6005,7 +6005,9 @@ def webhook_aom_run_premium():
 
 @app.route("/webhook/analyza-om-render-premium-docx", methods=["POST"])
 def webhook_aom_render_premium_docx():
-    """Vygeneruje premium DOCX posudok (engine v0.9.5)."""
+    """Vygeneruje premium DOCX posudok (engine v0.9.5) — LEGACY.
+    Pre nový posudok s 4 sekciami (scenáre/dotácia/záver/otázky) použi /webhook/analyza-om-render-orkestra.
+    """
     if not _aom_v2:
         return jsonify({"ok": False, "error": "analyza_om_v2 not loaded"}), 500
     body = request.get_json(silent=True) or {}
@@ -6017,6 +6019,32 @@ def webhook_aom_render_premium_docx():
         return jsonify(result)
     except Exception as e:
         log.exception("[aom-render-premium-docx] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
+@app.route("/webhook/analyza-om-render-orkestra", methods=["POST"])
+def webhook_aom_render_orkestra():
+    """NOVÝ posudok — Orkestra HTML šablóna → PDF (WeasyPrint) + DOCX (LibreOffice).
+
+    Vlna 1 refactor 2026-06-02 — 4 nové sekcie podľa skill fve-bess-posudok:
+    - 3 cenové scenáre (Báza / Nízky výkup / Spot s arbitrážou BS)
+    - Vplyv dotácie Zelená podnikom (porovnanie s/bez)
+    - Záver (fakty per variant, žiadne subjektívne formulácie)
+    - Otvorené otázky pre klienta (default checklist 7 položiek)
+
+    Reklamácia Lukáš 2026-06-02: 'DOCX export je čistá kravina, chýba technickosť'.
+    """
+    if not _aom_v2:
+        return jsonify({"ok": False, "error": "analyza_om_v2 not loaded"}), 500
+    body = request.get_json(silent=True) or {}
+    aid = body.get("analyza_id")
+    if not aid:
+        return jsonify({"ok": False, "error": "analyza_id required"}), 400
+    try:
+        result = _aom_v2.render_posudok_orkestra(_sb(), aid)
+        return jsonify(result)
+    except Exception as e:
+        log.exception("[aom-render-orkestra] failed")
         return jsonify({"ok": False, "error": str(e)[:500]}), 500
 
 
