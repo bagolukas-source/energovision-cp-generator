@@ -25,7 +25,7 @@ import yaml
 @dataclass(frozen=True)
 class DppoConfig:
     small_co_pct: float = 0.10
-    standard_pct: float = 0.22
+    standard_pct: float = 0.21  # zjednotené s tax_shield/cashflow (do 5 mil EUR)
     large_co_pct: float = 0.24
     default_pct: float = 0.22
 

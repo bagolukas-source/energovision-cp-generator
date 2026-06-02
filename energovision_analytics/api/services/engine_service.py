@@ -73,6 +73,18 @@ def _decode_csv_to_load_kw(csv_b64: str, granularity_min: int, expected_kwh: flo
         tmp.unlink(missing_ok=True)
 
 
+def _dotacia_npv_delta(delta_eur: float, fin) -> float:
+    """Správny NPV dopad zmeny dotácie o delta: +delta (nižší CAPEX rok 0)
+    MÍNUS stratený daňový štít (nižší net CAPEX = menej odpisu).
+    delta>0 = viac dotácie."""
+    dppo = float(getattr(fin, "dppo_pct", 0.21) or 0.21)
+    depr = int(getattr(fin, "depr_years", 6) or 6)
+    disc = float(getattr(fin, "discount_rate", 0.06) or 0.06)
+    annuity = sum(1.0 / ((1 + disc) ** y) for y in range(1, depr + 1))
+    shield_factor = (dppo / depr) * annuity  # NPV strateného štítu na 1 € net CAPEX
+    return delta_eur * (1.0 - shield_factor)
+
+
 def run_variants_pipeline(request_dict: dict, progress_cb=None) -> dict:
     """Spustí celý pipeline a vráti structured výsledky.
 
@@ -186,14 +198,14 @@ def run_variants_pipeline(request_dict: dict, progress_cb=None) -> dict:
             r.dotacia_eur = new_d
             r.financial.dotacia_eur = new_d
             r.financial.capex_net_eur = r.financial.capex_gross_eur - new_d
-            r.financial.npv_eur += delta
+            r.financial.npv_eur += _dotacia_npv_delta(delta, r.financial)
     else:
         for r in results:
             delta = -r.dotacia_eur
             r.dotacia_eur = 0
             r.financial.dotacia_eur = 0
             r.financial.capex_net_eur = r.financial.capex_gross_eur
-            r.financial.npv_eur += delta
+            r.financial.npv_eur += _dotacia_npv_delta(delta, r.financial)
 
     if progress_cb: progress_cb(95)
 
