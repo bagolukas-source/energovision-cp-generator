@@ -6022,6 +6022,43 @@ def webhook_aom_render_premium_docx():
         return jsonify({"ok": False, "error": str(e)[:500]}), 500
 
 
+@app.route("/webhook/analyza-om-bot", methods=["POST"])
+def webhook_aom_bot():
+    """Agentický orchestrátor: rozpozná situáciu (greenfield/retrofit/rozšírenie/BESS-only),
+    pri existujúcej FVE zrekonštruuje skutočnú spotrebu, navrhne metódu analýzy."""
+    from bot.reconstruct import classify_situation
+    body = request.get_json(silent=True) or {}
+    aid = body.get("analyza_id")
+    if not aid:
+        return jsonify({"ok": False, "error": "analyza_id required"}), 400
+    try:
+        a = _sb().table("analyza_om").select("*").eq("id", aid).single().execute().data
+        if not a:
+            return jsonify({"ok": False, "error": "not found"}), 404
+        if body.get("customer_request"):
+            a["_customer_request"] = body["customer_request"]
+        sit = classify_situation(a)
+        plan = {
+            "situation": sit,
+            "next_steps": [],
+        }
+        if sit["type"].startswith(("retrofit", "expansion", "existing")):
+            plan["next_steps"] = [
+                "Načítať 15-min odber AJ dodávku do siete",
+                "reconstruct_load: skutočná spotreba = odber + (výroba existujúcej FVE − dodávka)",
+                "Simulovať prírastok (batéria/rozšírenie) nad rekonštruovanou spotrebou",
+                "Optimalizovať na cieľ (návratnosť/IRR) cez reálne páky",
+            ]
+        elif sit["type"] == "bess_only":
+            plan["next_steps"] = ["BESS-solo dispatch (spot arbitráž + peak shaving)", "Optimalizovať veľkosť BESS na spread + RK headroom"]
+        else:
+            plan["next_steps"] = ["Štandardný variant sweep (run_variants_pipeline)", "Vybrať top NPV variant", "Generovať posudok"]
+        return jsonify({"ok": True, "plan": plan})
+    except Exception as e:
+        log.exception("[aom-bot] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
 @app.route("/webhook/analyza-om-parse-faktura", methods=["POST"])
 def webhook_aom_parse_faktura():
     """Faktúra (PDF/XLS, base64) -> AI rozpad tarifu -> naplní tarif_* polia analyza_om."""
