@@ -6022,6 +6022,32 @@ def webhook_aom_render_premium_docx():
         return jsonify({"ok": False, "error": str(e)[:500]}), 500
 
 
+@app.route("/webhook/analyza-om-parse-faktura", methods=["POST"])
+def webhook_aom_parse_faktura():
+    """Faktúra (PDF/XLS, base64) -> AI rozpad tarifu -> naplní tarif_* polia analyza_om."""
+    import base64 as _b64
+    from ingestion.faktura_parser import parse_faktura
+    body = request.get_json(silent=True) or {}
+    fb = body.get("file_base64"); fn = body.get("filename", "faktura.pdf"); aid = body.get("analyza_id")
+    if not fb:
+        return jsonify({"ok": False, "error": "file_base64 required"}), 400
+    try:
+        data = parse_faktura(_b64.b64decode(fb), fn)
+        upd = {}
+        for k in ("tarif_silova_eur_mwh","tarif_distribucia_eur_mwh","tarif_tps_eur_mwh","tarif_oze_eur_mwh","tarif_ostatne_eur_mwh","tarif_fix_mes_eur","om_sadzba","om_mrk_kw","om_rk_kw"):
+            v = data.get(k)
+            if v is not None and v != "":
+                upd[k] = v
+        if upd.get("tarif_silova_eur_mwh") is not None:
+            upd["tarif_source"] = (data.get("dodavatel") or "faktúra") + ((" " + str(data.get("obdobie"))) if data.get("obdobie") else "")
+        if aid and upd:
+            _sb().table("analyza_om").update(upd).eq("id", aid).execute()
+        return jsonify({"ok": True, "extracted": data, "updated_fields": list(upd.keys())})
+    except Exception as e:
+        log.exception("[aom-parse-faktura] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
 @app.route("/webhook/analyza-om-render-chocosuc", methods=["POST"])
 def webhook_aom_render_chocosuc():
     """ChocoSuc-grade posudok (audítorský, AI naratív grounded na odvodené metriky)."""
