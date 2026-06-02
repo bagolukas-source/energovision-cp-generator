@@ -182,6 +182,14 @@ def _build_context(user_ctx: dict[str, Any]) -> dict[str, Any]:
         # Každý prvok: {title, detail}
         "open_questions": [],
 
+        # ============ VLNA 4 — AI Expert posúdenie (Claude Sonnet 4.5) ============
+        # Tieto polia napĺňa _generate_ai_expert_commentary() v analyza_om_v2.py
+        # Pri zlyhaní AI alebo pre legacy volania zostanú prázdne → sekcia sa nezobrazí
+        "ai_commentary": "",                 # 3-4 paragrafov HTML
+        "ai_recommendations": [],            # [{title, detail}, ...]
+        "ai_anomalies": [],                  # [{title, detail}, ...]
+        "ai_open_questions": [],             # [{title, detail}, ...] — nahradí open_questions ak je naplnené
+
         # Cashflow series
         "cf_array": [],
         "accumulated_cf_final": 0,
