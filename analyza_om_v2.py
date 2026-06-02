@@ -1608,3 +1608,102 @@ def enrich_econ_full_response(sb, analyza_id: str) -> dict:
             "bat_discharge_mwh": ((winner.get("energy_flow") or {}).get("bat_to_load_mwh") or 0),
         }
     }
+
+
+# ============================================================
+# ChocoSuc-grade posudok — AI naratív (grounded na odvodené metriky) + render
+# ============================================================
+def _generate_chocosuc_ai(ctx: dict) -> dict:
+    """Celý naratív + odporúčania generuje AI z odvodených faktov (profil z dát, ekonomika).
+    Grounded: AI použije LEN čísla z ctx. Fail-safe -> deterministické defaults."""
+    import json
+    S = ctx["scenarios3"]; full = S[-1]; bza = S[0]; pm = ctx.get("profile_metrics", {})
+    facts = {
+        "klient": ctx.get("client_name"),
+        "profil_odvodeny_z_dat": {
+            "charakteristika": ctx.get("profile", {}).get("rezim"),
+            "sezonnost": ctx.get("profile", {}).get("sezonnost"),
+            "spicka": ctx.get("profile", {}).get("spicka"),
+            "vhodnost_fve": ctx.get("profile", {}).get("fve_fit"),
+            "load_factor": pm.get("load_factor"), "denny_podiel_pct": pm.get("day_share_pct"),
+            "vikend_ratio": pm.get("weekend_ratio"), "spickova_hodina": pm.get("peak_hour"),
+        },
+        "om": {"rocna_spotreba_mwh": round(ctx.get("year_mwh") or 0, 0), "mrk_kw": ctx.get("om_mrk_kw"),
+               "max_odber_kw": ctx.get("max15_kw")},
+        "fve_bess": {"fve_kwp": round(ctx.get("fve_kwp") or 0, 0), "bess_kwh": ctx.get("bess_kwh"),
+                     "vyroba_mwh": round(ctx.get("fve_prod_mwh") or 0, 0),
+                     "samospotreba_pct": round(ctx.get("samosp_pct") or 0, 1),
+                     "pokrytie_pct": round(ctx.get("coverage_pct") or 0, 1),
+                     "export_mwh": round(ctx.get("export_mwh") or 0, 1)},
+        "ekonomika": {"capex_eur": round(ctx.get("capex_total_eur") or 0),
+                      "uspora_baza_eur": round(bza["save_total"]), "uspora_plny_eur": round(full["save_total"]),
+                      "navratnost_r": round(full["payback"], 1), "npv20_eur": round(full["npv"]),
+                      "irr_pct": round(full["irr"], 1), "mc_prob_npv_kladne_pct": round(ctx.get("mc_prob_pos", 0) * 100)},
+        "skladba_uspory_eur": {n: round(v) for n, f, v in ctx.get("benefit_rows", [])},
+        "cena_necinnosti_20r_eur": round(ctx.get("inaction_infl_20y") or 0),
+    }
+    sysp = (
+        "Si senior energetický audítor Energovision s 20+ rokmi praxe. Píšeš expertný naratív posudku pre B2B klienta.\n"
+        "TÓN: vecný, data-first, klientovi vykáš, žiadne marketingové superlatívy, neistotu priznávaš.\n"
+        "GROUNDING (kritické — generuje sa bez kontroly): používaj VÝHRADNE čísla a charakteristiky z JSON. "
+        "Charakteristiku profilu ber z 'profil_odvodeny_z_dat' (NEvymýšľaj 24/7 ak to dáta nehovoria). Nevymýšľaj žiadne číslo.\n"
+        "VÝSTUP: striktný JSON (žiadny markdown):\n"
+        '{\"commentary\": \"4-6 odsekov HTML s <p>\", \"recommendations\": [{\"title\":\"...\",\"detail\":\"1-2 vety\"}, ... 4-6]}\n'
+        "commentary: (1) čo profil odhaľuje o prevádzke a vhodnosti FVE, (2) prečo navrhnutý variant + samospotreba vs export, "
+        "(3) ekonomika a riziko (scenáre, NPV, Monte Carlo), (4) cena nečinnosti. "
+        "recommendations: konkrétne kroky + proaktívne návrhy (napr. ak je FVE malá voči spotrebe, navrhni preveriť väčšiu)."
+    )
+    try:
+        from anthropic import Anthropic
+        msg = Anthropic().messages.create(
+            model="claude-sonnet-4-5-20250929", max_tokens=4000, temperature=0.3, system=sysp,
+            messages=[{"role": "user", "content": "Dáta:\n" + json.dumps(facts, ensure_ascii=False, indent=1) + "\n\nVyrob naratív a odporúčania."}])
+        t = msg.content[0].text.strip()
+        if t.startswith("```"):
+            t = t.split("\n", 1)[1].rsplit("```", 1)[0]
+        if t.lstrip().startswith("json"): t = t.lstrip()[4:]
+        r = json.loads(t)
+        recs = [(x.get("title", ""), x.get("detail", "")) for x in r.get("recommendations", [])]
+        return {"commentary": r.get("commentary", ""), "recommendations": recs}
+    except Exception as e:
+        logging.error("chocosuc AI failed: %s", e)
+        # deterministický fallback
+        return {"commentary": f"<p>{ctx.get('profile_sentence','')}</p>", "recommendations": [
+            ("Realizovať navrhnutý variant", ctx.get("recommendation_line", "")),
+            ("Preveriť zníženie RK", "Po inštalácii batérie klesá špičkové zaťaženie zo siete — možnosť znížiť rezervovanú kapacitu."),
+        ]}
+
+
+def render_posudok_chocosuc(sb, analyza_id: str) -> dict:
+    """ChocoSuc-grade posudok: deterministické fakty + AI naratív (grounded) -> HTML->PDF."""
+    from posudok_chocosuc.context import build_chocosuc_context
+    from posudok_chocosuc.generator import generate_chocosuc_pdf
+
+    a_res = sb.table("analyza_om").select("*, customers(first_name, last_name, company_name, email, ico)").eq("id", analyza_id).single().execute()
+    analyza = a_res.data
+    if not analyza:
+        raise ValueError(f"Analyza {analyza_id} not found")
+    econ = analyza.get("econ_results") or {}
+    variants = (econ.get("full_response") or {}).get("variants", [])
+    if not variants:
+        v_res = sb.table("analyza_om_variants").select("*").eq("analyza_id", analyza_id).order("position").execute()
+        for v in (v_res.data or []):
+            variants.append({"id": v.get("id"), "label": v.get("name", "Variant"), "pv_kwp": float(v.get("fve_kwp") or 0),
+                             "bess_kwh": float(v.get("bess_kwh") or 0), "capex_total_eur": float(v.get("capex_eur") or 0),
+                             "npv_eur": float(v.get("result_npv_eur_base") or 0), "irr_pct": float(v.get("result_irr_pct_base") or 0),
+                             "payback_simple_y": float(v.get("result_payback_y_base") or 0)})
+    if not variants:
+        raise ValueError("No variants — run simulation first")
+
+    ctx = build_chocosuc_context(analyza, variants)
+    ai = _generate_chocosuc_ai(ctx)
+    ctx["ai_commentary_html"] = ai["commentary"]
+    ctx["recommendations"] = ai["recommendations"] or ctx.get("recommendations") or []
+
+    pdf_bytes = generate_chocosuc_pdf(ctx)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    pdf_path = f"analyza_om/{analyza_id}/posudok_chocosuc_{ts}.pdf"
+    sb.storage.from_("documents").upload(pdf_path, pdf_bytes, {"content-type": "application/pdf", "upsert": "true"})
+    pdf_url = sb.storage.from_("documents").get_public_url(pdf_path)
+    sb.table("analyza_om").update({"posudok_orkestra_pdf_url": pdf_url, "posudok_orkestra_generated_at": datetime.now().isoformat()}).eq("id", analyza_id).execute()
+    return {"ok": True, "pdf_url": pdf_url, "size_kb": len(pdf_bytes) // 1024, "engine": "chocosuc-v1", "client": ctx.get("client_name")}

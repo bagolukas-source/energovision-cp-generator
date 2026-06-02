@@ -6022,6 +6022,22 @@ def webhook_aom_render_premium_docx():
         return jsonify({"ok": False, "error": str(e)[:500]}), 500
 
 
+@app.route("/webhook/analyza-om-render-chocosuc", methods=["POST"])
+def webhook_aom_render_chocosuc():
+    """ChocoSuc-grade posudok (audítorský, AI naratív grounded na odvodené metriky)."""
+    if not _aom_v2:
+        return jsonify({"ok": False, "error": "analyza_om_v2 not loaded"}), 500
+    body = request.get_json(silent=True) or {}
+    aid = body.get("analyza_id")
+    if not aid:
+        return jsonify({"ok": False, "error": "analyza_id required"}), 400
+    try:
+        return jsonify(_aom_v2.render_posudok_chocosuc(_sb(), aid))
+    except Exception as e:
+        log.exception("[aom-render-chocosuc] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
 @app.route("/webhook/analyza-om-render-orkestra", methods=["POST"])
 def webhook_aom_render_orkestra():
     """NOVÝ posudok — Orkestra HTML šablóna → PDF (WeasyPrint) + DOCX (LibreOffice).
