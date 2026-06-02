@@ -65,7 +65,11 @@ def build_chocosuc_context(analyza: dict, variants: list) -> dict:
     monthly_eur=base.get("monthly_solar_to_load") or []
     monthly_mwh=base.get("_monthly_mwh") or None
     avg_kw=float(analyza.get("consumption_avg_kw") or 0) or (float(base.get("load_total_mwh") or 0)*1000/8760)
-    peak_kw=float(analyza.get("consumption_peak_kw_15min") or 0) or float(analyza.get("consumption_peak_kw_hourly") or 0)
+    # SANITIZÁCIA špičky: zlé dáta (peak < avg) -> použiť iný zdroj, inak odhad (load factor ~0.45)
+    _cands=[float(analyza.get("consumption_peak_kw_15min") or 0), float(analyza.get("consumption_peak_kw_hourly") or 0)]
+    _valid=[c for c in _cands if c > (avg_kw or 0)*1.05]
+    peak_kw=max(_valid) if _valid else round((avg_kw or 0)/0.45)
+    peak_estimated = not _valid
     prof=classify_profile(hourly=base.get("_hourly"), monthly_mwh=monthly_mwh, avg_kw=avg_kw or None, peak_kw=peak_kw or None)
     pm=prof["metrics"]
     profile_sentence=f"Profil je charakteristický ako {prof['rezim']}; {prof['sezonnost']}." + (f" Špička: {prof['spicka']}." if prof.get('spicka') else "") + (f" {prof['fve_fit']}." if prof.get('fve_fit') else "")
@@ -147,7 +151,7 @@ def build_chocosuc_context(analyza: dict, variants: list) -> dict:
         "fve_kwp":base.get("pv_kwp"),"bess_kwh":bess_kwh,"yield":(base.get("pv_total_mwh",0)*1000/(base.get("pv_kwp") or 1)) if base.get("pv_kwp") else 1075,
         "fve_prod_mwh":base.get("pv_total_mwh"),"self_use_mwh":self_mwh,"export_mwh":export_mwh,
         "grid_import_mwh":base.get("grid_import_mwh"),"samosp_pct":base.get("samospotreba_pct"),"coverage_pct":base.get("samostatnost_pct"),
-        "year_mwh":base.get("load_total_mwh"),"max15_kw":peak_kw,"capex_total_eur":capex,"net_capex_eur":net_capex,
+        "year_mwh":base.get("load_total_mwh"),"max15_kw":peak_kw,"peak_estimated":peak_estimated,"capex_total_eur":capex,"net_capex_eur":net_capex,
         "co2_avoided_tonnes":base.get("co2_avoided_tonnes"),
         "monthly_mwh":monthly_mwh,"profile_metrics":pm,"profile_sentence":profile_sentence,"profile":prof,
         "p_silova":p_silova,"p_dist_var":p_dist_var,"p_tps":p_tps,"p_so":p_so,"p_dist_pevna":p_dist_pevna,"p_sell":p_sell,"p_avoided":p_avoided,

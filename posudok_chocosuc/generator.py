@@ -135,11 +135,11 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
   <table>{trow(["Údaj","Hodnota","Komentár"],head=True)}
     {trow(["Klient",ctx.get('client_name',''),"VN odberateľ"])}
     {trow(["Adresa OM",ctx.get('om_address','—'),ctx.get('lokalita_note','')])}
-    {trow(["EIC OM / č. miesta",f"{ctx.get('eic_om','—')} / {ctx.get('cislo_om','—')}","z faktúry"])}
+    {trow(["EIC OM / č. miesta",f"{ctx.get('eic_om') or '—'} / {ctx.get('cislo_om') or '—'}","z faktúry"])}
     {trow(["Distribučná oblasť",ctx.get('distrib_oblast','—'),""])}
     {trow(["Sadzba / tarif",ctx.get('om_sadzba','VN'),ctx.get('vtstnt','')])}
     {trow(["Ročná spotreba",f"{num(ctx.get('year_mwh'))} MWh",ctx.get('consumption_source','')])}
-    {trow(["Max 15-min odber",f"{num(ctx.get('max15_kw'))} kW",""])}
+    {trow(["Max 15-min odber",f"{num(ctx.get('max15_kw'))} kW","odhad z profilu" if ctx.get("peak_estimated") else ""])}
     {trow(["Priemerný odber",f"{num(pm.get('avg_kw'))} kW",f"load factor {num(pm.get('load_factor'),2)}"])}
     {trow(["MRK / RK",f"{num(ctx.get('om_mrk_kw'))} / {num(ctx.get('om_rk_kw'))} kW",f"využitie MRK {num((pm.get('avg_kw') or 0)/(ctx.get('om_mrk_kw') or 1)*100,0)} %"])}
   </table>
