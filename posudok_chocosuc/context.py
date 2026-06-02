@@ -81,51 +81,53 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None) -> dict:
     pm=prof["metrics"]
     profile_sentence=f"Profil je charakteristický ako {prof['rezim']}; {prof['sezonnost']}." + (f" Špička: {prof['spicka']}." if prof.get('spicka') else "") + (f" {prof['fve_fit']}." if prof.get('fve_fit') else "")
 
-    # --- ekonomika: Báza z ENGINE (deterministicky správne), tarif len pre rozpad/display ---
-    vs=base.get("value_streams") or {}
-    save_self=float(vs.get("solar_self_consumption_eur") or 0) or (self_mwh*1000*p_avoided)
-    save_export=float(vs.get("solar_export_eur") or 0) or (export_mwh*1000*p_sell)
-    base_saving=float(base.get("saving_y1_eur") or (save_self+save_export))
-    annual_tax=net_capex/ODPIS*DPPO
-    # increments — len pri BESS (peak shaving / arbitráž potrebujú batériu)
-    new_p95=float(base.get("_new_p95_kw") or 0)
-    rk_new=max(round((new_p95 or rk*0.55)/10)*10, rk*0.55) if rk else rk
-    save_peak=((rk-rk_new)*p_dist_pevna*12) if (bess_kwh>0 and rk and rk_new<rk) else 0
-    save_arb=bess_kwh*60 if bess_kwh>0 else 0
-    def scen(name,short,extra,use_engine=False):
-        stot=base_saving+extra
-        npv=_npv(stot,net_capex,opex,annual_tax); irr=_irr(stot,net_capex,opex,annual_tax)
-        pb=(net_capex/(stot+annual_tax-opex)) if (stot+annual_tax-opex)>0 else 99
-        return {"name":name,"short":short,"save_self":save_self,"save_export":save_export,
-                "save_peak":(save_peak if 'Peak' in name or extra>=save_peak>0 else 0),
-                "save_total":stot,"opex":opex,"annual_tax":annual_tax,"payback":pb,"npv":npv,"irr":irr}
-    if bess_kwh>0:
-        S=[scen("Báza (samospotreba + export)","Báza",0,use_engine=True),
-           scen("+ Peak shaving (zníženie RK)","+ Peak shaving",save_peak),
-           scen("+ BESS arbitráž (plný)","+ BESS arbitráž",save_peak+save_arb)]
-    else:
-        # FVE-only: cenové scenáre (Báza / nízky výkup / optimistický)
-        S=[scen("Báza (ÚRSO 2026)","Báza",0,use_engine=True),
-           scen("Nízky výkup (defenzívny)","Nízky výkup",-save_export*0.5),
-           scen("Optimistický (rast cien)","Optimistický",base_saving*0.10)]
-    full=max(S,key=lambda x:x["npv"]); 
-    # zoradiť: Báza prvá, full posledná
-    S=[s for s in S if s is not full and s["name"].startswith("Báza")]+[s for s in S if not s["name"].startswith("Báza") and s is not full]+[full]
+    # --- ekonomika: VŠETKY zložky z ENGINE value_streams (z dispatchu). Žiadne heuristiky,
+    #     žiadne dvojité započítanie — base_saving UŽ obsahuje samospotrebu/export/batériu/arbitráž/peak. ---
+    vs = base.get("value_streams") or {}
+    save_self   = float(vs.get("solar_self_consumption_eur") or (self_mwh*1000*p_avoided))
+    save_export = float(vs.get("solar_export_eur") or (export_mwh*1000*p_sell))
+    save_bess   = float(vs.get("bess_self_consumption_eur") or 0)
+    save_arb    = float(vs.get("arbitrage_eur") or 0)
+    save_peak   = float(vs.get("peak_shaving_eur") or 0)
+    base_saving = float(base.get("saving_y1_eur") or vs.get("total_eur") or (save_self+save_export+save_bess+save_arb+save_peak))
+    annual_tax  = net_capex/ODPIS*DPPO
 
-    # --- tornado ---
-    base_npv=full["npv"]
-    def npvm(sm=1.0,cm=1.0): return _npv(full["save_total"]*sm,net_capex*cm,opex,annual_tax)
+    # Báza ukotvená na ENGINE (validované), scenáre odvodené od nej (žiadny druhý NPV systém)
+    eng_npv = float(base.get("npv_eur") or 0)
+    eng_pb  = float(base.get("payback_years") or 0)
+    eng_irr = float(base.get("irr_pct") or 0)
+    _annuity = sum(1.0/((1+DISC)**y) for y in range(1, LIFE+1))  # diskontovaná anuita úspor
+    def scen(name, short, save_mult):
+        stot = base_saving * save_mult
+        d_save = stot - base_saving
+        npv = eng_npv + d_save * _annuity          # posun NPV o delta úspory (diskontovaná)
+        pb  = (net_capex/(stot+annual_tax-opex)) if (stot+annual_tax-opex)>0 else 99
+        # IRR škálovaná hrubo s payback (Báza = engine IRR)
+        irr = eng_irr * (eng_pb/pb) if (pb>0 and eng_pb>0) else eng_irr
+        if save_mult == 1.0:
+            npv, pb, irr = (eng_npv or npv), (eng_pb or pb), (eng_irr or irr)
+        return {"name":name,"short":short,"save_total":stot,"opex":opex,"annual_tax":annual_tax,
+                "payback":pb,"npv":npv,"irr":irr,"save_self":save_self,"save_export":save_export}
+    # 3 scenáre = cenová citlivosť na engine bázu (NIE pripočítavanie pák — tie sú už v báze)
+    S = [scen("Báza (ÚRSO 2026 + spot OKTE)","Báza",1.0),
+         scen("Defenzívny (nižší výkup/cena)","Defenzívny",0.85),
+         scen("Optimistický (rast cien energie)","Optimistický",1.12)]
+    full = S[-1]
+
+    # --- tornado (citlivosť NPV na engine bázu) ---
+    base_npv = full["npv"]
+    def npvm(sm=1.0,cm=1.0):
+        return eng_npv + (base_saving*sm - base_saving)*_annuity - (net_capex*cm - net_capex)
     drv=[("Cena elektriny",npvm(sm=0.85)-base_npv,npvm(sm=1.15)-base_npv),
          ("Špecifický výnos FVE",npvm(sm=0.90)-base_npv,npvm(sm=1.10)-base_npv),
          ("CAPEX (cena diela)",npvm(cm=1.15)-base_npv,npvm(cm=0.85)-base_npv)]
-    if bess_kwh>0: drv.append(("BESS arbitráž",-save_arb*6,save_arb*3))
     drv.sort(key=lambda d:max(abs(d[1]),abs(d[2])),reverse=True)
 
     # --- monte carlo ---
     random.seed(42); res=[]
     for _ in range(5000):
         sm=random.triangular(0.82,1.15,1.0); cm=random.triangular(0.95,1.12,1.0)
-        res.append(_npv(full["save_total"]*sm,net_capex*cm,opex,annual_tax))
+        res.append(eng_npv + (base_saving*sm - base_saving)*_annuity - (net_capex*cm - net_capex))
     res.sort(); P=lambda q:res[int(q*len(res))]
 
     # --- cena nečinnosti ---
@@ -134,18 +136,21 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None) -> dict:
     ina_infl=sum(ina_y1*((1-DEG)**y)*((1+INFL)**y) for y in range(LIFE))
 
     # --- komponenty (z variantu, fallback orientačné) ---
-    sel=base.get("_selected") or {}
     comp_real=bool(analyza.get("bundle_id"))
     components={"panel":f"FVE {base.get('pv_kwp',0):.0f} kWp — moduly podľa cenovej ponuky",
                 "inverter":f"meniče ~{base.get('inverter_kw',0):.0f} kW AC + optimizéry",
                 "battery":f"batéria {bess_kwh:.0f} kWh" if bess_kwh else "—",
                 "konstrukcia":base.get("fve_topology","E-W / Juh")}
 
-    benefit_rows=[("FVE samospotreba",f"{self_mwh:.0f} MWh × {p_avoided*1000:.1f} €/MWh",save_self),
-                  ("FVE export",f"{export_mwh:.0f} MWh × {p_sell*1000:.0f} €/MWh",save_export)]
-    if save_peak>0: benefit_rows.append(("Peak shaving (RK)",f"({rk:.0f}→{rk_new:.0f} kW) × {p_dist_pevna:.2f} €/kW/mes × 12",save_peak))
-    if save_arb>0: benefit_rows.append(("BESS arbitráž",f"{bess_kwh:.0f} kWh × 60 €/kWh/r",save_arb))
-    benefit_parts=[("Samospotreba",save_self,"#16A34A"),("Export",save_export,"#A7D08C"),("Peak shaving",save_peak,"#5B7CFA"),("Arbitráž",save_arb,"#8B5CF6"),("Daňový štít",annual_tax,"#F59E0B")]
+    # benefit_rows = REÁLNE engine zložky (z dispatchu), žiadny paušál
+    benefit_rows=[("FVE samospotreba (priama)",f"{self_mwh:.0f} MWh priamo do odberu",save_self),
+                  ("FVE export prebytkov",f"{export_mwh:.0f} MWh do siete",save_export)]
+    if save_bess>0: benefit_rows.append(("Batéria — posun PV do odberu","PV uskladnené a využité neskôr",save_bess))
+    if abs(save_arb)>1: benefit_rows.append(("BESS arbitráž (spot v BS)","nabíjanie lacno / vybíjanie draho",save_arb))
+    if save_peak>0: benefit_rows.append(("Peak shaving (zníženie RK)","redukcia mesačného 15-min maxima",save_peak))
+    benefit_parts=[("Samospotreba",save_self,"#16A34A"),("Export",save_export,"#A7D08C"),
+                   ("Batéria",save_bess,"#5B7CFA"),("Arbitráž",max(save_arb,0.0),"#8B5CF6"),
+                   ("Daňový štít",annual_tax,"#F59E0B")]
 
     ctx={
         "client_name":base.get("client_name"),"om_address":base.get("site_address") or "—",
