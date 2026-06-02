@@ -93,6 +93,13 @@ class RuleBasedEMS:
         # Precompute lookahead helpers — pre každý timestep top/bottom kvantily spotu
         lookahead_steps = int(self.config.lookahead_hours * 60 / timestep_min)
 
+        # BS-arbitraz akumulatory (spot-based, korektny model)
+        _arb_charge_spot = 0.0   # nabijaci naklad z gridu @ spot
+        _disch_spot = 0.0        # vybitie @ spot (pre grid-arbitraz)
+        _disch_retail = 0.0      # vybitie @ retail (pre PV samospotrebu)
+        _grid_charge_kwh = 0.0
+        _mon_max_load = {}   # mesiac -> max load kW
+        _mon_max_net = {}    # mesiac -> max (load - peak_shave) kW
         for i in range(n):
             ts = timestamps[i].to_pydatetime() if hasattr(timestamps[i], "to_pydatetime") else timestamps[i]
             load = float(load_kw[i])
@@ -264,6 +271,14 @@ class RuleBasedEMS:
             summary.bat_discharge_total_kwh += bat_to_load_kwh
             summary.grid_import_kwh += grid_import_kwh
             summary.grid_export_kwh += grid_export_kwh
+            _arb_charge_spot += grid_to_bat_kwh * spot / 1000.0
+            _disch_spot += bat_to_load_kwh * spot / 1000.0
+            _disch_retail += bat_to_load_kwh * tarif_buy
+            _grid_charge_kwh += grid_to_bat_kwh
+            _mon = ts.month if hasattr(ts,'month') else 1
+            _net_kw = load - (bat_to_load_peak / dt_h if dt_h > 0 else 0)
+            _mon_max_load[_mon] = max(_mon_max_load.get(_mon, 0.0), load)
+            _mon_max_net[_mon] = max(_mon_max_net.get(_mon, 0.0), _net_kw)
 
             for k, v in sav.items():
                 if k.startswith("sav_"):
@@ -277,6 +292,24 @@ class RuleBasedEMS:
                 summary.n_state_discharge += 1
             elif action == DispatchAction.PEAK_SHAVE:
                 summary.n_state_peak_shave += 1
+
+        # === BS-arbitraz (spot) + PV samospotreba (retail) — korektny rozklad ===
+        # Energia v baterii sa miesa (PV vs grid). PV-zdrojove vybitie usetri retail;
+        # grid-zdrojove vybitie je BS-arbitraz ocenena spot spreadom (BS vyrovnava komoditu
+        # za spot, ziadna distribucia). grid_frac = podiel grid nabijania na celkovom.
+        _total_charge = summary.bat_charge_total_kwh
+        _grid_frac = (_grid_charge_kwh / _total_charge) if _total_charge > 0 else 0.0
+        summary.sav_bess_self_cons_eur = _disch_retail * (1.0 - _grid_frac)
+        summary.sav_arbitrage_eur = _disch_spot * _grid_frac - _arb_charge_spot
+
+        # === Peak shaving — REALNA redukcia mesacneho maxima x MRK kapacitny poplatok ===
+        # MRK sa fakturuje z mesacneho 15-min maxima; baterka ho znizuje. Nie 200h pausal.
+        _mrk_eur_kw_mes = float(self.tariff.mrk_kapacita_eur_mw_mes) / 1000.0
+        _peak_sav = 0.0
+        for _m in _mon_max_load:
+            _red = max(0.0, _mon_max_load[_m] - _mon_max_net.get(_m, _mon_max_load[_m]))
+            _peak_sav += _red * _mrk_eur_kw_mes
+        summary.sav_peak_shaving_eur = _peak_sav
 
         # Finálne KPI
         summary.sav_total_eur = (
