@@ -687,59 +687,11 @@ def _generate_ai_expert_commentary(context: dict, analyza: dict) -> dict:
         }
 
 
-def render_posudok_orkestra(sb, analyza_id: str) -> dict:
-    """
-    NOVÝ posudok — Orkestra HTML šablóna → PDF (WeasyPrint) + DOCX (LibreOffice).
-
-    Vlna 1 + Vlna 3 (2026-06-02):
-    - 4 nové sekcie (cenové scenáre, vplyv dotácie, záver, otvorené otázky)
-    - KOMPLETNÝ data mapping z dostupných variant polí + PVGIS koeficientov
-    - Energy flow, cf_array (21 rokov), monthly_summary (12 mes.), CO2 — reálne čísla
-    - Hourly profile 24h pred/po (B2B typický)
-    - Klient name z customers.company_name alebo first/last
-    """
-    import subprocess
-    import tempfile
-    import os
-    from posudok_orkestra import generate_orkestra_pdf, render_orkestra_html
-
-    a_res = sb.table("analyza_om").select(
-        "*, customers(first_name, last_name, company_name, email, ico)"
-    ).eq("id", analyza_id).single().execute()
-    analyza = a_res.data
-    if not analyza:
-        raise ValueError(f"Analyza {analyza_id} not found")
-
-    econ = analyza.get("econ_results") or {}
-    run_response = econ.get("full_response") or {}
-    variants = run_response.get("variants", [])
-
-    # Fallback z DB tabuľky analyza_om_variants
-    if not variants:
-        v_res = sb.table("analyza_om_variants").select("*").eq("analyza_id", analyza_id).order("position").execute()
-        variants = []
-        for v in (v_res.data or []):
-            variants.append({
-                "id": v.get("id"),
-                "label": v.get("name", "Variant"),
-                "pv_kwp": float(v.get("fve_kwp") or 0),
-                "bess_kwh": float(v.get("bess_kwh") or 0),
-                "bess_kw": float(v.get("bess_kw") or 0),
-                "capex_total_eur": float(v.get("capex_eur") or 0),
-                "dotacia_eur": float(v.get("result_dotacia_eur") or 0),
-                "npv_eur": float(v.get("result_npv_eur_base") or 0),
-                "irr_pct": float(v.get("result_irr_pct_base") or 0),
-                "payback_simple_y": float(v.get("result_payback_y_base") or 0),
-                "samospotreba_pct": float(v.get("result_samosp_pct") or 0),
-                "samostatnost_pct": float(v.get("result_samostat_pct") or 0),
-                "import_mwh": float(v.get("result_import_mwh") or 0),
-                "export_mwh": float(v.get("result_export_mwh") or 0),
-                "saving_y1_eur": float(v.get("result_saving_y1_eur") or 0),
-            })
-
-    if not variants:
-        raise ValueError("No variants — run simulation first")
-
+def build_orkestra_context(analyza: dict, variants: list, analyza_id: str = "") -> dict:
+    """Cista funkcia: zo zaznamu analyzy + variantov postavi kontext pre Orkestra sablonu.
+    Ziadne sb / AI / PDF side-effecty -> lokalne testovatelne (harness).
+    Mapuje PRIORITNE engine vystupy (energy_flow, carbon, cashflow_array, monthly_summary,
+    value_streams, solar_consumption_pct); fallback na aproximacie len ked engine pole chyba."""
     # Selected variant
     selected_id = analyza.get("selected_variant_id")
     selected = None
@@ -757,6 +709,7 @@ def render_posudok_orkestra(sb, analyza_id: str) -> dict:
         cust.get("company_name")
         or (f"{cust.get('first_name') or ''} {cust.get('last_name') or ''}").strip()
         or analyza.get("om_name")
+        or (analyza.get("name") or "").strip()
         or "Klient"
     )
 
@@ -783,29 +736,42 @@ def render_posudok_orkestra(sb, analyza_id: str) -> dict:
     samosp_pct = float(selected.get("samospotreba_pct") or 0)
     samostat_pct = float(selected.get("samostatnost_pct") or 0)
 
-    # === Energy flow agregáty (engine field name fallbacks) ===
+    # === Energy flow — PRIORITNE z engine energy_flow objektu, fallback aproximacia ===
+    ef = selected.get("energy_flow") or {}
+    load_total_mwh = float(ef.get("load_total_mwh") or (annual_kwh / 1000))
     pv_total_mwh = float(
-        selected.get("pv_total_mwh")
+        ef.get("pv_total_mwh")
+        or (float(selected.get("pv_total_kwh") or 0) / 1000)
         or selected.get("fve_prod")
-        or (pv_kwp * 0.98)  # PVGIS yield ~980 kWh/kWp SK
+        or (pv_kwp * 0.98)
     )
-    import_mwh = float(selected.get("import_mwh") or selected.get("grid_import") or 0)
-    export_mwh = float(selected.get("export_mwh") or selected.get("grid_export") or 0)
-    load_total_mwh = annual_kwh / 1000
+    pv_to_load_mwh = float(ef.get("pv_to_load_mwh") if ef.get("pv_to_load_mwh") is not None
+                           else ((samosp_pct / 100.0) * pv_total_mwh if samosp_pct > 0 else 0))
+    pv_to_grid_mwh = float(ef.get("pv_to_grid_mwh") if ef.get("pv_to_grid_mwh") is not None
+                           else (float(selected.get("export_mwh") or selected.get("grid_export") or 0)))
+    residual_pv = max(0.0, pv_total_mwh - pv_to_load_mwh - pv_to_grid_mwh)
+    pv_to_bat_mwh = float(ef.get("pv_to_bat_mwh") if ef.get("pv_to_bat_mwh") is not None
+                          else (residual_pv if bess_kwh > 0 else 0))
+    curtailed_mwh = max(0.0, residual_pv - pv_to_bat_mwh) if bess_kwh > 0 else residual_pv
+    bat_to_load_mwh = float(ef.get("bat_to_load_mwh") if ef.get("bat_to_load_mwh") is not None
+                            else (pv_to_bat_mwh * 0.92 if bess_kwh > 0 else 0))
+    grid_to_bat_mwh = float(ef.get("grid_to_bat_mwh") or 0)
+    grid_to_load_mwh = float(ef.get("grid_to_load_mwh") if ef.get("grid_to_load_mwh") is not None
+                             else max(0.0, load_total_mwh - pv_to_load_mwh - bat_to_load_mwh))
+    # grid import (co klient nakupuje zo siete) = do odberu + do baterie
+    import_mwh = float(ef.get("grid_to_load_mwh") is not None and (grid_to_load_mwh + grid_to_bat_mwh)
+                       or (float(selected.get("grid_import_kwh") or 0) / 1000)
+                       or (grid_to_load_mwh + grid_to_bat_mwh))
+    export_mwh = float(ef.get("grid_export_mwh") if ef.get("grid_export_mwh") is not None else pv_to_grid_mwh)
 
-    # PV decomposition
-    pv_to_load_mwh = (samosp_pct / 100.0) * pv_total_mwh if samosp_pct > 0 else max(0, pv_total_mwh - export_mwh)
-    pv_to_grid_mwh = export_mwh
-    residual_pv = max(0, pv_total_mwh - pv_to_load_mwh - pv_to_grid_mwh)
-    pv_to_bat_mwh = residual_pv if bess_kwh > 0 else 0
-    curtailed_mwh = 0 if bess_kwh > 0 else residual_pv
-
-    # Battery discharge (roundtrip 92%)
-    bat_to_load_mwh = pv_to_bat_mwh * 0.92 if bess_kwh > 0 else 0
-    grid_to_load_mwh = max(0, load_total_mwh - pv_to_load_mwh - bat_to_load_mwh)
-
-    # Pct rozdelenie FVE produkcie
-    if pv_total_mwh > 0:
+    # Pct rozdelenie FVE produkcie — prioritne engine solar_consumption_pct
+    scp = selected.get("solar_consumption_pct") or {}
+    if scp:
+        direct_to_load_pct = float(scp.get("direct_to_load") or 0)
+        charging_battery_pct = float(scp.get("charging_battery") or 0)
+        exported_pct = float(scp.get("exported") or 0)
+        curtailed_pct = float(scp.get("curtailed") or 0)
+    elif pv_total_mwh > 0:
         direct_to_load_pct = (pv_to_load_mwh / pv_total_mwh) * 100
         charging_battery_pct = (pv_to_bat_mwh / pv_total_mwh) * 100
         exported_pct = (pv_to_grid_mwh / pv_total_mwh) * 100
@@ -817,20 +783,30 @@ def render_posudok_orkestra(sb, analyza_id: str) -> dict:
     PV_DEGRADATION = 0.005
     OPEX_RATE = 0.015
     annual_opex = capex_total * OPEX_RATE
-    cf_array = [-net_capex]
-    for y in range(1, 21):
-        degraded_saving = saving_y1 * ((1 - PV_DEGRADATION) ** (y - 1))
-        cf_array.append(degraded_saving - annual_opex)
+    engine_cf = selected.get("cashflow_array")
+    if engine_cf and len(engine_cf) >= 21:
+        cf_array = [float(x) for x in engine_cf[:21]]
+    else:
+        cf_array = [-net_capex]
+        for y in range(1, 21):
+            degraded_saving = saving_y1 * ((1 - PV_DEGRADATION) ** (y - 1))
+            cf_array.append(degraded_saving - annual_opex)
     accumulated_cf_final = sum(cf_array)
 
     # === Monthly summary (12 mesiacov) — PVGIS koeficienty pre SK ===
     PV_MONTHLY = [0.038, 0.057, 0.084, 0.107, 0.115, 0.116, 0.119, 0.107, 0.090, 0.067, 0.045, 0.055]
     TARIF_BUY_EUR_MWH = 120.0
     TARIF_SELL_EUR_MWH = 65.0
-    monthly_solar_to_load = [pv_to_load_mwh * 1000 * c * (TARIF_BUY_EUR_MWH / 1000) for c in PV_MONTHLY]
-    monthly_solar_export = [pv_to_grid_mwh * 1000 * c * (TARIF_SELL_EUR_MWH / 1000) for c in PV_MONTHLY]
-    arb_total_eur = bat_to_load_mwh * 110 if bess_kwh > 0 else 0
-    monthly_arbitrage = [arb_total_eur / 12.0] * 12
+    _ms = selected.get("monthly_summary")
+    if _ms and len(_ms) == 12:
+        monthly_solar_to_load = [float(m.get("solar_to_load_eur") or 0) for m in _ms]
+        monthly_solar_export = [float(m.get("solar_export_eur") or 0) for m in _ms]
+        monthly_arbitrage = [float(m.get("arbitrage_eur") or 0) for m in _ms]
+    else:
+        monthly_solar_to_load = [pv_to_load_mwh * 1000 * c * (TARIF_BUY_EUR_MWH / 1000) for c in PV_MONTHLY]
+        monthly_solar_export = [pv_to_grid_mwh * 1000 * c * (TARIF_SELL_EUR_MWH / 1000) for c in PV_MONTHLY]
+        arb_total_eur = bat_to_load_mwh * 110 if bess_kwh > 0 else 0
+        monthly_arbitrage = [arb_total_eur / 12.0] * 12
 
     # === Hourly load profile 24h (pred/po) ===
     HOURLY_LOAD = [0.025, 0.024, 0.024, 0.024, 0.025, 0.028, 0.033, 0.045,
@@ -845,10 +821,11 @@ def render_posudok_orkestra(sb, analyza_id: str) -> dict:
 
     # === CO2 (SK grid 0.25 t/MWh, 2024) ===
     clean_mwh = pv_to_load_mwh + bat_to_load_mwh + pv_to_grid_mwh
-    co2_avoided_tonnes = clean_mwh * 0.25
+    carbon = selected.get("carbon") or {}
+    co2_avoided_tonnes = float(carbon.get("co2_avoided_t_per_year") or (clean_mwh * 0.25))
     co2_reduction_pct = (clean_mwh / load_total_mwh * 100) if load_total_mwh > 0 else 0
-    trees_equivalent = int(co2_avoided_tonnes * 1000 / 21)
-    barrels_oil = int(co2_avoided_tonnes * 2.32)
+    trees_equivalent = int(carbon.get("trees_equivalent") or (co2_avoided_tonnes * 1000 / 21))
+    barrels_oil = int(carbon.get("barrels_oil_avoided") or (co2_avoided_tonnes * 2.32))
 
     # === 3 cenové scenáre ===
     saving_low = saving_y1 * 0.75
@@ -933,7 +910,7 @@ def render_posudok_orkestra(sb, analyza_id: str) -> dict:
         "project_name": analyza.get("name") or analyza.get("om_name") or "Hybridné riešenie FVE + BESS",
         "project_id": analyza.get("posudok_number") or f"AOM-{str(analyza_id)[:8]}",
         "client_name": client_name,
-        "site_address": analyza.get("om_address") or "—",
+        "site_address": (analyza.get("om_address") or "").strip(),
         "posudok_date": datetime.now().strftime("%d.%m.%Y"),
         "prepared_by_name": "Lukáš Bago",
         "prepared_by_email": "lukas.bago@energovision.sk",
@@ -967,7 +944,7 @@ def render_posudok_orkestra(sb, analyza_id: str) -> dict:
         "pv_to_bat_mwh": pv_to_bat_mwh,
         "grid_to_load_mwh": grid_to_load_mwh,
         "bat_to_load_mwh": bat_to_load_mwh,
-        "grid_to_bat_mwh": 0,
+        "grid_to_bat_mwh": grid_to_bat_mwh,
         "load_total_mwh": load_total_mwh,
         "grid_import_mwh": import_mwh,
         "grid_export_mwh": export_mwh,
@@ -998,6 +975,63 @@ def render_posudok_orkestra(sb, analyza_id: str) -> dict:
         "n_variants_run": len(variants),
         "spot_avg_eur_mwh": 103,
     }
+    return context
+
+
+def render_posudok_orkestra(sb, analyza_id: str) -> dict:
+    """
+    NOVÝ posudok — Orkestra HTML šablóna → PDF (WeasyPrint) + DOCX (LibreOffice).
+
+    Vlna 1 + Vlna 3 (2026-06-02):
+    - 4 nové sekcie (cenové scenáre, vplyv dotácie, záver, otvorené otázky)
+    - KOMPLETNÝ data mapping z dostupných variant polí + PVGIS koeficientov
+    - Energy flow, cf_array (21 rokov), monthly_summary (12 mes.), CO2 — reálne čísla
+    - Hourly profile 24h pred/po (B2B typický)
+    - Klient name z customers.company_name alebo first/last
+    """
+    import subprocess
+    import tempfile
+    import os
+    from posudok_orkestra import generate_orkestra_pdf, render_orkestra_html
+
+    a_res = sb.table("analyza_om").select(
+        "*, customers(first_name, last_name, company_name, email, ico)"
+    ).eq("id", analyza_id).single().execute()
+    analyza = a_res.data
+    if not analyza:
+        raise ValueError(f"Analyza {analyza_id} not found")
+
+    econ = analyza.get("econ_results") or {}
+    run_response = econ.get("full_response") or {}
+    variants = run_response.get("variants", [])
+
+    # Fallback z DB tabuľky analyza_om_variants
+    if not variants:
+        v_res = sb.table("analyza_om_variants").select("*").eq("analyza_id", analyza_id).order("position").execute()
+        variants = []
+        for v in (v_res.data or []):
+            variants.append({
+                "id": v.get("id"),
+                "label": v.get("name", "Variant"),
+                "pv_kwp": float(v.get("fve_kwp") or 0),
+                "bess_kwh": float(v.get("bess_kwh") or 0),
+                "bess_kw": float(v.get("bess_kw") or 0),
+                "capex_total_eur": float(v.get("capex_eur") or 0),
+                "dotacia_eur": float(v.get("result_dotacia_eur") or 0),
+                "npv_eur": float(v.get("result_npv_eur_base") or 0),
+                "irr_pct": float(v.get("result_irr_pct_base") or 0),
+                "payback_simple_y": float(v.get("result_payback_y_base") or 0),
+                "samospotreba_pct": float(v.get("result_samosp_pct") or 0),
+                "samostatnost_pct": float(v.get("result_samostat_pct") or 0),
+                "import_mwh": float(v.get("result_import_mwh") or 0),
+                "export_mwh": float(v.get("result_export_mwh") or 0),
+                "saving_y1_eur": float(v.get("result_saving_y1_eur") or 0),
+            })
+
+    if not variants:
+        raise ValueError("No variants — run simulation first")
+
+    context = build_orkestra_context(analyza, variants, analyza_id)
 
     # === Generate AI Expert commentary (Claude Sonnet 4.5) ===
     # Pri zlyhaní vráti prázdne defaults → posudok sa vygeneruje bez AI sekcie

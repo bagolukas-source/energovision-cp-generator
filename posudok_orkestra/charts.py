@@ -109,76 +109,117 @@ def chart_energy_flow(
     load_total_mwh: float,
     grid_export_mwh: float,
     width_in: float = 9.5,
-    height_in: float = 5.5,
+    height_in: float = 4.8,
 ) -> str:
-    """4-circle diagram s arrowmi medzi nimi (replika Orkestra P3).
-    Solar PV (top-right, yellow) → Site / Battery / Grid Export
-    Grid (left, blue) ↔ Site / Battery
-    Battery (bottom-right, green) ↔ Site
-    Site (center, purple) — consumption
-    """
+    """Profesionalny Sankey-style tok energie (zdroje vlavo -> odberne miesto vpravo).
+    Hrubka pasov ~ MWh. Slovenske popisky. Audtorsky vzhlad."""
+    from matplotlib.path import Path
+    from matplotlib.patches import PathPatch, FancyBboxPatch
+
     fig, ax = plt.subplots(figsize=(width_in, height_in))
     ax.set_xlim(0, 10)
     ax.set_ylim(0, 6)
-    ax.set_aspect("equal")
     ax.axis("off")
 
-    # Circle positions (x, y, radius, color, label_top, value, unit)
-    nodes = {
-        "Solar PV": (8.0, 4.5, 1.0, COLOR_SOLAR, "Solar PV", f"{pv_total_mwh:.0f}", "MWh\ngenerácia"),
-        "Site":     (5.0, 3.0, 1.1, COLOR_SITE,  "Site",     f"{load_total_mwh:.0f}", "MWh\nspotreba"),
-        "Grid":     (2.0, 3.0, 1.1, COLOR_GRID,  "Grid",     f"{grid_to_load_mwh + grid_to_bat_mwh:.0f}", f"MWh\nExport: {grid_export_mwh:.0f}"),
-        "Battery":  (8.0, 1.5, 0.9, COLOR_BATTERY, "Battery", f"{bat_to_load_mwh:.0f}", "MWh\nvýstup"),
-    }
+    load = max(load_total_mwh, 1e-6)
+    # vyskovy rozsah pre toky (do OM)
+    H = 4.4
+    y0 = 0.7
+    scale = H / max(load, pv_total_mwh)  # MWh -> vyska
 
-    for name, (x, y, r, color, label, value, unit) in nodes.items():
-        # Circle background — light tint
-        circ_bg = Circle((x, y), r, facecolor=color, alpha=0.20, edgecolor=color, linewidth=2.5)
-        ax.add_patch(circ_bg)
-        # Label top
-        ax.text(x, y + r * 0.5, label, ha="center", va="center", fontsize=10, color=COLOR_TEXT, weight="bold")
-        # Value (big)
-        ax.text(x, y - 0.05, value, ha="center", va="center", fontsize=22, color=COLOR_TEXT, weight="bold")
-        # Unit
-        ax.text(x, y - r * 0.55, unit, ha="center", va="center", fontsize=8, color=COLOR_TEXT)
+    x_src_r = 2.6     # prava hrana zdrojov
+    x_om_l = 7.4      # lava hrana OM
+    bar_w = 0.55
 
-    # Helper to draw arrow with label
-    def arrow(from_node, to_node, value_mwh, label_offset=(0, 0), color=None):
-        x1, y1, r1, c1, *_ = nodes[from_node]
-        x2, y2, r2, c2, *_ = nodes[to_node]
-        # Compute arrow start/end on circle edges
-        dx, dy = x2 - x1, y2 - y1
-        dist = math.hypot(dx, dy)
-        ux, uy = dx / dist, dy / dist
-        sx, sy = x1 + ux * r1, y1 + uy * r1
-        ex, ey = x2 - ux * r2, y2 - uy * r2
-        arrow_color = color or c1
-        arr = FancyArrowPatch((sx, sy), (ex, ey), arrowstyle="->,head_length=10,head_width=8",
-                              color=arrow_color, linewidth=2.5, alpha=0.85)
-        ax.add_patch(arr)
-        # Label uprostred
-        mx, my = (sx + ex) / 2 + label_offset[0], (sy + ey) / 2 + label_offset[1]
-        ax.text(mx, my, f"{value_mwh:.0f}", ha="center", va="center",
-                fontsize=11, color=COLOR_TEXT, weight="bold",
-                bbox=dict(boxstyle="round,pad=0.15", facecolor="white", edgecolor="none"))
+    def band(y_s0, y_s1, y_t0, y_t1, color, alpha=0.55):
+        # filled bezier band medzi (x_src_r, y_s*) a (x_om_l, y_t*)
+        cx = (x_src_r + x_om_l) / 2
+        verts = [
+            (x_src_r, y_s0),
+            (cx, y_s0), (cx, y_t0), (x_om_l, y_t0),
+            (x_om_l, y_t1),
+            (cx, y_t1), (cx, y_s1), (x_src_r, y_s1),
+            (x_src_r, y_s0),
+        ]
+        codes = [Path.MOVETO, Path.CURVE4, Path.CURVE4, Path.CURVE4,
+                 Path.LINETO, Path.CURVE4, Path.CURVE4, Path.CURVE4, Path.CLOSEPOLY]
+        ax.add_patch(PathPatch(Path(verts, codes), facecolor=color, edgecolor="none", alpha=alpha))
 
-    if pv_to_load_mwh > 0:
-        arrow("Solar PV", "Site", pv_to_load_mwh, label_offset=(0, 0.15))
-    if pv_to_grid_mwh > 0:
-        arrow("Solar PV", "Grid", pv_to_grid_mwh, label_offset=(0, 0.3))
-    if pv_to_bat_mwh > 0:
-        arrow("Solar PV", "Battery", pv_to_bat_mwh, label_offset=(0.3, 0))
-    if grid_to_load_mwh > 0:
-        arrow("Grid", "Site", grid_to_load_mwh, label_offset=(0, 0.2))
-    if bat_to_load_mwh > 0:
-        arrow("Battery", "Site", bat_to_load_mwh, label_offset=(0.2, 0))
-    if grid_to_bat_mwh > 0:
-        arrow("Grid", "Battery", grid_to_bat_mwh, label_offset=(0, -0.3))
+    def node_bar(x, y_bot, h, color, title, value_mwh, sub=None, align="left"):
+        ax.add_patch(FancyBboxPatch((x - bar_w/2, y_bot), bar_w, h,
+                     boxstyle="round,pad=0.02,rounding_size=0.08",
+                     facecolor=color, edgecolor="none"))
+        tx = x + (bar_w/2 + 0.25 if align=="left" else -(bar_w/2 + 0.25))
+        ha = "left" if align=="left" else "right"
+        ymid = y_bot + h/2
+        ax.text(tx, ymid + 0.16, title, ha=ha, va="center", fontsize=10.5, color=COLOR_TEXT, weight="bold")
+        ax.text(tx, ymid - 0.14, f"{value_mwh:,.0f} MWh".replace(",", " "), ha=ha, va="center", fontsize=9.5, color="#6B7280")
+        if sub:
+            ax.text(tx, ymid - 0.44, sub, ha=ha, va="center", fontsize=8, color="#9CA3AF")
+
+    has_bess = (pv_to_bat_mwh > 0 or bat_to_load_mwh > 0)
+
+    # ---- ZDROJE vlavo (stacked) ----
+    gap = 0.35
+    # vyska zdrojov: PV (cela vyroba), Siet (grid_to_load), Bateria (bat_to_load)
+    h_pv = pv_total_mwh * scale
+    h_grid = grid_to_load_mwh * scale
+    h_bat = (bat_to_load_mwh * scale) if has_bess else 0
+    total_src_h = h_pv + h_grid + h_bat + gap * (1 + (1 if has_bess else 0))
+    sy = y0 + max(0, (H - total_src_h)) / 2 + (total_src_h - gap*( (1 if has_bess else 0)+1))  # top start
+    # umiestnime zhora: PV hore
+    cur_top = y0 + H
+    pv_bot = cur_top - h_pv
+    node_bar(1.6, pv_bot, h_pv, COLOR_SOLAR, "Fotovoltika", pv_total_mwh, sub="výroba", align="left")
+    cur_top = pv_bot - gap
+    grid_bot = cur_top - h_grid
+    node_bar(1.6, grid_bot, h_grid, COLOR_GRID, "Sieť", grid_to_load_mwh, sub="import", align="left")
+    cur_top = grid_bot - gap
+    if has_bess:
+        bat_bot = cur_top - h_bat
+        node_bar(1.6, bat_bot, h_bat, COLOR_BATTERY, "Batéria", bat_to_load_mwh, sub="výstup", align="left")
+
+    # ---- ODBERNE MIESTO vpravo ----
+    h_om = load * scale
+    om_bot = y0 + (H - h_om)/2
+    node_bar(8.4, om_bot, h_om, COLOR_SITE, "Odberné miesto", load_total_mwh, sub="spotreba", align="right")
+
+    # ---- EXPORT (maly uzol vpravo hore) ----
+    h_exp = max(pv_to_grid_mwh * scale, 0.0)
+
+    # ---- TOKY (poradie zhora dole na strane OM = poradie zdrojov) ----
+    # zdroj PV: cast do OM (pv_to_load) + cast export (pv_to_grid)
+    # rozdelime PV bar zhora: pv_to_load potom pv_to_grid (export ide hore mimo OM)
+    pv_src_top = pv_bot + h_pv
+    # OM prijem zhora: PV_to_load, grid_to_load, bat_to_load
+    om_top = om_bot + h_om
+    t_cursor = om_top
+    # PV -> OM
+    h_pvload = pv_to_load_mwh * scale
+    s_top = pv_src_top
+    band(s_top, s_top - h_pvload, t_cursor, t_cursor - h_pvload, COLOR_SOLAR, alpha=0.5)
+    t_cursor -= h_pvload
+    s_after_pvload = s_top - h_pvload
+    # PV -> Export (zhora vpravo, mimo OM baru)
+    if h_exp > 0:
+        ex_y_top = om_top
+        ax.add_patch(FancyBboxPatch((9.1, ex_y_top - h_exp - 0.0), 0.4, max(h_exp,0.12),
+                     boxstyle="round,pad=0.02,rounding_size=0.05", facecolor=COLOR_GRID, edgecolor="none", alpha=0.85))
+        ax.text(9.3, ex_y_top - h_exp/2, f"Export\n{grid_export_mwh:,.0f} MWh".replace(",", " "),
+                ha="center", va="center", fontsize=7.5, color="#374151")
+        # tenky tok PV spodok -> export
+        band(s_after_pvload, s_after_pvload - h_exp, ex_y_top, ex_y_top - h_exp, COLOR_SOLAR, alpha=0.35)
+    # Grid -> OM
+    h_gl = grid_to_load_mwh * scale
+    band(grid_bot + h_grid, grid_bot, t_cursor, t_cursor - h_gl, COLOR_GRID, alpha=0.45)
+    t_cursor -= h_gl
+    # Bat -> OM
+    if has_bess and h_bat > 0:
+        band(bat_bot + h_bat, bat_bot, t_cursor, t_cursor - h_bat, COLOR_BATTERY, alpha=0.5)
 
     return _save_svg(fig)
 
 
-# ============ CHART 3: DAILY LOAD PROFILE (P4) ============
 def chart_daily_load_profile(
     hourly_load_kw: list[float],  # 24 values for avg day
     hourly_load_kw_after: list[float] | None = None,

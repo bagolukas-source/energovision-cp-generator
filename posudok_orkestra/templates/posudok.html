@@ -22,7 +22,7 @@
   <div class="cover-hero">
     <div class="cover-eyebrow">Technicko-ekonomický posudok</div>
     <h1 class="cover-title">{{ project_name }}</h1>
-    <p class="cover-subtitle">Fotovoltika {{ pv_kwp|round|int }} kWp{% if bess_kwh > 0 %} + batériové úložisko {{ bess_kwh|round|int }} kWh{% endif %} · {{ site_address }}</p>
+    <p class="cover-subtitle">Fotovoltika {{ pv_kwp|round|int }} kWp{% if bess_kwh > 0 %} + batériové úložisko {{ bess_kwh|round|int }} kWh{% endif %}{% if site_address and site_address != '—' %} · {{ site_address }}{% endif %}</p>
   </div>
 
   <div class="cover-pillars">
