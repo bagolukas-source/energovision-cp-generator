@@ -626,6 +626,396 @@ def _generate_ai_expert_commentary(context: dict, analyza: dict) -> dict:
                 "usetrene_t_rocne": round(context.get("co2_avoided_tonnes", 0), 1),
                 "redukcia_pct": round(context.get("co2_reduction_pct", 0), 1),
             },
+            "hodnotove_toky_eur_rok1": {
+                "samospotreba_fve": round(context.get("value_streams", {}).get("solar_self_consumption_eur", 0) or 0),
+                "export_do_siete": round(context.get("value_streams", {}).get("solar_export_eur", 0) or 0),
+                "arbitraz_bess": round(context.get("value_streams", {}).get("arbitrage_eur", 0) or 0),
+                "peak_shaving": round(context.get("value_streams", {}).get("peak_shaving_eur", 0) or 0),
+            },
+            "cena_necinnosti_20r_eur": {
+                "konstantne_ceny_energie": round(context.get("inaction_flat_20y", 0)),
+                "rast_cien_3pct_rocne": round(context.get("inaction_infl3_20y", 0)),
+            },
+        }
+
+        system_prompt = (
+            "Si senior energetický audítor a konzultant Energovision (slovenský EPC dodávateľ FVE, "
+            "batériových úložísk, trafostaníc, revízií a elektrotechnických prác) s viac než 20 rokmi praxe.\n"
+            "Píšeš expertné posúdenie pre priemyselného B2B klienta tak, ako by ho napísal skúsený energetik — "
+            "súvisle, vecne, data-first. Klientovi vykáš.\n\n"
+            "TÓN (záväzne):\n"
+            "- Vecný, technický, dôveryhodný. Žiadne marketingové frázy, žiadne superlatívy ('vynikajúce', 'najlepšie', 'skvelé', 'ideálne').\n"
+            "- Každé tvrdenie = fakt + dôsledok. Argumentuj číslom, nie dojmom.\n"
+            "- Neistotu a predpoklady priznávaj otvorene — to buduje dôveru. Keď niečo nevychádza, povedz to (napr. 'batéria pri tomto profile nedáva pozitívne NPV').\n"
+            "- Si nezávislý audítor, NIE predajca. Presviedčaš dôveryhodnosťou a presnosťou, nie tlakom.\n\n"
+            "GROUNDING (KRITICKÉ — posudok generuje obchodník bez kontroly, nesmieš sa pomýliť):\n"
+            "- Používaj VÝHRADNE čísla z poslaného JSON. NEVYMÝŠĽAJ žiadnu hodnotu.\n"
+            "- Každé číslo v texte sa MUSÍ presne zhodovať s číslom z JSON. Needhaduj, neextrapoluj nad rámec dát.\n"
+            "- Ak nejaký údaj v dátach nie je, nepíš oň konkrétne číslo — radšej ho uveď ako otvorenú otázku.\n"
+            "- Neuvádzaj konkrétne ceny komponentov, marže ani interné údaje — klient vidí len celkové čísla z JSON.\n\n"
+            "VÝSTUP — striktný JSON s 4 kľúčmi (žiadny markdown, žiadne ``` fences):\n"
+            "{\n"
+            "  \"commentary\": \"súvislý naratív 4-6 odsekov (~1-2 strany), HTML s <p> tagmi\",\n"
+            "  \"recommendations\": [{\"title\": \"krátky názov\", \"detail\": \"1-2 vety\"}, ... 4-6],\n"
+            "  \"anomalies\": [{\"title\": \"...\", \"detail\": \"...\"}, ... 0-4],\n"
+            "  \"open_questions\": [{\"title\": \"...\", \"detail\": \"prečo overiť\"}, ... 5-7]\n"
+            "}\n\n"
+            "ŠTRUKTÚRA commentary (súvislý príbeh, nie odrážky):\n"
+            "1) Charakter odberného miesta — čo profil spotreby a kľúčové čísla (spotreba, MRK, samospotreba) odhaľujú o prevádzke a prečo je/nie je vhodná pre navrhnuté riešenie.\n"
+            "2) Prečo práve navrhnutý variant — porovnaj s alternatívami z dát (NPV/IRR/návratnosť), vysvetli kompromis výkon/cena a rolu batérie (áno/nie a prečo).\n"
+            "3) Ekonomika a hodnota — skladba ročnej hodnoty (samospotreba/export/arbitráž), návratnosť, NPV, a cena nečinnosti (čo klient zaplatí za energiu ak neurobí nič).\n"
+            "4) Riziká a neistoty — úprimne, na čom čísla závisia (tarif, MRK, nábeh prevádzky), s odhadom neistoty.\n\n"
+            "recommendations: konkrétne ČO MÁ KLIENT UROBIŤ pre TENTO projekt (technicky a finančne).\n"
+            "anomalies: čo je v dátach nezvyčajné (podimenzovanie, lepšia alternatíva v top-piku, ekonomická anomália).\n"
+            "open_questions: TAILORED pre tento projekt s ohľadom na konkrétne čísla — nie generický checklist."
+        )
+        msg = client.messages.create(
+            model="claude-sonnet-4-5-20250929",
+            max_tokens=2000,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        narrative_text = msg.content[0].text if msg.content else ""
+
+        return {
+            "text": narrative_text,
+            "scenario_type": scenario_type,
+            "scenario_description": scenario_desc,
+            "top_3_used": top_summary,
+            "generated_at": datetime.now().isoformat(),
+        }
+    except Exception as e:
+        log.warning("[ai-narrative] generation failed: %s", e)
+        return {"error": str(e)[:200], "scenario_type": analyza.get("scenario_type")}
+
+
+def run_variants_premium(sb, analyza_id: str) -> dict:
+    """
+    Spustí VariantGenerator nad analyza_om → uloží varianty do analyza_om_variants.
+    """
+    from energovision_analytics.api.services.engine_service import run_variants_pipeline, build_run_variants_response
+    
+    # Načítaj analyza_om
+    a_res = sb.table("analyza_om").select("*").eq("id", analyza_id).single().execute()
+    analyza = a_res.data
+    if not analyza:
+        raise ValueError(f"Analyza {analyza_id} not found")
+    
+    # Update status
+    sb.table("analyza_om").update({"status": "running"}).eq("id", analyza_id).execute()
+    
+    request_dict = _build_request_from_analyza(analyza)
+    log.info(f"[aom-v2] Running pipeline for {analyza_id} with {len(request_dict['variants']['pv_kwp_options'])} PV × {len(request_dict['variants']['bess_kwh_options'])} BESS")
+    
+    # Wrap engine call — pri chybe nastav status na 'failed' aby analyza neuviazla v running
+    try:
+        raw_result = run_variants_pipeline(request_dict)
+        result = build_run_variants_response(raw_result)
+    except Exception as engine_err:
+        log.exception("[aom-v2] engine pipeline failed for %s", analyza_id)
+        sb.table("analyza_om").update({
+            "status": "failed",
+            "econ_results": {"error": str(engine_err)[:500]},
+            "updated_at": datetime.now().isoformat(),
+        }).eq("id", analyza_id).execute()
+        raise
+    
+    # Save variants do DB — variants sú teraz JSON-serializable dicts
+    variants = result.get("variants") or []
+    if variants:
+        # Clear existing variants
+        sb.table("analyza_om_variants").delete().eq("analyza_id", analyza_id).execute()
+        
+        rows = []
+        for idx, v in enumerate(variants):
+            rows.append({
+                "analyza_id": analyza_id,
+                "name": v.get("label", f"V{idx+1}"),
+                "position": idx + 1,
+                "fve_kwp": v.get("pv_kwp", 0),
+                "fve_tilt_deg": 35,
+                "fve_azimuth_deg": 180,
+                "fve_topology": "south",  # default tilt/azimuth topology (constraint: south|east_west|tracker|carport)
+                "bess_kwh": v.get("bess_kwh", 0),
+                "bess_kw": v.get("bess_kw", 0),
+                "bess_arbitrage_enabled": v.get("bess_kwh", 0) > 0,
+                "capex_eur": v.get("capex_total_eur", 0),
+                "capex_source": "engine_v095_quick",
+                "result_samosp_pct": v.get("samospotreba_pct", 0),
+                "result_samostat_pct": v.get("samostatnost_pct", 0),
+                "result_export_mwh": v.get("export_kwh", 0) / 1000 if v.get("export_kwh") else 0,
+                "result_import_mwh": (v.get("grid_import_kwh", 0) or 0) / 1000,
+                "result_npv_eur_base": v.get("npv_eur", 0),
+                "result_irr_pct_base": v.get("irr_pct", 0),
+                "result_payback_y_base": v.get("payback_simple_y", 0),
+                "result_dotacia_eur": v.get("dotacia_eur", 0),
+            })
+        sb.table("analyza_om_variants").insert(rows).execute()
+    
+    # AI NARRATIVE — Claude úvaha pre posudok (energetik perspective)
+    ai_narrative = _generate_ai_narrative(analyza, result.get("variants", []), result.get("top_picks", []))
+
+    # Save sim + econ summary do analyza_om
+    # full_response sa použije pri renderingu Premium DOCX posudku (musí mať bohatú schému variantov)
+    sb.table("analyza_om").update({
+        "status": "completed",
+        "sim_results": result.get("variants", [])[:1] if result.get("variants") else None,
+        "econ_results": {
+            "top_picks": result.get("top_picks", []),
+            "variants_count": len(variants),
+            "engine_version": result.get("engine_version", "0.9.5"),
+            "full_response": result,
+            "ai_narrative": ai_narrative,
+        },
+        "updated_at": datetime.now().isoformat(),
+    }).eq("id", analyza_id).execute()
+    
+    return {
+        "ok": True,
+        "analyza_id": analyza_id,
+        "variants_count": len(variants),
+        "top_picks": result.get("top_picks", [])[:6],
+    }
+
+
+def render_posudok_premium(sb, analyza_id: str) -> dict:
+    """
+    Vyrenderuje premium DOCX posudok z analyza_om + variantov → upload do Storage.
+    
+    Architektúra:
+    - run_variants_premium ukladá full_response z build_run_variants_response do econ_results.full_response
+    - tento endpoint ho vyberie a posiela priamo do generate_premium_posudok(run_response=...)
+    - generate_premium_posudok vracia bytes (NEMÁ output_path parameter)
+    """
+    from energovision_analytics.reporting.posudok_premium import generate_premium_posudok
+    
+    a_res = sb.table("analyza_om").select("*, customers(first_name, last_name, company_name, email, ico)").eq("id", analyza_id).single().execute()
+    analyza = a_res.data
+    if not analyza:
+        raise ValueError(f"Analyza {analyza_id} not found")
+    
+    # Plný engine response — zapisuje sa pri run_variants_premium
+    econ = analyza.get("econ_results") or {}
+    run_response = econ.get("full_response")
+    
+    # Fallback: ak full_response chýba (legacy analýza pred patch1), rebuilduj minimal z analyza_om_variants
+    if not run_response or not run_response.get("variants"):
+        v_res = sb.table("analyza_om_variants").select("*").eq("analyza_id", analyza_id).order("position").execute()
+        db_variants = v_res.data or []
+        if not db_variants:
+            raise ValueError("No variants — spusti run_variants_premium najprv")
+        
+        rebuilt_variants = []
+        for v in db_variants:
+            pv_kwp = float(v.get("fve_kwp") or 0)
+            bess_kwh = float(v.get("bess_kwh") or 0)
+            bess_kw = float(v.get("bess_kw") or 0)
+            capex_total = float(v.get("capex_eur") or 0)
+            dotacia = float(v.get("result_dotacia_eur") or 0)
+            # Odhadneme capex split (PV ~70% ak BESS prítomné, inak 100%)
+            if bess_kwh > 0:
+                capex_pv = capex_total * 0.7
+                capex_bess = capex_total * 0.3
+            else:
+                capex_pv = capex_total
+                capex_bess = 0.0
+            rebuilt_variants.append({
+                "variant_id": v.get("name", f"V{v.get('position', 0)}"),
+                "label": v.get("name", "Variant"),
+                "pv_kwp": pv_kwp,
+                "bess_kwh": bess_kwh,
+                "bess_kw": bess_kw,
+                "ems_strategy": "rule_based",
+                "capex_pv_eur": capex_pv,
+                "capex_bess_eur": capex_bess,
+                "capex_total_eur": capex_total,
+                "dotacia_eur": dotacia,
+                "net_capex_eur": capex_total - dotacia,
+                "samospotreba_pct": float(v.get("result_samosp_pct") or 0),
+                "samostatnost_pct": float(v.get("result_samostat_pct") or 0),
+                "pv_total_kwh": pv_kwp * 1050,  # PVGIS yield approx
+                "grid_import_kwh": float(v.get("result_import_mwh") or 0) * 1000,
+                "saving_y1_eur": 0,  # nepoznáme, fallback
+                "npv_eur": float(v.get("result_npv_eur_base") or 0),
+                "irr_pct": float(v.get("result_irr_pct_base") or 0),
+                "payback_simple_y": float(v.get("result_payback_y_base") or 0),
+                "lcoe_eur_mwh": 0,
+                "lcos_eur_mwh": 0,
+                "rank_labels": [],
+            })
+        run_response = {
+            "variants": rebuilt_variants,
+            "top_picks": econ.get("top_picks", []),
+            "n_variants_run": len(rebuilt_variants),
+            "manifest": {},
+        }
+    
+    # Customer
+    cust = analyza.get("customers") or {}
+    if cust.get("company_name"):
+        client_name = cust["company_name"]
+    else:
+        client_name = f"{cust.get('first_name') or ''} {cust.get('last_name') or ''}".strip() or "Klient"
+    client_contact = cust.get("email") or ""
+    
+    # Site meta — kľúče ktoré posudok_premium očakáva
+    site_meta = {
+        "lokalita": analyza.get("om_address") or "",
+        "psc": analyza.get("om_psc") or "",
+        "distribuutor": analyza.get("om_distributor") or "",
+        "sadzba": analyza.get("om_sadzba") or "NN",
+        "typ_tarify": analyza.get("om_tarif_typ") or "spot",
+        "rk_kw": float(analyza.get("om_rk_kw") or 0),
+        "mrk_kw": float(analyza.get("om_mrk_kw") or 0),
+        "rocna_spotreba_kwh": float(analyza.get("consumption_annual_mwh") or 0) * 1000,
+    }
+    
+    # Project ID — engine_version pre manifest footer
+    engine_version = econ.get("engine_version") or "0.9.5"
+    project_id = analyza.get("name") or f"AOM-{str(analyza_id)[:8]}"
+
+    # Posudok number — buď explicit z analyza alebo auto-generate
+    posudok_number = analyza.get("posudok_number")
+    if not posudok_number:
+        # Auto: P-YY-XXX format - počíta sa z poradia
+        yr = datetime.now().strftime("%y")
+        try:
+            count_res = sb.table("analyza_om").select("id", count="exact").execute()
+            seq = (count_res.count or 0)
+            posudok_number = f"P-{yr}-{seq:03d}"
+        except Exception:
+            posudok_number = f"P-{yr}-XXX"
+
+    # AI narrative + scenario z econ_results
+    ai_narrative_obj = econ.get("ai_narrative") or {}
+    ai_narrative_text = ai_narrative_obj.get("text", "") if isinstance(ai_narrative_obj, dict) else ""
+
+    # Render DOCX — funkcia VRACIA bytes (žiadny output_path!)
+    docx_bytes = generate_premium_posudok(
+        client_name=client_name,
+        project_id=project_id,
+        posudok_number=posudok_number,
+        client_address=analyza.get("om_address") or "",
+        client_contact=client_contact,
+        project_name=analyza.get("name") or "Hybridné riešenie FVE + BESS",
+        site_meta=site_meta,
+        run_response=run_response,
+        engine_version=engine_version,
+        manifest_footer=f"Engine v{engine_version} | {posudok_number} | Analýza OM {project_id}",
+        posudok_date=datetime.now().strftime("%d.%m.%Y"),
+        prepared_by_name="Lukáš Bago",
+        prepared_by_email="lukas.bago@energovision.sk",
+        prepared_by_phone="0918 187 762",
+        # Scenario-aware
+        scenario_type=analyza.get("scenario_type") or "nova_fve",
+        scenario_description=analyza.get("scenario_description"),
+        existing_fve_kwp=float(analyza.get("existing_fve_kwp") or 0),
+        existing_bess_kwh=float(analyza.get("existing_bess_kwh") or 0),
+        existing_fve_samosp_pct=float(analyza["existing_fve_samosp_pct"]) if analyza.get("existing_fve_samosp_pct") else None,
+        ai_narrative=ai_narrative_text or None,
+    )
+    
+    # Upload do Storage
+    storage_path = f"analyza_om/{analyza_id}/posudok_premium_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+    sb.storage.from_("documents").upload(
+        storage_path, docx_bytes,
+        {"content-type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "upsert": "true"}
+    )
+    public_url = sb.storage.from_("documents").get_public_url(storage_path)
+    
+    sb.table("analyza_om").update({"docx_path": public_url}).eq("id", analyza_id).execute()
+
+    return {"ok": True, "docx_url": public_url, "storage_path": storage_path}
+
+
+def _generate_ai_expert_commentary(context: dict, analyza: dict) -> dict:
+    """
+    Vygeneruje AI Expert posúdenie pre Orkestra posudok.
+
+    Volá Claude Sonnet 4.5 (anthropic SDK, model claude-sonnet-4-5-20250929)
+    s štruktúrovaným JSON o projekte. Output: 4 sekcie:
+      - commentary: 3-4 paragrafov expert posúdenia (HTML s <p> tagmi)
+      - recommendations: 5-7 konkrétnych odporúčaní
+      - anomalies: 0-4 anomálie/quick wins
+      - open_questions: 5-7 tailored otázok pre klienta
+
+    Pri zlyhaní (timeout, parse error, network) vráti prázdne defaults
+    a posudok sa vygeneruje BEZ AI sekcie (fail-safe).
+    """
+    import json
+    try:
+        from anthropic import Anthropic
+        client = Anthropic()  # API key z ANTHROPIC_API_KEY env
+
+        # Pripraviť čisté input data (skrátiť dlhé polia, zaokrúhliť čísla)
+        input_data = {
+            "klient": context.get("client_name"),
+            "lokalita": context.get("site_address"),
+            "om": {
+                "mrk_kw": context.get("mrk_kw"),
+                "rocna_spotreba_mwh": round(context.get("annual_kwh", 0) / 1000, 1),
+                "tarif": context.get("tarif_typ"),
+            },
+            "vybrany_variant": {
+                "nazov": context.get("label"),
+                "fve_kwp": context.get("pv_kwp"),
+                "bess_kwh": context.get("bess_kwh"),
+                "bess_kw": context.get("bess_kw"),
+                "capex_eur": round(context.get("capex_total_eur", 0)),
+                "dotacia_eur": round(context.get("dotacia_eur", 0)),
+                "net_capex_eur": round(context.get("net_capex_eur", 0)),
+                "saving_y1_eur": round(context.get("saving_y1_eur", 0)),
+                "payback_y": round(context.get("payback_years", 0), 1),
+                "npv_20r_eur": round(context.get("npv_eur", 0)),
+                "irr_pct": round(context.get("irr_pct", 0), 1),
+                "samospotreba_pct": round(context.get("samospotreba_pct", 0), 1),
+                "samostatnost_pct": round(context.get("samostatnost_pct", 0), 1),
+            },
+            "energia_mwh": {
+                "fve_vyroba": round(context.get("pv_total_mwh", 0), 1),
+                "samospotreba_fve_do_odberu": round(context.get("pv_to_load_mwh", 0), 1),
+                "export_do_siete": round(context.get("pv_to_grid_mwh", 0), 1),
+                "import_zo_siete": round(context.get("grid_to_load_mwh", 0), 1),
+                "celkova_spotreba": round(context.get("load_total_mwh", 0), 1),
+            },
+            "scenare_ekonomiky": [
+                {
+                    "nazov": s.get("name"),
+                    "rocne_uspory_eur": round(s.get("annual_save_eur", 0)),
+                    "payback_y": round(s.get("payback_years", 0), 1),
+                    "npv_eur": round(s.get("npv_eur", 0)),
+                    "irr_pct": round(s.get("irr_pct", 0), 1),
+                } for s in context.get("scenarios", [])
+            ],
+            "alternativne_varianty_top": [
+                {
+                    "nazov": v.get("label"),
+                    "fve_kwp": v.get("pv_kwp"),
+                    "bess_kwh": v.get("bess_kwh"),
+                    "capex_eur": round(v.get("capex_total_eur", 0)),
+                    "npv_eur": round(v.get("npv_eur", 0)),
+                    "irr_pct": round(v.get("irr_pct", 0), 1),
+                    "payback_y": round(v.get("payback_years", 0), 1),
+                } for v in context.get("other_variants", [])[:4]
+            ],
+            "dotacia": {
+                "schema": context.get("dotacia_scheme_name"),
+                "max_eur": context.get("dotacia_max_eur"),
+                "ziska_dotaciu": context.get("dotacia_eur", 0) > 0,
+            },
+            "co2": {
+                "usetrene_t_rocne": round(context.get("co2_avoided_tonnes", 0), 1),
+                "redukcia_pct": round(context.get("co2_reduction_pct", 0), 1),
+            },
+            "hodnotove_toky_eur_rok1": {
+                "samospotreba_fve": round(context.get("value_streams", {}).get("solar_self_consumption_eur", 0) or 0),
+                "export_do_siete": round(context.get("value_streams", {}).get("solar_export_eur", 0) or 0),
+                "arbitraz_bess": round(context.get("value_streams", {}).get("arbitrage_eur", 0) or 0),
+                "peak_shaving": round(context.get("value_streams", {}).get("peak_shaving_eur", 0) or 0),
+            },
+            "cena_necinnosti_20r_eur": {
+                "konstantne_ceny_energie": round(context.get("inaction_flat_20y", 0)),
+                "rast_cien_3pct_rocne": round(context.get("inaction_infl3_20y", 0)),
+            },
         }
 
         system_prompt = (
@@ -651,7 +1041,7 @@ def _generate_ai_expert_commentary(context: dict, analyza: dict) -> dict:
 
         msg = client.messages.create(
             model="claude-sonnet-4-5-20250929",
-            max_tokens=3500,
+            max_tokens=6000,
             temperature=0.3,
             system=system_prompt,
             messages=[
@@ -685,6 +1075,35 @@ def _generate_ai_expert_commentary(context: dict, analyza: dict) -> dict:
             "ai_anomalies": [],
             "ai_open_questions": [],
         }
+
+
+def _validate_orkestra(context: dict) -> list:
+    """Autonomia: sanity-check kontextu pred renderom. Vrati list warningov (logovane).
+    Posudok generuje obchodnik bez kontroly -> server musi zachytit nezmysly."""
+    w = []
+    def num(k):
+        try: return float(context.get(k) or 0)
+        except Exception: return 0.0
+    if num("pv_kwp") <= 0: w.append("pv_kwp <= 0")
+    if num("annual_kwh") <= 0: w.append("rocna spotreba <= 0")
+    if num("capex_total_eur") <= 0: w.append("CAPEX <= 0")
+    if not (0 <= num("samospotreba_pct") <= 100): w.append(f"samospotreba mimo 0-100: {num('samospotreba_pct')}")
+    if not (0 <= num("samostatnost_pct") <= 100): w.append(f"samostatnost mimo 0-100: {num('samostatnost_pct')}")
+    if num("payback_years") <= 0: w.append("payback <= 0")
+    cf = context.get("cf_array") or []
+    if len(cf) < 21: w.append(f"cf_array len {len(cf)} < 21")
+    # energy balance konzistencia: pv_to_load+pv_to_grid+pv_to_bat ~ pv_total (±5 %)
+    pv_tot = num("pv_total_mwh")
+    if pv_tot > 0:
+        decomposed = num("pv_to_load_mwh") + num("pv_to_grid_mwh") + num("pv_to_bat_mwh")
+        if abs(decomposed - pv_tot) / pv_tot > 0.05:
+            w.append(f"PV bilancia nesedi: {decomposed:.0f} vs {pv_tot:.0f} MWh")
+    # import konzistencia s diagramom
+    if num("grid_import_mwh") <= 0 and num("grid_to_load_mwh") > 0:
+        w.append("grid_import_mwh=0 ale grid_to_load>0 (nemapovane)")
+    if w:
+        logging.warning("[orkestra-validacia] %d upozorneni: %s", len(w), "; ".join(w))
+    return w
 
 
 def build_orkestra_context(analyza: dict, variants: list, analyza_id: str = "") -> dict:
@@ -905,6 +1324,12 @@ def build_orkestra_context(analyza: dict, variants: list, analyza_id: str = "") 
             "payback_years": v.get("payback_simple_y", v.get("payback_y", 0)),
         })
 
+    # === Cena necinnosti (cost of inaction) — eskalujuca cena energie ktoru by FVE pokryla ===
+    # Grounded v saving_y1; dva scenare: bez inflacie energie vs +3 %/rok.
+    inaction_flat_20y = sum(saving_y1 * ((1 - PV_DEGRADATION) ** y) for y in range(20))
+    inaction_infl3_20y = sum(saving_y1 * ((1 - PV_DEGRADATION) ** y) * (1.03 ** y) for y in range(20))
+    annual_grid_value_y1 = saving_y1  # hodnota energie pokrytej FVE v roku 1
+
     # === Build full context ===
     context = {
         "project_name": analyza.get("name") or analyza.get("om_name") or "Hybridné riešenie FVE + BESS",
@@ -974,6 +1399,13 @@ def build_orkestra_context(analyza: dict, variants: list, analyza_id: str = "") 
         "other_variants": other_variants,
         "n_variants_run": len(variants),
         "spot_avg_eur_mwh": 103,
+        "value_streams": selected.get("value_streams") or {},
+        "inaction_flat_20y": inaction_flat_20y,
+        "inaction_infl3_20y": inaction_infl3_20y,
+        "annual_grid_value_y1": annual_grid_value_y1,
+        "discount_rate_pct": 6,
+        "energy_inflation_pct": 3,
+        "analysis_years": 20,
     }
     return context
 
@@ -1032,6 +1464,7 @@ def render_posudok_orkestra(sb, analyza_id: str) -> dict:
         raise ValueError("No variants — run simulation first")
 
     context = build_orkestra_context(analyza, variants, analyza_id)
+    context["_validation_warnings"] = _validate_orkestra(context)
 
     # === Generate AI Expert commentary (Claude Sonnet 4.5) ===
     # Pri zlyhaní vráti prázdne defaults → posudok sa vygeneruje bez AI sekcie

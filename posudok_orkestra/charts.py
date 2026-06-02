@@ -76,10 +76,10 @@ def chart_cashflow(
 
     # Net cashflow bars roky 1..N
     if len(years) > 1:
-        ax.bar(years[1:], cf_array[1:], color=COLOR_NET_CF, width=0.6, label="Ročný cash flow")
+        ax.bar(years[1:], cf_array[1:], color=COLOR_NET_CF, width=0.6, label="Ročný peňažný tok")
 
     # Accumulated line
-    ax.plot(years, accumulated, color=COLOR_ACCUM, linewidth=2.5, label="Kumulovaný cash flow")
+    ax.plot(years, accumulated, color=COLOR_ACCUM, linewidth=2.5, label="Kumulovaný peňažný tok")
 
     # Format y-axis as currency
     def fmt(x, _):

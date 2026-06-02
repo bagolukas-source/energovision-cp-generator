@@ -411,6 +411,29 @@
    ========================================================================= #}
 {% if ai_commentary or (ai_recommendations and ai_recommendations|length > 0) %}
 <section class="page">
+  <h2 class="page-title">Cena nečinnosti</h2>
+  <p class="page-subtitle">Koľko stojí ponechať súčasný stav bez zmeny</p>
+
+  <p>Energiu, ktorú by fotovoltika pokryla priamo do odberu, dnes nakupujete zo siete. Pri zachovaní súčasného stavu za túto energiu počas 20-ročnej životnosti riešenia zaplatíte:</p>
+
+  <div class="zaver-fakty">
+    <div class="zaver-item">
+      <strong>Pri konštantných cenách energie:</strong> {{ inaction_flat_20y|format_currency }} za 20 rokov ({{ annual_grid_value_y1|format_currency }} v prvom roku).
+    </div>
+    <div class="zaver-item">
+      <strong>Pri raste cien energie o {{ energy_inflation_pct }} % ročne:</strong> {{ inaction_infl3_20y|format_currency }} za 20 rokov — energia bez vlastného zdroja zdražuje každý rok.
+    </div>
+    <div class="zaver-item">
+      <strong>Investícia do riešenia:</strong> {{ net_capex_eur|format_currency }} (Net CAPEX). Návratnosť {{ payback_years|round(1) }} rokov — po tomto bode generuje riešenie čistú úsporu počas zvyšných {{ (analysis_years - payback_years)|round|int }} rokov životnosti.
+    </div>
+  </div>
+
+  <p class="zaver-note">
+    Nečinnosť nie je neutrálna voľba — je to rozhodnutie naďalej platiť plnú trhovú cenu za energiu, ktorú si viete vyrobiť. Rozdiel medzi oboma scenármi vyššie je hodnota, ktorú riešenie chráni pred rastom cien.
+  </p>
+</section>
+
+<section class="page">
   <h2 class="page-title">Expert posúdenie</h2>
   <p class="page-subtitle">Analýza senior energetického konzultanta Energovision</p>
 
@@ -486,6 +509,36 @@
   </p>
 </section>
 
+<section class="page">
+  <h2 class="page-title">Ako začneme</h2>
+  <p class="page-subtitle">Realizácia na kľúč — od obhliadky po spustenie</p>
+
+  <ol class="open-questions">
+    <li>
+      <strong>01 · Spätná väzba a obhliadka</strong>
+      <div class="oq-detail">Prejdeme posudok spoločne, doplníme chýbajúce vstupy (tarif, MRK, statika) a vykonáme technickú obhliadku odberného miesta.</div>
+    </li>
+    <li>
+      <strong>02 · Finálny návrh a zmluva</strong>
+      <div class="oq-detail">Spresníme dimenzovanie a cenu na základe obhliadky, pripravíme projektovú dokumentáciu a zmluvu o dielo. V prípade záujmu zabezpečíme aj žiadosť o dotáciu.</div>
+    </li>
+    <li>
+      <strong>03 · Pripojenie a realizácia</strong>
+      <div class="oq-detail">Vybavíme pripojenie do distribučnej sústavy, dodáme a nainštalujeme technológiu, vrátane konštrukcie, meničov, batérie a elektroinštalácie.</div>
+    </li>
+    <li>
+      <strong>04 · Spustenie a monitoring</strong>
+      <div class="oq-detail">Uvedieme systém do prevádzky, odovzdáme revízie a dokumentáciu a napojíme stanicu na monitoring s priebežným dohľadom nad výrobou a úsporami.</div>
+    </li>
+  </ol>
+
+  <div class="zaver-fakty" style="margin-top:18px;">
+    <div class="zaver-item">
+      <strong>Komplexná zodpovednosť — Energovision.</strong> Riešenie dodávame na kľúč pod jednou strechou: fotovoltika a batériové úložiská, údržba a servis trafostaníc, odborné revízie, elektrotechnické a realizačné práce, a energetický manažment vrátane monitoringu. Klient má jedného partnera pre celý životný cyklus zdroja — od návrhu po dlhodobú prevádzku.
+    </div>
+  </div>
+</section>
+
 {# =========================================================================
    PAGE 8e — OTVORENÉ OTÁZKY PRE KLIENTA
    Skill: checklist čo si klient musí overiť alebo doplniť pred podpisom.
@@ -552,6 +605,27 @@
     <p><strong>Ekonomika</strong> — NPV {{ analysis_years }} r., diskont 6 %, OPEX 1.5–2.0 % CAPEX/rok, degradácia FVE 0.5 %/rok, BESS 2 %/rok.</p>
     <p><strong>Daňový odpis</strong> — lineárny 6 r. pri DPPO 22 % (novela 2025 pre MSP).</p>
   </div>
+
+  <table class="assumptions-table" style="width:100%; border-collapse:collapse; margin:14px 0 8px; font-size:12px;">
+    <thead>
+      <tr>
+        <th style="text-align:left; padding:6px 8px; color:#6B7280; border-bottom:2px solid #E5E7EB;">Predpoklad / vstup</th>
+        <th style="text-align:right; padding:6px 8px; color:#6B7280; border-bottom:2px solid #E5E7EB;">Hodnota</th>
+        <th style="text-align:left; padding:6px 8px; color:#6B7280; border-bottom:2px solid #E5E7EB;">Zdroj</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td style="padding:5px 8px;">Diskontná sadzba</td><td style="padding:5px 8px; text-align:right;">{{ discount_rate_pct }} %</td><td style="padding:5px 8px;">Interný WACC predpoklad</td></tr>
+      <tr><td style="padding:5px 8px;">Horizont hodnotenia</td><td style="padding:5px 8px; text-align:right;">{{ analysis_years }} rokov</td><td style="padding:5px 8px;">Životnosť FVE</td></tr>
+      <tr><td style="padding:5px 8px;">Degradácia FVE</td><td style="padding:5px 8px; text-align:right;">0,5 %/rok</td><td style="padding:5px 8px;">Výrobca panelov</td></tr>
+      <tr><td style="padding:5px 8px;">Priemerná spotová cena</td><td style="padding:5px 8px; text-align:right;">{{ spot_avg_eur_mwh|round|int }} €/MWh</td><td style="padding:5px 8px;">OKTE DAM 2025</td></tr>
+      <tr><td style="padding:5px 8px;">Distribučné tarify</td><td style="padding:5px 8px; text-align:right;">ÚRSO 2026</td><td style="padding:5px 8px;">Cenové rozhodnutie ÚRSO</td></tr>
+      <tr><td style="padding:5px 8px;">Daňový odpis</td><td style="padding:5px 8px; text-align:right;">6 r. lineárny</td><td style="padding:5px 8px;">Zákon o dani z príjmov</td></tr>
+      <tr><td style="padding:5px 8px;">Ročná spotreba OM</td><td style="padding:5px 8px; text-align:right;">{{ (annual_kwh/1000)|round|int }} MWh</td><td style="padding:5px 8px;">15-min dáta / faktúra klienta</td></tr>
+      <tr><td style="padding:5px 8px;">MRK odberného miesta</td><td style="padding:5px 8px; text-align:right;">{{ mrk_kw|round|int }} kW</td><td style="padding:5px 8px;">Zmluva s distribútorom</td></tr>
+    </tbody>
+  </table>
+  <p style="font-size:11px; color:#9CA3AF; margin:4px 0 12px;">Model má neistotu rádovo ±10–15 %. Reálne výsledky závisia od nábehu prevádzky, finálnej tarify a podmienok pripojenia. Pri doplnení 12-mesačných 15-min dát a reálnej zmluvy s dodávateľom sa presnosť posudku zvýši.</p>
 
   <div class="contact-card">
     <h3>Kontakt</h3>
