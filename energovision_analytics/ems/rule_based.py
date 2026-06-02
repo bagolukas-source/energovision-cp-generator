@@ -320,11 +320,15 @@ class RuleBasedEMS:
         # 2) PV export (dostaneš výkupnú cenu)
         sav_export = pv_to_grid_kwh * self.export_price
 
-        # 3) BAT self-cons (ušetríš retail, ale stála ťa nákup z grid + RTE straty)
-        bess_self_net = bat_to_load_self_kwh * tarif_buy * 0.85  # ~15% net cost (RTE + opportunity)
+        # 3) BAT self-cons — vybitie energie (z PV zadarmo) ušetrí PLNÚ retail cenu.
+        #    Nabíjací náklad z gridu sa účtuje v arbitráži (#4), tu žiadny paušál.
+        bess_self_net = bat_to_load_self_kwh * tarif_buy
 
-        # 4) Arbitráž (BAT vybíja v drahej hodine = ušetríš drahý nákup, kúpila z lacného)
-        arb_net = bat_to_load_arb_kwh * tarif_buy - grid_to_bat_kwh * spot_eur_mwh / 1000
+        # 4) Arbitráž round-trip: vybitie v drahej hodine ušetrí retail, nabitie z gridu
+        #    v lacnej hodine STÁLO REÁLNU retail cenu importu (tarif_buy, vrát. distribúcie),
+        #    nie surový spot. tarif_buy je per-step → zachytí spread, distribúciu aj RTE
+        #    (vybiješ menej než nabiješ). Konzervatívne a správne.
+        arb_net = bat_to_load_arb_kwh * tarif_buy - grid_to_bat_kwh * tarif_buy
 
         # 5) Peak shaving — znižuje 15-min monthly peak → znižuje fakturovanú MRK kapacitu
         # Real fakturácia: monthly_peak_kw × mrk_kapacita_eur_mw_mes / 1000

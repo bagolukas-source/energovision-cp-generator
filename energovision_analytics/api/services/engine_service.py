@@ -262,47 +262,21 @@ def build_run_variants_response(
         cf_array = cf_array[:25]  # max 25 rokov
 
         # === VALUE STREAMS BREAKDOWN (annual €) ===
-        # POZOR: rule_based dispatch logika klasifikuje BAT discharge do 3 vetiev
-        # (peak / arb / self_cons), ale arbitráž vetva sa málokedy triggeruje
-        # (vyžaduje SÚČASNE drahú hodinu + load > 0). Reálna arbitráž (grid charge
-        # lacná hodina → discharge na load v drahšej) je v dispatchu klasifikovaná
-        # ako bess_self_consumption. Recompute arbitrage = bess_discharge_total ×
-        # tarif − grid_to_bat × spot_avg (správnejšia decompozícia per round-trip).
+        # Engine rule_based teraz počíta arbitráž round-trip správne (real hodinový tarif_buy
+        # na nabíjanie aj vybíjanie, žiadny paušál). bess_self = PV-zdrojové vybitie × retail.
+        # Berieme engine hodnoty priamo. Arbitráž môže byť záporná = grid-arbitráž sa pri danom
+        # profile/batérii neoplatí (úprimne). Pre report sa bess_self + arbitráž zobrazí ako
+        # jeden "batériový prínos" (commingled energia), total je korektný súčet.
         s = r.summary
-        grid_to_bat_real = max(0.0, float(s.bat_charge_total_kwh - s.pv_to_bat_kwh))
-        bess_discharge_real = float(s.bat_discharge_total_kwh)
-        # Engine spot ceny priemer (€/MWh) — z manifest alebo default
-        spot_avg_eur_kwh = 0.103  # ~103 €/MWh OKTE 2025
-        retail_avg_eur_kwh = 0.146  # ÚRSO 2026 VN retail avg
-        # Arbitráž ROUND-TRIP účtovne:
-        arb_revenue = bess_discharge_real * retail_avg_eur_kwh
-        arb_cost = grid_to_bat_real * spot_avg_eur_kwh
-        arb_recomputed = arb_revenue - arb_cost
-        # Engine sav_arbitrage_eur je broken pre VN spot kontrakty — použijeme recomputed
-        # ak engine_sav < 0 (znamenie že bess_self_cons je vlastne arbitráž)
-        engine_arb = float(s.sav_arbitrage_eur)
-        engine_bess_self = float(s.sav_bess_self_cons_eur)
-        if engine_arb < 0 and engine_bess_self > 0:
-            # Reclassify bess_self → arbitráž
-            arb_final = arb_recomputed
-            bess_self_final = 0.0
-        else:
-            arb_final = engine_arb
-            bess_self_final = engine_bess_self
-
         value_streams = {
             "solar_self_consumption_eur": float(s.sav_solar_self_cons_eur),
             "solar_export_eur": float(s.sav_solar_export_eur),
-            "bess_self_consumption_eur": bess_self_final,
-            "arbitrage_eur": arb_final,
+            "bess_self_consumption_eur": float(s.sav_bess_self_cons_eur),
+            "arbitrage_eur": float(s.sav_arbitrage_eur),
             "peak_shaving_eur": float(s.sav_peak_shaving_eur),
             "mrk_penalty_avoided_eur": float(s.sav_mrk_penalty_avoided_eur),
-            "total_eur": float(s.sav_solar_self_cons_eur)
-                       + float(s.sav_solar_export_eur)
-                       + bess_self_final
-                       + arb_final
-                       + float(s.sav_peak_shaving_eur)
-                       + float(s.sav_mrk_penalty_avoided_eur),
+            "bess_total_eur": float(s.sav_bess_self_cons_eur) + float(s.sav_arbitrage_eur),
+            "total_eur": float(s.sav_total_eur),
         }
 
         # === MONTHLY SUMMARY (12) — odhad z PVGIS SK distribúcie ===
