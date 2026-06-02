@@ -403,6 +403,54 @@
    PAGE 8d — ZÁVER (fakticky, bez "odporúčame")
    Skill: žiadne subjektívne formulácie, len fakty per variant.
    ========================================================================= #}
+{# =========================================================================
+   PAGE — EXPERT POSÚDENIE (AI Claude Sonnet 4.5)
+   Komentár senior konzultanta Energovision: vecné posúdenie variantu,
+   odporúčania, anomálie a quick wins.
+   Sekcia sa renderuje len ak AI vygenerovala obsah (fail-safe).
+   ========================================================================= #}
+{% if ai_commentary or (ai_recommendations and ai_recommendations|length > 0) %}
+<section class="page">
+  <h2 class="page-title">Expert posúdenie</h2>
+  <p class="page-subtitle">Analýza senior energetického konzultanta Energovision</p>
+
+  {% if ai_commentary %}
+  <div class="ai-commentary">
+    {{ ai_commentary|safe }}
+  </div>
+  {% endif %}
+
+  {% if ai_recommendations and ai_recommendations|length > 0 %}
+  <h3 class="ai-section-title">Odporúčania</h3>
+  <ol class="ai-recommendations">
+    {% for rec in ai_recommendations %}
+    <li>
+      <strong>{{ rec.title }}</strong>
+      {% if rec.detail %}<div class="ai-detail">{{ rec.detail }}</div>{% endif %}
+    </li>
+    {% endfor %}
+  </ol>
+  {% endif %}
+
+  {% if ai_anomalies and ai_anomalies|length > 0 %}
+  <h3 class="ai-section-title">Anomálie a quick wins</h3>
+  <div class="ai-anomalies">
+    {% for an in ai_anomalies %}
+    <div class="ai-anomaly-item">
+      <strong>⚠ {{ an.title }}</strong>
+      {% if an.detail %}<div class="ai-detail">{{ an.detail }}</div>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <p class="ai-footer">
+    <em>Posúdenie generované AI asistentom (Claude Sonnet 4.5) na základe vstupných dát.
+    Pred odoslaním klientovi odporúčame overiť záverečným konzultantom.</em>
+  </p>
+</section>
+{% endif %}
+
 <section class="page">
   <h2 class="page-title">Záver</h2>
   <p class="page-subtitle">Sumár faktov pre rozhodnutie klienta</p>
@@ -446,9 +494,11 @@
   <h2 class="page-title">Otvorené otázky pre klienta</h2>
   <p class="page-subtitle">Údaje ktoré odporúčame overiť pred finálnym rozhodnutím</p>
 
+  {# Použiť ai_open_questions ak Claude vygeneroval tailored otázky, inak open_questions, inak default 7 #}
+  {% set _qs = ai_open_questions if (ai_open_questions and ai_open_questions|length > 0) else open_questions %}
   <ol class="open-questions">
-    {% if open_questions and open_questions|length > 0 %}
-      {% for q in open_questions %}
+    {% if _qs and _qs|length > 0 %}
+      {% for q in _qs %}
       <li>
         <strong>{{ q.title }}</strong>
         {% if q.detail %}<div class="oq-detail">{{ q.detail }}</div>{% endif %}
