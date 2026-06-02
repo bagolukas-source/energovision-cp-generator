@@ -1730,5 +1730,17 @@ def render_posudok_chocosuc(sb, analyza_id: str) -> dict:
     pdf_path = f"analyza_om/{analyza_id}/posudok_chocosuc_{ts}.pdf"
     sb.storage.from_("documents").upload(pdf_path, pdf_bytes, {"content-type": "application/pdf", "upsert": "true"})
     pdf_url = sb.storage.from_("documents").get_public_url(pdf_path)
-    sb.table("analyza_om").update({"posudok_orkestra_pdf_url": pdf_url, "posudok_orkestra_generated_at": datetime.now().isoformat()}).eq("id", analyza_id).execute()
-    return {"ok": True, "pdf_url": pdf_url, "size_kb": len(pdf_bytes) // 1024, "engine": "chocosuc-v1", "client": ctx.get("client_name")}
+
+    # DOCX (natívny python-docx — funguje na Render bez libreoffice)
+    docx_url = None
+    try:
+        from posudok_chocosuc.generator_docx import generate_chocosuc_docx
+        docx_bytes = generate_chocosuc_docx(ctx)
+        docx_path = f"analyza_om/{analyza_id}/posudok_chocosuc_{ts}.docx"
+        sb.storage.from_("documents").upload(docx_path, docx_bytes, {"content-type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "upsert": "true"})
+        docx_url = sb.storage.from_("documents").get_public_url(docx_path)
+    except Exception as _e:
+        logging.error("chocosuc DOCX failed: %s", _e)
+
+    sb.table("analyza_om").update({"posudok_orkestra_pdf_url": pdf_url, "posudok_orkestra_docx_url": docx_url, "posudok_orkestra_generated_at": datetime.now().isoformat()}).eq("id", analyza_id).execute()
+    return {"ok": True, "pdf_url": pdf_url, "docx_url": docx_url, "size_kb": len(pdf_bytes) // 1024, "engine": "chocosuc-v1", "client": ctx.get("client_name")}
