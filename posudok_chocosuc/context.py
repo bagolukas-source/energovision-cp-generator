@@ -33,7 +33,7 @@ def _irr(save_total, capex, opex, annual_tax):
         else: hi=m
     return m*100
 
-def build_chocosuc_context(analyza: dict, variants: list) -> dict:
+def build_chocosuc_context(analyza: dict, variants: list, hourly=None) -> dict:
     from analyza_om_v2 import build_orkestra_context
     base=build_orkestra_context(analyza, variants, str(analyza.get("id","")))
 
@@ -61,16 +61,23 @@ def build_chocosuc_context(analyza: dict, variants: list) -> dict:
     p_sell=g("tarif_sell",None); p_sell=(p_sell) if (p_sell and p_sell<1) else 0.06
     p_avoided=p_silova+p_dist_var
 
-    # --- profil (z dát: agregáty + mesačné; hourly ak je) ---
-    monthly_eur=base.get("monthly_solar_to_load") or []
-    monthly_mwh=base.get("_monthly_mwh") or None
+    # --- profil (z dát: hourly ak dostupný, inak agregáty) ---
+    hourly_wd=hourly_we=None; monthly_mwh=None
+    if hourly:
+        from collections import defaultdict
+        bd=defaultdict(list); bw=defaultdict(list); mm=defaultdict(float)
+        for (hh, wknd, kw, mon) in hourly:
+            (bw if wknd else bd)[hh].append(kw); mm[mon]+=kw/1000.0
+        hourly_wd=[ (sum(bd[h])/len(bd[h]) if bd.get(h) else 0) for h in range(24)]
+        hourly_we=[ (sum(bw[h])/len(bw[h]) if bw.get(h) else 0) for h in range(24)]
+        monthly_mwh=[mm.get(m,0) for m in range(1,13)]
     avg_kw=float(analyza.get("consumption_avg_kw") or 0) or (float(base.get("load_total_mwh") or 0)*1000/8760)
     # SANITIZÁCIA špičky: zlé dáta (peak < avg) -> použiť iný zdroj, inak odhad (load factor ~0.45)
     _cands=[float(analyza.get("consumption_peak_kw_15min") or 0), float(analyza.get("consumption_peak_kw_hourly") or 0)]
     _valid=[c for c in _cands if c > (avg_kw or 0)*1.05]
     peak_kw=max(_valid) if _valid else round((avg_kw or 0)/0.45)
     peak_estimated = not _valid
-    prof=classify_profile(hourly=base.get("_hourly"), monthly_mwh=monthly_mwh, avg_kw=avg_kw or None, peak_kw=peak_kw or None)
+    prof=classify_profile(hourly=[(h[0],h[1],h[2]) for h in hourly] if hourly else None, monthly_mwh=monthly_mwh, avg_kw=avg_kw or None, peak_kw=peak_kw or None)
     pm=prof["metrics"]
     profile_sentence=f"Profil je charakteristický ako {prof['rezim']}; {prof['sezonnost']}." + (f" Špička: {prof['spicka']}." if prof.get('spicka') else "") + (f" {prof['fve_fit']}." if prof.get('fve_fit') else "")
 
@@ -153,7 +160,7 @@ def build_chocosuc_context(analyza: dict, variants: list) -> dict:
         "grid_import_mwh":base.get("grid_import_mwh"),"samosp_pct":base.get("samospotreba_pct"),"coverage_pct":base.get("samostatnost_pct"),
         "year_mwh":base.get("load_total_mwh"),"max15_kw":peak_kw,"peak_estimated":peak_estimated,"capex_total_eur":capex,"net_capex_eur":net_capex,
         "co2_avoided_tonnes":base.get("co2_avoided_tonnes"),
-        "monthly_mwh":monthly_mwh,"profile_metrics":pm,"profile_sentence":profile_sentence,"profile":prof,
+        "monthly_mwh":monthly_mwh,"hourly_wd":hourly_wd,"hourly_we":hourly_we,"profile_metrics":pm,"profile_sentence":profile_sentence,"profile":prof,
         "p_silova":p_silova,"p_dist_var":p_dist_var,"p_tps":p_tps,"p_so":p_so,"p_dist_pevna":p_dist_pevna,"p_sell":p_sell,"p_avoided":p_avoided,
         "tarif_real":tarif_real,"tarif_source":(analyza.get("tarif_source") or "faktúra") if tarif_real else "orientačné (ÚRSO 2026)",
         "components":components,"components_real":comp_real,

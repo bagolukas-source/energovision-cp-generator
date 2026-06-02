@@ -1695,7 +1695,32 @@ def render_posudok_chocosuc(sb, analyza_id: str) -> dict:
     if not variants:
         raise ValueError("No variants — run simulation first")
 
-    ctx = build_chocosuc_context(analyza, variants)
+    # --- načítať hodinový profil zo storage (analyza-om bucket) pre full profile metriky ---
+    hourly = None
+    try:
+        ppath = analyza.get("consumption_profile_path")
+        if ppath:
+            raw = sb.storage.from_("analyza-om").download(ppath)
+            import datetime as _dt
+            hourly = []
+            for line in raw.decode("utf-8", "replace").splitlines():
+                parts = line.split(",")
+                if len(parts) < 2:
+                    continue
+                ts = parts[0].strip()
+                try:
+                    d = _dt.datetime.fromisoformat(ts.replace("Z", ""))
+                    kw = float(parts[-1])
+                except Exception:
+                    continue
+                hourly.append((d.hour, d.weekday() >= 5, kw, d.month))
+            if len(hourly) < 100:
+                hourly = None
+    except Exception as _e:
+        logging.warning("chocosuc hourly load failed: %s", _e)
+        hourly = None
+
+    ctx = build_chocosuc_context(analyza, variants, hourly=hourly)
     ai = _generate_chocosuc_ai(ctx)
     ctx["ai_commentary_html"] = ai["commentary"]
     ctx["recommendations"] = ai["recommendations"] or ctx.get("recommendations") or []
