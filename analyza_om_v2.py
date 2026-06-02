@@ -170,7 +170,7 @@ def _build_request_from_analyza(analyza: dict) -> dict:
     engine_rk_kw = sk_import_kw
     engine_mrk_kw = max(sk_export_kw, sk_import_kw)  # engine validates mrk >= rk
 
-    return {
+    req = {
         "site": {
             "nazov": analyza.get("name", "OM"),
             "psc": analyza.get("om_psc") or "010 01",
@@ -223,6 +223,27 @@ def _build_request_from_analyza(analyza: dict) -> dict:
         },
         "async_mode": False,
     }
+    # --- CHAT OVERRIDES (učiteľnosť / šperkovanie cez chat) ---
+    co = analyza.get("chat_overrides") or {}
+    if isinstance(co, dict) and co:
+        try:
+            add_pv = [float(x) for x in (co.get("add_pv_kwp") or [])]
+            add_bess = [float(x) for x in (co.get("add_bess_kwh") or [])]
+            if add_pv:
+                req["variants"]["pv_kwp_options"] = sorted(set(list(req["variants"]["pv_kwp_options"]) + add_pv))
+            if add_bess:
+                req["variants"]["bess_kwh_options"] = sorted(set(list(req["variants"]["bess_kwh_options"]) + add_bess))
+            if co.get("capex_per_kwp"):
+                req["capex"]["capex_pv_eur_per_kwp"] = float(co["capex_per_kwp"])
+            if co.get("capex_per_kwh_bess"):
+                req["capex"]["capex_bess_eur_per_kwh"] = float(co["capex_per_kwh_bess"])
+            if co.get("dotacia_enabled") is not None:
+                req["dotacia"]["enabled"] = bool(co["dotacia_enabled"])
+            if co.get("arb_min_spread_eur_mwh"):
+                req["ems_config"]["arb_min_spread_eur_mwh"] = float(co["arb_min_spread_eur_mwh"])
+        except Exception as _e:
+            logging.warning("chat_overrides merge failed: %s", _e)
+    return req
 
 
 def _generate_ai_narrative(analyza: dict, variants: list, top_picks: list) -> dict:
@@ -1744,3 +1765,107 @@ def render_posudok_chocosuc(sb, analyza_id: str) -> dict:
 
     sb.table("analyza_om").update({"posudok_orkestra_pdf_url": pdf_url, "posudok_orkestra_docx_url": docx_url, "posudok_orkestra_generated_at": datetime.now().isoformat()}).eq("id", analyza_id).execute()
     return {"ok": True, "pdf_url": pdf_url, "docx_url": docx_url, "size_kb": len(pdf_bytes) // 1024, "engine": "chocosuc-v1", "client": ctx.get("client_name")}
+
+
+def aom_chat(sb, analyza_id: str, message: str, history=None) -> dict:
+    """Chat refinement (šperkovanie) nad posudkom. Claude rozpozná zámer:
+    - explain  → odpovie z kontextu posudku (bez re-renderu)
+    - adjust   → uloží override páky do analyza.chat_overrides, prepočíta engine, pregeneruje posudok
+    Učitelné: chat_overrides ostanú na zázname, každý ďalší render ich rešpektuje."""
+    import json as _json
+    from anthropic import Anthropic
+    history = history or []
+
+    a = sb.table("analyza_om").select("*, customers(company_name, first_name, last_name)").eq("id", analyza_id).single().execute().data
+    if not a:
+        raise ValueError("Analyza not found")
+    econ = a.get("econ_results") or {}
+    fr = econ.get("full_response") or {}
+    variants = fr.get("variants", [])
+    # kompaktný kontext pre Claude
+    vlist = []
+    for v in variants[:8]:
+        vlist.append({"label": v.get("label"), "pv_kwp": v.get("pv_kwp"), "bess_kwh": v.get("bess_kwh"),
+                      "npv_eur": v.get("npv_eur"), "irr_pct": v.get("irr_pct"), "payback_y": v.get("payback_simple_y"),
+                      "capex_eur": v.get("capex_total_eur")})
+    cur_over = a.get("chat_overrides") or {}
+    ctx = {
+        "klient": (a.get("customers") or {}).get("company_name") or a.get("name"),
+        "rocna_spotreba_mwh": a.get("consumption_annual_mwh"),
+        "mrk_kw": a.get("om_mrk_kw"), "max_export_kw": a.get("max_export_kw"),
+        "existing_fve_kwp": a.get("existing_fve_kwp"), "scenario_type": a.get("scenario_type"),
+        "varianty": vlist, "aktualne_overrides": cur_over,
+    }
+
+    sysp = (
+        "Si senior energetický konzultant Energovision. Používateľ (obchodník) sa s tebou rozpráva o posudku "
+        "FVE/BESS pre konkrétneho klienta a chce ho doladiť. Máš kontext (JSON). Odpovedaj po slovensky, vecne, krátko.\n\n"
+        "Rozhodni zámer používateľa a VRÁŤ IBA JSON:\n"
+        "{\n"
+        '  "intent": "explain" | "adjust",\n'
+        '  "reply": "text odpovede používateľovi (po slovensky, 1-4 vety)",\n'
+        '  "adjustments": {\n'
+        '     "add_pv_kwp": [čísla kWp ktoré má engine navýše preštudovať, alebo []],\n'
+        '     "add_bess_kwh": [čísla kWh batérie navyše, alebo []],\n'
+        '     "capex_per_kwp": číslo alebo null,\n'
+        '     "capex_per_kwh_bess": číslo alebo null,\n'
+        '     "dotacia_enabled": true|false|null,\n'
+        '     "arb_min_spread_eur_mwh": číslo alebo null,\n'
+        '     "scenario_emphasis": "optimisticky"|"konzervativny"|null\n'
+        "  }\n"
+        "}\n\n"
+        "Pravidlá: ak sa používateľ iba pýta / chce vysvetlenie → intent=explain, adjustments prázdne. "
+        "Ak chce zmeniť konfiguráciu (väčšia FVE, pridať/zväčšiť batériu, iné ceny, zapnúť dotáciu, optimistickejší pohľad) "
+        "→ intent=adjust a vyplň adjustments. NIKDY si nevymýšľaj čísla mimo toho čo používateľ žiada. "
+        "Rešpektuj fyzikálne limity: FVE AC ≤ MRK, export ≤ max_export_kw — ak žiada nezmysel, v reply slušne upozorni."
+    )
+    msgs = []
+    for h in history[-6:]:
+        r = "user" if h.get("role") == "user" else "assistant"
+        msgs.append({"role": r, "content": h.get("content", "")})
+    msgs.append({"role": "user", "content": "KONTEXT:\n" + _json.dumps(ctx, ensure_ascii=False) + "\n\nSPRÁVA:\n" + message})
+
+    try:
+        resp = Anthropic().messages.create(
+            model="claude-sonnet-4-5-20250929", max_tokens=1500, temperature=0.2,
+            system=sysp, messages=msgs)
+        txt = resp.content[0].text.strip()
+        if txt.startswith("```"):
+            txt = txt.split("```")[1].replace("json", "", 1).strip()
+        parsed = _json.loads(txt)
+    except Exception as e:
+        logging.exception("aom_chat parse failed")
+        return {"ok": True, "intent": "explain", "reply": "Prepáč, nerozumel som — skús to formulovať inak (napr. „zvýš batériu na 120 kWh“ alebo „prečo je návratnosť takáto“).", "rerender": False, "error": str(e)[:200]}
+
+    intent = parsed.get("intent", "explain")
+    reply = parsed.get("reply") or ""
+    adj = parsed.get("adjustments") or {}
+
+    if intent != "adjust" or not any(adj.get(k) for k in ("add_pv_kwp","add_bess_kwh","capex_per_kwp","capex_per_kwh_bess","dotacia_enabled","scenario_emphasis","arb_min_spread_eur_mwh")):
+        return {"ok": True, "intent": "explain", "reply": reply or "Rozumiem.", "rerender": False}
+
+    # --- ADJUST: zlúčiť do chat_overrides, prepočítať, pregenerovať ---
+    new_over = dict(cur_over)
+    for k in ("add_pv_kwp","add_bess_kwh"):
+        if adj.get(k):
+            new_over[k] = sorted(set(list(new_over.get(k, [])) + [float(x) for x in adj[k]]))
+    for k in ("capex_per_kwp","capex_per_kwh_bess","arb_min_spread_eur_mwh"):
+        if adj.get(k) is not None:
+            new_over[k] = float(adj[k])
+    if adj.get("dotacia_enabled") is not None:
+        new_over["dotacia_enabled"] = bool(adj["dotacia_enabled"])
+    if adj.get("scenario_emphasis"):
+        new_over["scenario_emphasis"] = adj["scenario_emphasis"]
+    sb.table("analyza_om").update({"chat_overrides": new_over}).eq("id", analyza_id).execute()
+
+    # prepočítať engine s novými pákami + pregenerovať posudok
+    try:
+        run_variants_premium(sb, analyza_id)
+        rendered = render_posudok_chocosuc(sb, analyza_id)
+    except Exception as e:
+        logging.exception("aom_chat rerender failed")
+        return {"ok": True, "intent": "adjust", "reply": reply + " (⚠ prepočet zlyhal: " + str(e)[:150] + ")", "rerender": False, "overrides": new_over}
+
+    return {"ok": True, "intent": "adjust", "reply": reply or "Hotovo, posudok som prepočítal.",
+            "rerender": True, "pdf_url": rendered.get("pdf_url"), "docx_url": rendered.get("docx_url"),
+            "overrides": new_over}

@@ -1,0 +1,63 @@
+{
+  "analyza": {
+    "name": "Arcellor MittalGonvarri Nitra ",
+    "om_address": "",
+    "om_psc": "94901",
+    "om_mrk_kw": "850",
+    "om_rk_kw": "650",
+    "consumption_annual_mwh": "2957.98",
+    "om_sadzba": "VN",
+    "selected_variant_id": "46d0c67a-ef76-410c-9195-3ea2195ead9f",
+    "posudok_number": null,
+    "customers": null,
+    "econ_results": {}
+  },
+  "selected_full": {
+    "label": "780 kWp FVE (bez BESS)",
+    "variant_id": "PV780_BESS0_rule_based",
+    "pv_kwp": 780, "bess_kwh": 0, "bess_kw": 0,
+    "irr_pct": 27.100245075252317,
+    "npv_eur": 1057904.7342413657,
+    "dotacia_eur": 0,
+    "capex_pv_eur": 624000, "capex_bess_eur": 0, "capex_total_eur": 624000, "net_capex_eur": 624000,
+    "saving_y1_eur": 154880.14338952632,
+    "payback_simple_y": 3.5129149575143774,
+    "samospotreba_pct": 94.4588971560435,
+    "samostatnost_pct": 25.727291857172403,
+    "pv_total_kwh": 805650.0452462658,
+    "grid_import_kwh": 2196971.8523232117,
+    "ems_strategy": "rule_based",
+    "energy_flow": {"pv_total_mwh":805.6500452462658,"pv_to_bat_mwh":0,"load_total_mwh":2957.98,"pv_to_grid_mwh":44.6418975694776,"pv_to_load_mwh":761.0081476767883,"bat_to_load_mwh":0,"grid_export_mwh":44.6418975694776,"grid_to_bat_mwh":0,"grid_to_load_mwh":2196.971852323212},
+    "carbon": {"trees_equivalent":9591,"barrels_oil_avoided":467,"co2_avoided_t_per_year":201.41251131156645},
+    "value_streams": {"total_eur":154880.14338952632,"arbitrage_eur":0,"peak_shaving_eur":0,"solar_export_eur":2678.513854168656,"mrk_penalty_avoided_eur":0,"bess_self_consumption_eur":0,"solar_self_consumption_eur":152201.62953535767},
+    "solar_consumption_pct": {"exported":5.541102843956492,"curtailed":0,"direct_to_load":94.4588971560435,"charging_battery":0},
+    "cashflow_array": [-574000,164394.81,163620.41,162849.88,162083.20,161320.36,160561.33,138759.43,138007.98,137260.28,136516.31,135776.07,135039.53,134306.68,133577.48,132851.93,132130.01,131411.70,130696.99,129985.84,129278.25],
+    "monthly_summary": [
+      {"month":1,"solar_to_load_eur":5783.7,"solar_export_eur":101.8,"arbitrage_eur":0},
+      {"month":2,"solar_to_load_eur":8675.5,"solar_export_eur":152.7,"arbitrage_eur":0},
+      {"month":3,"solar_to_load_eur":13393.7,"solar_export_eur":235.7,"arbitrage_eur":0},
+      {"month":4,"solar_to_load_eur":16437.8,"solar_export_eur":289.3,"arbitrage_eur":0},
+      {"month":5,"solar_to_load_eur":18112.0,"solar_export_eur":318.7,"arbitrage_eur":0},
+      {"month":6,"solar_to_load_eur":18873.0,"solar_export_eur":332.1,"arbitrage_eur":0},
+      {"month":7,"solar_to_load_eur":18873.0,"solar_export_eur":332.1,"arbitrage_eur":0},
+      {"month":8,"solar_to_load_eur":17655.4,"solar_export_eur":310.7,"arbitrage_eur":0},
+      {"month":9,"solar_to_load_eur":13850.3,"solar_export_eur":243.7,"arbitrage_eur":0},
+      {"month":10,"solar_to_load_eur":10197.5,"solar_export_eur":179.5,"arbitrage_eur":0},
+      {"month":11,"solar_to_load_eur":6088.1,"solar_export_eur":107.1,"arbitrage_eur":0},
+      {"month":12,"solar_to_load_eur":4261.6,"solar_export_eur":75.0,"arbitrage_eur":0}
+    ]
+  },
+  "others": [
+    {"label":"663 kWp FVE (bez BESS)","pv_kwp":663,"bess_kwh":0,"capex_total_eur":530400,"dotacia_eur":0,"npv_eur":919133.06,"irr_pct":27.94,"payback_simple_y":3.418},
+    {"label":"507 kWp FVE (bez BESS)","pv_kwp":507,"bess_kwh":0,"capex_total_eur":405600,"dotacia_eur":0,"npv_eur":720953.17,"irr_pct":29.39,"payback_simple_y":3.265},
+    {"label":"312 kWp FVE (bez BESS)","pv_kwp":312,"bess_kwh":0,"capex_total_eur":249600,"dotacia_eur":0,"npv_eur":443939.70,"irr_pct":32.31,"payback_simple_y":2.992},
+    {"label":"780 kWp FVE + 200/100 kWh/kW BESS","pv_kwp":780,"bess_kwh":200,"capex_total_eur":720000,"dotacia_eur":0,"npv_eur":262126.33,"irr_pct":12.38,"payback_simple_y":6.189},
+    {"label":"663 kWp FVE + 200/100 kWh/kW BESS","pv_kwp":663,"bess_kwh":200,"capex_total_eur":626400,"dotacia_eur":0,"npv_eur":214535.30,"irr_pct":12.30,"payback_simple_y":6.216},
+    {"label":"780 kWp FVE + 500/250 kWh/kW BESS","pv_kwp":780,"bess_kwh":500,"capex_total_eur":864000,"dotacia_eur":0,"npv_eur":162617.52,"irr_pct":9.73,"payback_simple_y":7.382},
+    {"label":"507 kWp FVE + 200/100 kWh/kW BESS","pv_kwp":507,"bess_kwh":200,"capex_total_eur":501600,"dotacia_eur":0,"npv_eur":147482.90,"irr_pct":12.03,"payback_simple_y":6.313},
+    {"label":"663 kWp FVE + 500/250 kWh/kW BESS","pv_kwp":663,"bess_kwh":500,"capex_total_eur":770400,"dotacia_eur":0,"npv_eur":116261.19,"irr_pct":9.33,"payback_simple_y":7.592},
+    {"label":"312 kWp FVE + 200/100 kWh/kW BESS","pv_kwp":312,"bess_kwh":200,"capex_total_eur":345600,"dotacia_eur":0,"npv_eur":57439.88,"irr_pct":11.11,"payback_simple_y":6.684},
+    {"label":"507 kWp FVE + 500/250 kWh/kW BESS","pv_kwp":507,"bess_kwh":500,"capex_total_eur":645600,"dotacia_eur":0,"npv_eur":45731.67,"irr_pct":8.36,"payback_simple_y":8.135},
+    {"label":"312 kWp FVE + 500/250 kWh/kW BESS","pv_kwp":312,"bess_kwh":500,"capex_total_eur":489600,"dotacia_eur":0,"npv_eur":-47595.09,"irr_pct":6.08,"payback_simple_y":9.695}
+  ]
+}

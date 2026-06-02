@@ -112,6 +112,12 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None) -> dict:
     S = [scen("Báza (ÚRSO 2026 + spot OKTE)","Báza",1.0),
          scen("Defenzívny (nižší výkup/cena)","Defenzívny",0.85),
          scen("Optimistický (rast cien energie)","Optimistický",1.12)]
+    # scenario_emphasis z chatu (učiteľnosť): ktorý scenár je „odporúčaný" v posudku
+    _co = analyza.get("chat_overrides") or {}
+    _emph = _co.get("scenario_emphasis") if isinstance(_co, dict) else None
+    _reco_idx = {"konzervativny":1, "optimisticky":2}.get(_emph, 0)
+    for _i,_sc in enumerate(S):
+        _sc["recommended"] = (_i == _reco_idx)
     full = S[-1]
 
     # --- tornado (citlivosť NPV na engine bázu) ---

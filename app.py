@@ -6022,6 +6022,22 @@ def webhook_aom_render_premium_docx():
         return jsonify({"ok": False, "error": str(e)[:500]}), 500
 
 
+@app.route("/webhook/analyza-om-chat", methods=["POST"])
+def webhook_aom_chat():
+    """Chat refinement (šperkovanie): rozpozná zámer, odpovie alebo prepočíta + pregeneruje posudok."""
+    if not _aom_v2:
+        return jsonify({"ok": False, "error": "analyza_om_v2 not loaded"}), 500
+    body = request.get_json(silent=True) or {}
+    aid = body.get("analyza_id"); msg = body.get("message")
+    if not aid or not msg:
+        return jsonify({"ok": False, "error": "analyza_id + message required"}), 400
+    try:
+        return jsonify(_aom_v2.aom_chat(_sb(), aid, msg, body.get("history") or []))
+    except Exception as e:
+        log.exception("[aom-chat] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
 @app.route("/webhook/analyza-om-bot", methods=["POST"])
 def webhook_aom_bot():
     """Agentický orchestrátor: rozpozná situáciu (greenfield/retrofit/rozšírenie/BESS-only),
