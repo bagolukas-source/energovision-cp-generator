@@ -662,13 +662,11 @@ def _generate_ai_expert_commentary(context: dict, analyza: dict) -> dict:
         text = msg.content[0].text.strip()
         # Strip optional markdown code fences
         if text.startswith("```"):
-            lines = text.split("
-")
+            lines = text.split("\n")
             lines = lines[1:]  # drop opening fence
             if lines and lines[-1].strip().startswith("```"):
                 lines = lines[:-1]
-            text = "
-".join(lines).strip()
+            text = "\n".join(lines).strip()
         if text.startswith("json"):
             text = text[4:].strip()
 
