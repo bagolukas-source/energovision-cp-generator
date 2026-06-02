@@ -280,13 +280,13 @@
       {% for v in other_variants %}
       <tr>
         <td>{{ v.label }}</td>
-        <td class="num">{{ v.pv_kwp|round|int }}</td>
-        <td class="num">{{ v.bess_kwh|round|int }}</td>
+        <td class="num">{{ v.pv_kwp|default(0)|round|int }}</td>
+        <td class="num">{{ v.bess_kwh|default(0)|round|int }}</td>
         <td class="num">{{ v.capex_total_eur|format_currency }}</td>
         <td class="num">{{ v.dotacia_eur|format_currency }}</td>
         <td class="num">{{ v.npv_eur|format_currency }}</td>
-        <td class="num">{{ v.irr_pct|round(1) }} %</td>
-        <td class="num">{{ v.payback_simple_y|round(1) }} r</td>
+        <td class="num">{{ v.irr_pct|default(0)|round(1) }} %</td>
+        <td class="num">{{ v.payback_simple_y|default(0)|round(1) }} r</td>
       </tr>
       {% endfor %}
     </tbody>

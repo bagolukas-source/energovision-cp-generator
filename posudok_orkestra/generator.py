@@ -28,7 +28,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from jinja2 import Environment, FileSystemLoader, select_autoescape
+from jinja2 import Environment, FileSystemLoader, select_autoescape, Undefined
 from weasyprint import HTML, CSS
 
 from . import charts
@@ -83,10 +83,40 @@ def _logo_b64() -> str:
     return ""
 
 
+class _SafeUndefined(Undefined):
+    """Chybajuce pole degraduje na 0/prazdny retazec namiesto padu celeho posudku.
+    Posudok sa nikdy nesmie 500-nut kvoli jednemu chybajucemu cislu."""
+    __slots__ = ()
+    def __int__(self): return 0
+    def __float__(self): return 0.0
+    def __round__(self, ndigits=0): return 0
+    def __str__(self): return ""
+    def __html__(self): return ""
+    def __add__(self, other): return other
+    def __radd__(self, other): return other
+    def __sub__(self, other): return -other if isinstance(other,(int,float)) else 0
+    def __rsub__(self, other): return other
+    def __mul__(self, other): return 0
+    def __rmul__(self, other): return 0
+    def __truediv__(self, other): return 0
+    def __rtruediv__(self, other): return 0
+    def __iter__(self): return iter(())
+    def __len__(self): return 0
+    def __bool__(self): return False
+    def __hash__(self): return 0
+    def __eq__(self, o): return (o == 0) or isinstance(o, Undefined)
+    def __ne__(self, o): return not self.__eq__(o)
+    def __lt__(self, o): return 0 < o if isinstance(o,(int,float)) else False
+    def __le__(self, o): return 0 <= o if isinstance(o,(int,float)) else False
+    def __gt__(self, o): return 0 > o if isinstance(o,(int,float)) else False
+    def __ge__(self, o): return 0 >= o if isinstance(o,(int,float)) else False
+
+
 def _make_env() -> Environment:
     env = Environment(
         loader=FileSystemLoader(str(_TEMPLATES_DIR)),
         autoescape=select_autoescape(["html", "xml"]),
+        undefined=_SafeUndefined,
     )
     env.filters["format_currency"] = _format_currency
     env.filters["format_kwh"] = _format_kwh

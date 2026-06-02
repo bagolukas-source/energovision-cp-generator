@@ -923,6 +923,8 @@ def render_posudok_orkestra(sb, analyza_id: str) -> dict:
             "dotacia_eur": v.get("dotacia_eur", 0),
             "npv_eur": v.get("npv_eur", 0),
             "irr_pct": v.get("irr_pct", 0),
+            # template (posudok.html) cita v.payback_simple_y - pole musi mat tento nazov
+            "payback_simple_y": v.get("payback_simple_y", v.get("payback_y", 0)),
             "payback_years": v.get("payback_simple_y", v.get("payback_y", 0)),
         })
 
