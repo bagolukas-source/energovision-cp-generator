@@ -106,7 +106,16 @@ def run_intake(sb, analyza_id: str, files: list, bucket: str = "analyza-om") -> 
                         rec["clean_filename"] = "consumption_15min.csv"
                         rec.setdefault("extracted", {})["annual_mwh"] = cons_summary.get("annual_mwh")
             else:
-                warnings.append("Spotreba: parser nevrátil ok (" + str((res or {}).get("error",""))[:120] + ")")
+                detail = "; ".join(str(w)[:140] for w in (res or {}).get("warnings", [])[:6])
+                warnings.append("Spotreba: " + str((res or {}).get("error",""))[:80] + (" | " + detail if detail else ""))
+                # sniff prvých bajtov (HTML maskované ako .xls?)
+                try:
+                    import analyza_om.engine as _eng2
+                    head = _eng2.storage_download(cons_paths[0])[:64]
+                    sig = "HTML" if head.lstrip()[:6].lower() in (b"<html", b"<?xml", b"<table", b"<!doct") or b"<" in head[:8] else ("ZIP/xlsx" if head[:2]==b"PK" else ("BIFF/xls" if head[:4]==b"\xd0\xcf\x11\xe0" else "?"))
+                    warnings.append(f"Formát 1. súboru: {sig} (head={head[:24]!r})")
+                except Exception as _se:
+                    warnings.append(f"sniff zlyhal: {_se}")
         except Exception as e:
             log.exception("intake consumption parse failed")
             warnings.append(f"Spotreba parse zlyhala: {str(e)[:150]}")
