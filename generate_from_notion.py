@@ -39,6 +39,7 @@ KONSTRUKCIA_MAP = {
     "Falcový plech": "KON-003",
     "Plochá strecha — J 13°": "KON-004",
     "Plochá strecha — V/Z 10°": "KON-005",
+    "Zemná inštalácia": "KON-006",
 }
 BATERIA_MAP = {
     "Pylontech Force H3 — 5.12 kWh": "BAT-001",

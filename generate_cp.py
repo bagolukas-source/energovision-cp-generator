@@ -81,6 +81,8 @@ def _load_cennik_raw():
         kod, kat, naz, mj, cena, zdr, dat, pozn = row
         if kod and cena is not None and isinstance(cena, (int, float)):
             out[kod] = {"nazov": naz, "kategoria": kat, "mj": mj, "cena": float(cena)}
+    # Fallback pre nové konštrukcie čo nie sú v xlsx cenníku (cena je aj tak CRM-override)
+    out.setdefault("KON-006", {"nazov": "Zemná inštalácia — zemné skrutky + profil", "kategoria": "Konštrukcia", "mj": "modul", "cena": 130.0})
     return out
 
 
