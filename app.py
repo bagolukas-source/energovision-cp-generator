@@ -6037,6 +6037,35 @@ def webhook_aom_chat_status():
         return jsonify({"ok": False, "error": str(e)[:300]}), 500
 
 
+@app.route("/webhook/analyza-om-intake", methods=["POST"])
+def webhook_aom_intake():
+    """Chat-first intake: roztriedi nahrané súbory, prečistí, uloží podklady, extrahuje parametre."""
+    body = request.get_json(silent=True) or {}
+    aid = body.get("analyza_id"); files = body.get("files") or []
+    if not aid or not files:
+        return jsonify({"ok": False, "error": "analyza_id + files required"}), 400
+    try:
+        from ingestion.intake import run_intake
+        bucket = body.get("bucket") or "analyza-om"
+        return jsonify(run_intake(_sb(), aid, files, bucket))
+    except Exception as e:
+        log.exception("[aom-intake] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
+@app.route("/webhook/analyza-om-podklady", methods=["GET", "POST"])
+def webhook_aom_podklady():
+    """Zoznam pomenovaných podkladov pre analýzu."""
+    aid = request.args.get("analyza_id") or (request.get_json(silent=True) or {}).get("analyza_id")
+    if not aid:
+        return jsonify({"ok": False, "error": "analyza_id required"}), 400
+    try:
+        r = _sb().table("analyza_om_podklady").select("*").eq("analyza_id", aid).order("created_at").execute()
+        return jsonify({"ok": True, "podklady": r.data or []})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)[:300]}), 500
+
+
 @app.route("/webhook/analyza-om-chat", methods=["POST"])
 def webhook_aom_chat():
     """Chat refinement (šperkovanie): rozpozná zámer, odpovie alebo prepočíta + pregeneruje posudok."""
