@@ -641,6 +641,13 @@ def lead_from_notion(notion_props, variant):
     else:
         wp = 535  # default novy LONGi 535 Wp
     vykon_kwp = round(pocet_panelov * wp / 1000, 2)
+    # Ak cenovka pošle reálny výkon, použi ho (neprepočítavaj z Wp)
+    _flat_vykon = notion_props.get("vykon_kwp") or notion_props.get("Výkon FVE")
+    try:
+        if _flat_vykon not in (None, ""):
+            vykon_kwp = round(float(str(_flat_vykon).replace(",", ".").split()[0]), 2)
+    except Exception:
+        pass
 
     # Poznamky text - pouzity pre Spotreba fallback aj pre adresu nizsie
     pozn = notion_props.get("Poznámky") or ""
@@ -758,9 +765,16 @@ def lead_from_notion(notion_props, variant):
         "cena_el_eur_kwh": 0.16,
         "distribucka": DISTRIBUCKA_DEFAULT,
         "vykon_kwp": vykon_kwp,
+        "pocet_panelov": pocet_panelov,
         "panel_kod": panel_kod,
         "invertor_kod": inv_kod,
         "konstrukcia_kod": kon_kod,
+        # Reálne názvy z cenovky pre DISPLAY (nie re-derived z cenníka)
+        "disp_menic": notion_props.get("Menič"),
+        "disp_panel": notion_props.get("Panel") or notion_props.get("Typ panela"),
+        "disp_konstrukcia": notion_props.get("Konštrukcia (typ)"),
+        "disp_bateria": notion_props.get("Batéria (typ)"),
+        "disp_wallbox": notion_props.get("Wallbox (typ)"),
         # P0: Zemná inštalácia z Notion property — pri "Áno" pridá uzemnenie 250 €
         "zemna_instalacia_yes": (notion_props.get("Zemná inštalácia") or "").startswith("Áno"),
         "bateria_kwh": bateria_kwh,

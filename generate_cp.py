@@ -97,7 +97,7 @@ def vyrataj_konfig(lead, cennik):
     elif "540" in panel["nazov"]: wp = 540
     elif "535" in panel["nazov"]: wp = 535
     else: wp = 535  # default LONGi 535 Wp
-    pocet_panelov = round(vykon * 1000 / wp)
+    pocet_panelov = int(lead.get("pocet_panelov") or round(vykon * 1000 / wp))
 
     # menič (default Solinteg 10K alebo Huawei podľa kWp)
     inv_kod = lead.get("invertor_kod")
@@ -192,9 +192,9 @@ def vyrataj_konfig(lead, cennik):
     return {
         "vykon_kwp": vykon,
         "pocet_panelov": pocet_panelov,
-        "panel": panel["nazov"],
-        "menic": menic["nazov"],
-        "konstrukcia": konstrukcia["nazov"],
+        "panel": lead.get("disp_panel") or panel["nazov"],
+        "menic": lead.get("disp_menic") or menic["nazov"],
+        "konstrukcia": lead.get("disp_konstrukcia") or konstrukcia["nazov"],
         "bom": bom,
         "praca": praca,
         "ma_bateriu": lead.get("bateria_kwh", 0) > 0,
