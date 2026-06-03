@@ -164,6 +164,7 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
 
 <section class="newpage">
   <div class="kick">2 — Profil odberu</div><h2>Charakteristika spotreby</h2>
+  <div class="narr">{ctx.get('profile_narrative','')}</div>
   <img class="img" src="{g_daily}"><div class="cap">Graf 1: Denný profil odberu — pracovný deň vs víkend, s PV produkciou. {ctx.get('daily_cap','')}</div>
   <img class="img" src="{g_month}"><div class="cap">Graf 2: Mesačná spotreba. {ctx.get('monthly_cap','')}</div>
 </section>
@@ -188,6 +189,7 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
     {trow(["Pokrytie spotreby OM",f"{num(ctx.get('coverage_pct'),1)} %","FVE vs spotreba"])}
   </table>
   <img class="img" src="{g_bal}"><div class="cap">Graf 3: Energetická bilancia.</div>
+  <div class="narr">{ctx.get('balance_narrative','')}</div>
 </section>
 
 <section class="newpage">
@@ -204,6 +206,7 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
   <table>{trow(["Scenár","Úspora €/r","Návratnosť","NPV 20 r.","IRR"],head=True,align=['l','r','r','r','r'])}
     {"".join(trow([s['name'],eur(s['save_total']),f"{num(s['payback'],1)} r",eur(s['npv']),f"{num(s['irr'],1)} %"],em=("em" if s is full else None)) for s in S)}
   </table>
+  <div class="scenexpl">{"".join(f'<div class="rec"><b>{nm}</b><span>{tx}</span></div>' for nm,tx in ctx.get('scenarios_bullets',[]))}</div>
   <img class="img" src="{g_scen}"><div class="cap">Graf 4: Porovnanie 3 scenárov.</div>
   <img class="img" src="{g_cum}"><div class="cap">Graf 5: Kumulatívny cashflow 20 rokov.</div>
 </section>
@@ -232,13 +235,17 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
 </section>
 
 <section class="newpage">
-  <div class="kick">7 — Expert posúdenie a odporúčania</div><h2>Odporúčané kroky</h2>
+  <div class="kick">7 — Expert posúdenie a odporúčania</div><h2>Odborné posúdenie</h2>
+  <div class="narr">{nar}</div>
+  <div class="kick" style="margin-top:10px;">Odporúčané kroky</div>
   {"".join(f'<div class="rec"><span class="nthe">{i+1:02d}</span><b>{t}</b><span>{d}</span></div>' for i,(t,d) in enumerate(recs))}
 </section>
 
 <section class="newpage">
   <div class="kick">8 — Záver</div><h2>{ctx.get('zaver_headline','Odporúčanie pre klienta')}</h2>
   <div class="banner"><div style="font-size:9.4pt;">{ctx.get('zaver_text','')}</div></div>
+  <div class="kick" style="margin-top:10px;">Argumenty pre realizáciu</div>
+  {"".join(f'<div class="rec"><b>{t}</b><span>{d}</span></div>' for t,d in ctx.get('zaver_arguments',[]))}
   <div class="kick" style="margin-top:10px;">Záruky a istoty</div>
   <ul class="green">
     <li>Výkonová záruka na panely (typicky 25–30 r.) a záruka výrobcu na meniče a batériu.</li>

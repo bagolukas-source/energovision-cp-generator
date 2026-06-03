@@ -1687,12 +1687,27 @@ def _generate_chocosuc_ai(ctx: dict) -> dict:
         recs = [(x.get("title", ""), x.get("detail", "")) for x in r.get("recommendations", [])]
         return {"commentary": r.get("commentary", ""), "recommendations": recs}
     except Exception as e:
-        logging.error("chocosuc AI failed: %s", e)
-        # deterministický fallback
-        return {"commentary": f"<p>{ctx.get('profile_sentence','')}</p>", "recommendations": [
+        logging.error("chocosuc AI failed (pouzivam deterministicky narativ): %s", e)
+        # BOHATÝ deterministický fallback — poskladaný z reálnych čísel (nikdy nie prázdny)
+        eco = (f"<p>Ekonomicky vychádza investícia priaznivo vo všetkých troch scenároch: ročná úspora "
+               f"{facts['ekonomika']['uspora_baza_eur']:,.0f} € (báza) až {facts['ekonomika']['uspora_plny_eur']:,.0f} € "
+               f"(plný scenár), návratnosť {facts['ekonomika']['navratnost_r']} r, NPV 20 r. "
+               f"{facts['ekonomika']['npv20_eur']:,.0f} € a IRR {facts['ekonomika']['irr_pct']} %. "
+               f"Riziková analýza (Monte Carlo) potvrdzuje kladné NPV s pravdepodobnosťou "
+               f"{facts['ekonomika']['mc_prob_npv_kladne_pct']} %.</p>").replace(",", " ")
+        ina = (f"<p>Nečinnosť nie je neutrálna voľba — energiu, ktorú by FVE pokryla priamo, dnes nakupujete zo siete; "
+               f"pri raste cien o 2,5 %/r to za 20 rokov predstavuje náklad rádovo "
+               f"{facts['cena_necinnosti_20r_eur']:,.0f} €.</p>").replace(",", " ")
+        commentary = (ctx.get("profile_narrative", "") + ctx.get("balance_narrative", "") + eco + ina) or f"<p>{ctx.get('profile_sentence','')}</p>"
+        recs = [
             ("Realizovať navrhnutý variant", ctx.get("recommendation_line", "")),
-            ("Preveriť zníženie RK", "Po inštalácii batérie klesá špičkové zaťaženie zo siete — možnosť znížiť rezervovanú kapacitu."),
-        ]}
+            ("Doplniť faktúru a 15-min dáta", "Spresnia tarifu a profil — posudok prejde z orientačného na presný."),
+        ]
+        if facts["fve_bess"].get("bess_kwh"):
+            recs.append(("Preveriť zníženie RK", "Po inštalácii batérie klesá špičkové zaťaženie zo siete — možnosť znížiť rezervovanú kapacitu a šetriť na pevnej zložke distribúcie."))
+        else:
+            recs.append(("Zvážiť batériu k FVE", "Batéria posúva výrobu do špičiek, zvyšuje samospotrebu a otvára peak shaving — preveriť v ďalšom kroku."))
+        return {"commentary": commentary, "recommendations": recs}
 
 
 def render_posudok_chocosuc(sb, analyza_id: str) -> dict:
@@ -1748,7 +1763,10 @@ def render_posudok_chocosuc(sb, analyza_id: str) -> dict:
 
     pdf_bytes = generate_chocosuc_pdf(ctx)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    pdf_path = f"analyza_om/{analyza_id}/posudok_chocosuc_{ts}.pdf"
+    import re as _re
+    _slug = _re.sub(r"[^A-Za-z0-9]+", "_", (ctx.get("client_name") or "OM")).strip("_")[:40] or "OM"
+    _fbase = f"Posudok_FVE_{_slug}_{ts}"
+    pdf_path = f"analyza_om/{analyza_id}/{_fbase}.pdf"
     sb.storage.from_("documents").upload(pdf_path, pdf_bytes, {"content-type": "application/pdf", "upsert": "true"})
     pdf_url = sb.storage.from_("documents").get_public_url(pdf_path)
 
@@ -1757,7 +1775,7 @@ def render_posudok_chocosuc(sb, analyza_id: str) -> dict:
     try:
         from posudok_chocosuc.generator_docx import generate_chocosuc_docx
         docx_bytes = generate_chocosuc_docx(ctx)
-        docx_path = f"analyza_om/{analyza_id}/posudok_chocosuc_{ts}.docx"
+        docx_path = f"analyza_om/{analyza_id}/{_fbase}.docx"
         sb.storage.from_("documents").upload(docx_path, docx_bytes, {"content-type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "upsert": "true"})
         docx_url = sb.storage.from_("documents").get_public_url(docx_path)
     except Exception as _e:

@@ -190,4 +190,96 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None) -> dict:
         "zaver_text":f"Investícia {capex:,.0f} € do FVE {base.get('pv_kwp',0):.0f} kWp".replace(","," ")+(f" + BESS {bess_kwh:.0f} kWh" if bess_kwh else "")+f" prinesie ročné úspory {S[0]['save_total']:,.0f} € (báza) až {full['save_total']:,.0f} € (plný scenár). Návratnosť {full['payback']:.1f}–{S[0]['payback']:.1f} r, NPV 20 r. {full['npv']:,.0f} €, IRR {full['irr']:.1f} %.".replace(","," "),
         "recommendations":[],  # doplní AI/deterministic neskôr
     }
+    _build_deterministic_narratives(ctx, S, full, prof, pm)
     return ctx
+
+
+def _build_deterministic_narratives(ctx, S, full, prof, pm):
+    """Odborná próza z REÁLNYCH čísel pre každú sekciu — nezávislé od AI (nikdy prázdne).
+    AI naratív tieto polia neskôr môže prepísať/obohatiť."""
+    def n(v, d=0):
+        try:
+            return f"{float(v):,.{d}f}".replace(",", "\u00a0").replace(".", ",").replace("\u00a0", " ")
+        except Exception:
+            return "—"
+    fve = float(ctx.get("fve_kwp") or 0)
+    prod = float(ctx.get("fve_prod_mwh") or 0)
+    selfu = float(ctx.get("self_use_mwh") or 0)
+    exp = float(ctx.get("export_mwh") or 0)
+    imp = float(ctx.get("grid_import_mwh") or 0)
+    year = float(ctx.get("year_mwh") or 0)
+    sams = float(ctx.get("samosp_pct") or 0)
+    cov = float(ctx.get("coverage_pct") or 0)
+    bess = float(ctx.get("bess_kwh") or 0)
+    capex = float(ctx.get("capex_total_eur") or 0)
+    mrk = float(ctx.get("om_mrk_kw") or 0)
+    rk = float(ctx.get("om_rk_kw") or 0)
+    avg_kw = (year * 1000 / 8760) if year else 0
+    peak = float(ctx.get("max15_kw") or 0)
+    lf = pm.get("load_factor")
+    day_share = pm.get("day_share_pct")
+    peak_hour = pm.get("peak_hour")
+    rezim = (prof or {}).get("rezim") or "priemyselná prevádzka"
+    sezon = (prof or {}).get("sezonnost") or "rovnomerná"
+    co2 = float(ctx.get("co2_avoided_tonnes") or 0)
+
+    # --- 1) PROFIL ---
+    parts = []
+    parts.append(f"Charakter prevádzky: <b>{rezim}</b>. Z analyzovaných {ctx.get('consumption_source','dát')} vychádza priemerný odber {n(avg_kw)} kW a 15-min špička {n(peak)} kW")
+    if lf is not None:
+        parts[-1] += f" (load factor {n(lf,2)})"
+    parts[-1] += "."
+    if day_share is not None:
+        parts.append(f"Cez deň (slnečné hodiny) prebehne približne {n(day_share)} % spotreby — to priamo určuje, koľko FVE energie sa využije bez batérie.")
+    _sez = str(sezon)
+    _sezl = _sez.lower().replace("sezónnosť", "").strip() or "rovnomerná"
+    parts.append(f"Sezónnosť odberu je {_sezl}; ročná spotreba OM je {n(year)} MWh.")
+    fit = (prof or {}).get("fve_fit")
+    if fit:
+        fit = str(fit)[0].upper() + str(fit)[1:]
+        parts.append(fit if fit.endswith(".") else fit + ".")
+    ctx["profile_narrative"] = "<p>" + "</p><p>".join(parts) + "</p>"
+    ctx["daily_cap"] = f"Priemer {n(avg_kw)} kW, špička {n(peak)} kW" + (f", špičková hodina {peak_hour}:00." if peak_hour is not None else ".")
+    ctx["monthly_cap"] = f"Ročná spotreba {n(year)} MWh."
+
+    # --- 2) ENERGETICKÁ BILANCIA ---
+    exp_pct = (exp / prod * 100) if prod else 0
+    bnar = (f"Z {n(prod)} MWh ročnej výroby FVE sa <b>{n(sams,1)} %</b> ({n(selfu)} MWh) spotrebuje priamo v prevádzke "
+            f"a iba {n(exp_pct,1)} % ({n(exp,1)} MWh) odchádza ako prebytok do siete. ")
+    if fve and year and fve * 1.05 < year / 1.05:
+        bnar += f"Relatívne malá FVE ({n(fve)} kWp) voči spotrebe ({n(year)} MWh/r) je dôvod vysokej samospotreby — vyrobená energia sa takmer celá využije na mieste. "
+    bnar += f"FVE pokryje {n(cov,1)} % ročnej spotreby OM; zvyšných {n(imp)} MWh zostáva zo siete."
+    ctx["balance_narrative"] = "<p>" + bnar + "</p>"
+
+    # odhad počtu modulov ak nie sú reálne komponenty (kredibilita technickej sekcie)
+    comp = dict(ctx.get("components") or {})
+    if not ctx.get("components_real") and fve:
+        nmod = int(round(fve / 0.58))  # ~580 Wp typický modul 2026
+        comp["panel"] = f"~{nmod} ks modulov á ~580 Wp (orientačne — spresní cenová ponuka)"
+        ac = fve / 1.1
+        comp["inverter"] = comp.get("inverter") or f"meniče ~{ac:.0f} kW AC (DC/AC ~1,1)"
+        comp["konstrukcia"] = comp.get("konstrukcia") or "podľa obhliadky (strecha/prístrešok/terén)"
+        ctx["components"] = comp
+
+    # --- 3) SCENÁRE (3 bullety s výkladom) ---
+    sb = []
+    sb.append((S[0]["name"], f"Najkonzervatívnejší — iba FVE samospotreba a export, bez dodatočných opatrení. Ročná úspora {n(S[0]['save_total'])} €, návratnosť {n(S[0]['payback'],1)} r."))
+    sb.append((S[1]["name"], f"Stresový pohľad — nižší výkup prebytkov a opatrnejšie ceny energie. Ukazuje odolnosť investície: úspora {n(S[1]['save_total'])} €/r, návratnosť {n(S[1]['payback'],1)} r."))
+    sb.append((S[2]["name"], f"Pri raste trhových cien energie hodnota vlastnej výroby rastie — úspora {n(S[2]['save_total'])} €/r, NPV 20 r. {n(S[2]['npv'])} €, IRR {n(S[2]['irr'],1)} %."))
+    ctx["scenarios_bullets"] = sb
+
+    # --- 4) ZÁVER — argumenty (rich bullety) ---
+    args = []
+    args.append(("Predikovateľnosť ceny energie na 20+ rokov",
+                 f"Vlastná výroba pokryje {n(cov,1)} % ročnej spotreby pri {n(sams,1)} % samospotrebe — prirodzený hedge proti rastu cien elektriny a regulačných poplatkov."))
+    dan = capex * 0.21
+    args.append(("Daňová optimalizácia",
+                 f"6-ročný rovnomerný odpis predstavuje úsporu 21 % × {n(capex)} € = {n(dan)} € na dani z príjmu (priemerne {n(dan/6)} €/rok počas prvých 6 rokov)."))
+    if bess > 0:
+        args.append(("Peak shaving cez batériu",
+                     f"Batéria {n(bess)} kWh znižuje špičkové odbery zo siete — umožní bezpečne požiadať o zníženie rezervovanej kapacity (RK {n(rk)} kW) a šetriť na pevnej zložke distribúcie."))
+    args.append(("ESG profil a CSRD reporting",
+                 f"Ročná úspora ~{n(co2)} t CO₂ (pri SK emisnej intenzite ~0,33 kg/kWh) — doložiteľný podklad pre EU Taxonómiu a CSRD disclosures."))
+    args.append(("Reziduálna hodnota po 20 rokoch",
+                 f"Po 20 rokoch má FVE ešte ~90 % výkonu (degradácia 0,5 %/r); konzervatívne 10 % CAPEX = {n(capex*0.10)} € reziduálnej hodnoty."))
+    ctx["zaver_arguments"] = args
