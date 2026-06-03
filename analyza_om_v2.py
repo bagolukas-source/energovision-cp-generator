@@ -1844,28 +1844,54 @@ def aom_chat(sb, analyza_id: str, message: str, history=None) -> dict:
     if intent != "adjust" or not any(adj.get(k) for k in ("add_pv_kwp","add_bess_kwh","capex_per_kwp","capex_per_kwh_bess","dotacia_enabled","scenario_emphasis","arb_min_spread_eur_mwh")):
         return {"ok": True, "intent": "explain", "reply": reply or "Rozumiem.", "rerender": False}
 
-    # --- ADJUST: zlúčiť do chat_overrides, prepočítať, pregenerovať ---
+    # --- ADJUST: zlúčiť do chat_overrides ---
     new_over = dict(cur_over)
+    engine_change = False  # vyžaduje prepočet engine (ťažké) vs len re-render
     for k in ("add_pv_kwp","add_bess_kwh"):
         if adj.get(k):
             new_over[k] = sorted(set(list(new_over.get(k, [])) + [float(x) for x in adj[k]]))
+            engine_change = True
     for k in ("capex_per_kwp","capex_per_kwh_bess","arb_min_spread_eur_mwh"):
         if adj.get(k) is not None:
-            new_over[k] = float(adj[k])
+            new_over[k] = float(adj[k]); engine_change = True
     if adj.get("dotacia_enabled") is not None:
-        new_over["dotacia_enabled"] = bool(adj["dotacia_enabled"])
+        new_over["dotacia_enabled"] = bool(adj["dotacia_enabled"]); engine_change = True
     if adj.get("scenario_emphasis"):
-        new_over["scenario_emphasis"] = adj["scenario_emphasis"]
+        new_over["scenario_emphasis"] = adj["scenario_emphasis"]  # len render-level
     sb.table("analyza_om").update({"chat_overrides": new_over}).eq("id", analyza_id).execute()
 
-    # prepočítať engine s novými pákami + pregenerovať posudok
-    try:
-        run_variants_premium(sb, analyza_id)
-        rendered = render_posudok_chocosuc(sb, analyza_id)
-    except Exception as e:
-        logging.exception("aom_chat rerender failed")
-        return {"ok": True, "intent": "adjust", "reply": reply + " (⚠ prepočet zlyhal: " + str(e)[:150] + ")", "rerender": False, "overrides": new_over}
+    # RENDER-ONLY páky (scenario_emphasis) — engine netreba, re-render je rýchly a zmestí sa do requestu
+    if not engine_change:
+        try:
+            rendered = render_posudok_chocosuc(sb, analyza_id)
+            return {"ok": True, "intent": "adjust", "reply": reply or "Hotovo, posudok som upravil.",
+                    "rerender": True, "pdf_url": rendered.get("pdf_url"), "docx_url": rendered.get("docx_url"),
+                    "overrides": new_over}
+        except Exception as e:
+            logging.exception("aom_chat render-only failed")
+            return {"ok": True, "intent": "adjust", "reply": reply + " (⚠ pregenerovanie zlyhalo: " + str(e)[:150] + ")", "rerender": False, "overrides": new_over}
 
-    return {"ok": True, "intent": "adjust", "reply": reply or "Hotovo, posudok som prepočítal.",
-            "rerender": True, "pdf_url": rendered.get("pdf_url"), "docx_url": rendered.get("docx_url"),
-            "overrides": new_over}
+    # ENGINE páky — prepočet + render trvá ~1-2 min, beží NA POZADÍ (inak gunicorn worker timeout 120s)
+    import threading
+    def _bg(aid):
+        try:
+            run_variants_premium(sb, aid)
+            render_posudok_chocosuc(sb, aid)
+            try:
+                sb.table("analyza_om").update({"chat_job_status": "done"}).eq("id", aid).execute()
+            except Exception:
+                pass
+        except Exception:
+            logging.exception("aom_chat bg recompute failed")
+            try:
+                sb.table("analyza_om").update({"chat_job_status": "failed"}).eq("id", aid).execute()
+            except Exception:
+                pass
+    try:
+        sb.table("analyza_om").update({"chat_job_status": "running"}).eq("id", analyza_id).execute()
+    except Exception:
+        pass
+    threading.Thread(target=_bg, args=(analyza_id,), daemon=True).start()
+    return {"ok": True, "intent": "adjust",
+            "reply": (reply or "Rozumiem.") + " Prepočítavam s novými parametrami (engine + posudok) — trvá ~1-2 min. Posudok sa obnoví automaticky.",
+            "rerender": False, "pending": True, "overrides": new_over}

@@ -6022,6 +6022,21 @@ def webhook_aom_render_premium_docx():
         return jsonify({"ok": False, "error": str(e)[:500]}), 500
 
 
+@app.route("/webhook/analyza-om-chat-status", methods=["GET", "POST"])
+def webhook_aom_chat_status():
+    """Polling stav background prepočtu chatu (engine páky bežia async)."""
+    aid = request.args.get("analyza_id") or (request.get_json(silent=True) or {}).get("analyza_id")
+    if not aid:
+        return jsonify({"ok": False, "error": "analyza_id required"}), 400
+    try:
+        r = _sb().table("analyza_om").select("chat_job_status, posudok_orkestra_pdf_url, posudok_orkestra_docx_url, posudok_orkestra_generated_at").eq("id", aid).single().execute().data or {}
+        return jsonify({"ok": True, "status": r.get("chat_job_status"),
+                        "pdf_url": r.get("posudok_orkestra_pdf_url"), "docx_url": r.get("posudok_orkestra_docx_url"),
+                        "generated_at": r.get("posudok_orkestra_generated_at")})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)[:300]}), 500
+
+
 @app.route("/webhook/analyza-om-chat", methods=["POST"])
 def webhook_aom_chat():
     """Chat refinement (šperkovanie): rozpozná zámer, odpovie alebo prepočíta + pregeneruje posudok."""
