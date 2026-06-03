@@ -37,7 +37,28 @@ class DotaciaScheme:
     last_verified: Optional[str] = None
 
 
-_DEFAULT_PATH = Path(__file__).resolve().parents[3] / "data" / "dotacie" / "sk_2026.yaml"
+def _resolve_default_path() -> Path:
+    """Robustné hľadanie dotačného YAML — env override + viac kandidátov
+    (deploy štruktúra sa líši od lokálnej)."""
+    import os
+    env = os.environ.get("ENERGO_DOTACIE_YAML")
+    if env and Path(env).exists():
+        return Path(env)
+    here = Path(__file__).resolve()
+    cands = [
+        here.parents[3] / "data" / "dotacie" / "sk_2026.yaml",
+        here.parents[2] / "aom_data" / "dotacie" / "sk_2026.yaml",   # cp-generator committed
+        here.parents[2] / "data" / "dotacie" / "sk_2026.yaml",
+        here.parents[1] / "data" / "dotacie" / "sk_2026.yaml",       # package-local
+        Path.cwd() / "aom_data" / "dotacie" / "sk_2026.yaml",
+        Path.cwd() / "data" / "dotacie" / "sk_2026.yaml",
+    ]
+    for c in cands:
+        if c.exists():
+            return c
+    return cands[0]  # fallback (neexistuje -> schemes={})
+
+_DEFAULT_PATH = _resolve_default_path()
 
 
 def load_dotacie_schemes(path: Optional[Path | str] = None) -> dict[str, DotaciaScheme]:
