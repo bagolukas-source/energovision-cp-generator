@@ -125,6 +125,7 @@ def parse_consumption(analyza_id: str, file_paths: List[str], options: Optional[
                 series = None
                 fmt = None
                 for parser_fn, label in [
+                    (ec.parse_obis_datetime_xls, "obis_datetime_xls"),
                     (ec.parse_sse_obis_xls, "sse_obis_xls"),
                     (ec.parse_xls_96cols, "xls_96cols"),
                     (ec.parse_zdis_xls, "zdis_xls"),
@@ -150,10 +151,17 @@ def parse_consumption(analyza_id: str, file_paths: List[str], options: Optional[
     if not series_list:
         return {"status": "error", "error": "No files parsed", "warnings": warnings}
 
-    # Aggregate (sum by default)
-    combined_15min = series_list[0].copy()
-    for s in series_list[1:]:
-        combined_15min = combined_15min.add(s, fill_value=0)
+    # Aggregate — smart: mesačné rezy toho istého merača (malý prekryv) → zjednoť (dedupe);
+    # podružné merače (rovnaký rozsah, veľký prekryv) → sčítaj.
+    import pandas as _pd
+    _cat = _pd.concat(series_list)
+    _overlap = int(_cat.index.duplicated().sum()) / max(1, len(_cat))
+    if _overlap < 0.30:
+        combined_15min = _cat[~_cat.index.duplicated(keep="first")].sort_index()
+    else:
+        combined_15min = series_list[0].copy()
+        for s in series_list[1:]:
+            combined_15min = combined_15min.add(s, fill_value=0)
 
     # Hourly aggregation
     hourly = ec.aggregate_to_hourly(combined_15min)
@@ -161,7 +169,7 @@ def parse_consumption(analyza_id: str, file_paths: List[str], options: Optional[
     # Summary metrics
     annual_kwh = float(hourly.sum())
     annual_mwh = annual_kwh / 1000.0
-    peak_kw_15min = float(combined_15min.max() * 4)  # 15-min energy → kW (×4)
+    peak_kw_15min = float(combined_15min.max() * 4 * 1000)  # MWh/15min → kW (×4 ×1000)
     peak_kw_hourly = float(hourly.max())
     avg_kw = float(hourly.mean())
     coverage_pct = 100.0 * (hourly.notna().sum() / len(hourly)) if len(hourly) > 0 else 0.0

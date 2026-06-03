@@ -193,6 +193,56 @@ def parse_sse_obis_xls(fn: Path) -> pd.Series:
     return s
 
 
+def parse_obis_datetime_xls(fn: Path) -> pd.Series:
+    """OBIS .xls s JEDNÝM stĺpcom 'Dátum a čas merania' (Excel serial) + '1.5.0 - Činný odber (kW)'.
+    Formát napr. Savencia/distribútor mesačné exporty. Vracia MWh per 15-min interval."""
+    suffix = fn.suffix.lower()
+    df = pd.read_excel(fn, sheet_name=0, header=None, engine=("xlrd" if suffix == ".xls" else "openpyxl"))
+    hr = None
+    for r in range(min(8, len(df))):
+        vals = [str(df.iat[r, c]).lower() if not pd.isna(df.iat[r, c]) else "" for c in range(min(15, df.shape[1]))]
+        if any(("dátum" in v or "datum" in v) and ("čas" in v or "cas" in v) for v in vals) and any("1.5.0" in v for v in vals):
+            hr = r; break
+    if hr is None:
+        raise ValueError("OBIS-dt: header s 'dátum a čas' + '1.5.0' nenájdený")
+    headers = [str(df.iat[hr, c]).strip() if not pd.isna(df.iat[hr, c]) else "" for c in range(df.shape[1])]
+    col_dt = col_p = None
+    for i, h in enumerate(headers):
+        hl = h.lower()
+        if col_dt is None and (("dátum" in hl or "datum" in hl) and ("čas" in hl or "cas" in hl)):
+            col_dt = i
+        if col_p is None and "1.5.0" in h and "kw" in hl and "odber" in hl and "kvar" not in hl and "kvalit" not in hl:
+            col_p = i
+    if col_p is None:
+        for i, h in enumerate(headers):
+            hl = h.lower()
+            if "1.5.0" in h and "kw" in hl and "kvalit" not in hl and "kvar" not in hl:
+                col_p = i; break
+    if col_dt is None or col_p is None:
+        raise ValueError(f"OBIS-dt: stĺpce dt={col_dt} p={col_p}")
+    rows = []
+    for r in range(hr + 1, len(df)):
+        dv = df.iat[r, col_dt]; vv = df.iat[r, col_p]
+        if pd.isna(dv) or pd.isna(vv):
+            continue
+        if isinstance(dv, (int, float)):
+            ts = pd.to_datetime(dv, origin="1899-12-30", unit="D")
+        else:
+            ts = pd.to_datetime(dv, errors="coerce", dayfirst=True)
+        if pd.isna(ts):
+            continue
+        try:
+            kw = float(str(vv).replace(",", "."))
+        except Exception:
+            continue
+        rows.append((ts, kw * 0.25 / 1000.0))  # kW × 0.25h = kWh/15min, /1000 = MWh/15min
+    if not rows:
+        raise ValueError("OBIS-dt: žiadne dátové riadky")
+    s = pd.Series(dict(rows)).sort_index()
+    s.index.name = "ts"
+    return s
+
+
 def aggregate_to_hourly(series: pd.Series) -> pd.Series:
     """Agreguje 15-min profil na hodinový (suma kWh za hodinu)."""
     if (series.index[1] - series.index[0]).total_seconds() < 3000:  # ~15min
