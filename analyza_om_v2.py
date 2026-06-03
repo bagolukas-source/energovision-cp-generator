@@ -373,7 +373,7 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
                 "name": v.get("label", f"V{idx+1}"),
                 "position": idx + 1,
                 "fve_kwp": v.get("pv_kwp", 0),
-                "fve_tilt_deg": 35,
+                "fve_tilt_deg": 13,
                 "fve_azimuth_deg": 180,
                 "fve_topology": "south",  # default tilt/azimuth topology (constraint: south|east_west|tracker|carport)
                 "bess_kwh": v.get("bess_kwh", 0),
@@ -757,6 +757,23 @@ def _validate_orkestra(context: dict) -> list:
     return w
 
 
+def _construction_str(analyza: dict) -> str:
+    """Konštrukcia z cenovej ponuky: Juh 13° alebo Východ-Západ 10°. Nikdy 35°.
+    Default keď CP neudáva: Juh 13°."""
+    topo = (analyza.get("fve_topology") or "").strip().lower()
+    tilt = analyza.get("fve_tilt_deg")
+    try: tilt = int(float(tilt)) if tilt not in (None, "") else None
+    except Exception: tilt = None
+    if tilt == 35: tilt = None  # 35° nepoužívame
+    if any(k in topo for k in ("east", "e-w", "ew", "v-z", "vz", "východ", "zapad", "západ")):
+        return f"Východ-Západ {tilt or 10}°"
+    if any(k in topo for k in ("juh", "south", "jih")):
+        return f"Juh {tilt or 13}°"
+    if topo and "35" not in topo:
+        return analyza.get("fve_topology")  # voľný text z CP
+    return f"Juh {tilt or 13}°"
+
+
 def build_orkestra_context(analyza: dict, variants: list, analyza_id: str = "") -> dict:
     """Cista funkcia: zo zaznamu analyzy + variantov postavi kontext pre Orkestra sablonu.
     Ziadne sb / AI / PDF side-effecty -> lokalne testovatelne (harness).
@@ -997,7 +1014,7 @@ def build_orkestra_context(analyza: dict, variants: list, analyza_id: str = "") 
         "bess_kwh": bess_kwh,
         "bess_kw": bess_kw,
         "inverter_kw": selected.get("inverter_kw", pv_kwp * 0.9),
-        "fve_topology": analyza.get("fve_topology") or "Juh, 35°",
+        "fve_topology": _construction_str(analyza),
         "mrk_kw": mrk_kw,
         "annual_kwh": annual_kwh,
         "tarif_typ": analyza.get("om_tarif_typ") or "spot",
@@ -1635,10 +1652,11 @@ def enrich_econ_full_response(sb, analyza_id: str) -> dict:
 # ChocoSuc-grade posudok — AI naratív (grounded na odvodené metriky) + render
 # ============================================================
 def _generate_chocosuc_ai(ctx: dict) -> dict:
-    """Celý naratív + odporúčania generuje AI z odvodených faktov (profil z dát, ekonomika).
-    Grounded: AI použije LEN čísla z ctx. Fail-safe -> deterministické defaults."""
+    """Celý posudok píše AI po sekciách, PRÍSNE grounded (len engine čísla).
+    Vráti dict s HTML per sekcia + recommendations. Fail-safe -> deterministické narativy."""
     import json
     S = ctx["scenarios3"]; full = S[-1]; bza = S[0]; pm = ctx.get("profile_metrics", {})
+    comp = ctx.get("components", {}) or {}
     facts = {
         "klient": ctx.get("client_name"),
         "profil_odvodeny_z_dat": {
@@ -1648,67 +1666,104 @@ def _generate_chocosuc_ai(ctx: dict) -> dict:
             "vhodnost_fve": ctx.get("profile", {}).get("fve_fit"),
             "load_factor": pm.get("load_factor"), "denny_podiel_pct": pm.get("day_share_pct"),
             "vikend_ratio": pm.get("weekend_ratio"), "spickova_hodina": pm.get("peak_hour"),
+            "data_real": bool(ctx.get("consumption_real")),
         },
         "om": {"rocna_spotreba_mwh": round(ctx.get("year_mwh") or 0, 0), "mrk_kw": ctx.get("om_mrk_kw"),
-               "max_odber_kw": ctx.get("max15_kw")},
+               "rk_kw": ctx.get("om_rk_kw"), "max_odber_kw": ctx.get("max15_kw"), "sadzba": ctx.get("om_sadzba")},
         "fve_bess": {"fve_kwp": round(ctx.get("fve_kwp") or 0, 0), "bess_kwh": ctx.get("bess_kwh"),
                      "vyroba_mwh": round(ctx.get("fve_prod_mwh") or 0, 0),
+                     "specificky_vynos_kwh_kwp": round(ctx.get("yield") or 0),
+                     "konstrukcia": comp.get("konstrukcia"), "moduly": comp.get("panel"),
                      "samospotreba_pct": round(ctx.get("samosp_pct") or 0, 1),
                      "pokrytie_pct": round(ctx.get("coverage_pct") or 0, 1),
-                     "export_mwh": round(ctx.get("export_mwh") or 0, 1)},
+                     "self_use_mwh": round(ctx.get("self_use_mwh") or 0, 1),
+                     "export_mwh": round(ctx.get("export_mwh") or 0, 1),
+                     "import_mwh": round(ctx.get("grid_import_mwh") or 0, 0)},
+        "scenare": [{"nazov": x["name"], "uspora_eur_rok": round(x["save_total"]), "navratnost_r": round(x["payback"], 1),
+                     "npv20_eur": round(x["npv"]), "irr_pct": round(x["irr"], 1)} for x in S],
         "ekonomika": {"capex_eur": round(ctx.get("capex_total_eur") or 0),
-                      "uspora_baza_eur": round(bza["save_total"]), "uspora_plny_eur": round(full["save_total"]),
                       "navratnost_r": round(full["payback"], 1), "npv20_eur": round(full["npv"]),
-                      "irr_pct": round(full["irr"], 1), "mc_prob_npv_kladne_pct": round(ctx.get("mc_prob_pos", 0) * 100)},
+                      "irr_pct": round(full["irr"], 1), "mc_prob_npv_kladne_pct": round(ctx.get("mc_prob_pos", 0) * 100),
+                      "mc_p10_eur": round(ctx.get("mc_p10") or 0), "mc_p90_eur": round(ctx.get("mc_p90") or 0),
+                      "danovy_stit_rok_eur": round(full.get("annual_tax", 0))},
         "skladba_uspory_eur": {n: round(v) for n, f, v in ctx.get("benefit_rows", [])},
+        "ceny_realne_z_faktury": bool(ctx.get("tarif_real")),
         "cena_necinnosti_20r_eur": round(ctx.get("inaction_infl_20y") or 0),
+        "co2_usetrene_t_rok": round(ctx.get("co2_avoided_tonnes") or 0),
     }
     sysp = (
-        "Si senior energetický audítor Energovision s 20+ rokmi praxe. Píšeš expertný naratív posudku pre B2B klienta.\n"
-        "TÓN: vecný, data-first, klientovi vykáš, žiadne marketingové superlatívy, neistotu priznávaš.\n"
-        "GROUNDING (kritické — generuje sa bez kontroly): používaj VÝHRADNE čísla a charakteristiky z JSON. "
-        "Charakteristiku profilu ber z 'profil_odvodeny_z_dat' (NEvymýšľaj 24/7 ak to dáta nehovoria). Nevymýšľaj žiadne číslo.\n"
-        "VÝSTUP: striktný JSON (žiadny markdown):\n"
-        '{\"commentary\": \"4-6 odsekov HTML s <p>\", \"recommendations\": [{\"title\":\"...\",\"detail\":\"1-2 vety\"}, ... 4-6]}\n'
-        "commentary: (1) čo profil odhaľuje o prevádzke a vhodnosti FVE, (2) prečo navrhnutý variant + samospotreba vs export, "
-        "(3) ekonomika a riziko (scenáre, NPV, Monte Carlo), (4) cena nečinnosti. "
-        "recommendations: konkrétne kroky + proaktívne návrhy (napr. ak je FVE malá voči spotrebe, navrhni preveriť väčšiu)."
+        "Si senior energetický audítor Energovision s 20+ rokmi praxe. Píšeš kompletný technicko-ekonomický posudok "
+        "pre B2B priemyselného klienta. Tón: vecný, technický, presvedčivý dôveryhodnosťou (nie superlatívmi), klientovi vykáš.\n\n"
+        "═══ GROUNDING — ABSOLÚTNE PRAVIDLO ═══\n"
+        "Smieš použiť VÝHRADNE čísla, ktoré sú v JSON. NESMIEŠ uviesť ŽIADNE číslo, ktoré tam nie je — "
+        "žiadne vymyslené NPV prírastky (žiadne 'zvýši NPV o 150-250 tis.'), žiadne pokrytie po hypotetickej zmene, "
+        "žiadne konkrétne kWh batérie ak nie sú v dátach, žiadne názvy bánk, žiadne úrokové sadzby. "
+        "Ak navrhuješ ďalší krok, formuluj ho KVALITATÍVNE alebo použi len číslo z JSON. "
+        "Každé číslo v texte musí byť dohľadateľné v JSON. Charakteristiku profilu ber z 'profil_odvodeny_z_dat' "
+        "(NEvymýšľaj 24/7 ak to dáta nehovoria). Ak 'data_real' je false, jemne uveď že ide o modelovaný profil; "
+        "ak 'ceny_realne_z_faktury' je false, spomeň že ceny sú orientačné ÚRSO 2026 (spresní faktúra). Porušenie = chyba.\n\n"
+        "VÝSTUP: striktný JSON (žiadny markdown, žiadny text okolo). Každá hodnota je HTML s <p> odsekmi:\n"
+        "{\n"
+        '  "summary": "manažérske zhrnutie — 3 odseky: ekonomický výsledok (úspora/návratnosť/NPV/IRR), čo to znamená pre firmu, riziko (Monte Carlo). EKONOMICKÝ uhol.",\n'
+        '  "profile": "interpretácia profilu odberu — 2 odseky z load_factor, denny_podiel, vikend, spickova_hodina, sezonnost a čo to znamená pre dimenzovanie FVE/batérie.",\n'
+        '  "balance": "energetická bilancia — 1-2 odseky: výroba, samospotreba vs export, pokrytie, prečo také hodnoty.",\n'
+        '  "scenarios": "1 odsek úvod k 3 scenárom — čo rozlišujú a prečo (báza vs defenzívny vs optimistický).",\n'
+        '  "technical": "technické zhodnotenie navrhnutého variantu — 1-2 odseky: výkon, konštrukcia, výnos, vhodnosť pre toto OM.",\n'
+        '  "expert": "expertné posúdenie — 2-3 odseky TECHNICKO-RIZIKOVÝ uhol (INÝ než summary): citlivosť, predpoklady, čo overiť, kde sú limity. NEopakuj summary.",\n'
+        '  "zaver": "záverečné odporúčanie — 1 odsek, jasný verdikt s číslami.",\n'
+        '  "recommendations": [{"title":"krátky", "detail":"1-2 vety, KVALITATÍVNE alebo s číslom z JSON"}, ... 4-6 položiek]\n'
+        "}"
     )
+    def _fallback():
+        # deterministický fallback — summary (ekonomický) ≠ expert (technicko-rizikový)
+        e = facts["ekonomika"]
+        summ = (ctx.get("balance_narrative","") +
+                f"<p>Ekonomicky vychádza investícia priaznivo vo všetkých troch scenároch: ročná úspora "
+                f"{bza['save_total']:,.0f} € (báza) až {full['save_total']:,.0f} € (plný scenár), návratnosť {e['navratnost_r']} r, "
+                f"NPV 20 r. {e['npv20_eur']:,.0f} € a IRR {e['irr_pct']} %. Monte Carlo potvrdzuje kladné NPV s pravdepodobnosťou "
+                f"{e['mc_prob_npv_kladne_pct']} %.</p>").replace(",", " ")
+        exp = (f"<p>Z technického hľadiska je navrhnutý variant {facts['fve_bess']['fve_kwp']:.0f} kWp primeraný profilu OM — "
+               f"pri samospotrebe {facts['fve_bess']['samospotreba_pct']} % sa vyrobená energia využije takmer celá. "
+               f"Rozhodujúce predpoklady sú špecifický výnos {facts['fve_bess']['specificky_vynos_kwh_kwp']} kWh/kWp (PVGIS) a "
+               f"stabilita odberového profilu.</p>"
+               f"<p>Citlivosť: medzi defenzívnym a optimistickým scenárom je rozpätie NPV {S[1]['npv']:,.0f} – {S[2]['npv']:,.0f} €. "
+               f"Pred realizáciou odporúčam overiť finálnu tarifu (faktúra), podmienky pripojenia u prevádzkovateľa distribučnej "
+               f"sústavy a presnú konštrukciu z cenovej ponuky.</p>").replace(",", " ")
+        recs = [("Realizovať navrhnutý variant", ctx.get("recommendation_line", ""))]
+        if not facts["ceny_realne_z_faktury"]:
+            recs.append(("Doplniť faktúru za elektrinu", "Spresní silovú aj distribučnú cenu — posudok prejde z orientačného na presný."))
+        if not facts["fve_bess"].get("bess_kwh"):
+            recs.append(("Preveriť variant s batériou", "Batéria posúva výrobu do špičiek a zvyšuje samospotrebu — vhodné preveriť ako ďalší variant."))
+        else:
+            recs.append(("Preveriť zníženie RK", "Po inštalácii batérie klesá špičkové zaťaženie zo siete — možnosť znížiť rezervovanú kapacitu."))
+        recs.append(("Technická obhliadka OM", "Overenie strechy/plochy, statiky a bodu pripojenia pred finálnym projektom."))
+        return {"summary": summ, "profile": ctx.get("profile_narrative",""), "balance": ctx.get("balance_narrative",""),
+                "scenarios": "", "technical": "", "expert": exp, "zaver": ctx.get("zaver_text",""), "recommendations": recs}
     try:
         from anthropic import Anthropic
         msg = Anthropic().messages.create(
-            model="claude-sonnet-4-5-20250929", max_tokens=4000, temperature=0.3, system=sysp,
-            messages=[{"role": "user", "content": "Dáta:\n" + json.dumps(facts, ensure_ascii=False, indent=1) + "\n\nVyrob naratív a odporúčania."}])
+            model="claude-sonnet-4-5-20250929", max_tokens=6000, temperature=0.25, system=sysp,
+            messages=[{"role": "user", "content": "Dáta posudku (JSON):\n" + json.dumps(facts, ensure_ascii=False, indent=1) + "\n\nVyrob kompletný posudok podľa schémy. Len JSON."}])
         t = msg.content[0].text.strip()
         if t.startswith("```"):
             t = t.split("\n", 1)[1].rsplit("```", 1)[0]
         if t.lstrip().startswith("json"): t = t.lstrip()[4:]
         r = json.loads(t)
         recs = [(x.get("title", ""), x.get("detail", "")) for x in r.get("recommendations", [])]
-        return {"commentary": r.get("commentary", ""), "recommendations": recs}
+        fb = _fallback()
+        return {
+            "summary": r.get("summary") or fb["summary"],
+            "profile": r.get("profile") or fb["profile"],
+            "balance": r.get("balance") or fb["balance"],
+            "scenarios": r.get("scenarios") or "",
+            "technical": r.get("technical") or "",
+            "expert": r.get("expert") or fb["expert"],
+            "zaver": r.get("zaver") or fb["zaver"],
+            "recommendations": recs or fb["recommendations"],
+        }
     except Exception as e:
         logging.error("chocosuc AI failed (pouzivam deterministicky narativ): %s", e)
-        # BOHATÝ deterministický fallback — poskladaný z reálnych čísel (nikdy nie prázdny)
-        eco = (f"<p>Ekonomicky vychádza investícia priaznivo vo všetkých troch scenároch: ročná úspora "
-               f"{facts['ekonomika']['uspora_baza_eur']:,.0f} € (báza) až {facts['ekonomika']['uspora_plny_eur']:,.0f} € "
-               f"(plný scenár), návratnosť {facts['ekonomika']['navratnost_r']} r, NPV 20 r. "
-               f"{facts['ekonomika']['npv20_eur']:,.0f} € a IRR {facts['ekonomika']['irr_pct']} %. "
-               f"Riziková analýza (Monte Carlo) potvrdzuje kladné NPV s pravdepodobnosťou "
-               f"{facts['ekonomika']['mc_prob_npv_kladne_pct']} %.</p>").replace(",", " ")
-        ina = (f"<p>Nečinnosť nie je neutrálna voľba — energiu, ktorú by FVE pokryla priamo, dnes nakupujete zo siete; "
-               f"pri raste cien o 2,5 %/r to za 20 rokov predstavuje náklad rádovo "
-               f"{facts['cena_necinnosti_20r_eur']:,.0f} €.</p>").replace(",", " ")
-        commentary = (ctx.get("profile_narrative", "") + ctx.get("balance_narrative", "") + eco + ina) or f"<p>{ctx.get('profile_sentence','')}</p>"
-        recs = [
-            ("Realizovať navrhnutý variant", ctx.get("recommendation_line", "")),
-            ("Doplniť faktúru a 15-min dáta", "Spresnia tarifu a profil — posudok prejde z orientačného na presný."),
-        ]
-        if facts["fve_bess"].get("bess_kwh"):
-            recs.append(("Preveriť zníženie RK", "Po inštalácii batérie klesá špičkové zaťaženie zo siete — možnosť znížiť rezervovanú kapacitu a šetriť na pevnej zložke distribúcie."))
-        else:
-            recs.append(("Zvážiť batériu k FVE", "Batéria posúva výrobu do špičiek, zvyšuje samospotrebu a otvára peak shaving — preveriť v ďalšom kroku."))
-        return {"commentary": commentary, "recommendations": recs}
-
+        return _fallback()
 
 def render_posudok_chocosuc(sb, analyza_id: str) -> dict:
     """ChocoSuc-grade posudok: deterministické fakty + AI naratív (grounded) -> HTML->PDF."""
@@ -1758,8 +1813,15 @@ def render_posudok_chocosuc(sb, analyza_id: str) -> dict:
 
     ctx = build_chocosuc_context(analyza, variants, hourly=hourly)
     ai = _generate_chocosuc_ai(ctx)
-    ctx["ai_commentary_html"] = ai["commentary"]
-    ctx["recommendations"] = ai["recommendations"] or ctx.get("recommendations") or []
+    # AI píše všetky sekcie (grounded); ak niektorá chýba, deterministický ctx fallback ostáva
+    ctx["ai_summary_html"] = ai.get("summary") or ""
+    if ai.get("profile"):  ctx["profile_narrative"] = ai["profile"]
+    if ai.get("balance"):  ctx["balance_narrative"] = ai["balance"]
+    ctx["scenarios_intro_html"] = ai.get("scenarios") or ""
+    ctx["technical_narrative"] = ai.get("technical") or ""
+    ctx["ai_expert_html"] = ai.get("expert") or ""
+    if ai.get("zaver"):    ctx["zaver_text"] = ai["zaver"]
+    ctx["recommendations"] = ai.get("recommendations") or ctx.get("recommendations") or []
 
     pdf_bytes = generate_chocosuc_pdf(ctx)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")

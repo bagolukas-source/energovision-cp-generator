@@ -62,7 +62,7 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None) -> dict:
     p_avoided=p_silova+p_dist_var
 
     # --- profil (z dát: hourly ak dostupný, inak agregáty) ---
-    hourly_wd=hourly_we=None; monthly_mwh=None
+    hourly_wd=hourly_we=None; monthly_mwh=None; _months_filled=[]
     if hourly:
         from collections import defaultdict
         bd=defaultdict(list); bw=defaultdict(list); mm=defaultdict(float)
@@ -71,6 +71,15 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None) -> dict:
         hourly_wd=[ (sum(bd[h])/len(bd[h]) if bd.get(h) else 0) for h in range(24)]
         hourly_we=[ (sum(bw[h])/len(bw[h]) if bw.get(h) else 0) for h in range(24)]
         monthly_mwh=[mm.get(m,0) for m in range(1,13)]
+        # dopočet chýbajúcich/nulových mesiacov priemerom ostatných (dátová diera, napr. február)
+        _nz=[x for x in monthly_mwh if x and x>0]
+        _filled=[i+1 for i,x in enumerate(monthly_mwh) if not x or x<=0]
+        if _nz and _filled and len(_filled)<6:
+            _avg=sum(_nz)/len(_nz)
+            monthly_mwh=[(x if (x and x>0) else round(_avg,1)) for x in monthly_mwh]
+            _months_filled=_filled
+        else:
+            _months_filled=[]
     avg_kw=float(analyza.get("consumption_avg_kw") or 0) or (float(base.get("load_total_mwh") or 0)*1000/8760)
     # SANITIZÁCIA špičky: zlé dáta (peak < avg) -> použiť iný zdroj, inak odhad (load factor ~0.45)
     _cands=[float(analyza.get("consumption_peak_kw_15min") or 0), float(analyza.get("consumption_peak_kw_hourly") or 0)]
@@ -171,7 +180,7 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None) -> dict:
         "grid_import_mwh":base.get("grid_import_mwh"),"samosp_pct":base.get("samospotreba_pct"),"coverage_pct":base.get("samostatnost_pct"),
         "year_mwh":base.get("load_total_mwh"),"max15_kw":peak_kw,"peak_estimated":peak_estimated,"capex_total_eur":capex,"net_capex_eur":net_capex,
         "co2_avoided_tonnes":base.get("co2_avoided_tonnes"),
-        "monthly_mwh":monthly_mwh,"hourly_wd":hourly_wd,"hourly_we":hourly_we,"profile_metrics":pm,"profile_sentence":profile_sentence,"profile":prof,
+        "monthly_mwh":monthly_mwh,"months_filled":_months_filled,"hourly_wd":hourly_wd,"hourly_we":hourly_we,"profile_metrics":pm,"profile_sentence":profile_sentence,"profile":prof,
         "p_silova":p_silova,"p_dist_var":p_dist_var,"p_tps":p_tps,"p_so":p_so,"p_dist_pevna":p_dist_pevna,"p_sell":p_sell,"p_avoided":p_avoided,
         "tarif_real":tarif_real,"tarif_source":(analyza.get("tarif_source") or "faktúra") if tarif_real else "orientačné (ÚRSO 2026)",
         "components":components,"components_real":comp_real,
@@ -240,7 +249,9 @@ def _build_deterministic_narratives(ctx, S, full, prof, pm):
         parts.append(fit if fit.endswith(".") else fit + ".")
     ctx["profile_narrative"] = "<p>" + "</p><p>".join(parts) + "</p>"
     ctx["daily_cap"] = f"Priemer {n(avg_kw)} kW, špička {n(peak)} kW" + (f", špičková hodina {peak_hour}:00." if peak_hour is not None else ".")
-    ctx["monthly_cap"] = f"Ročná spotreba {n(year)} MWh."
+    _mf = ctx.get("months_filled") or []
+    _mn = {1:"jan",2:"feb",3:"mar",4:"apr",5:"máj",6:"jún",7:"júl",8:"aug",9:"sep",10:"okt",11:"nov",12:"dec"}
+    ctx["monthly_cap"] = f"Ročná spotreba {n(year)} MWh." + (f" Dopočítané z priemeru: {', '.join(_mn.get(m,str(m)) for m in _mf)}." if _mf else "")
 
     # --- 2) ENERGETICKÁ BILANCIA ---
     exp_pct = (exp / prod * 100) if prod else 0
@@ -258,7 +269,9 @@ def _build_deterministic_narratives(ctx, S, full, prof, pm):
         comp["panel"] = f"~{nmod} ks modulov á ~580 Wp (orientačne — spresní cenová ponuka)"
         ac = fve / 1.1
         comp["inverter"] = comp.get("inverter") or f"meniče ~{ac:.0f} kW AC (DC/AC ~1,1)"
-        comp["konstrukcia"] = comp.get("konstrukcia") or "podľa obhliadky (strecha/prístrešok/terén)"
+        _k = comp.get("konstrukcia")
+        if not _k or "35" in str(_k):
+            comp["konstrukcia"] = "Juh 13° (orientačne — spresní cenová ponuka)"
         ctx["components"] = comp
 
     # --- 3) SCENÁRE (3 bullety s výkladom) ---

@@ -37,7 +37,8 @@ def render_chocosuc_html(ctx: dict) -> str:
     S=ctx["scenarios3"]; bza=S[0]; full=S[-1]
     pm=ctx.get("profile_metrics",{})
     recs=ctx.get("recommendations",[])
-    nar=ctx.get("ai_commentary_html") or ctx.get("narrative_html") or ""
+    summ_nar=ctx.get("ai_summary_html") or ctx.get("ai_commentary_html") or ""
+    exp_nar=ctx.get("ai_expert_html") or ctx.get("ai_commentary_html") or ""
     has_addr = ctx.get("om_address") and ctx.get("om_address")!="—"
     # tarif rows (s fallback flagom)
     tflag = "" if ctx.get("tarif_real") else " <span style='color:#B45309'>(predpoklad)</span>"
@@ -153,7 +154,7 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
     <div class="bcard"><div class="h">Nezávislosť</div><div class="d">{num(ctx.get('coverage_pct'),1)} % spotreby z vlastného zdroja pri {num(ctx.get('samosp_pct'),1)} % samospotrebe.</div></div>
     <div class="bcard"><div class="h">ESG</div><div class="d">−{num(ctx.get('co2_avoided_tonnes'),0)} t CO₂ ročne; doložiteľný príspevok k udržateľnosti.</div></div>
   </div>
-  <div class="narr" style="margin-top:8px;">{nar}</div>
+  <div class="narr" style="margin-top:8px;">{summ_nar}</div>
 </section>
 
 <section class="newpage">
@@ -180,6 +181,7 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
     {trow(["Špecifický výnos",f"{num(ctx.get('yield'))} kWh/kWp"])}
     {trow(["Predpokladaná ročná výroba",f"{num(ctx.get('fve_prod_mwh'))} MWh"],em="em")}
   </table>
+  <div class="narr">{ctx.get('technical_narrative','')}</div>
   <div class="kick" style="margin-top:8px;">Energetická bilancia</div>
   <table>{trow(["Veličina","Hodnota","Podiel"],head=True,align=['l','r','r'])}
     {trow(["Ročná výroba FVE",f"{num(ctx.get('fve_prod_mwh'))} MWh","100 %"])}
@@ -203,6 +205,7 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
     {trow(["Výkupná cena prebytkov",f"{num(ctx['p_sell']*1000,0)} €/MWh","export"])}
   </table>
   <h2 style="margin-top:8px;">Tri scenáre prínosu</h2>
+  <div class="narr">{ctx.get('scenarios_intro_html','')}</div>
   <table>{trow(["Scenár","Úspora €/r","Návratnosť","NPV 20 r.","IRR"],head=True,align=['l','r','r','r','r'])}
     {"".join(trow([s['name'],eur(s['save_total']),f"{num(s['payback'],1)} r",eur(s['npv']),f"{num(s['irr'],1)} %"],em=("em" if s is full else None)) for s in S)}
   </table>
@@ -236,7 +239,7 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
 
 <section class="newpage">
   <div class="kick">7 — Expert posúdenie a odporúčania</div><h2>Odborné posúdenie</h2>
-  <div class="narr">{nar}</div>
+  <div class="narr">{exp_nar}</div>
   <div class="kick" style="margin-top:10px;">Odporúčané kroky</div>
   {"".join(f'<div class="rec"><span class="nthe">{i+1:02d}</span><b>{t}</b><span>{d}</span></div>' for i,(t,d) in enumerate(recs))}
 </section>
