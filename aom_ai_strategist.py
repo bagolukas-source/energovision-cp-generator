@@ -95,6 +95,53 @@ def classify_client_profile(analyza: dict, consumption_profile: list[float] = No
 # VRSTVA B — Smart variant generation (5 archetypov)
 # ============================================================
 
+def _measured_load_profile_block(sb, analyza):
+    """Stiahne REÁLNY hodinový profil spotreby zo storage (bucket analyza-om),
+    prerobí ho na parser-friendly CSV (dayfirst-safe %d.%m.%Y, plný rok, rescale
+    na DB ročnú spotrebu) a vráti load_profile blok pre engine (source=csv_base64).
+    Engine tak počíta z REÁLNEHO tvaru spotreby. None ak profil nie je dostupný.
+
+    Pozn.: stored profil má ISO timestampy, ale engine load_profile_from_csv parsuje
+    dayfirst=True (pre SK distribučné CSV) → ISO by sa rozsypal. Preto reserializujeme.
+    """
+    import base64 as _b64, io as _io
+    path = (analyza.get("consumption_profile_path") or "").strip()
+    if not path:
+        return None
+    try:
+        import pandas as _pd
+        raw = sb.storage.from_("analyza-om").download(path)
+        if not raw or len(raw) < 50:
+            return None
+        df = _pd.read_csv(_io.BytesIO(raw))
+        if df.shape[1] < 2 or len(df) < 24:
+            return None
+        ts = _pd.to_datetime(df.iloc[:, 0], errors="coerce")        # ISO — BEZ dayfirst
+        val = _pd.to_numeric(df.iloc[:, 1], errors="coerce")
+        ser = _pd.Series(val.values, index=ts).dropna()
+        if len(ser) < 24:
+            return None
+        ser = ser[~ser.index.duplicated(keep="first")].sort_index()
+        full = _pd.date_range(ser.index.min().floor("h"), periods=8760, freq="1h")
+        ser = ser.reindex(full).interpolate(limit=6).fillna(float(ser.mean()))
+        annual = float(analyza.get("consumption_annual_mwh") or 0) * 1000
+        if annual > 0 and float(ser.sum()) > 0:
+            ser = ser * (annual / float(ser.sum()))
+        out = _pd.DataFrame({
+            "datetime": ser.index.strftime("%d.%m.%Y %H:%M"),
+            "kwh": ser.values.round(4),
+        })
+        csv_bytes = out.to_csv(index=False, sep=";").encode("utf-8")
+        return {
+            "source": "csv_base64",
+            "csv_base64": _b64.b64encode(csv_bytes).decode("ascii"),
+            "csv_filename": "profile.csv",
+            "granularity_min": 60,
+        }
+    except Exception as e:
+        log.warning(f"[measured_profile] spracovanie zlyhalo ({path}): {e}")
+        return None
+
 def generate_smart_variants(sb, analyza: dict, profile: dict, capex_overrides: dict = None) -> list[dict]:
     """Vygeneruje 5 archetypov a spustí engine na výpočet metrík.
     
@@ -173,6 +220,15 @@ def generate_smart_variants(sb, analyza: dict, profile: dict, capex_overrides: d
         },
     ]
     
+    # Reálny profil zo storage → engine počíta z REÁLNEHO tvaru spotreby (nie syntetický template)
+    _measured = _measured_load_profile_block(sb, analyza)
+    if _measured:
+        _lp_block = _measured
+        profile["engine_profile_source"] = "measured"
+    else:
+        _lp_block = {"source": "synthetic", "profile_template": _detect_profile_template(profile), "granularity_min": 60}
+        profile["engine_profile_source"] = "estimated_mrk" if annual_estimated else "synthetic"
+
     # Volá engine pre každý archetype (rýchla simulácia)
     try:
         from energovision_analytics.api.services.engine_service import run_variants_pipeline, build_run_variants_response
@@ -191,11 +247,7 @@ def generate_smart_variants(sb, analyza: dict, profile: dict, capex_overrides: d
                 "typ_tarify": "spot",
                 "bilancna_skupina": "Energie2",
             },
-            "load_profile": {
-                "source": "synthetic",
-                "profile_template": _detect_profile_template(profile),
-                "granularity_min": 60,
-            },
+            "load_profile": _lp_block,
             "variants": {
                 "pv_kwp_options": pv_options,
                 "bess_kwh_options": bess_options,
@@ -226,8 +278,9 @@ def generate_smart_variants(sb, analyza: dict, profile: dict, capex_overrides: d
                 arch["dotacia_eur"] = float(match.get("dotacia_eur", 0) or 0)
             else:
                 _apply_economic_fallback(arch, annual_kwh, annual_estimated, capex_overrides)
-            # Ak engine match má 0 NPV/payback (zlyhal výpočet) — fallback
-            if (arch.get("npv_eur") or 0) <= 0 or (arch.get("payback_years") or 0) <= 0:
+            # Fallback IBA ak engine nevrátil reálne čísla (chýbajúci match / nulový CAPEX).
+            # Záporné NPV (napr. over-spec Stretch) je VALIDNÝ engine výsledok — nenahrádzaj odhadom.
+            if (arch.get("capex_total_eur") or 0) <= 0:
                 _apply_economic_fallback(arch, annual_kwh, annual_estimated, capex_overrides)
     except Exception as e:
         log.warning(f"Engine call failed, using estimates: {e}")
@@ -680,6 +733,7 @@ def run_full_analysis(sb, analyza_id: str, capex_overrides: dict = None) -> dict
         "capex_per_kwh_bess": float(overrides.get("capex_per_kwh_bess") or 430.0),
         "cena_nakup_eur_kwh": float(overrides.get("cena_nakup_eur_kwh") or 0.15),
         "cena_predaj_eur_kwh": float(overrides.get("cena_predaj_eur_kwh") or 0.02),
+        "profile_source": profile.get("engine_profile_source", "synthetic"),
     }
     
     payload = {

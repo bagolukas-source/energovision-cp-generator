@@ -6053,6 +6053,57 @@ def webhook_aom_intake():
         return jsonify({"ok": False, "error": str(e)[:500]}), 500
 
 
+@app.route("/webhook/analyza-om-reparse", methods=["POST"])
+def webhook_aom_reparse():
+    """Override: pouzivatel opravi jednotku/granularitu -> prepocet z raw suborov.
+    Body: { analyza_id, force: {value_unit?, granularity_min?} }"""
+    body = request.get_json(silent=True) or {}
+    aid = body.get("analyza_id"); force = body.get("force") or {}
+    if not aid:
+        return jsonify({"ok": False, "error": "analyza_id required"}), 400
+    try:
+        sb = _sb()
+        pk = sb.table("analyza_om_podklady").select("storage_path,kind").eq("analyza_id", aid).eq("kind", "15min").execute()
+        paths = [p["storage_path"] for p in (pk.data or []) if p.get("storage_path")]
+        if not paths:
+            return jsonify({"ok": False, "error": "ziadne 15-min podklady na prepocet"}), 400
+        a = sb.table("analyza_om").select("om_mrk_kw").eq("id", aid).single().execute()
+        opts = {"force": force, "mrk_kw": (a.data or {}).get("om_mrk_kw")}
+        import analyza_om.engine as _eng
+        res = _eng.parse_consumption(aid, paths, opts)
+        if res.get("status") != "ok":
+            return jsonify({"ok": False, "error": res.get("error"), "warnings": res.get("warnings")}), 400
+        cs = res.get("summary") or {}; val = res.get("validation") or {}
+        sb.table("analyza_om").update({
+            "consumption_annual_mwh": cs.get("annual_mwh"),
+            "consumption_peak_kw_15min": cs.get("peak_kw_15min"),
+            "consumption_peak_kw_hourly": cs.get("peak_kw_hourly"),
+            "consumption_avg_kw": cs.get("avg_kw"),
+            "consumption_coverage_pct": cs.get("coverage_pct"),
+            "consumption_strategy": res.get("strategy"),
+            "consumption_needs_review": bool(val.get("needs_review")),
+            "consumption_meta": {"strategy": res.get("strategy"), "strategy_meta": res.get("strategy_meta"),
+                                 "validation": val, "reasoning": res.get("reasoning"),
+                                 "annual_mwh": cs.get("annual_mwh"), "forced": force},
+            "consumption_method": "intake_override",
+            "updated_at": "now()",
+        }).eq("id", aid).execute()
+        pfmap = {(p.get("storage_path") or ""): p for p in (res.get("per_file") or [])}
+        for rec in (pk.data or []):
+            pf = pfmap.get(rec.get("storage_path"))
+            if pf and pf.get("mwh") is not None:
+                ex = {"role": "hlavny odber", "mwh": pf.get("mwh"), "period": pf.get("period"), "unit": pf.get("unit")}
+                upd = {"extracted": ex}
+                if pf.get("period"):
+                    upd["label"] = f"15-min spotreba (hlavny odber) - {pf.get('period')}"
+                sb.table("analyza_om_podklady").update(upd).eq("storage_path", rec["storage_path"]).eq("analyza_id", aid).execute()
+        return jsonify({"ok": True, "strategy": res.get("strategy"), "summary": cs,
+                        "validation": val, "reasoning": res.get("reasoning")})
+    except Exception as e:
+        log.exception("[aom-reparse] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
 @app.route("/webhook/analyza-om-podklady", methods=["GET", "POST"])
 def webhook_aom_podklady():
     """Zoznam pomenovaných podkladov pre analýzu."""
@@ -6386,6 +6437,12 @@ def webhook_aom_parse_public():
                     "consumption_profile_path": outputs.get("profile_hourly_path") or (str(analyza_id) + "/consumption_profile.csv"),
                     "consumption_15min_path": outputs.get("profile_15min_path") or (str(analyza_id) + "/consumption_15min.csv"),
                     "consumption_method": "auto_parse",
+                    "consumption_strategy": result.get("strategy"),
+                    "consumption_needs_review": bool((result.get("validation") or {}).get("needs_review")),
+                    "consumption_meta": {"strategy": result.get("strategy"),
+                                         "validation": result.get("validation"),
+                                         "reasoning": result.get("reasoning"),
+                                         "annual_mwh": summary.get("annual_mwh")},
                     "updated_at": "now()",
                 }).eq("id", analyza_id).execute()
             except Exception as upd_err:

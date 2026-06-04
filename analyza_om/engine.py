@@ -92,112 +92,111 @@ def _bump_analyza_status(analyza_id: str, status: str) -> None:
     sb_patch("analyza_om", analyza_id, {"status": status, "updated_at": datetime.now(timezone.utc).isoformat()})
 
 # ---------------- Consumption parsing ----------------
-def parse_consumption(analyza_id: str, file_paths: List[str], options: Optional[Dict] = None) -> Dict[str, Any]:
-    """
-    Download files from Storage, parse, aggregate, return summary + paths to normalized profiles.
-    """
+def parse_file_total_mwh(storage_path):
+    """Parsuje JEDEN consumption súbor (rovnaký parser chain ako parse_consumption)
+    a vráti {mwh, period, format} BEZ uploadu — pre per-file zobrazenie v podkladoch."""
     from . import extract_consumption as ec
+    import tempfile as _tf
+    from pathlib import Path as _P
+    content = storage_download(storage_path)
+    suf = _P(storage_path).suffix.lower()
+    with _tf.NamedTemporaryFile(delete=False, suffix=suf) as tfh:
+        tfh.write(content); tmp = _P(tfh.name)
+    try:
+        series = None
+        if suf == ".csv":
+            series = ec.parse_sse_csv(tmp)
+        else:
+            for parser_fn in (ec.parse_obis_datetime_xls, ec.parse_sse_obis_xls, ec.parse_xls_96cols, ec.parse_zdis_xls):
+                try:
+                    series = parser_fn(tmp); break
+                except Exception:
+                    continue
+        if series is None or len(series) == 0:
+            return {"mwh": None, "period": None}
+        mwh = float(series.sum())  # 15-min série sú v MWh/interval
+        try:
+            ts0 = series.index.min(); period = ts0.strftime("%m/%Y")
+        except Exception:
+            period = None
+        return {"mwh": round(mwh, 2), "period": period}
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def parse_consumption(analyza_id: str, file_paths: List[str], options: Optional[Dict] = None) -> Dict[str, Any]:
+    """AI intake agent: stiahne súbory, rozhodne stratégiu (measured/extrapolate/synthesize),
+    prevedie na kanonickú formu (15-min MWh + hodinová) a uloží do storage.
+    Spätne kompatibilný výstup (status/summary/outputs/warnings) + nové polia
+    (strategy/validation/reasoning/per_file/meta_path)."""
+    import json as _json
+    from ingestion import intake_agent as _agent
 
     opts = options or {}
-    series_list = []
-    detected_formats = []
+    files = []
     warnings = []
-
     for storage_path in file_paths:
         try:
-            content = storage_download(storage_path)
+            files.append({"filename": Path(storage_path).name, "bytes": storage_download(storage_path),
+                          "storage_path": storage_path})
         except Exception as e:
             warnings.append(f"Download failed for {storage_path}: {e}")
-            continue
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=Path(storage_path).suffix) as tf:
-            tf.write(content)
-            tmp = Path(tf.name)
+    context = {
+        "invoice_annual_kwh": opts.get("invoice_annual_kwh"),
+        "mrk_kw": opts.get("mrk_kw"),
+        "segment": opts.get("segment"),
+    }
+    year = int(opts.get("year") or 2025)
+    res = _agent.run_agent(files, context, year=year, force=opts.get("force"))
+    if not res.get("ok"):
+        return {"status": "error", "error": res.get("reason") or "intake agent zlyhal",
+                "strategy": res.get("strategy"), "per_file": res.get("per_file"),
+                "warnings": warnings + (res.get("warnings") or [])}
 
-        # Auto-detect format
-        fmt = None
-        try:
-            if tmp.suffix.lower() == ".csv":
-                series = ec.parse_sse_csv(tmp)
-                fmt = "sse_csv_15min"
-            elif tmp.suffix.lower() in (".xls", ".xlsx"):
-                # Skús v poradí: sse_obis (OBIS kódy + koeficienty) → 96cols → zdis
-                series = None
-                fmt = None
-                for parser_fn, label in [
-                    (ec.parse_obis_datetime_xls, "obis_datetime_xls"),
-                    (ec.parse_sse_obis_xls, "sse_obis_xls"),
-                    (ec.parse_xls_96cols, "xls_96cols"),
-                    (ec.parse_zdis_xls, "zdis_xls"),
-                ]:
-                    try:
-                        series = parser_fn(tmp)
-                        fmt = label
-                        break
-                    except Exception as ex:
-                        warnings.append(f"{label} fallback: {ex}")
-                if series is None:
-                    raise RuntimeError("Žiadny XLS parser nezbehol")
-            else:
-                warnings.append(f"Unknown format for {storage_path}")
-                continue
-            series_list.append(series)
-            detected_formats.append(fmt)
-        except Exception as e:
-            warnings.append(f"Parse failed for {storage_path}: {e}")
-        finally:
-            tmp.unlink(missing_ok=True)
-
-    if not series_list:
-        return {"status": "error", "error": "No files parsed", "warnings": warnings}
-
-    # Aggregate — smart: mesačné rezy toho istého merača (malý prekryv) → zjednoť (dedupe);
-    # podružné merače (rovnaký rozsah, veľký prekryv) → sčítaj.
-    import pandas as _pd
-    _cat = _pd.concat(series_list)
-    _overlap = int(_cat.index.duplicated().sum()) / max(1, len(_cat))
-    if _overlap < 0.30:
-        combined_15min = _cat[~_cat.index.duplicated(keep="first")].sort_index()
-    else:
-        combined_15min = series_list[0].copy()
-        for s in series_list[1:]:
-            combined_15min = combined_15min.add(s, fill_value=0)
-
-    # Hourly aggregation
-    hourly = ec.aggregate_to_hourly(combined_15min)
-
-    # Summary metrics
-    annual_kwh = float(hourly.sum())
-    annual_mwh = annual_kwh / 1000.0
-    peak_kw_15min = float(combined_15min.max() * 4 * 1000)  # MWh/15min → kW (×4 ×1000)
-    peak_kw_hourly = float(hourly.max())
-    avg_kw = float(hourly.mean())
-    coverage_pct = 100.0 * (hourly.notna().sum() / len(hourly)) if len(hourly) > 0 else 0.0
-
-    # Upload normalized files
-    hourly_csv = hourly.to_csv().encode("utf-8")
-    min15_csv = combined_15min.to_csv().encode("utf-8")
+    series_15 = res["series_15min"]
+    hourly = res["hourly"]
     hourly_path = f"{analyza_id}/consumption_profile.csv"
     min15_path = f"{analyza_id}/consumption_15min.csv"
-    storage_upload(hourly_path, hourly_csv, "text/csv")
-    storage_upload(min15_path, min15_csv, "text/csv")
+    meta_path = f"{analyza_id}/consumption_meta.json"
+    storage_upload(hourly_path, hourly.to_csv().encode("utf-8"), "text/csv")
+    storage_upload(min15_path, series_15.to_csv().encode("utf-8"), "text/csv")
+
+    # per-file mapa (storage_path → mwh/period/...) pre intake
+    per_file = []
+    for pf, f in zip(res.get("per_file", []), files):
+        pf2 = dict(pf); pf2["storage_path"] = f.get("storage_path"); per_file.append(pf2)
+
+    meta = {
+        "strategy": res["strategy"], "strategy_meta": res.get("strategy_meta"),
+        "annual_mwh": res["annual_mwh"], "peak_kw_15min": res["peak_kw_15min"],
+        "peak_kw_hourly": res["peak_kw_hourly"], "avg_kw": res["avg_kw"],
+        "coverage_pct": res["coverage_pct"], "validation": res["validation"],
+        "reasoning": res["reasoning"], "per_file": per_file,
+    }
+    storage_upload(meta_path, _json.dumps(meta, ensure_ascii=False, indent=2).encode("utf-8"), "application/json")
 
     return {
         "status": "ok",
-        "detected_formats": detected_formats,
+        "detected_formats": [pf.get("source") for pf in res.get("per_file", [])],
+        "strategy": res["strategy"],
         "summary": {
-            "annual_mwh": round(annual_mwh, 2),
-            "peak_kw_15min": round(peak_kw_15min, 1),
-            "peak_kw_hourly": round(peak_kw_hourly, 1),
-            "avg_kw": round(avg_kw, 1),
-            "coverage_pct": round(coverage_pct, 2),
-            "missing_intervals_count": int(hourly.isna().sum()),
+            "annual_mwh": res["annual_mwh"],
+            "peak_kw_15min": res["peak_kw_15min"],
+            "peak_kw_hourly": res["peak_kw_hourly"],
+            "avg_kw": res["avg_kw"],
+            "coverage_pct": res["coverage_pct"],
+            "missing_intervals_count": 0,
         },
+        "validation": res["validation"],
+        "reasoning": res["reasoning"],
+        "per_file": per_file,
         "outputs": {
             "profile_hourly_path": hourly_path,
             "profile_15min_path": min15_path,
+            "meta_path": meta_path,
         },
-        "warnings": warnings,
+        "warnings": warnings + (res.get("warnings") or []),
     }
 
 

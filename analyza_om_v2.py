@@ -27,7 +27,54 @@ os.environ.setdefault("ENERGO_TARIFF_YAML", str(TARIFF_YAML))
 log = logging.getLogger(__name__)
 
 
-def _build_request_from_analyza(analyza: dict) -> dict:
+def _measured_load_profile_block(sb, analyza):
+    """Stiahne REÁLNY hodinový profil spotreby zo storage (bucket analyza-om),
+    prerobí ho na parser-friendly CSV (dayfirst-safe %d.%m.%Y, plný rok, rescale
+    na DB ročnú spotrebu) a vráti load_profile blok pre engine (source=csv_base64).
+    Engine tak počíta z REÁLNEHO tvaru spotreby. None ak profil nie je dostupný.
+
+    Pozn.: stored profil má ISO timestampy, ale engine load_profile_from_csv parsuje
+    dayfirst=True (pre SK distribučné CSV) → ISO by sa rozsypal. Preto reserializujeme.
+    """
+    import base64 as _b64, io as _io
+    path = (analyza.get("consumption_profile_path") or "").strip()
+    if not path:
+        return None
+    try:
+        import pandas as _pd
+        raw = sb.storage.from_("analyza-om").download(path)
+        if not raw or len(raw) < 50:
+            return None
+        df = _pd.read_csv(_io.BytesIO(raw))
+        if df.shape[1] < 2 or len(df) < 24:
+            return None
+        ts = _pd.to_datetime(df.iloc[:, 0], errors="coerce")        # ISO — BEZ dayfirst
+        val = _pd.to_numeric(df.iloc[:, 1], errors="coerce")
+        ser = _pd.Series(val.values, index=ts).dropna()
+        if len(ser) < 24:
+            return None
+        ser = ser[~ser.index.duplicated(keep="first")].sort_index()
+        full = _pd.date_range(ser.index.min().floor("h"), periods=8760, freq="1h")
+        ser = ser.reindex(full).interpolate(limit=6).fillna(float(ser.mean()))
+        annual = float(analyza.get("consumption_annual_mwh") or 0) * 1000
+        if annual > 0 and float(ser.sum()) > 0:
+            ser = ser * (annual / float(ser.sum()))
+        out = _pd.DataFrame({
+            "datetime": ser.index.strftime("%d.%m.%Y %H:%M"),
+            "kwh": ser.values.round(4),
+        })
+        csv_bytes = out.to_csv(index=False, sep=";").encode("utf-8")
+        return {
+            "source": "csv_base64",
+            "csv_base64": _b64.b64encode(csv_bytes).decode("ascii"),
+            "csv_filename": "profile.csv",
+            "granularity_min": 60,
+        }
+    except Exception as e:
+        log.warning(f"[measured_profile] spracovanie zlyhalo ({path}): {e}")
+        return None
+
+def _build_request_from_analyza(analyza: dict, measured_block: dict = None) -> dict:
     """Konvertuje DB záznam analyza_om na engine RunVariantsRequest dict.
     
     Sizing logika (priority order):
@@ -181,7 +228,7 @@ def _build_request_from_analyza(analyza: dict) -> dict:
             "bilancna_skupina": "Energie2",
             "eic_kod": None,
         },
-        "load_profile": {
+        "load_profile": measured_block if measured_block else {
             "source": "synthetic",
             "profile_template": profile_template,
             "granularity_min": 60,
@@ -193,7 +240,9 @@ def _build_request_from_analyza(analyza: dict) -> dict:
         },
         "capex": {
             "mode": "quick",
-            "capex_pv_eur_per_kwp": 800,
+            # ak je nahraná NAŠA cenová ponuka (CP), použij REÁLNU cenu €/kWp namiesto odhadu → návratnosť "za presné peniaze"
+            "capex_pv_eur_per_kwp": (float(analyza["cp_price_eur"]) / float(analyza["cp_kwp"]))
+                if (analyza.get("cp_price_eur") and analyza.get("cp_kwp") and float(analyza.get("cp_kwp") or 0) > 0) else 800,
             "capex_bess_eur_per_kwh": 480,
         },
         "financial": {
@@ -344,7 +393,7 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
     # Update status
     sb.table("analyza_om").update({"status": "running"}).eq("id", analyza_id).execute()
     
-    request_dict = _build_request_from_analyza(analyza)
+    request_dict = _build_request_from_analyza(analyza, _measured_load_profile_block(sb, analyza))
     log.info(f"[aom-v2] Running pipeline for {analyza_id} with {len(request_dict['variants']['pv_kwp_options'])} PV × {len(request_dict['variants']['bess_kwh_options'])} BESS")
     
     # Wrap engine call — pri chybe nastav status na 'failed' aby analyza neuviazla v running
@@ -1564,14 +1613,14 @@ def enrich_econ_full_response(sb, analyza_id: str) -> dict:
         run_variants_pipeline, build_run_variants_response
     )
     
-    a_res = sb.table("analyza_om").select("id,name,om_psc,om_rk_kw,om_mrk_kw,max_export_kw,consumption_annual_mwh,consumption_peak_kw_hourly,econ_results").eq("id", analyza_id).single().execute()
+    a_res = sb.table("analyza_om").select("id,name,om_psc,om_rk_kw,om_mrk_kw,max_export_kw,consumption_annual_mwh,consumption_peak_kw_hourly,consumption_profile_path,econ_results").eq("id", analyza_id).single().execute()
     analyza = a_res.data
     if not analyza:
         return {"ok": False, "error": "analyza not found"}
     
     # Vyrob request_dict (rovnaký path ako run_variants_premium)
     try:
-        request_dict = _build_request_from_analyza(analyza)
+        request_dict = _build_request_from_analyza(analyza, _measured_load_profile_block(sb, analyza))
     except Exception as e:
         log.exception("[enrich-full-response] build_request failed for %s", analyza_id)
         return {"ok": False, "error": f"build_request: {e}"}
