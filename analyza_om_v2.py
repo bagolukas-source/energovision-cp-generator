@@ -74,6 +74,24 @@ def _measured_load_profile_block(sb, analyza):
         log.warning(f"[measured_profile] spracovanie zlyhalo ({path}): {e}")
         return None
 
+def _cp_capex(analyza: dict) -> dict:
+    """CAPEX pre engine. Ak je nahraná NAŠA cenová ponuka (CP) → použi REÁLNE ceny:
+    batériu oceň sadzbou a ZVYŠOK ceny (FVE+optimizéry+montáž) rozpočítaj na €/kWp.
+    Tým sa pre konfiguráciu zodpovedajúcu CP zrekonštruuje PRESNÁ cena ponuky.
+    Bez CP → default odhad."""
+    try:
+        cpP = float(analyza.get("cp_price_eur") or 0)
+        cpK = float(analyza.get("cp_kwp") or 0)
+        cpB = float(analyza.get("cp_bess_kwh") or 0)
+        if cpP > 0 and cpK > 0:
+            bess_rate = 330.0  # reálna utility sadzba BESS (LUNA2000) €/kWh
+            pv_rate = max(400.0, (cpP - cpB * bess_rate) / cpK)
+            return {"mode": "quick", "capex_pv_eur_per_kwp": round(pv_rate, 1), "capex_bess_eur_per_kwh": bess_rate}
+    except Exception:
+        pass
+    return {"mode": "quick", "capex_pv_eur_per_kwp": 800, "capex_bess_eur_per_kwh": 480}
+
+
 def _build_request_from_analyza(analyza: dict, measured_block: dict = None) -> dict:
     """Konvertuje DB záznam analyza_om na engine RunVariantsRequest dict.
     
@@ -238,13 +256,7 @@ def _build_request_from_analyza(analyza: dict, measured_block: dict = None) -> d
             "bess_kwh_options": bess_options,
             "ems_strategies": ["rule_based"],
         },
-        "capex": {
-            "mode": "quick",
-            # ak je nahraná NAŠA cenová ponuka (CP), použij REÁLNU cenu €/kWp namiesto odhadu → návratnosť "za presné peniaze"
-            "capex_pv_eur_per_kwp": (float(analyza["cp_price_eur"]) / float(analyza["cp_kwp"]))
-                if (analyza.get("cp_price_eur") and analyza.get("cp_kwp") and float(analyza.get("cp_kwp") or 0) > 0) else 800,
-            "capex_bess_eur_per_kwh": 480,
-        },
+        "capex": _cp_capex(analyza),
         "financial": {
             "dppo_pct": 0.22,
             "discount_rate": 0.06,
