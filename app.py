@@ -5299,6 +5299,49 @@ if os.environ.get("SOLINTEG_MQTT_AUTOSTART", "false").lower() == "true":
         log.warning("[boot] Solinteg MQTT auto-start failed: %s", str(e)[:200])
 
 
+
+# ============================================================
+# Trafostanice — generátor dokumentov
+# ============================================================
+@app.route("/webhook/ts-generate-doc", methods=["POST"])
+def ts_generate_doc():
+    """Vygeneruje dokument k trafostanici (DOCX), uloží do storage + ts_documents.
+    Body: { station_id, doc_type }  doc_type: preberaci_protokol | zmluva | mpp | revizna_sprava"""
+    from datetime import date as _d
+    body = request.get_json(silent=True) or {}
+    sid = body.get("station_id"); doc_type = body.get("doc_type")
+    if not sid or not doc_type:
+        return jsonify({"ok": False, "error": "station_id + doc_type required"}), 400
+    try:
+        sb = _sb()
+        ts = sb.table("transformer_stations").select("*").eq("id", sid).single().execute().data
+        if not ts:
+            return jsonify({"ok": False, "error": "TS nenájdená"}), 404
+        from ts_module import ts_documents_gen as _tsg
+        gens = {
+            "preberaci_protokol": (_tsg.generate_preberaci_protokol, "Preberací protokol"),
+        }
+        if doc_type not in gens:
+            return jsonify({"ok": False, "error": f"Dokument '{doc_type}' zatiaľ pripravujem — najprv je Preberací protokol."}), 400
+        fn, label = gens[doc_type]
+        data = fn(ts)
+        fname = f"{ts.get('ts_code','TS')}_{doc_type}_{_d.today().isoformat()}.docx"
+        path = f"trafostanice/{sid}/{fname}"
+        sb.storage.from_("documents").upload(path, data,
+            {"content-type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "upsert": "true"})
+        url = sb.storage.from_("documents").get_public_url(path)
+        sb.table("ts_documents").insert({
+            "station_id": sid, "doc_type": doc_type,
+            "title": f"{label} — {ts.get('ts_code','')}",
+            "file_url": url, "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "file_size_bytes": len(data),
+        }).execute()
+        return jsonify({"ok": True, "url": url, "title": f"{label} — {ts.get('ts_code','')}", "filename": fname})
+    except Exception as e:
+        log.exception("[ts-generate-doc] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
