@@ -5320,6 +5320,9 @@ def ts_generate_doc():
         from ts_module import ts_documents_gen as _tsg
         gens = {
             "preberaci_protokol": (_tsg.generate_preberaci_protokol, "Preberací protokol"),
+            "zmluva": (_tsg.generate_zmluva, "Zmluva o servise TS"),
+            "mpp": (_tsg.generate_mpp, "MPP — miestny prevádzkový predpis"),
+            "revizna_sprava": (_tsg.generate_revizna, "Revízna správa (OPaOS)"),
         }
         if doc_type not in gens:
             return jsonify({"ok": False, "error": f"Dokument '{doc_type}' zatiaľ pripravujem — najprv je Preberací protokol."}), 400
