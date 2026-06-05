@@ -716,13 +716,15 @@ def lead_from_notion(notion_props, variant):
 
     # Ulica + PSČ — najprv skús z Poznámok regex "adresa: ulica, 12345"
     # Ak nenájde, použij ulica_from_mesto (vyextrahované z Mesto property vyššie)
-    ulica = ""
-    psc = ""
-    m_addr = re.search(r"adresa[\s:]+([^,]+),\s*(\d{3}\s?\d{2})", pozn, re.I)
-    if m_addr:
-        ulica = m_addr.group(1).strip()
-        psc = m_addr.group(2)
-    elif ulica_from_mesto:
+    # Primárne explicitné polia z CRM ("Ulica číslo" + "PSČ"); inak Poznámky regex; inak z Mesto.
+    ulica = (notion_props.get("Ulica číslo") or "").strip()
+    psc = (notion_props.get("PSČ") or "").strip()
+    if not ulica or not psc:
+        m_addr = re.search(r"adresa[\s:]+([^,]+),\s*(\d{3}\s?\d{2})", pozn, re.I)
+        if m_addr:
+            ulica = ulica or m_addr.group(1).strip()
+            psc = psc or m_addr.group(2)
+    if not ulica and ulica_from_mesto:
         ulica = ulica_from_mesto
 
     # Per-variant marža s fallbackom na centrálnu "Marža %"
