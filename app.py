@@ -3809,7 +3809,7 @@ def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchod
         <ul>
           <li><strong>Investícia po dotácii Zelená domácnostiam:</strong> {cena_a:,.0f} € s DPH</li>
           <li><strong>Návratnosť:</strong> 6–8 rokov pri dnešnej cene elektriny 0,16 €/kWh</li>
-          <li><strong>Záruka:</strong> 30 rokov na panely LONGi, 10 rokov na menič Huawei</li>
+          <li><strong>Záruka:</strong> 30 rokov na panely, 10 rokov na menič</li>
           <li><strong>Inštalácia:</strong> 1–2 dni, bez stavebných úprav</li>
         </ul>
         <p style="background:#F0F8F4;padding:12px;border-left:4px solid #1B5E3F;font-size:14px;">
@@ -3840,25 +3840,6 @@ def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchod
         </p>
         """.replace(",", " "))
 
-    # === BLOCK D — FVE + Wallbox (bez baterie) ===
-    if "D" in variants:
-        blocks.append(f"""
-        <h3 style="color:#1B5E3F;margin-top:24px;">Varianta D — fotovoltika {kwp} kWp + wallbox (bez batérie)</h3>
-        <p>Pre rodiny s elektromobilom ktoré <strong>nepotrebujú batériu</strong> — auto sa nabíja priamo zo slnka cez deň.
-        Wallbox automaticky reaguje na prebytky FVE a využíva ich na nabíjanie EV. Optimálne riešenie ak doma cez deň
-        bývate menej a hlavnou prioritou je nabíjanie auta zo slnka.</p>
-        <ul>
-          <li><strong>Investícia po dotácii:</strong> {cena_d:,.0f} € s DPH</li>
-          <li><strong>Návratnosť:</strong> 7–9 rokov pri kombinácii FVE + EV nabíjanie</li>
-          <li><strong>Výhoda:</strong> nižšia investícia ako varianta C, ale stále plné EV nabíjanie zo slnka</li>
-          <li><strong>Hybridný menič:</strong> možnosť doplnenia batérie neskôr bez prerábania systému</li>
-        </ul>
-        <p style="background:#F0F8F4;padding:12px;border-left:4px solid #1B5E3F;font-size:14px;">
-          <strong>Dlhodobý plán:</strong> mnoho rodín začína s variant D a po 2-3 rokoch dopĺňa batériu, keď vidia
-          svoj reálny profil spotreby. Týmto spôsobom investujú postupne a vyhnú sa pre/poddimenzovaniu batérie.
-        </p>
-        """.replace(",", " "))
-
     # === BLOCK C — FVE + BESS + Wallbox ===
     if "C" in variants:
         bat_str = f"{bateria_kwh:.0f} kWh" if bateria_kwh else "batéria"
@@ -3877,6 +3858,25 @@ def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchod
           <strong>Slovenský kontext:</strong> Pri raste cien benzínu/nafty a zvyšujúcich sa parkovných
           poplatkoch vo veľkých mestách (Bratislava, Košice) sa elektromobil vracia za 4-6 rokov samostatne.
           S vlastnou FVE ešte rýchlejšie.
+        </p>
+        """.replace(",", " "))
+
+    # === BLOCK D — FVE + Wallbox (bez baterie) ===
+    if "D" in variants:
+        blocks.append(f"""
+        <h3 style="color:#1B5E3F;margin-top:24px;">Varianta D — fotovoltika {kwp} kWp + wallbox (bez batérie)</h3>
+        <p>Pre rodiny s elektromobilom ktoré <strong>nepotrebujú batériu</strong> — auto sa nabíja priamo zo slnka cez deň.
+        Wallbox automaticky reaguje na prebytky FVE a využíva ich na nabíjanie EV. Optimálne riešenie ak doma cez deň
+        bývate menej a hlavnou prioritou je nabíjanie auta zo slnka.</p>
+        <ul>
+          <li><strong>Investícia po dotácii:</strong> {cena_d:,.0f} € s DPH</li>
+          <li><strong>Návratnosť:</strong> 7–9 rokov pri kombinácii FVE + EV nabíjanie</li>
+          <li><strong>Výhoda:</strong> nižšia investícia ako varianta C, ale stále plné EV nabíjanie zo slnka</li>
+          <li><strong>Hybridný menič:</strong> možnosť doplnenia batérie neskôr bez prerábania systému</li>
+        </ul>
+        <p style="background:#F0F8F4;padding:12px;border-left:4px solid #1B5E3F;font-size:14px;">
+          <strong>Dlhodobý plán:</strong> mnoho rodín začína s variant D a po 2-3 rokoch dopĺňa batériu, keď vidia
+          svoj reálny profil spotreby. Týmto spôsobom investujú postupne a vyhnú sa pre/poddimenzovaniu batérie.
         </p>
         """.replace(",", " "))
 
