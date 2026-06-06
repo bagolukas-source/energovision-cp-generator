@@ -2036,3 +2036,50 @@ def aom_chat(sb, analyza_id: str, message: str, history=None) -> dict:
     return {"ok": True, "intent": "adjust",
             "reply": (reply or "Rozumiem.") + " Prepočítavam s novými parametrami (engine + posudok) — trvá ~1-2 min. Posudok sa obnoví automaticky.",
             "rerender": False, "pending": True, "overrides": new_over}
+
+
+def export_intervals(sb, analyza_id: str, pv_kwp: float = None, bess_kwh: float = None) -> dict:
+    """Vyexportuje REÁLNE hodinové interval rady pre vybraný (winner) variant do storage
+    `analyza-om/<id>/intervals.json` — foundation pre Orkestra interval grafy
+    (Battery SoC, Interval activity, Annual/Daily load profile After, Energy prices)."""
+    import json as _json
+    from energovision_analytics.api.services.engine_service import export_variant_intervals
+    import analyza_om.engine as _eng
+
+    a = sb.table("analyza_om").select("*").eq("id", analyza_id).single().execute().data
+    if not a:
+        raise ValueError("Analyza not found")
+
+    # winner variant: explicit pv/bess override → selected_variant_id → top NPV
+    if pv_kwp is None or bess_kwh is None:
+        v_res = sb.table("analyza_om_variants").select("*").eq("analyza_id", analyza_id).execute()
+        variants = v_res.data or []
+        if not variants:
+            raise ValueError("Žiadne varianty — spusti run_variants_premium najprv")
+        sel_id = a.get("selected_variant_id")
+        winner = None
+        if sel_id:
+            winner = next((v for v in variants if str(v.get("id")) == str(sel_id)), None)
+        if not winner:
+            winner = max(variants, key=lambda v: (v.get("result_npv_eur_base") or -1e18))
+        pv_kwp = float(winner.get("fve_kwp") or 0)
+        bess_kwh = float(winner.get("bess_kwh") or 0)
+
+    request = _build_request_from_analyza(a, _measured_load_profile_block(sb, a))
+    data = export_variant_intervals(request, pv_kwp, bess_kwh)
+
+    path = f"{analyza_id}/intervals.json"
+    payload = _json.dumps(data, ensure_ascii=False).encode("utf-8")
+    _eng.storage_upload(path, payload, "application/json")
+
+    # mini summary pre odpoveď
+    after = data.get("net_load_after_kw") or []
+    soc = data.get("soc_kwh") or []
+    return {
+        "ok": True, "path": path, "n": data.get("n"),
+        "variant": data.get("variant"),
+        "peak_after_kw": round(max(after), 1) if after else None,
+        "min_after_kw": round(min(after), 1) if after else None,
+        "max_soc_kwh": round(max(soc), 1) if soc else 0,
+        "bytes": len(payload),
+    }

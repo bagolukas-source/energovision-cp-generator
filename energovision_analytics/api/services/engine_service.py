@@ -386,3 +386,105 @@ def build_run_variants_response(
         "n_variants_run": len(results),
         "elapsed_ms": pipeline_output["elapsed_ms"],
     }
+
+
+def export_variant_intervals(request_dict: dict, pv_kwp: float, bess_kwh: float,
+                             ems_strategy: str = "rule_based") -> dict:
+    """Spustí JEDEN variant s keep_intervals=True a vráti REÁLNE hodinové časové rady
+    (load before, net load after, pv, battery activity, SoC, spot) pre Orkestra-style
+    interval grafy. Pre PV-only (bess=0 → engine nebeží dispatch) dopočíta toky
+    deterministicky z PV simulácie + load (fyzikálna bilancia, žiadny odhad).
+
+    Pozn.: premium engine beží hodinovo (8760), takže rozlíšenie je hodinové.
+    """
+    import numpy as _np
+    from energovision_analytics.pv.system import PVSystemSim
+
+    # --- setup (zhodné s run_variants_pipeline kroky 1-3) ---
+    site_req = request_dict["site"]
+    site = auto_fill_site(
+        nazov=site_req["nazov"], psc=site_req["psc"],
+        rocna_spotreba_kwh=site_req["rocna_spotreba_kwh"], rk_kw=site_req["rk_kw"],
+        mrk_kw=site_req.get("mrk_kw"), typ_tarify=site_req.get("typ_tarify", "spot"),
+        bilancna_skupina=site_req.get("bilancna_skupina", "Energie2"), eic_kod=site_req.get("eic_kod"),
+    )
+    lp = request_dict["load_profile"]
+    if lp["source"] == "csv_base64":
+        load_kw, ts = _decode_csv_to_load_kw(lp["csv_base64"], lp.get("granularity_min", 60), site.rocna_spotreba_kwh)
+    else:
+        params = _profile_template_params(lp.get("profile_template", "kancelaria"))
+        df_syn = synthetic_load_profile(annual_kwh=site.rocna_spotreba_kwh, year=2025, granularity_min=60, **params)
+        load_kw = df_syn["load_kw"].to_numpy(); ts = df_syn.index
+    spot_df = pd.read_csv(SPOT_CSV); spot = spot_df["price_eur_per_mwh"].to_numpy()
+    tariff_engine = TariffEngine.from_yaml(TARIFF_YAML)
+    tov = request_dict.get("tariff_overrides") or {}
+    if tov:
+        for ty in tariff_engine._tariffs.values():
+            if tov.get("silova_eur_mwh") is not None: ty.fix_silova_eur_mwh = float(tov["silova_eur_mwh"])
+            if tov.get("distribucia_eur_mwh") is not None: ty.distrib_eur_mwh = float(tov["distribucia_eur_mwh"])
+            if tov.get("tps_eur_mwh") is not None: ty.tps_eur_mwh = float(tov["tps_eur_mwh"])
+            if tov.get("oze_eur_mwh") is not None: ty.njf_eur_mwh = float(tov["oze_eur_mwh"])
+            if tov.get("ostatne_eur_mwh") is not None:
+                _h = float(tov["ostatne_eur_mwh"]) / 2; ty.spotrebna_dan_eur_mwh = _h; ty.tss_eur_mwh = _h
+            if tov.get("mrk_kapacita_eur_mw_mes") is not None: ty.mrk_kapacita_eur_mw_mes = float(tov["mrk_kapacita_eur_mw_mes"])
+
+    n = min(len(load_kw), len(spot), 8760)
+    load_kw = load_kw[:n]; spot = spot[:n]
+    ts = ts[:n] if len(ts) > n else ts
+    if len(ts) < n:
+        ts = pd.date_range("2025-01-01 00:00", periods=n, freq="1h")
+    load_df = pd.DataFrame({"load_kw": load_kw}, index=ts)
+    capex = request_dict.get("capex", {}); fin = request_dict.get("financial", {})
+
+    gen = VariantGenerator(
+        site=site, load_df=load_df, spot_eur_mwh=spot, timestamps=ts, tariff_engine=tariff_engine,
+        pv_kwp_options=[pv_kwp], bess_kwh_options=[bess_kwh], ems_strategies=[ems_strategy],
+        capex_pv_eur_per_kwp=capex.get("capex_pv_eur_per_kwp", 800),
+        capex_bess_eur_per_kwh=capex.get("capex_bess_eur_per_kwh", 480),
+        dppo_pct=fin.get("dppo_pct", 0.22), discount_rate=fin.get("discount_rate", 0.06),
+        horizon_years=fin.get("horizon_years", 20), depr_years=fin.get("depr_years", 6),
+    )
+    r = gen.run_single(pv_kwp, bess_kwh, ems_strategy, keep_intervals=True)
+
+    load_before, after, pv_out, batt, soc_kwh, spot_out = [], [], [], [], [], []
+    if r.intervals:
+        for iv in r.intervals:
+            dt = iv.dt_hours or 1.0
+            imp = iv.grid_import_kwh / dt; exp = iv.grid_export_kwh / dt
+            charge = (iv.pv_to_bat_kwh + iv.grid_to_bat_kwh) / dt
+            disch = iv.bat_to_load_kwh / dt
+            load_before.append(round(iv.load_kw, 2)); after.append(round(imp - exp, 2))
+            pv_out.append(round(iv.pv_kw, 2)); batt.append(round(disch - charge, 2))
+            soc_kwh.append(round(iv.bat_soc_kwh_end, 2)); spot_out.append(round(iv.spot_eur_mwh, 1))
+    else:
+        pv_in = gen._make_pv(pv_kwp)
+        if pv_in:
+            pv_kw = PVSystemSim(pv_in, site).simulate_year(int(pd.Timestamp(ts[0]).year), 60)["pv_kw"].to_numpy()[:n]
+        else:
+            pv_kw = _np.zeros(n)
+        if len(pv_kw) < n:
+            pv_kw = _np.concatenate([pv_kw, _np.zeros(n - len(pv_kw))])
+        mrk_lim = float(site.mrk_kw or 0)
+        neg_curtail = bool((request_dict.get("ems_config") or {}).get("negative_spot_curtail", True))
+        for i in range(n):
+            L = float(load_kw[i]); P = float(pv_kw[i]); sp = float(spot[i])
+            pv_to_load = min(P, L); exp = max(0.0, P - pv_to_load)
+            if neg_curtail and sp < 0: exp = 0.0
+            if mrk_lim: exp = min(exp, mrk_lim)
+            grid = L - pv_to_load
+            load_before.append(round(L, 2)); after.append(round(grid - exp, 2))
+            pv_out.append(round(P, 2)); batt.append(0.0); soc_kwh.append(0.0); spot_out.append(round(sp, 1))
+
+    return {
+        "granularity_min": 60,
+        "start_iso": pd.Timestamp(ts[0]).isoformat(),
+        "n": len(load_before),
+        "variant": {"pv_kwp": float(pv_kwp), "bess_kwh": float(bess_kwh),
+                    "bess_usable_kwh": round(float(bess_kwh) * 0.90, 1)},
+        "load_before_kw": load_before,
+        "net_load_after_kw": after,
+        "pv_kw": pv_out,
+        "battery_kw": batt,
+        "soc_kwh": soc_kwh,
+        "spot_eur_mwh": spot_out,
+    }

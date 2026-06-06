@@ -6163,6 +6163,23 @@ def webhook_aom_podklady():
         return jsonify({"ok": False, "error": str(e)[:300]}), 500
 
 
+@app.route("/webhook/analyza-om-intervals", methods=["POST"])
+def webhook_aom_intervals():
+    """Vyexportuje REÁLNE hodinové interval rady (load before/after, pv, battery, SoC, spot)
+    pre winner variant do storage analyza-om/<id>/intervals.json — pre Orkestra interval grafy."""
+    if not _aom_v2:
+        return jsonify({"ok": False, "error": "analyza_om_v2 not loaded"}), 500
+    body = request.get_json(silent=True) or {}
+    aid = body.get("analyza_id")
+    if not aid:
+        return jsonify({"ok": False, "error": "analyza_id required"}), 400
+    try:
+        return jsonify(_aom_v2.export_intervals(_sb(), aid, body.get("pv_kwp"), body.get("bess_kwh")))
+    except Exception as e:
+        log.exception("[aom-intervals] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
 @app.route("/webhook/analyza-om-chat", methods=["POST"])
 def webhook_aom_chat():
     """Chat refinement (šperkovanie): rozpozná zámer, odpovie alebo prepočíta + pregeneruje posudok."""
