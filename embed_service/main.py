@@ -1,12 +1,7 @@
 """
 Energovision — self-hosted embedding service (NIČ NEVOLÁ VON).
-Model intfloat/multilingual-e5-large (1024-dim, multilingválny vrátane SK).
-Stiahne sa RAZ pri štarte, potom beží lokálne na CPU. Žiadne externé API za behu.
-
-Beh:  uvicorn main:app --host 0.0.0.0 --port $PORT
-Endpointy:
-  GET  /health           -> {"ok":true,"model":...,"dim":1024}
-  POST /embed  {"texts":[...], "kind":"query|passage"} -> {"vectors":[[...],...]}
+Model z env EMBED_MODEL (default multilingual MiniLM, 384-dim). Stiahne sa raz pri builde,
+beží lokálne na CPU. Za behu žiadne externé API.
 """
 import os
 from typing import List
@@ -14,28 +9,33 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from fastembed import TextEmbedding
 
-MODEL_NAME = os.environ.get("EMBED_MODEL", "intfloat/multilingual-e5-large")
-app = FastAPI(title="Energovision Embeddings", version="1.0")
+MODEL_NAME = os.environ.get("EMBED_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
+IS_E5 = "e5" in MODEL_NAME.lower()
+app = FastAPI(title="Energovision Embeddings", version="1.1")
 _model = None
 
 def model() -> TextEmbedding:
     global _model
     if _model is None:
-        _model = TextEmbedding(MODEL_NAME)  # stiahne váhy raz, cache v kontajneri
+        _model = TextEmbedding(MODEL_NAME)
     return _model
 
 class EmbedReq(BaseModel):
     texts: List[str]
-    kind: str = "query"   # e5 konvencia: 'query' alebo 'passage'
+    kind: str = "query"   # pre e5 modely: 'query'/'passage'; inak ignorované
+
+def _prep(texts, kind):
+    if IS_E5:
+        p = "query: " if kind == "query" else "passage: "
+        return [p + (t or "") for t in texts]
+    return [(t or "") for t in texts]
 
 @app.get("/health")
 def health():
-    m = model()
-    return {"ok": True, "model": MODEL_NAME, "dim": 1024}
+    v = next(model().embed(["test"]))
+    return {"ok": True, "model": MODEL_NAME, "dim": len(v)}
 
 @app.post("/embed")
 def embed(req: EmbedReq):
-    prefix = "query: " if req.kind == "query" else "passage: "
-    texts = [prefix + (t or "") for t in req.texts]
-    vecs = [v.tolist() for v in model().embed(texts)]
+    vecs = [v.tolist() for v in model().embed(_prep(req.texts, req.kind))]
     return {"vectors": vecs, "dim": (len(vecs[0]) if vecs else 0)}
