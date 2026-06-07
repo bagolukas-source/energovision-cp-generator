@@ -100,6 +100,7 @@ class VariantGenerator:
         pv_modul_wp: int = 700,
         pv_sklon: float = 25,
         pv_azimut: float = 180,
+        pv_konfiguracia: str = "2xP",
         pv_inverter_ratio: float = 1.0,
         count_battery_replacement: bool = False,
         bess_vyrobca: str = "Huawei",
@@ -141,6 +142,7 @@ class VariantGenerator:
         self.pv_modul_wp = pv_modul_wp
         self.pv_sklon = pv_sklon
         self.pv_azimut = pv_azimut
+        self.pv_konfiguracia = pv_konfiguracia
         self.pv_inverter_ratio = pv_inverter_ratio
 
         # BESS defaults
@@ -176,7 +178,7 @@ class VariantGenerator:
             inverter_kw_ac=inverter_kw,
             sklon_stupne=self.pv_sklon,
             azimut_stupne=self.pv_azimut,
-            konfiguracia=Konfiguracia.DVOJRADOVA_PORTRAIT,
+            konfiguracia=(Konfiguracia(self.pv_konfiguracia) if self.pv_konfiguracia in [c.value for c in Konfiguracia] else Konfiguracia.DVOJRADOVA_PORTRAIT),
         )
 
     def _make_bess(self, kwh: float) -> BESSInput:

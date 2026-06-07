@@ -292,6 +292,9 @@ def _build_request_from_analyza(analyza: dict, measured_block: dict = None) -> d
             "pv_kwp_options": pv_options,
             "bess_kwh_options": bess_options,
             "ems_strategies": ["rule_based"],
+            "pv_sklon": _topology_params(analyza)[0],
+            "pv_azimut": _topology_params(analyza)[1],
+            "pv_konfiguracia": _topology_params(analyza)[2],
         },
         "capex": _cp_capex(analyza),
         "financial": {
@@ -473,9 +476,9 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
                 "name": v.get("label", f"V{idx+1}"),
                 "position": idx + 1,
                 "fve_kwp": v.get("pv_kwp", 0),
-                "fve_tilt_deg": 13,
-                "fve_azimuth_deg": 180,
-                "fve_topology": "south",  # default tilt/azimuth topology (constraint: south|east_west|tracker|carport)
+                "fve_tilt_deg": int(_topology_params(analyza)[0]),
+                "fve_azimuth_deg": int(_topology_params(analyza)[1]),
+                "fve_topology": (analyza.get("fve_topology") or "south"),  # reálna topológia z analýzy
                 "bess_kwh": v.get("bess_kwh", 0),
                 "bess_kw": v.get("bess_kw", 0),
                 "bess_arbitrage_enabled": v.get("bess_kwh", 0) > 0,
@@ -855,6 +858,26 @@ def _validate_orkestra(context: dict) -> list:
     if w:
         logging.warning("[orkestra-validacia] %d upozorneni: %s", len(w), "; ".join(w))
     return w
+
+
+def _topology_params(analyza: dict) -> tuple[float, float, str]:
+    """Mapuje fve_topology + tilt/azimut na (sklon, azimut, konfiguracia) pre engine.
+    konfiguracia: '2xP' (juh/carport), 'EW' (východ-západ), 'tracker'."""
+    topo = (analyza.get("fve_topology") or "south").strip().lower()
+    tilt = analyza.get("fve_tilt_deg")
+    azim = analyza.get("fve_azimuth_deg")
+    try: tilt = float(tilt) if tilt not in (None, "") else None
+    except Exception: tilt = None
+    try: azim = float(azim) if azim not in (None, "") else None
+    except Exception: azim = None
+    if topo in ("east_west", "ew", "vychod_zapad", "v-z", "východ-západ"):
+        return (tilt if tilt is not None else 10.0), 180.0, "EW"
+    if topo == "tracker":
+        return 0.0, 180.0, "tracker"
+    if topo == "carport":
+        return (tilt if tilt is not None else 8.0), (azim if azim is not None else 180.0), "2xP"
+    # south (default) — south_13 (ploché) / south_30 (šikmé)
+    return (tilt if tilt is not None else 13.0), (azim if azim is not None else 180.0), "2xP"
 
 
 def _construction_str(analyza: dict) -> str:

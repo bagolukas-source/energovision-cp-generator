@@ -12,7 +12,7 @@ Validácia: ±5–10 % vs PVGIS hourly export pre SK lokality 47.5–49.5°N.
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from math import cos, pi, radians, sin
+from math import acos, asin, cos, degrees, pi, radians, sin
 from typing import Optional
 
 import numpy as np
@@ -160,6 +160,56 @@ def hourly_clear_sky_factor(
     return elevation_deg  # 0 v noci, max ~ 1 v lete v poludnie
 
 
+def _solar_position(timestamp: datetime, lat: float, lon: float):
+    """Vráti (elevation_rad, azimuth_deg) — azimut 0=S(sever),90=V,180=J,270=Z (clockwise)."""
+    day_of_year = timestamp.timetuple().tm_yday
+    declination = 23.45 * sin(radians(360 / 365 * (284 + day_of_year)))
+    B = radians(360 / 365 * (day_of_year - 81))
+    eot_min = 9.87 * sin(2 * B) - 7.53 * cos(B) - 1.5 * sin(B)
+    hour_decimal = timestamp.hour + timestamp.minute / 60
+    longitude_correction = (lon - 15) * 4 / 60
+    solar_time = hour_decimal + longitude_correction + eot_min / 60
+    hour_angle = 15 * (solar_time - 12)  # ° (záporné ráno, kladné poobede)
+    la = radians(lat); dec = radians(declination); ha = radians(hour_angle)
+    sin_elev = sin(la) * sin(dec) + cos(la) * cos(dec) * cos(ha)
+    sin_elev = max(-1.0, min(1.0, sin_elev))
+    elev = asin(sin_elev)
+    cos_el = cos(elev)
+    if cos_el < 1e-6:
+        return elev, 180.0
+    cos_az = (sin(dec) - sin_elev * sin(la)) / (cos_el * cos(la) + 1e-9)
+    cos_az = max(-1.0, min(1.0, cos_az))
+    az = degrees(acos(cos_az))           # 0=sever; rastie cez východ
+    if hour_angle > 0:
+        az = 360.0 - az                  # poobede → západ
+    return elev, az
+
+
+def _poa_panel(elev: float, sun_az: float, tilt_deg: float, panel_az_deg: float) -> float:
+    """Plane-of-array faktor pre jednu rovinu (beam cos-incidence + izotropný difúz)."""
+    if elev <= 0:
+        return 0.0
+    b = radians(tilt_deg); se = sin(elev); ce = cos(elev)
+    cos_inc = se * cos(b) + ce * sin(b) * cos(radians(sun_az - panel_az_deg))
+    beam = max(0.0, cos_inc) * se               # DNI proxy ~ sin(elev)
+    diffuse = 0.18 * se * (1 + cos(b)) / 2       # izotropný difúz (sky view)
+    return beam + diffuse
+
+
+def hourly_poa_factor(timestamp: datetime, lat: float, lon: float,
+                      sklon: float = 30, azimut: float = 180, konfig: str = "2xP") -> float:
+    """Orientačne-citlivý POA faktor — určuje TVAR dňa (Juh jednovrchol, V-Z dvojvrchol, tracker plató)."""
+    elev, sun_az = _solar_position(timestamp, lat, lon)
+    if elev <= 0:
+        return 0.0
+    k = (konfig or "").upper()
+    if k == "EW":  # Východ-Západ: dve roviny (V 90°, Z 270°), polovičná kapacita každá
+        return 0.5 * _poa_panel(elev, sun_az, sklon, 90.0) + 0.5 * _poa_panel(elev, sun_az, sklon, 270.0)
+    if k == "TRACKER":  # 1-osový N-S tracker: sleduje slnko V-Z → široké plató
+        return max(0.0, sin(elev)) + 0.12 * sin(elev)
+    return _poa_panel(elev, sun_az, sklon, azimut)
+
+
 def synthesize_hourly_profile(
     year: int,
     lat: float,
@@ -169,6 +219,7 @@ def synthesize_hourly_profile(
     azimut: float = 180,
     timestep_min: int = 60,
     losses_factor: float = 0.86,
+    konfig: str = "2xP",
 ) -> pd.DataFrame:
     """Syntetizuj hodinový PV profil pre celý rok.
 
@@ -184,6 +235,11 @@ def synthesize_hourly_profile(
         DataFrame s timestamp index a stĺpcom 'pv_kw'.
     """
     monthly_yields = monthly_yield_kwh_per_kwp(lat, lon, sklon, azimut)
+    _k = (konfig or "").upper()
+    if _k == "EW":
+        monthly_yields = [m * 0.92 for m in monthly_yields]      # V-Z: ~8 % nižší ročný yield, ale plochší profil
+    elif _k == "TRACKER":
+        monthly_yields = [m * 1.18 for m in monthly_yields]      # 1-osový tracker: ~+18 % ročne
 
     # Generuj všetky timestamps
     start = datetime(year, 1, 1)
@@ -200,7 +256,7 @@ def synthesize_hourly_profile(
     monthly_cs_sums = [0.0] * 12
     cs_per_ts = []
     for ts in timestamps:
-        cs = hourly_clear_sky_factor(ts.to_pydatetime(), lat, lon)
+        cs = hourly_poa_factor(ts.to_pydatetime(), lat, lon, sklon, azimut, konfig)
         cs_per_ts.append(cs)
         monthly_cs_sums[ts.month - 1] += cs * dt_hours
 

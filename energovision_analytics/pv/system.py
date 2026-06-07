@@ -41,6 +41,7 @@ class PVSystemSim:
             azimut=self.pv.azimut_stupne,
             timestep_min=timestep_min,
             losses_factor=self.loss_factor,
+            konfig=getattr(self.pv.konfiguracia, "value", str(self.pv.konfiguracia)),
         )
 
         # Aplikuj inverter clipping (DC > AC limit)
