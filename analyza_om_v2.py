@@ -1817,7 +1817,7 @@ def _generate_chocosuc_ai(ctx: dict) -> dict:
     try:
         from anthropic import Anthropic
         msg = Anthropic().messages.create(
-            model="claude-sonnet-4-5-20250929", max_tokens=6000, temperature=0.25, system=sysp,
+            model="claude-sonnet-4-5-20250929", max_tokens=4000, temperature=0.25, system=sysp,
             messages=[{"role": "user", "content": "Dáta posudku (JSON):\n" + json.dumps(facts, ensure_ascii=False, indent=1) + "\n\nVyrob kompletný posudok podľa schémy. Len JSON."}])
         t = msg.content[0].text.strip()
         if t.startswith("```"):

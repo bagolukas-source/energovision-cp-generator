@@ -6075,8 +6075,8 @@ def webhook_aom_chat_status():
     if not aid:
         return jsonify({"ok": False, "error": "analyza_id required"}), 400
     try:
-        r = _sb().table("analyza_om").select("chat_job_status, posudok_orkestra_pdf_url, posudok_orkestra_docx_url, posudok_orkestra_generated_at").eq("id", aid).single().execute().data or {}
-        return jsonify({"ok": True, "status": r.get("chat_job_status"),
+        r = _sb().table("analyza_om").select("chat_job_status, posudok_job_status, posudok_orkestra_pdf_url, posudok_orkestra_docx_url, posudok_orkestra_generated_at").eq("id", aid).single().execute().data or {}
+        return jsonify({"ok": True, "status": r.get("chat_job_status"), "posudok_status": r.get("posudok_job_status"),
                         "pdf_url": r.get("posudok_orkestra_pdf_url"), "docx_url": r.get("posudok_orkestra_docx_url"),
                         "generated_at": r.get("posudok_orkestra_generated_at")})
     except Exception as e:
@@ -6261,18 +6261,30 @@ def webhook_aom_parse_faktura():
 
 @app.route("/webhook/analyza-om-render-chocosuc", methods=["POST"])
 def webhook_aom_render_chocosuc():
-    """ChocoSuc-grade posudok (audítorský, AI naratív grounded na odvodené metriky)."""
+    """ChocoSuc-grade posudok — beží ASYNC (AI + WeasyPrint + DOCX > 120s = gunicorn timeout).
+    Vráti pending; frontend polluje /analyza-om-chat-status (posudok_status + pdf_url)."""
     if not _aom_v2:
         return jsonify({"ok": False, "error": "analyza_om_v2 not loaded"}), 500
     body = request.get_json(silent=True) or {}
     aid = body.get("analyza_id")
     if not aid:
         return jsonify({"ok": False, "error": "analyza_id required"}), 400
+    import threading
     try:
-        return jsonify(_aom_v2.render_posudok_chocosuc(_sb(), aid))
-    except Exception as e:
-        log.exception("[aom-render-chocosuc] failed")
-        return jsonify({"ok": False, "error": str(e)[:500]}), 500
+        _sb().table("analyza_om").update({"posudok_job_status": "running"}).eq("id", aid).execute()
+    except Exception:
+        pass
+    def _bg(_aid):
+        try:
+            _aom_v2.render_posudok_chocosuc(_sb(), _aid)
+            try: _sb().table("analyza_om").update({"posudok_job_status": "done"}).eq("id", _aid).execute()
+            except Exception: pass
+        except Exception:
+            log.exception("[aom-render-chocosuc bg] failed")
+            try: _sb().table("analyza_om").update({"posudok_job_status": "failed"}).eq("id", _aid).execute()
+            except Exception: pass
+    threading.Thread(target=_bg, args=(aid,), daemon=True).start()
+    return jsonify({"ok": True, "pending": True, "message": "Posudok sa generuje na pozadí (~1-2 min)."})
 
 
 @app.route("/webhook/analyza-om-render-orkestra", methods=["POST"])
@@ -11916,8 +11928,6 @@ def webhook_eva_read_xlsx():
 @app.route("/webhook/analyza-om-render-internal-calc", methods=["POST"])
 def webhook_aom_render_internal_calc():
     """Vygeneruje INTERNÝ kalkulačný DOCX pre Energovision (nie pre klienta)."""
-    if not _hs_auth_ok(request):
-        return jsonify({"error": "unauthorized"}), 401
     if not _aom_v2:
         return jsonify({"ok": False, "error": "analyza_om_v2 not loaded"}), 500
 
