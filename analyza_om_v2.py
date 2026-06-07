@@ -104,11 +104,11 @@ def _cp_capex(analyza: dict) -> dict:
         cpK = float(analyza.get("cp_kwp") or 0)
         cpB = float(analyza.get("cp_bess_kwh") or 0)
         if cpP > 0 and cpK > 0:
-            fixed = cpP - cpK * PV_MARG - cpB * BESS_RATE
-            # fix drž v rozumnom pásme (projekt/OPT/pripojenie), nie záporné ani extrémne
-            fixed = min(max(fixed, 20000.0), 120000.0)
+            # Pozn.: BESS rate 318 je ALL-IN (vrátane VN pripojenia batérie z BESS solo ponuky),
+            # preto fix = LEN projekt FVE (~38k), nekalibrujeme ho z drahej exaktnej CP (inak by
+            # VN pripojenie batérie nesprávne preplácalo aj malé/FVE-only varianty).
             return {"mode": "real", "capex_pv_eur_per_kwp": PV_MARG,
-                    "capex_pv_fixed_eur": round(fixed, 0), "capex_bess_eur_per_kwh": BESS_RATE}
+                    "capex_pv_fixed_eur": PV_FIXED_DEFAULT, "capex_bess_eur_per_kwh": BESS_RATE}
     except Exception:
         pass
     return {"mode": "real", "capex_pv_eur_per_kwp": PV_MARG,
