@@ -88,21 +88,31 @@ def _measured_load_profile_block(sb, analyza):
         return None
 
 def _cp_capex(analyza: dict) -> dict:
-    """CAPEX pre engine. Ak je nahraná NAŠA cenová ponuka (CP) → použi REÁLNE ceny:
-    batériu oceň sadzbou a ZVYŠOK ceny (FVE+optimizéry+montáž) rozpočítaj na €/kWp.
-    Tým sa pre konfiguráciu zodpovedajúcu CP zrekonštruuje PRESNÁ cena ponuky.
-    Bez CP → default odhad."""
+    """CAPEX pre engine — REÁLNE jednotkové ceny z ponúk Energovision (2026).
+    Model FVE = FIXNÁ zložka (projekt/základ) + MARGINÁLNA €/kWp → zachytí úspory z rozsahu.
+    Reálne ceny (KraussMaffei PON-25): FVE 230 kWp samostatne 740 €/kWp = fix 38k + marginál 574;
+    rozšírenie 574 €/kWp (marginál pri škále). BESS solo 1035 kWh / 328 932 € = 318 €/kWh.
+    (Predtým: rozbitá rekonštrukcia BESS@330 → FVE nafúknuté na 942 €/kWp — opravené 2026-06-07.)
+    Ak existuje CP, fixnú zložku kalibruje tak, aby CP konfigurácia sedela na cenu ponuky;
+    inak default fix 38k. BESS rate je all-in (vrátane VN pripojenia batérie z BESS solo ponuky).
+    """
+    PV_MARG = 574.0
+    PV_FIXED_DEFAULT = 38000.0
+    BESS_RATE = 318.0
     try:
         cpP = float(analyza.get("cp_price_eur") or 0)
         cpK = float(analyza.get("cp_kwp") or 0)
         cpB = float(analyza.get("cp_bess_kwh") or 0)
         if cpP > 0 and cpK > 0:
-            bess_rate = 330.0  # reálna utility sadzba BESS (LUNA2000) €/kWh
-            pv_rate = max(400.0, (cpP - cpB * bess_rate) / cpK)
-            return {"mode": "quick", "capex_pv_eur_per_kwp": round(pv_rate, 1), "capex_bess_eur_per_kwh": bess_rate}
+            fixed = cpP - cpK * PV_MARG - cpB * BESS_RATE
+            # fix drž v rozumnom pásme (projekt/OPT/pripojenie), nie záporné ani extrémne
+            fixed = min(max(fixed, 20000.0), 120000.0)
+            return {"mode": "real", "capex_pv_eur_per_kwp": PV_MARG,
+                    "capex_pv_fixed_eur": round(fixed, 0), "capex_bess_eur_per_kwh": BESS_RATE}
     except Exception:
         pass
-    return {"mode": "quick", "capex_pv_eur_per_kwp": 800, "capex_bess_eur_per_kwh": 480}
+    return {"mode": "real", "capex_pv_eur_per_kwp": PV_MARG,
+            "capex_pv_fixed_eur": PV_FIXED_DEFAULT, "capex_bess_eur_per_kwh": BESS_RATE}
 
 
 def _build_request_from_analyza(analyza: dict, measured_block: dict = None) -> dict:

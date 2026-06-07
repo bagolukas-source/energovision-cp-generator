@@ -105,8 +105,9 @@ class VariantGenerator:
         bess_vyrobca: str = "Huawei",
         bess_typ: str = "LUNA2000",
         # Cost inputs
-        capex_pv_eur_per_kwp: float = 800,
-        capex_bess_eur_per_kwh: float = 480,
+        capex_pv_eur_per_kwp: float = 574,
+        capex_pv_fixed_eur: float = 38000,
+        capex_bess_eur_per_kwh: float = 318,
         # Financial — defaulty z core.defaults (centrálne)
         opex_pct: float | None = None,
         opex_bess_pct: float | None = None,
@@ -149,6 +150,7 @@ class VariantGenerator:
         # Cost
         self.count_battery_replacement = count_battery_replacement
         self.capex_pv = capex_pv_eur_per_kwp
+        self.capex_pv_fixed = capex_pv_fixed_eur
         self.capex_bess = capex_bess_eur_per_kwh
         self.opex_pct = opex_pct
         self.opex_bess_pct = opex_bess_pct
@@ -241,7 +243,8 @@ class VariantGenerator:
             intervals = []
 
         # Financial
-        capex_pv_total = pv_kwp * self.capex_pv if pv else 0
+        # Reálny CAPEX FVE: FIXNÁ zložka (projekt/základ) + MARGINÁLNA €/kWp (úspory z rozsahu)
+        capex_pv_total = (self.capex_pv_fixed + pv_kwp * self.capex_pv) if pv else 0
         capex_bess_total = bess_kwh * self.capex_bess if bess else 0
         total_capex = capex_pv_total + capex_bess_total
 
