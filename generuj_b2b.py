@@ -144,6 +144,8 @@ def generuj_zod(*, project: dict, customer: dict, milestones: list[dict], out_di
         "{validFrom}": _fmt_date_sk(project.get("contract_signed_at") or date.today()),
         # Kód
         "{code}": project.get("project_code") or project.get("name") or "",
+        # Splatnosť B2B = 14 dní (zladenie so spôsobom fakturácie; šablóna má default 7)
+        "Lehota splatnosti faktúr je 7 dní.": "Lehota splatnosti faktúr je 14 dní.",
     }
 
     log.info("[generuj_zod] project=%s, mapping keys=%d", project.get("id"), len(mapping))
