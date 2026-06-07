@@ -2514,10 +2514,15 @@ def generuj_pd_crm():
             log.warning("[generuj-pd-crm] SolarEdge raw nedostupný: %s", e)
 
     try:
-        from generuj_pd import vygeneruj_projektovu_dokumentaciu
         import base64 as _b64
+        mode = (body.get("mode") or "b2c").lower()
         with tempfile.TemporaryDirectory() as tmpdir:
-            files = vygeneruj_projektovu_dokumentaciu(lead_data, tmpdir, solaredge_pdf_bytes=solaredge_pdf_bytes)
+            if mode == "b2b":
+                from generuj_pd import vygeneruj_pd_b2b
+                files = vygeneruj_pd_b2b(lead_data, tmpdir)
+            else:
+                from generuj_pd import vygeneruj_projektovu_dokumentaciu
+                files = vygeneruj_projektovu_dokumentaciu(lead_data, tmpdir, solaredge_pdf_bytes=solaredge_pdf_bytes)
             attachments = []
             for kluc, path in files.items():
                 with open(path, "rb") as fh:

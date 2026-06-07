@@ -229,6 +229,7 @@ def _build_ctx(lead_data):
         "ulica_a_cislo": ulica,
         "psc": psc,
         "mesto": mesto,
+        "psc_mesto": f"{psc} {mesto}".strip(),
 
         # Prevádzka / Miesto stavby
         "prevadzka": prevadzka,
@@ -239,8 +240,8 @@ def _build_ctx(lead_data):
         # Projekt
         "typ": typ,
         "SO01": so01,
-        "stupen_projektu": "DPP — Dokumentácia pre pripojenie",
-        "STUPEN_PROJEKTU": "DPP — DOKUMENTÁCIA PRE PRIPOJENIE",
+        "stupen_projektu": _safe(lead_data.get("stupen_projektu"), "DPP — Dokumentácia pre pripojenie"),
+        "STUPEN_PROJEKTU": _safe(lead_data.get("stupen_projektu"), "DPP — Dokumentácia pre pripojenie").upper(),
         "OZN": "FVE",
         "cislo_zakazky": ev_id,
         "datum": _safe(lead_data.get('datum_dnes'), datetime.now().strftime("%d.%m.%Y")),
@@ -465,4 +466,37 @@ def vygeneruj_projektovu_dokumentaciu(lead_data, out_dir, solaredge_pdf_bytes=No
             log.warning("[pd] technický výkres zlyhal: %s", e)
 
     log.info("[pd] vygenerovaných %d dokumentov pre %s", len(out), priezvisko)
+    return out
+
+
+# ============================================================
+# B2B PD (firma) — nové šablóny z kitu „Generovanie PD"
+# Jadro PD = Tit_Zoz_POUVV + technicka_sprava_b2b (DIS ako text {{dis}}).
+# stupen_projektu prichádza z CRM (odvodené z process_templates: RP/PSO/PSZaPS).
+# Tech-listy (datasheety) prikladá volajúci (webhook) po vygenerovaní.
+# ============================================================
+
+def gen_tit_zoz_pouvv_b2b(lead_data, output_path):
+    return _render_template("Tit_Zoz_POUVV.docx", _build_ctx(lead_data), output_path)
+
+
+def gen_technicka_sprava_b2b(lead_data, output_path):
+    return _render_template("technicka_sprava_b2b.docx", _build_ctx(lead_data), output_path)
+
+
+def vygeneruj_pd_b2b(lead_data, out_dir):
+    """B2B PD jadro: Titul+Zoznam+PoUVV + Technická správa. Vráti {kluc: path}."""
+    out_dir = Path(out_dir); out_dir.mkdir(parents=True, exist_ok=True)
+    priezvisko = lead_data.get('meno_priezvisko', 'Klient').split()[-1] if lead_data.get('meno_priezvisko') else 'Klient'
+    base = re.sub(r'[^A-Za-zÁ-ž0-9]+', '_', priezvisko).strip('_') or 'Klient'
+    ev_id = lead_data.get('ev_id', 'EV-XX')
+    if not lead_data.get('dis'):
+        g = _resolve_dis_from_psc(lead_data.get('psc'))
+        if g:
+            lead_data['dis'] = g
+    out = {}
+    out['titul_zoznam_pouvv'] = gen_tit_zoz_pouvv_b2b(lead_data, out_dir / f"{ev_id}_PD_01_Titul_Zoznam_PoUVV_{base}.docx")
+    out['technicka'] = gen_technicka_sprava_b2b(lead_data, out_dir / f"{ev_id}_PD_02_Technicka_sprava_{base}.docx")
+    log.info("[pd-b2b] %d dokumentov pre %s (stupeň=%s, dis=%s)", len(out), priezvisko,
+             lead_data.get('stupen_projektu'), lead_data.get('dis'))
     return out
