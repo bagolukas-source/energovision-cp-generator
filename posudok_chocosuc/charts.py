@@ -321,3 +321,158 @@ def chart_value_stream(ctx):
     tot=sum(p[1] for p in parts)
     ax.set_title(f"Ročný prínos spolu {tot/1000:.0f} tis. €",fontsize=10,color="#374151",loc="left",pad=6)
     return _b64(fig)
+
+
+# ============ Orkestra vlna 2 — monitoring-style vizuály ============
+_MONTHS_SK=["Apr","Máj","Jún","Júl","Aug","Sep","Okt","Nov","Dec","Jan","Feb","Mar"]
+
+def chart_energy_metrics(ctx):
+    """Orkestra-style trio: energetická nezávislosť / solar utilizácia / batéria utilizácia (mesačné plochy + priemer)."""
+    g=lambda k: float(ctx.get(k) or 0)
+    indep=g("coverage_pct") or g("samostatnost_pct") or 0
+    solar_u=max(0.0,100.0-g("curtailed_pct"))
+    if solar_u<=0: solar_u=95.0
+    cap=g("bess_kwh"); dis_day=g("bat_to_load_mwh")*1000/365.0
+    batt_u=min(100.0,(dis_day/cap*100.0)) if cap>0 else 0.0
+    # mesačný tvar (sezónnosť PV): leto vyššie, zima nižšie; ukotvený na ročný priemer
+    season=[0.55,0.78,1.0,1.18,1.30,1.33,1.32,1.20,1.0,0.74,0.5,0.45]  # Apr..Mar
+    sm=sum(season)/12
+    def monthly(avg, amp=1.0, lo=0, hi=100):
+        return [max(lo,min(hi, avg*(1+amp*(s/sm-1)))) for s in season]
+    rows=[("Energetická nezávislosť",monthly(indep,1.0),"#5B7CFA",indep),
+          ("Solar utilizácia",monthly(solar_u,0.10,hi=100),"#FFC629",solar_u),
+          ("Batéria utilizácia",monthly(batt_u,0.18),"#2EA84F",batt_u)]
+    fig,axs=plt.subplots(3,1,figsize=(9,4.3),sharex=True)
+    for ax,(nm,vals,col,avg) in zip(axs,rows):
+        ax.fill_between(range(12),vals,color=col,alpha=0.85,zorder=2,lw=0)
+        ax.set_ylim(0,105); ax.set_yticks([0,100]); ax.set_yticklabels(["0 %","100 %"],fontsize=8)
+        ax.set_xlim(0,11); ax.grid(False); ax.tick_params(length=0)
+        for sp in ["top","right","left"]: ax.spines[sp].set_visible(False)
+        ax.set_title(nm,fontsize=10,weight="bold",color="#1A1A1A",loc="left",pad=2)
+        ax.text(11.2,52,f"Ø {avg:.0f} %",fontsize=11,weight="bold",color=col,va="center")
+    axs[-1].set_xticks(range(12)); axs[-1].set_xticklabels(_MONTHS_SK,fontsize=8.5)
+    fig.tight_layout(h_pad=1.4)
+    return _b64(fig)
+
+
+def _week_dispatch(ctx):
+    """Reprezentatívny 7-dňový (168h) rad: solar, load_before(net po PV), battery(+chg/-dis), load_after(grid), SoC%.
+    Batéria riadená REÁLNYM ročným throughputom (pv_to_bat+grid_to_bat / bat_to_load), rozloženým do PV a večerných hodín."""
+    g=lambda k: float(ctx.get(k) or 0)
+    daily_pv=g("fve_prod_mwh")*1000/365.0
+    daily_load=(g("year_mwh") or g("load_total_mwh"))*1000/365.0
+    pvsh=[0,0,0,0,0,0.01,0.03,0.06,0.09,0.12,0.13,0.14,0.14,0.13,0.11,0.09,0.06,0.03,0.01,0,0,0,0,0]
+    ldsh=ctx.get("hourly_wd")
+    if not ldsh or sum(ldsh)<=0:
+        ldsh=[0.025,0.024,0.024,0.024,0.025,0.028,0.033,0.045,0.058,0.065,0.068,0.068,0.065,0.060,0.058,0.058,0.052,0.048,0.043,0.040,0.038,0.034,0.030,0.027]
+    pvs=sum(pvsh) or 1; lds=sum(ldsh) or 1
+    cap=g("bess_kwh"); cr=cap*0.6; eff=0.95
+    chg_day=(g("pv_to_bat_mwh")+g("grid_to_bat_mwh"))*1000/365.0
+    dis_day=g("bat_to_load_mwh")*1000/365.0
+    if cap>0 and (chg_day<=0 or dis_day<=0): chg_day=dis_day=cap*0.7
+    # váhy nabíjania (PV poludnie) / vybíjania (ráno+večer)
+    cw=[0,0,0,0,0,0,0,0,0.06,0.12,0.17,0.19,0.18,0.14,0.09,0.05,0.01,0,0,0,0,0,0,0]
+    dw=[0,0,0,0,0,0,0.04,0.06,0,0,0,0,0,0,0,0,0,0.10,0.20,0.24,0.22,0.14,0,0]
+    cws=sum(cw) or 1; dws=sum(dw) or 1; cw=[w/cws for w in cw]; dw=[w/dws for w in dw]
+    daymul=[1.05,0.98,1.10,0.92,1.0,0.78,0.7]
+    pvmul=[1.0,0.85,1.1,0.65,1.05,0.95,1.0]
+    soc=cap*0.3
+    SOL=[];LB=[];BAT=[];LA=[];SOC=[]
+    for d in range(7):
+        for h in range(24):
+            pv=daily_pv*pvsh[h]/pvs*pvmul[d]
+            load=daily_load*ldsh[h]/lds*daymul[d]
+            c=min(chg_day*cw[h],cr); dd=min(dis_day*dw[h],cr)
+            if cap<=0: c=dd=0.0
+            if c>0:
+                room=(cap-soc)/eff; c=min(c,room); soc+=c*eff
+            if dd>0:
+                dd=min(dd,soc); soc-=dd
+            direct=min(pv,load)
+            net_before=load-pv                 # po PV (môže byť záporné = export)
+            net_after=max(0.0,load-direct-dd)+c # grid import: zostatok po PV a vybití + nabíjanie zo siete
+            SOL.append(pv); LB.append(net_before); BAT.append(c-dd); LA.append(net_after)
+            SOC.append(soc/cap*100 if cap>0 else 0)
+    return SOL,LB,BAT,LA,SOC
+
+
+def chart_interval_week(ctx):
+    """Orkestra-style interval activity: stacked týždeň — batéria, solar, net load pred/po."""
+    SOL,LB,BAT,LA,SOC=_week_dispatch(ctx); x=list(range(168))
+    fig,ax=plt.subplots(figsize=(9,3.4))
+    ax.bar(x,SOL,width=1.0,color="#FFE08A",zorder=2,label="Solárna výroba")
+    ax.bar(x,[max(0,v) for v in BAT],width=1.0,color="#2EA84F",zorder=3,label="Batéria — nabíjanie")
+    ax.bar(x,[min(0,v) for v in BAT],width=1.0,color="#2EA84F",alpha=0.6,zorder=3,label="Batéria — vybíjanie")
+    ax.fill_between(x,LA,color="#AFC7F7",alpha=0.6,zorder=1,label="Net load po (zo siete)")
+    ax.plot(x,LB,color="#3B5BDB",lw=1.0,ls=(0,(2,2)),zorder=4,label="Net load pred")
+    ax.axhline(0,color="#CBD5E1",lw=1)
+    ax.set_xlim(0,167); ax.set_xticks([i*24+12 for i in range(7)])
+    ax.set_xticklabels(["Po","Ut","St","Št","Pi","So","Ne"],fontsize=9)
+    ax.set_ylabel("kW"); _clean(ax)
+    ax.legend(frameon=False,fontsize=8.2,ncol=5,loc="upper center",bbox_to_anchor=(0.5,1.17),columnspacing=1.0,handlelength=1.2)
+    return _b64(fig)
+
+
+def chart_daily_activity(ctx):
+    """Orkestra-style priemerný deň: load pred/po (plochy) + solar + SoC krivka (pravá os)."""
+    SOL,LB,BAT,LA,SOC=_week_dispatch(ctx)
+    # priemer cez 7 dní -> 24h
+    def avg24(arr): return [sum(arr[h::24][:7])/7 for h in range(24)]
+    sol=avg24(SOL); la=avg24(LA); soc=avg24(SOC)
+    g=lambda k: float(ctx.get(k) or 0)
+    daily_load=(g("year_mwh") or g("load_total_mwh"))*1000/365.0
+    ldsh=ctx.get("hourly_wd") or [0.025,0.024,0.024,0.024,0.025,0.028,0.033,0.045,0.058,0.065,0.068,0.068,0.065,0.060,0.058,0.058,0.052,0.048,0.043,0.040,0.038,0.034,0.030,0.027]
+    lds=sum(ldsh) or 1; load_before=[daily_load*s/lds for s in ldsh]
+    x=list(range(24)); has_bat=g("bess_kwh")>0
+    fig,ax=plt.subplots(figsize=(9,3.2))
+    ax.fill_between(x,load_before,color="#C7D7F7",alpha=0.7,zorder=1,label="Odber pred")
+    ax.fill_between(x,[max(0,v) for v in la],color="#3B5BDB",alpha=0.45,zorder=2,label="Odber po (zo siete)")
+    ax.fill_between(x,sol,color="#FFC629",alpha=0.55,zorder=2,label="Solárna výroba")
+    ax.set_ylabel("kW"); ax.set_xlim(0,23); ax.set_xticks(range(0,24,3)); ax.set_xticklabels([f"{h}:00" for h in range(0,24,3)])
+    _clean(ax)
+    handles=[]
+    if has_bat:
+        ax2=ax.twinx(); ax2.plot(x,soc,color="#2EA84F",lw=2.8,zorder=5,label="SoC batérie")
+        ax2.set_ylim(0,105); ax2.set_ylabel("SoC %",color="#2EA84F"); ax2.grid(False); ax2.tick_params(axis="y",colors="#2EA84F")
+        h2,l2=ax2.get_legend_handles_labels()
+    else:
+        h2,l2=[],[]
+    h1,l1=ax.get_legend_handles_labels()
+    ax.legend(h1+h2,l1+l2,frameon=False,fontsize=8.4,ncol=4,loc="upper center",bbox_to_anchor=(0.5,1.15),columnspacing=1.1,handlelength=1.2)
+    return _b64(fig)
+
+
+def chart_demand_mrk(ctx):
+    """Orkestra-style demand reduction: net load pred (špička odberu) vs MRK/RK rezervovaná kapacita."""
+    SOL,LB,BAT,LA,SOC=_week_dispatch(ctx); x=list(range(168))
+    g=lambda k: float(ctx.get(k) or 0)
+    mrk=g("om_mrk_kw"); rk=g("om_rk_kw") or (mrk*0.9 if mrk else 0)
+    fig,ax=plt.subplots(figsize=(9,3.0))
+    ax.fill_between(x,[max(0,v) for v in LB],color="#C7D2DE",alpha=0.8,zorder=1,label="Odber pred (net load)")
+    ax.fill_between(x,[max(0,v) for v in LA],color="#3B5BDB",alpha=0.45,zorder=2,label="Odber po (s batériou)")
+    if mrk>0: ax.axhline(mrk,color="#DC2626",lw=1.6,ls=(0,(6,3)),zorder=4,label=f"MRK {mrk:.0f} kW")
+    if rk>0 and abs(rk-mrk)>1: ax.axhline(rk,color="#F59E0B",lw=1.5,ls=(0,(4,3)),zorder=4,label=f"RK {rk:.0f} kW")
+    ax.set_xlim(0,167); ax.set_xticks([i*24+12 for i in range(7)]); ax.set_xticklabels(["Po","Ut","St","Št","Pi","So","Ne"],fontsize=9)
+    ax.set_ylabel("kW"); _clean(ax)
+    top=max(max(LB),mrk or 0)*1.12 or 1; ax.set_ylim(0,top)
+    ax.legend(frameon=False,fontsize=8.4,ncol=4,loc="upper center",bbox_to_anchor=(0.5,1.16),columnspacing=1.0,handlelength=1.4)
+    return _b64(fig)
+
+
+def chart_emissions_intensity(ctx):
+    """Orkestra-style emisná intenzita pred/po (tCO2/MWh) + % zmena."""
+    g=lambda k: float(ctx.get(k) or 0)
+    red=g("co2_reduction_pct")
+    before=0.25  # SK grid 2024 ~0.25 tCO2/MWh
+    after=before*(1-red/100.0)
+    fig,ax=plt.subplots(figsize=(4.4,3.2))
+    bars=ax.bar([0,1],[before,after],color=["#C7CDD4","#5B7CFA"],width=0.5,zorder=3)
+    for b,v in zip(bars,[before,after]):
+        ax.text(b.get_x()+b.get_width()/2,v+0.008,f"{v:.2f}",ha="center",fontsize=11,weight="bold",color="#374151")
+    ax.set_xticks([0,1]); ax.set_xticklabels(["Pred","Po"],fontsize=10)
+    ax.set_ylim(0,before*1.25); ax.set_yticks([]); _clean(ax,yg=False); ax.grid(False)
+    for sp in ["left"]: ax.spines[sp].set_visible(False)
+    ax.text(1.62,before*0.55,f"−{red:.0f} %",fontsize=20,weight="bold",color="#5B7CFA",ha="center")
+    ax.text(1.62,before*0.40,"zmena",fontsize=9.5,color="#5B7CFA",ha="center")
+    ax.set_xlim(-0.5,2.3)
+    return _b64(fig)

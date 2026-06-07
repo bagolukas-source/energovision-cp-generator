@@ -37,6 +37,8 @@ def render_chocosuc_html(ctx: dict) -> str:
     g_donut=C.chart_solar_donut(ctx); g_flow=C.chart_energy_flow(ctx)
     g_soc=C.chart_soc_profile(ctx); g_wf=C.chart_waterfall(ctx)
     g_capex=C.chart_capex_split(ctx); g_vs=C.chart_value_stream(ctx)
+    g_emet=C.chart_energy_metrics(ctx); g_iweek=C.chart_interval_week(ctx)
+    g_dact=C.chart_daily_activity(ctx); g_demand=C.chart_demand_mrk(ctx); g_emis=C.chart_emissions_intensity(ctx)
     _gc=[0]
     def gimg(src,text):
         if not src: return ''
@@ -207,8 +209,8 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
   <div class="kick" style="margin-top:10px;">Tok energie a využitie výroby</div>
   {gimg(g_flow, "Ročný tok energie — výroba FVE, priama samospotreba, batéria a sieť (MWh/rok).")}
   {gimg(g_donut, "Ako sa využije vyrobená FVE energia — priamo, cez batériu, export.")}
-  {('<div class="kick" style="margin-top:10px;">Prevádzka batérie — typický deň</div>' if g_soc else '')}
-  {gimg(g_soc, "Reprezentatívny denný cyklus batérie — nabíjanie z PV cez deň, vybíjanie do večernej špičky; krivka SoC (stav nabitia).")}
+  <div class="kick" style="margin-top:12px;">Energetické metriky (ročný priemer)</div>
+  {gimg(g_emet, "Energetická nezávislosť, využitie solárnej výroby a batérie — mesačné priemery roka 1.")}
   <div class="kick" style="margin-top:12px;">Environmentálny prínos (CO₂)</div>
   <div class="benefits">
     <div class="bcard" style="border-top-color:#5E8E2A; background:#F4F8EE;"><div class="h" style="font-size:15pt; color:#5E8E2A;">−{num(ctx.get('co2_avoided_tonnes'),0)} t</div><div class="d">CO₂ ročne menej</div></div>
@@ -216,7 +218,22 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
     <div class="bcard"><div class="h" style="font-size:15pt;">{num(ctx.get('trees_equivalent'),0)}</div><div class="d">ekvivalent vysadených stromov</div></div>
     <div class="bcard"><div class="h" style="font-size:15pt;">{num(ctx.get('barrels_oil'),0)}</div><div class="d">barelov ropy ušetrených</div></div>
   </div>
-  <div class="narr">{ctx.get('balance_narrative','')}</div>
+  <div class="two" style="margin-top:10px; align-items:center;">
+    <div>{gimg(g_emis, "Emisná intenzita pred a po inštalácii (tCO₂ na MWh spotreby).")}</div>
+    <div class="narr">{ctx.get('balance_narrative','')}</div>
+  </div>
+</section>
+
+<section class="newpage">
+  <div class="kick">3b — Intervalová prevádzka a riadenie odberu</div><h2>Ako systém pracuje v čase</h2>
+  <div class="kick" style="margin-top:4px;">Priemerný deň</div>
+  {gimg(g_dact, "Priemerný deň roka 1 — odber pred a po inštalácii, solárna výroba a stav nabitia batérie (SoC).")}
+  {('<div class="kick" style="margin-top:10px;">Reprezentatívny týždeň — intervalová aktivita</div>' if g_iweek else '')}
+  {gimg(g_iweek, "Reprezentatívny týždeň zo simulácie — solárna výroba, nabíjanie/vybíjanie batérie a čistý odber pred/po.")}
+  {('<div class="kick" style="margin-top:10px;">Prevádzka batérie — typický deň</div>' if g_soc else '')}
+  {gimg(g_soc, "Denný cyklus batérie — nabíjanie z PV cez deň, vybíjanie do večernej špičky; krivka SoC.")}
+  <div class="kick" style="margin-top:10px;">Riadenie odberovej špičky (MRK / RK)</div>
+  {gimg(g_demand, "Čistý odber zo siete pred a po inštalácii vs rezervovaná kapacita (MRK/RK) — reprezentatívny týždeň.")}
 </section>
 
 <section class="newpage">
