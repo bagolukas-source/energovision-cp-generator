@@ -4406,14 +4406,14 @@ def generuj_dokumenty_supabase():
 @app.route("/webhook/docx-to-pdf", methods=["POST"])
 @require_secret
 def docx_to_pdf_endpoint():
-    """Verna konverzia branded DOCX -> PDF cez LibreOffice (zachova logo, hlavicku, styly).
-    Fallback: mammoth + WeasyPrint (bez brandingu), aby endpoint nikdy nespadol."""
+    """DOCX -> PDF. Ak je dostupny LibreOffice (Docker), verna konverzia (zachova logo/styly).
+    Inak branded fallback: mammoth (telo) + Energovision letterhead + WeasyPrint."""
     body = request.get_json(force=True, silent=True) or {}
     docx_url = body.get("docx_url")
     if not docx_url:
         return jsonify({"error": "missing docx_url"}), 400
 
-    import base64, os, tempfile, subprocess
+    import base64, os, tempfile, subprocess, shutil
     from io import BytesIO
 
     try:
@@ -4424,54 +4424,72 @@ def docx_to_pdf_endpoint():
     except Exception as e:
         return jsonify({"error": f"download error: {e}"}), 500
 
-    # 1) PRIMARNE: verna LibreOffice konverzia
-    try:
-        tmpdir = tempfile.mkdtemp(prefix="d2p_")
-        in_path = os.path.join(tmpdir, "in.docx")
-        with open(in_path, "wb") as fh:
-            fh.write(docx_bytes)
-        env = dict(os.environ, HOME=tmpdir)
-        proc = subprocess.run(
-            ["soffice", "--headless", "--norestore",
-             f"-env:UserInstallation=file://{tmpdir}/loprofile",
-             "--convert-to", "pdf:writer_pdf_Export", "--outdir", tmpdir, in_path],
-            env=env, capture_output=True, timeout=120,
-        )
-        out_pdf = os.path.join(tmpdir, "in.pdf")
-        if proc.returncode == 0 and os.path.exists(out_pdf):
-            with open(out_pdf, "rb") as fh:
-                pdf_bytes = fh.read()
-            if pdf_bytes:
-                pdf_b64 = base64.b64encode(pdf_bytes).decode()
-                return jsonify({"ok": True, "pdf_base64": pdf_b64, "size_bytes": len(pdf_bytes), "method": "libreoffice"})
-        log.warning("docx-to-pdf libreoffice rc=%s err=%s", proc.returncode, (proc.stderr or b"")[:200])
-    except Exception as e:
-        log.warning("docx-to-pdf libreoffice exception: %s", e)
+    # 1) PRIMARNE: LibreOffice (len ak je nainstalovany — napr. Docker runtime)
+    soffice_bin = shutil.which("soffice") or shutil.which("libreoffice")
+    if soffice_bin:
+        try:
+            tmpdir = tempfile.mkdtemp(prefix="d2p_")
+            in_path = os.path.join(tmpdir, "in.docx")
+            with open(in_path, "wb") as fh:
+                fh.write(docx_bytes)
+            env = dict(os.environ, HOME=tmpdir)
+            proc = subprocess.run(
+                [soffice_bin, "--headless", "--norestore",
+                 f"-env:UserInstallation=file://{tmpdir}/loprofile",
+                 "--convert-to", "pdf:writer_pdf_Export", "--outdir", tmpdir, in_path],
+                env=env, capture_output=True, timeout=120,
+            )
+            out_pdf = os.path.join(tmpdir, "in.pdf")
+            if proc.returncode == 0 and os.path.exists(out_pdf):
+                with open(out_pdf, "rb") as fh:
+                    pdf_bytes = fh.read()
+                if pdf_bytes:
+                    return jsonify({"ok": True, "pdf_base64": base64.b64encode(pdf_bytes).decode(),
+                                    "size_bytes": len(pdf_bytes), "method": "libreoffice"})
+            log.warning("docx-to-pdf libreoffice rc=%s err=%s", proc.returncode, (proc.stderr or b"")[:200])
+        except Exception as e:
+            log.warning("docx-to-pdf libreoffice exception: %s", e)
 
-    # 2) FALLBACK: mammoth + weasyprint
+    # 2) BRANDED FALLBACK: mammoth telo + Energovision letterhead
     try:
         import mammoth
         from weasyprint import HTML
         result = mammoth.convert_to_html(BytesIO(docx_bytes))
         html_body = result.value
+        # letterhead/footer obrazky (v repo root)
+        base = os.path.dirname(os.path.abspath(__file__))
+        def _b64img(name):
+            p = os.path.join(base, name)
+            try:
+                with open(p, "rb") as fh:
+                    return "data:image/png;base64," + base64.b64encode(fh.read()).decode()
+            except Exception:
+                return ""
+        header_src = _b64img("energovision_header.png")
+        footer_src = _b64img("energovision_footer.png")
+        header_html = f'<div class="lh"><img src="{header_src}"/></div><hr class="grn"/>' if header_src else ""
+        footer_css = (f'@bottom-center {{ content: ""; background: url({footer_src}) no-repeat center; '
+                      f'background-size: contain; height: 16mm; }}') if footer_src else ""
         html_full = f"""<!DOCTYPE html><html lang="sk"><head>
 <meta charset="utf-8">
 <style>
-  @page {{ size: A4; margin: 18mm; }}
-  body {{ font-family: 'Helvetica', sans-serif; font-size: 10pt; color: #1a1a1a; line-height: 1.45; }}
-  h1 {{ font-size: 16pt; margin: 12pt 0 6pt; }}
-  h2 {{ font-size: 13pt; margin: 10pt 0 5pt; }}
+  @page {{ size: A4; margin: 16mm 18mm 22mm 18mm; {footer_css} }}
+  body {{ font-family: 'Carlito','Calibri','Helvetica',sans-serif; font-size: 10.5pt; color: #1a1a1a; line-height: 1.45; }}
+  .lh img {{ width: 100%; display:block; }}
+  hr.grn {{ border: none; border-top: 2.5px solid #92D050; margin: 4pt 0 12pt; }}
+  h1 {{ font-size: 15pt; text-align:center; margin: 14pt 0 8pt; }}
+  h2 {{ font-size: 12.5pt; margin: 10pt 0 5pt; }}
   h3 {{ font-size: 11pt; margin: 8pt 0 4pt; }}
   p {{ margin: 4pt 0; }}
-  table {{ border-collapse: collapse; margin: 6pt 0; }}
+  table {{ border-collapse: collapse; margin: 6pt 0; width:100%; }}
   td, th {{ border: 0.5pt solid #ccc; padding: 4pt 6pt; }}
   strong {{ font-weight: 700; }}
-</style></head><body>{html_body}</body></html>"""
-        pdf_bytes = HTML(string=html_full).write_pdf()
-        pdf_b64 = base64.b64encode(pdf_bytes).decode()
-        return jsonify({"ok": True, "pdf_base64": pdf_b64, "size_bytes": len(pdf_bytes), "method": "mammoth+weasyprint(fallback)"})
+</style></head><body>{header_html}{html_body}</body></html>"""
+        pdf_bytes = HTML(string=html_full, base_url=base).write_pdf()
+        return jsonify({"ok": True, "pdf_base64": base64.b64encode(pdf_bytes).decode(),
+                        "size_bytes": len(pdf_bytes), "method": "branded-fallback"})
     except Exception as e:
-        log.exception("docx-to-pdf failed (both methods)")
+        log.exception("docx-to-pdf failed")
         return jsonify({"error": str(e)}), 500
 
 

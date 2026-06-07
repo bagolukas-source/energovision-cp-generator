@@ -7,9 +7,9 @@ services:
 - type: web
   name: energovision-cp-generator
   runtime: python
-  plan: standard
+  plan: starter
   region: frankfurt
-  buildCommand: 'apt-get update && apt-get install -y libpango-1.0-0 libpangoft2-1.0-0 libreoffice-writer --no-install-recommends
+  buildCommand: 'apt-get update && apt-get install -y libpango-1.0-0 libpangoft2-1.0-0
 
     pip install -r requirements.txt
 
