@@ -5,7 +5,7 @@ import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-GREEN="#16A34A"; LIME="#92D050"; DARK="#1A1A1A"; GRAY="#6B7280"; GRID="#5B7CFA"; SITE="#B85DD8"; SOLAR="#FFC629"; AMBER="#F59E0B"
+GREEN="#5E8E2A"; LIME="#92D050"; DARK="#1A1A1A"; GRAY="#6B7280"; GRID="#5B7CFA"; SITE="#B85DD8"; SOLAR="#FFC629"; AMBER="#F59E0B"
 plt.rcParams.update({"font.family":"DejaVu Sans","font.size":11,"axes.edgecolor":"#E3E8EE","axes.labelcolor":"#64748B",
  "xtick.color":"#94A3B8","ytick.color":"#94A3B8","xtick.labelsize":10,"ytick.labelsize":10,
  "axes.spines.top":False,"axes.spines.right":False,"axes.spines.left":False,

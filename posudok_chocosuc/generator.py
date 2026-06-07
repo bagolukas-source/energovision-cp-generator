@@ -122,11 +122,16 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
   <h1 style="font-size:28pt; margin:6px 0;">{ctx.get('client_name','')}</h1>
   <div style="font-size:11pt; color:#374151;">FVE {num(ctx.get('fve_kwp'),0)} kWp{(' + BESS '+num(ctx.get('bess_kwh'),0)+' kWh') if ctx.get('bess_kwh') else ''}</div>
   <div style="font-size:9pt; color:#9CA3AF; font-style:italic; margin-top:8px;">{ctx.get('cover_subtitle','Analýza odberu, simulácia výroby a ekonomické posúdenie v 3 scenároch s rizikovou analýzou.')}</div>
+  <div style="display:flex; gap:36px; margin-top:30px; align-items:flex-end;">
+    <div><div class="kick">Čistý prínos · NPV 20 r.</div><div style="font-size:32pt; font-weight:bold; color:#5E8E2A; line-height:1.0;">+{eur(full['npv'])}</div></div>
+    <div><div class="kick">Návratnosť</div><div style="font-size:32pt; font-weight:bold; color:#1A1A1A; line-height:1.0;">{num(full['payback'],1)} r</div></div>
+    <div><div class="kick">IRR</div><div style="font-size:32pt; font-weight:bold; color:#1A1A1A; line-height:1.0;">{num(full['irr'],0)} %</div></div>
+  </div>
   <div class="two" style="margin-top:40px;">
     <div><div class="kick">Pre</div><div style="font-weight:bold;">{ctx.get('client_name','')}</div>
       <div style="color:#374151; font-size:8.6pt;">{ctx.get('om_address','') if has_addr else ''}{('<br>EIC OM: '+ctx['eic_om']) if ctx.get('eic_om') else ''}</div>
       <div class="kick" style="margin-top:14px;">Parametre OM</div>
-      <div style="font-size:8.6pt;">Spotreba {num(ctx.get('year_mwh'))} MWh/r<br>MRK {num(ctx.get('om_mrk_kw'))} kW · RK {num(ctx.get('om_rk_kw'))} kW · {ctx.get('om_sadzba','VN')}<br>{ctx.get('distrib_oblast','')}</div></div>
+      <div style="font-size:8.6pt;">Spotreba {num(ctx.get('year_mwh'))} MWh/r<br>MRK {num(ctx.get('om_mrk_kw'))} kW · RK {num(ctx.get('om_rk_kw'))} kW · {ctx.get('om_sadzba','VN')}{('<br>'+str(ctx['distrib_oblast'])) if (ctx.get('distrib_oblast') and str(ctx.get('distrib_oblast')).lower()!='none') else ''}</div></div>
     <div><div class="kick">Vystavené</div><div style="font-weight:bold;">{ctx.get('posudok_date','')}</div>
       <div class="kick" style="margin-top:14px;">Podklady</div>
       <div style="font-size:8.6pt;">{ctx.get('podklady','15-min profil · faktúra · PVGIS · OKTE')}</div></div>
