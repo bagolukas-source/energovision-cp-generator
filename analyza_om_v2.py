@@ -200,7 +200,11 @@ def _build_request_from_analyza(analyza: dict, measured_block: dict = None) -> d
         pv_options = [p for p in pv_options if p >= 5]
         pv_options = sorted(set(pv_options))
         
-        if optimal_kwp <= 30:
+        if mrk_kw:
+            # BESS výkon škáluje až po MRK (0.5C → kapacita pri ktorej výkon = MRK je MRK/0.5)
+            _bm = round(mrk_kw / 0.5, 0)
+            bess_options = sorted(set([0, round(_bm * 0.5, 0), round(_bm, 0)]))
+        elif optimal_kwp <= 30:
             bess_options = [0, 10, 30]
         elif optimal_kwp <= 100:
             bess_options = [0, 50, 100]
