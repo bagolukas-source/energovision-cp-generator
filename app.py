@@ -4406,27 +4406,54 @@ def generuj_dokumenty_supabase():
 @app.route("/webhook/docx-to-pdf", methods=["POST"])
 @require_secret
 def docx_to_pdf_endpoint():
+    """Verna konverzia branded DOCX -> PDF cez LibreOffice (zachova logo, hlavicku, styly).
+    Fallback: mammoth + WeasyPrint (bez brandingu), aby endpoint nikdy nespadol."""
     body = request.get_json(force=True, silent=True) or {}
     docx_url = body.get("docx_url")
     if not docx_url:
         return jsonify({"error": "missing docx_url"}), 400
 
-    import base64
+    import base64, os, tempfile, subprocess
     from io import BytesIO
-    try:
-        import mammoth
-        from weasyprint import HTML
 
-        # 1) Stiahni docx
+    try:
         r = requests.get(docx_url, timeout=30)
         if not r.ok:
             return jsonify({"error": f"download failed: {r.status_code}"}), 500
+        docx_bytes = r.content
+    except Exception as e:
+        return jsonify({"error": f"download error: {e}"}), 500
 
-        # 2) DOCX → HTML cez mammoth (bez LibreOffice, beží na 512 MB)
-        result = mammoth.convert_to_html(BytesIO(r.content))
+    # 1) PRIMARNE: verna LibreOffice konverzia
+    try:
+        tmpdir = tempfile.mkdtemp(prefix="d2p_")
+        in_path = os.path.join(tmpdir, "in.docx")
+        with open(in_path, "wb") as fh:
+            fh.write(docx_bytes)
+        env = dict(os.environ, HOME=tmpdir)
+        proc = subprocess.run(
+            ["soffice", "--headless", "--norestore",
+             f"-env:UserInstallation=file://{tmpdir}/loprofile",
+             "--convert-to", "pdf:writer_pdf_Export", "--outdir", tmpdir, in_path],
+            env=env, capture_output=True, timeout=120,
+        )
+        out_pdf = os.path.join(tmpdir, "in.pdf")
+        if proc.returncode == 0 and os.path.exists(out_pdf):
+            with open(out_pdf, "rb") as fh:
+                pdf_bytes = fh.read()
+            if pdf_bytes:
+                pdf_b64 = base64.b64encode(pdf_bytes).decode()
+                return jsonify({"ok": True, "pdf_base64": pdf_b64, "size_bytes": len(pdf_bytes), "method": "libreoffice"})
+        log.warning("docx-to-pdf libreoffice rc=%s err=%s", proc.returncode, (proc.stderr or b"")[:200])
+    except Exception as e:
+        log.warning("docx-to-pdf libreoffice exception: %s", e)
+
+    # 2) FALLBACK: mammoth + weasyprint
+    try:
+        import mammoth
+        from weasyprint import HTML
+        result = mammoth.convert_to_html(BytesIO(docx_bytes))
         html_body = result.value
-
-        # Wrap do A4 dokumentu s minimal CSS
         html_full = f"""<!DOCTYPE html><html lang="sk"><head>
 <meta charset="utf-8">
 <style>
@@ -4440,16 +4467,12 @@ def docx_to_pdf_endpoint():
   td, th {{ border: 0.5pt solid #ccc; padding: 4pt 6pt; }}
   strong {{ font-weight: 700; }}
 </style></head><body>{html_body}</body></html>"""
-
-        # 3) HTML → PDF cez WeasyPrint (už máme)
         pdf_bytes = HTML(string=html_full).write_pdf()
         pdf_b64 = base64.b64encode(pdf_bytes).decode()
-        return jsonify({"ok": True, "pdf_base64": pdf_b64, "size_bytes": len(pdf_bytes), "method": "mammoth+weasyprint"})
+        return jsonify({"ok": True, "pdf_base64": pdf_b64, "size_bytes": len(pdf_bytes), "method": "mammoth+weasyprint(fallback)"})
     except Exception as e:
-        log.exception("docx-to-pdf failed")
+        log.exception("docx-to-pdf failed (both methods)")
         return jsonify({"error": str(e)}), 500
-
-
 
 
 # ============================================================
