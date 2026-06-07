@@ -4424,7 +4424,22 @@ def docx_to_pdf_endpoint():
     except Exception as e:
         return jsonify({"error": f"download error: {e}"}), 500
 
-    # 1) PRIMARNE: LibreOffice (len ak je nainstalovany — napr. Docker runtime)
+    # 0) PRIMARNE: Gotenberg (LibreOffice ako API) — verny render DOCX (zachova cislovanie/styly)
+    GOTENBERG_URL = os.environ.get("GOTENBERG_URL", "").rstrip("/")
+    if GOTENBERG_URL:
+        try:
+            g_user = os.environ.get("GOTENBERG_USER", "")
+            g_pass = os.environ.get("GOTENBERG_PASS", "")
+            g_auth = (g_user, g_pass) if g_user else None
+            files = {"files": ("document.docx", docx_bytes, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")}
+            gr = requests.post(f"{GOTENBERG_URL}/forms/libreoffice/convert", files=files, auth=g_auth, timeout=120)
+            if gr.ok and gr.content[:4] == b"%PDF":
+                return jsonify({"ok": True, "pdf_base64": base64.b64encode(gr.content).decode(), "size_bytes": len(gr.content), "method": "gotenberg-libreoffice"})
+            log.warning("docx-to-pdf gotenberg rc=%s len=%s", gr.status_code, len(gr.content or b""))
+        except Exception as e:
+            log.warning("docx-to-pdf gotenberg exception: %s", e)
+
+    # 1) LibreOffice lokalne (len ak je nainstalovany — napr. Docker runtime)
     soffice_bin = shutil.which("soffice") or shutil.which("libreoffice")
     if soffice_bin:
         try:
