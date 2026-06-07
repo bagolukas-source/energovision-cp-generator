@@ -61,7 +61,7 @@ def main():
     if found_subj:
         print(f"⚠ SUBJEKTÍVNE FORMULÁCIE ({len(found_subj)}):")
         for w in found_subj:
-            print(f"    – „{w}"")
+            print(f'    – „{w}"')
         issues_count += len(found_subj)
     else:
         print("✓ Žiadne subjektívne formulácie")
@@ -71,7 +71,7 @@ def main():
     if found_int:
         print(f"\n⚠ INTERNÉ ÚDAJE ({len(found_int)}):")
         for w in found_int:
-            print(f"    – „{w}"")
+            print(f'    – „{w}"')
         issues_count += len(found_int)
     else:
         print("✓ Žiadne interné údaje (ceny komponentov, zľavy, marže)")

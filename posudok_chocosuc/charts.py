@@ -15,7 +15,7 @@ def _clean(ax,yg=True):
     if not yg: ax.grid(axis="y",visible=False)
     ax.tick_params(length=0)
 def _b64(fig):
-    b=io.BytesIO(); fig.savefig(b,format="png",dpi=200,bbox_inches="tight",pad_inches=0.12); plt.close(fig)
+    b=io.BytesIO(); fig.savefig(b,format="png",dpi=150,bbox_inches="tight",pad_inches=0.12); plt.close(fig)
     return "data:image/png;base64,"+base64.b64encode(b.getvalue()).decode()
 
 def _synth_daily(avg_kw, peak_hour=12):

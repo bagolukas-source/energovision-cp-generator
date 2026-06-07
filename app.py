@@ -6339,6 +6339,11 @@ def webhook_aom_render_chocosuc():
             log.exception("[aom-render-chocosuc bg] failed")
             try: _sb().table("analyza_om").update({"posudok_job_status": "failed"}).eq("id", _aid).execute()
             except Exception: pass
+        finally:
+            # Uvoľni pamäť po ťažkom generovaní (WeasyPrint+AI+engine) — Starter 512MB, prevencia OOM
+            try:
+                import gc; gc.collect()
+            except Exception: pass
     threading.Thread(target=_bg, args=(aid,), daemon=True).start()
     return jsonify({"ok": True, "pending": True, "message": "Posudok sa generuje na pozadí (~1-2 min)."})
 
