@@ -12132,6 +12132,13 @@ def _generate_internal_calc_doc(analyza_id: str) -> dict:
     )
     public_url = sb.storage.from_("documents").get_public_url(storage_path)
 
+    try:
+        from analyza_om_v2 import _record_doc
+        _record_doc(sb, analyza_id, "internal_calc", "Interná kalkulácia (DOCX)",
+                    storage_path.split("/")[-1], public_url, storage_path, len(blob) // 1024)
+    except Exception as _e:
+        logging.warning("internal_calc record_doc failed: %s", _e)
+
     return {"ok": True, "docx_url": public_url, "storage_path": storage_path, "size_kb": len(blob) // 1024}
 
 

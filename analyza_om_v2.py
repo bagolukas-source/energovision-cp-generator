@@ -27,6 +27,19 @@ os.environ.setdefault("ENERGO_TARIFF_YAML", str(TARIFF_YAML))
 log = logging.getLogger(__name__)
 
 
+def _record_doc(sb, analyza_id, doc_type, title, filename, file_url, storage_path, size_kb=None, variant_label=None):
+    """Zapíše dokument do histórie analyza_om_documents (idempotentne podľa storage_path)."""
+    try:
+        sb.table("analyza_om_documents").upsert({
+            "analyza_id": analyza_id, "doc_type": doc_type, "title": title,
+            "filename": filename, "file_url": file_url, "storage_path": storage_path,
+            "size_kb": size_kb, "variant_label": variant_label,
+            "generated_at": datetime.now().isoformat(),
+        }, on_conflict="storage_path").execute()
+    except Exception as _e:
+        logging.warning("record_doc failed (%s): %s", doc_type, _e)
+
+
 def _measured_load_profile_block(sb, analyza):
     """Stiahne REÁLNY hodinový profil spotreby zo storage (bucket analyza-om),
     prerobí ho na parser-friendly CSV (dayfirst-safe %d.%m.%Y, plný rok, rescale
@@ -1931,6 +1944,10 @@ def render_posudok_chocosuc(sb, analyza_id: str) -> dict:
         logging.error("chocosuc DOCX failed: %s", _e)
 
     sb.table("analyza_om").update({"posudok_orkestra_pdf_url": pdf_url, "posudok_orkestra_docx_url": docx_url, "posudok_orkestra_generated_at": datetime.now().isoformat()}).eq("id", analyza_id).execute()
+    _vlabel = ctx.get("variant_title") or None
+    _record_doc(sb, analyza_id, "posudok_pdf", "Technický posudok (PDF)", f"{_fbase}.pdf", pdf_url, pdf_path, len(pdf_bytes)//1024, _vlabel)
+    if docx_url:
+        _record_doc(sb, analyza_id, "posudok_docx", "Technický posudok (DOCX)", f"{_fbase}.docx", docx_url, docx_path, (len(docx_bytes)//1024 if "docx_bytes" in dir() else None), _vlabel)
     return {"ok": True, "pdf_url": pdf_url, "docx_url": docx_url, "size_kb": len(pdf_bytes) // 1024, "engine": "chocosuc-v1", "client": ctx.get("client_name")}
 
 
