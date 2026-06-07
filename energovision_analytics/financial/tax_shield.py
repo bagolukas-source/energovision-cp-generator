@@ -31,8 +31,8 @@ def sk_dotacia_zelena_podnikom(
     capex_eur: float,
     samospotreba_pct: float,
     max_dotacia_eur: float = 50_000,
-    intenzita_pct: float = 0.45,
-    min_samospotreba_pct: float = 80,
+    intenzita_pct: float = 0.40,
+    min_samospotreba_pct: float = 50,
 ) -> dict:
     """Vyhodnotenie dotácie Zelená podnikom (2024-2026).
 
@@ -53,7 +53,8 @@ def sk_dotacia_zelena_podnikom(
             "reason": f"Samospotreba {samospotreba_pct:.1f} % < {min_samospotreba_pct} %",
             "max_possible": min(capex_eur * intenzita_pct, max_dotacia_eur),
         }
-    amount = min(capex_eur * intenzita_pct, max_dotacia_eur)
+    eff_int = 0.45 if samospotreba_pct > 80 else intenzita_pct
+    amount = min(capex_eur * eff_int, max_dotacia_eur)
     return {
         "eligible": True,
         "amount_eur": amount,

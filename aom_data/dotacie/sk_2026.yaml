@@ -7,8 +7,8 @@ zelena_podnikom:
   vyhlasovatel: "SIEA / MH SR"
   status: "active"          # active | upcoming | closed
   max_eur: 50000
-  intensity_pct: 45         # max 45 % oprávnených nákladov
-  min_samospotreba_pct: 80  # kritérium — najmenej 80 % vyrobenej energie na samospotrebu
+  intensity_pct: 40         # základ 40 %; 45 % ak samospotreba > 80 % (SIEA)
+  min_samospotreba_pct: 50  # SIEA: min 50 % samospotreba (45 % intenzita až pri >80 %)
   applicable_to:
     - "FVE"
     - "FVE+BESS"

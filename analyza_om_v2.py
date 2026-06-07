@@ -242,7 +242,7 @@ def _build_request_from_analyza(analyza: dict, measured_block: dict = None) -> d
             "rocna_spotreba_kwh": annual_kwh,
             "rk_kw": engine_rk_kw,
             "mrk_kw": engine_mrk_kw,
-            "typ_tarify": "spot",
+            "typ_tarify": (analyza.get("om_tarif_typ") or "spot"),  # FIX/SPOT podľa kontraktu klienta
             "bilancna_skupina": "Energie2",
             "eic_kod": None,
         },
@@ -258,7 +258,7 @@ def _build_request_from_analyza(analyza: dict, measured_block: dict = None) -> d
         },
         "capex": _cp_capex(analyza),
         "financial": {
-            "dppo_pct": 0.22,
+            "dppo_pct": 0.21,  # SK DPPO štandard 21 % (overené ÚRSO/podnikajte.sk 2026)
             "discount_rate": 0.06,
             "horizon_years": 20,
             "depr_years": 6,

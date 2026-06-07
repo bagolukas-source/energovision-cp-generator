@@ -270,7 +270,7 @@ class VariantGenerator:
             annual_saving_y1_eur=summary.sav_total_eur,
             saving_decomp_y1=saving_decomp,
             dotacia_eur=dotacia_eur,
-            annual_degradation_pct=2.0 if bess else 0.5,
+            annual_degradation_pct=0.5,  # FVE degradácia ~0.5 %/rok (NREL); batéria cez replacement event, nie na celý výnos
             annual_bess_discharge_kwh=summary.bat_discharge_total_kwh,
         )
 
@@ -309,9 +309,20 @@ class VariantGenerator:
         if s.load_total_kwh > 0:
             s.samostatnost_pct = s.pv_to_load_kwh / s.load_total_kwh * 100
 
-        # Saving — len PV
-        avg_tarif = 0.20  # rough
-        s.sav_solar_self_cons_eur = s.pv_to_load_kwh * avg_tarif
+        # Saving — PV samospotreba ocenená REÁLNYM tarifom per-interval (FIX→flat,
+        # SPOT→hodinový), KONZISTENTNE s RuleBasedEMS. (Predtým hardcoded 0.20 → nafukovalo
+        # PV-only a robilo batériu zdanlivo stratovou. Audit 2026-06-07.)
+        try:
+            _spot = self.spot
+            _n2 = min(len(pv_to_load), len(_spot))
+            _sav = 0.0
+            for _i in range(_n2):
+                _sav += float(pv_to_load[_i]) * retail.retail_buy_eur_kwh(float(_spot[_i]))
+            s.sav_solar_self_cons_eur = _sav
+        except Exception:
+            # fallback: priemerný tarif z retail (FIX) ak spot nedostupný
+            _avg = retail.retail_buy_eur_kwh(None) if retail.typ_tarify.value == "fix" else 0.146
+            s.sav_solar_self_cons_eur = s.pv_to_load_kwh * _avg
         s.sav_solar_export_eur = s.pv_to_grid_kwh * 0.06
         s.sav_total_eur = s.sav_solar_self_cons_eur + s.sav_solar_export_eur
         s.co2_avoided_t = (s.pv_to_load_kwh + s.pv_to_grid_kwh) * 0.25 / 1000
