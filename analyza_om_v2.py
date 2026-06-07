@@ -109,12 +109,14 @@ def _build_request_from_analyza(analyza: dict, measured_block: dict = None) -> d
     # FVE DC kWp môže byť o ~20 % vyššie (DC:AC pomer 1.2, klasický over-sizing menica),
     # ale viac je nezmysel — energia by sa orezala alebo by porušilo MRK.
     max_export = float(analyza["max_export_kw"]) if analyza.get("max_export_kw") else None
-    hard_cap_kwp = None
-    if mrk_kw:
-        # FVE aj BESS výkon ≤ MRK (kapacita pripojenia) — STRIKTNÝ limit (požiadavka užívateľa).
-        hard_cap_kwp = mrk_kw
-    if max_export and (not hard_cap_kwp or max_export < hard_cap_kwp):
-        hard_cap_kwp = max_export
+    # MRK = limit na AC kW (menič/pripojenie). FVE DC kWp môže byť oversized 1.3×
+    # (menič clipuje špičku, panely zriedka dajú nominál) → napr. 1000 kW MRK ⇒ 1300 kWp.
+    # BESS výkon (AC) ostáva STRIKTNE ≤ MRK (rieši sa nižšie cez mrk_kw, nie hard_cap_kwp).
+    DC_OVERSIZE = 1.3
+    _ac_limit = mrk_kw
+    if max_export and (not _ac_limit or max_export < _ac_limit):
+        _ac_limit = max_export
+    hard_cap_kwp = (_ac_limit * DC_OVERSIZE) if _ac_limit else None
     
     # Optimal FVE size — preferuj realny annual spotreba ak existuje
     if annual_kwh > 1000:
