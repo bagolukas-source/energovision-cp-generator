@@ -151,3 +151,56 @@ def chart_montecarlo(ctx):
         ax.text(q/1000,ymax*1.14,f"{lab}: {q/1000:.0f} k€",ha="center",va="bottom",fontsize=9.5,color=c,weight="bold",bbox=bb,zorder=5)
     ax.set_xlabel("NPV 20 r. (k€)"); ax.set_yticks([]); _clean(ax,yg=False)
     return _b64(fig)
+
+
+def chart_solar_donut(ctx):
+    """Orkestra-style donut: ako sa využije vyrobená FVE energia."""
+    direct=float(ctx.get("direct_to_load_pct") or 0); batt=float(ctx.get("charging_battery_pct") or 0)
+    exp=float(ctx.get("exported_pct") or 0); curt=float(ctx.get("curtailed_pct") or 0)
+    prod=float(ctx.get("fve_prod_mwh") or 0)
+    segs=[("Priamo do odberu",direct,SOLAR),("Cez batériu",batt,GREEN),
+          ("Export do siete",exp,GRID),("Nevyužité",curt,"#CBD5E1")]
+    segs=[s for s in segs if s[1] and s[1]>0.05]
+    fig,ax=plt.subplots(figsize=(5.6,3.2))
+    ax.pie([s[1] for s in segs], colors=[s[2] for s in segs], startangle=90, counterclock=False,
+           wedgeprops=dict(width=0.40, edgecolor="white", linewidth=2.2))
+    ax.text(0,0.10,f"{prod:.0f}",ha="center",va="center",fontsize=21,weight="bold",color=DARK)
+    ax.text(0,-0.20,"MWh / rok",ha="center",va="center",fontsize=9.5,color=GRAY)
+    ax.legend([f"{s[0]}  {s[1]:.0f} %" for s in segs], loc="center left",
+              bbox_to_anchor=(1.02,0.5), frameon=False, fontsize=10.5, handlelength=1.0, labelspacing=0.7)
+    ax.set(aspect="equal")
+    return _b64(fig)
+
+
+def chart_energy_flow(ctx):
+    """Orkestra-style energy flow: 4 uzly (Výroba/Batéria/Spotreba/Sieť) so šípkami a MWh."""
+    from matplotlib.patches import FancyArrowPatch, Circle
+    g=lambda k: float(ctx.get(k) or 0)
+    pv=g("fve_prod_mwh"); load=g("year_mwh") or g("load_total_mwh")
+    pv_load=g("pv_to_load_mwh"); pv_bat=g("pv_to_bat_mwh"); exp=g("export_mwh")
+    bat_load=g("bat_to_load_mwh"); grid_load=g("grid_to_load_mwh"); grid_bat=g("grid_to_bat_mwh")
+    fig,ax=plt.subplots(figsize=(7.4,3.8)); ax.set_xlim(0,10); ax.set_ylim(0,6.4); ax.axis("off")
+    # uzly: (x,y,r,farba,nazov,hodnota)
+    N={"solar":(1.6,4.7,SOLAR,"Výroba FVE",pv),"bat":(8.4,4.7,GREEN,"Batéria",pv_bat+grid_bat),
+       "site":(5.0,1.3,"#102D4C","Spotreba",load),"grid":(1.6,1.3,GRID,"Sieť",g("grid_import_mwh"))}
+    for k,(x,y,c,nm,val) in N.items():
+        ax.add_patch(Circle((x,y),0.62,facecolor=c,edgecolor="white",lw=2,zorder=3))
+        ax.text(x,y+0.04,f"{val:.0f}",ha="center",va="center",color="white",fontsize=12,weight="bold",zorder=4)
+        ax.text(x,y-0.20,"MWh",ha="center",va="center",color="white",fontsize=7,zorder=4)
+        ax.text(x,y-0.95,nm,ha="center",va="center",color="#374151",fontsize=9.5,weight="bold")
+    def arrow(a,b,val,col,off=0.0):
+        if val<=0.05: return
+        (x1,y1,*_),(x2,y2,*_)=N[a],N[b]
+        ax.add_patch(FancyArrowPatch((x1,y1),(x2,y2),connectionstyle=f"arc3,rad={off}",
+            arrowstyle="-|>",mutation_scale=14,lw=1.0+min(5.0,val/40.0),color=col,alpha=0.55,
+            shrinkA=24,shrinkB=24,zorder=2))
+        mx,my=(x1+x2)/2,(y1+y2)/2
+        ax.text(mx+0.15,my+0.15,f"{val:.0f}",fontsize=8.5,color=col,weight="bold",
+                bbox=dict(boxstyle="round,pad=0.12",fc="white",ec="none",alpha=0.9),zorder=5)
+    arrow("solar","site",pv_load,SOLAR,-0.18)
+    arrow("solar","bat",pv_bat,SOLAR,-0.15)
+    arrow("solar","grid",exp,GRID,0.25)        # export
+    arrow("bat","site",bat_load,GREEN,0.18)
+    arrow("grid","site",grid_load,GRID,-0.12)
+    arrow("grid","bat",grid_bat,GRID,0.30)
+    return _b64(fig)

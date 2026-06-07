@@ -34,6 +34,7 @@ def render_chocosuc_html(ctx: dict) -> str:
     g_daily=C.chart_daily(ctx); g_month=C.chart_monthly(ctx); g_bal=C.chart_energy_balance(ctx)
     g_scen=C.chart_scenarios(ctx); g_cum=C.chart_cumcf(ctx); g_ben=C.chart_benefit(ctx)
     g_tor=C.chart_tornado(ctx); g_mc=C.chart_montecarlo(ctx)
+    g_donut=C.chart_solar_donut(ctx); g_flow=C.chart_energy_flow(ctx)
     S=ctx["scenarios3"]; bza=S[0]; full=S[-1]
     pm=ctx.get("profile_metrics",{})
     recs=ctx.get("recommendations",[])
@@ -196,6 +197,16 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
     {trow(["Pokrytie spotreby OM",f"{num(ctx.get('coverage_pct'),1)} %","FVE vs spotreba"])}
   </table>
   <img class="img" src="{g_bal}"><div class="cap">Graf 3: Energetická bilancia.</div>
+  <div class="kick" style="margin-top:10px;">Tok energie a využitie výroby</div>
+  <img class="img" src="{g_flow}"><div class="cap">Graf 4: Ročný tok energie — výroba FVE, priama samospotreba, batéria a sieť (MWh/rok).</div>
+  <img class="img" src="{g_donut}"><div class="cap">Graf 5: Ako sa využije vyrobená FVE energia — priamo, cez batériu, export.</div>
+  <div class="kick" style="margin-top:12px;">Environmentálny prínos (CO₂)</div>
+  <div class="benefits">
+    <div class="bcard" style="border-top-color:#5E8E2A; background:#F4F8EE;"><div class="h" style="font-size:15pt; color:#5E8E2A;">−{num(ctx.get('co2_avoided_tonnes'),0)} t</div><div class="d">CO₂ ročne menej</div></div>
+    <div class="bcard"><div class="h" style="font-size:15pt;">{num(ctx.get('co2_reduction_pct'),0)} %</div><div class="d">zníženie uhlíkovej stopy</div></div>
+    <div class="bcard"><div class="h" style="font-size:15pt;">{num(ctx.get('trees_equivalent'),0)}</div><div class="d">ekvivalent vysadených stromov</div></div>
+    <div class="bcard"><div class="h" style="font-size:15pt;">{num(ctx.get('barrels_oil'),0)}</div><div class="d">barelov ropy ušetrených</div></div>
+  </div>
   <div class="narr">{ctx.get('balance_narrative','')}</div>
 </section>
 
