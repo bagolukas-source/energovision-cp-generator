@@ -1766,7 +1766,7 @@ def _generate_chocosuc_ai(ctx: dict) -> dict:
         "cena_necinnosti_20r_eur": round(ctx.get("inaction_infl_20y") or 0),
         "co2_usetrene_t_rok": round(ctx.get("co2_avoided_tonnes") or 0),
     }
-    sysp = (
+    _grounding = (
         "Si senior energetický audítor Energovision s 20+ rokmi praxe. Píšeš kompletný technicko-ekonomický posudok "
         "pre B2B priemyselného klienta. Tón: vecný, technický, presvedčivý dôveryhodnosťou (nie superlatívmi), klientovi vykáš.\n\n"
         "═══ GROUNDING — ABSOLÚTNE PRAVIDLO ═══\n"
@@ -1777,17 +1777,6 @@ def _generate_chocosuc_ai(ctx: dict) -> dict:
         "Každé číslo v texte musí byť dohľadateľné v JSON. Charakteristiku profilu ber z 'profil_odvodeny_z_dat' "
         "(NEvymýšľaj 24/7 ak to dáta nehovoria). Ak 'data_real' je false, jemne uveď že ide o modelovaný profil; "
         "ak 'ceny_realne_z_faktury' je false, spomeň že ceny sú orientačné ÚRSO 2026 (spresní faktúra). Porušenie = chyba.\n\n"
-        "VÝSTUP: striktný JSON (žiadny markdown, žiadny text okolo). Každá hodnota je HTML s <p> odsekmi:\n"
-        "{\n"
-        '  "summary": "manažérske zhrnutie — 3 odseky: ekonomický výsledok (úspora/návratnosť/NPV/IRR), čo to znamená pre firmu, riziko (Monte Carlo). EKONOMICKÝ uhol.",\n'
-        '  "profile": "interpretácia profilu odberu — 2 odseky z load_factor, denny_podiel, vikend, spickova_hodina, sezonnost a čo to znamená pre dimenzovanie FVE/batérie.",\n'
-        '  "balance": "energetická bilancia — 1-2 odseky: výroba, samospotreba vs export, pokrytie, prečo také hodnoty.",\n'
-        '  "scenarios": "1 odsek úvod k 3 scenárom — čo rozlišujú a prečo (báza vs defenzívny vs optimistický).",\n'
-        '  "technical": "technické zhodnotenie navrhnutého variantu — 1-2 odseky: výkon, konštrukcia, výnos, vhodnosť pre toto OM.",\n'
-        '  "expert": "expertné posúdenie — 2-3 odseky TECHNICKO-RIZIKOVÝ uhol (INÝ než summary): citlivosť, predpoklady, čo overiť, kde sú limity. NEopakuj summary.",\n'
-        '  "zaver": "záverečné odporúčanie — 1 odsek, jasný verdikt s číslami.",\n'
-        '  "recommendations": [{"title":"krátky", "detail":"1-2 vety, KVALITATÍVNE alebo s číslom z JSON"}, ... 4-6 položiek]\n'
-        "}"
     )
     def _fallback():
         # deterministický fallback — summary (ekonomický) ≠ expert (technicko-rizikový)
@@ -1814,31 +1803,54 @@ def _generate_chocosuc_ai(ctx: dict) -> dict:
         recs.append(("Technická obhliadka OM", "Overenie strechy/plochy, statiky a bodu pripojenia pred finálnym projektom."))
         return {"summary": summ, "profile": ctx.get("profile_narrative",""), "balance": ctx.get("balance_narrative",""),
                 "scenarios": "", "technical": "", "expert": exp, "zaver": ctx.get("zaver_text",""), "recommendations": recs}
+
+    # PARALELNÉ AI — 4 sekčné skupiny naraz (plná kvalita, kratší wall-clock). AI je povinné, len rýchlejšie.
+    _facts_json = json.dumps(facts, ensure_ascii=False, indent=1)
+    _groups = [
+        ('{"summary":"manažérske zhrnutie — 3 odseky: ekonomický výsledok (úspora/návratnosť/NPV/IRR), čo to znamená pre firmu, riziko (Monte Carlo). EKONOMICKÝ uhol.","profile":"interpretácia profilu odberu — 2 odseky z load_factor, denny_podiel, vikend, spickova_hodina, sezonnost a čo to znamená pre dimenzovanie FVE/batérie.","balance":"energetická bilancia — 1-2 odseky: výroba, samospotreba vs export, pokrytie, prečo také hodnoty."}'),
+        ('{"scenarios":"1 odsek úvod k 3 scenárom — čo rozlišujú a prečo (báza vs defenzívny vs optimistický).","technical":"technické zhodnotenie navrhnutého variantu — 1-2 odseky: výkon, konštrukcia, výnos, vhodnosť pre toto OM."}'),
+        ('{"expert":"expertné posúdenie — 2-3 odseky TECHNICKO-RIZIKOVÝ uhol (INÝ než summary): citlivosť, predpoklady, čo overiť, kde sú limity. NEopakuj summary.","zaver":"záverečné odporúčanie — 1 odsek, jasný verdikt s číslami."}'),
+        ('{"recommendations":[{"title":"krátky","detail":"1-2 vety, KVALITATÍVNE alebo s číslom z JSON"}, ... 4-6 položiek]}'),
+    ]
+    def _call_group(schema):
+        sysp_g = _grounding + ("VÝSTUP: striktný JSON (žiadny markdown, žiadny text okolo). Každá hodnota je HTML s <p> odsekmi. "
+                               "Vyplň PRÁVE tieto kľúče:\n" + schema)
+        try:
+            from anthropic import Anthropic
+            msg = Anthropic().messages.create(
+                model="claude-sonnet-4-5-20250929", max_tokens=2600, temperature=0.25, system=sysp_g,
+                messages=[{"role": "user", "content": "Dáta posudku (JSON):\n" + _facts_json + "\n\nVyrob LEN sekcie zo schémy. Len JSON."}])
+            t = msg.content[0].text.strip()
+            if t.startswith("```"):
+                t = t.split("\n", 1)[1].rsplit("```", 1)[0]
+            if t.lstrip().startswith("json"):
+                t = t.lstrip()[4:]
+            return json.loads(t)
+        except Exception as _e:
+            logging.warning("chocosuc AI group failed: %s", _e)
+            return {}
+    merged = {}
     try:
-        from anthropic import Anthropic
-        msg = Anthropic().messages.create(
-            model="claude-sonnet-4-5-20250929", max_tokens=4000, temperature=0.25, system=sysp,
-            messages=[{"role": "user", "content": "Dáta posudku (JSON):\n" + json.dumps(facts, ensure_ascii=False, indent=1) + "\n\nVyrob kompletný posudok podľa schémy. Len JSON."}])
-        t = msg.content[0].text.strip()
-        if t.startswith("```"):
-            t = t.split("\n", 1)[1].rsplit("```", 1)[0]
-        if t.lstrip().startswith("json"): t = t.lstrip()[4:]
-        r = json.loads(t)
-        recs = [(x.get("title", ""), x.get("detail", "")) for x in r.get("recommendations", [])]
-        fb = _fallback()
-        return {
-            "summary": r.get("summary") or fb["summary"],
-            "profile": r.get("profile") or fb["profile"],
-            "balance": r.get("balance") or fb["balance"],
-            "scenarios": r.get("scenarios") or "",
-            "technical": r.get("technical") or "",
-            "expert": r.get("expert") or fb["expert"],
-            "zaver": r.get("zaver") or fb["zaver"],
-            "recommendations": recs or fb["recommendations"],
-        }
-    except Exception as e:
-        logging.error("chocosuc AI failed (pouzivam deterministicky narativ): %s", e)
-        return _fallback()
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=4) as _ex:
+            for _r in _ex.map(_call_group, _groups):
+                if isinstance(_r, dict):
+                    merged.update(_r)
+    except Exception as _e:
+        logging.error("chocosuc AI parallel failed: %s", _e)
+    fb = _fallback()
+    _recs = merged.get("recommendations")
+    _recs_t = [(x.get("title", ""), x.get("detail", "")) for x in _recs] if isinstance(_recs, list) else None
+    return {
+        "summary": merged.get("summary") or fb["summary"],
+        "profile": merged.get("profile") or fb["profile"],
+        "balance": merged.get("balance") or fb["balance"],
+        "scenarios": merged.get("scenarios") or "",
+        "technical": merged.get("technical") or "",
+        "expert": merged.get("expert") or fb["expert"],
+        "zaver": merged.get("zaver") or fb["zaver"],
+        "recommendations": _recs_t or fb["recommendations"],
+    }
 
 def render_posudok_chocosuc(sb, analyza_id: str) -> dict:
     """ChocoSuc-grade posudok: deterministické fakty + AI naratív (grounded) -> HTML->PDF."""
