@@ -45,6 +45,9 @@ class VariantResult:
     summary: DispatchSummary
     financial: FinancialResult
     intervals: Optional[list[DispatchInterval]] = field(default=None, repr=False)
+    # Pre konzistentný rebuild financií s korektnou dotáciou (B1 fix) — neserializuje sa
+    _cf_builder: object = field(default=None, repr=False, compare=False)
+    _cf_kwargs: Optional[dict] = field(default=None, repr=False, compare=False)
 
     # KPI pre ranking
     @property
@@ -98,6 +101,7 @@ class VariantGenerator:
         pv_sklon: float = 25,
         pv_azimut: float = 180,
         pv_inverter_ratio: float = 1.0,
+        count_battery_replacement: bool = False,
         bess_vyrobca: str = "Huawei",
         bess_typ: str = "LUNA2000",
         # Cost inputs
@@ -143,6 +147,7 @@ class VariantGenerator:
         self.bess_typ = bess_typ
 
         # Cost
+        self.count_battery_replacement = count_battery_replacement
         self.capex_pv = capex_pv_eur_per_kwp
         self.capex_bess = capex_bess_eur_per_kwh
         self.opex_pct = opex_pct
@@ -240,9 +245,6 @@ class VariantGenerator:
         capex_bess_total = bess_kwh * self.capex_bess if bess else 0
         total_capex = capex_pv_total + capex_bess_total
 
-        dotacia_info = sk_dotacia_zelena_podnikom(total_capex, summary.samospotreba_pct)
-        dotacia_eur = dotacia_info["amount_eur"]
-
         saving_decomp = {
             "sav_solar_self_cons_eur": summary.sav_solar_self_cons_eur,
             "sav_solar_export_eur": summary.sav_solar_export_eur,
@@ -251,6 +253,18 @@ class VariantGenerator:
             "sav_peak_shaving_eur": summary.sav_peak_shaving_eur,
             "sav_mrk_penalty_avoided_eur": summary.sav_mrk_penalty_avoided_eur,
         }
+
+        # Výmena článkov batérie — OPCIA (default OFF). Default = bez výmeny (batéria
+        # predpokladaná na celý horizont). Ak ZAPNUTÉ → výmena pri dosiahnutí warranty cyklov
+        # (reálny ročný throughput, nie podhodnotené EFC), náklad 40 % BESS capexu, periodicky.
+        _cells_repl_interval = None
+        if bess and getattr(self, "count_battery_replacement", False):
+            _usable = (bess.usable_kwh or (bess_kwh * 0.9))
+            _ann_cycles = (summary.bat_discharge_total_kwh / _usable) if _usable > 0 else 0.0
+            if _ann_cycles > 0:
+                _life = bess.warranty_cycles / _ann_cycles
+                if _life < self.horizon_years:
+                    _cells_repl_interval = max(4, int(round(_life)))
 
         builder = CashflowBuilder(
             capex_solar_eur=capex_pv_total,
@@ -261,18 +275,21 @@ class VariantGenerator:
             monitoring_eur_per_year=300,
             bess_inverter_replacement_year=12 if bess else None,
             bess_inverter_replacement_pct=0.10,
+            bess_cells_replacement_interval_years=_cells_repl_interval,
             dppo_pct=self.dppo_pct,
             depr_years=self.depr_years,
             discount_rate=self.discount_rate,
             horizon_years=self.horizon_years,
         )
-        financial = builder.build(
+        # B1 fix: BÁZOVÝ cashflow je BEZ dotácie → IRR, payback aj cashflow_array sú konzistentné.
+        # Správnu dotáciu aplikuje pipeline (engine_service) plným rebuildom cez tieto kwargs.
+        _cf_kwargs = dict(
             annual_saving_y1_eur=summary.sav_total_eur,
             saving_decomp_y1=saving_decomp,
-            dotacia_eur=dotacia_eur,
-            annual_degradation_pct=0.5,  # FVE degradácia ~0.5 %/rok (NREL); batéria cez replacement event, nie na celý výnos
+            annual_degradation_pct=0.5,
             annual_bess_discharge_kwh=summary.bat_discharge_total_kwh,
         )
+        financial = builder.build(dotacia_eur=0.0, **_cf_kwargs)
 
         return VariantResult(
             variant_id=variant_id,
@@ -283,10 +300,12 @@ class VariantGenerator:
             capex_pv_eur_per_kwp=self.capex_pv,
             capex_bess_eur_per_kwh=self.capex_bess,
             capex_total_eur=total_capex,
-            dotacia_eur=dotacia_eur,
+            dotacia_eur=0.0,  # finálnu dotáciu nastaví pipeline (rebuild)
             summary=summary,
             financial=financial,
             intervals=intervals if keep_intervals else None,
+            _cf_builder=builder,
+            _cf_kwargs=_cf_kwargs,
         )
 
     def _build_pv_only_summary(self, load_kw, pv_kw, retail) -> DispatchSummary:

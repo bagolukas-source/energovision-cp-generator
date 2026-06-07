@@ -176,42 +176,43 @@ def run_variants_pipeline(request_dict: dict, progress_cb=None) -> dict:
         discount_rate=fin.get("discount_rate", 0.06),
         horizon_years=fin.get("horizon_years", 20),
         depr_years=fin.get("depr_years", 6),
+        count_battery_replacement=bool(fin.get("count_battery_replacement", False)),
     )
     log.info("Running %d variants", len(v["pv_kwp_options"]) * len(v["bess_kwh_options"]))
     results = gen.run_all(parallel=True)
     if progress_cb: progress_cb(80)
 
     # 5. Aplikuj dotáciu
+    # B1 fix: dotáciu aplikujeme PLNÝM REBUILDOM cashflowu (nie patchom len NPV) →
+    # NPV, IRR, payback aj cashflow_array sú navzájom konzistentné s reálnou dotáciou.
     dotacia = request_dict.get("dotacia", {})
-    if dotacia.get("enabled", True) and dotacia.get("scheme_id") != "ziadna":
-        schemes = load_dotacie_schemes()
-        _req_scheme = dotacia.get("scheme_id") or "zelena_podnikom"
-        for r in results:
+    _dot_enabled = bool(dotacia.get("enabled", False)) and dotacia.get("scheme_id") != "ziadna"
+    _schemes = load_dotacie_schemes() if _dot_enabled else {}
+    _req_scheme = dotacia.get("scheme_id") or "zelena_podnikom"
+    for r in results:
+        new_d = 0.0
+        if _dot_enabled:
             proj_type = "FVE+BESS" if r.bess_kwh > 0 else "FVE"
             # Auto-výber schémy podľa veľkosti: Zelená podnikom do 250 kW, nad to Modernizačný fond
             _scheme = _req_scheme
-            if _scheme == "zelena_podnikom" and r.pv_kwp > 250 and "modernizacny_fond" in schemes:
+            if _scheme == "zelena_podnikom" and r.pv_kwp > 250 and "modernizacny_fond" in _schemes:
                 _scheme = "modernizacny_fond"
             res = apply_dotacia(
                 scheme_id=_scheme,
                 capex_eur=r.capex_total_eur,
                 samospotreba_pct=r.samospotreba_pct,
-                project_type=proj_type, schemes=schemes,
+                project_type=proj_type, schemes=_schemes,
                 installed_kw=r.pv_kwp,
             )
             new_d = res["amount_eur"] if res["eligible"] else 0.0
-            delta = new_d - r.dotacia_eur
-            r.dotacia_eur = new_d
+        r.dotacia_eur = new_d
+        # Plný rebuild financií s korektnou dotáciou (IRR/payback/array konzistentné)
+        if getattr(r, "_cf_builder", None) is not None and getattr(r, "_cf_kwargs", None) is not None:
+            r.financial = r._cf_builder.build(dotacia_eur=new_d, **r._cf_kwargs)
+        else:
+            # fallback (nemalo by nastať) — aspoň zosúlaď polia
             r.financial.dotacia_eur = new_d
             r.financial.capex_net_eur = r.financial.capex_gross_eur - new_d
-            r.financial.npv_eur += _dotacia_npv_delta(delta, r.financial)
-    else:
-        for r in results:
-            delta = -r.dotacia_eur
-            r.dotacia_eur = 0
-            r.financial.dotacia_eur = 0
-            r.financial.capex_net_eur = r.financial.capex_gross_eur
-            r.financial.npv_eur += _dotacia_npv_delta(delta, r.financial)
 
     if progress_cb: progress_cb(95)
 

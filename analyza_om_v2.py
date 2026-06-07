@@ -289,6 +289,8 @@ def _build_request_from_analyza(analyza: dict, measured_block: dict = None) -> d
             "discount_rate": 0.06,
             "horizon_years": 20,
             "depr_years": 6,
+            # Výmena batérie počas horizontu — OPCIA, default OFF (batéria predpokladaná na celý horizont)
+            "count_battery_replacement": bool(analyza.get("pocitat_vymenu_baterie", False)),
         },
         "dotacia": {
             "enabled": bool(analyza.get("dotacia_enabled", False)),
