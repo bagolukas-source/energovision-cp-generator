@@ -118,6 +118,7 @@ class CashflowBuilder:
         bess_inverter_replacement_year: Optional[int] = 12,
         bess_inverter_replacement_pct: float = 0.10,
         bess_cells_replacement_year: Optional[int] = None,
+        bess_cells_replacement_interval_years: Optional[int] = None,
         dppo_pct: float = 0.21,
         depr_years: int = 6,
         discount_rate: float = 0.06,
@@ -134,6 +135,7 @@ class CashflowBuilder:
         self.bess_inverter_replacement_year = bess_inverter_replacement_year
         self.bess_inverter_replacement_pct = bess_inverter_replacement_pct
         self.bess_cells_replacement_year = bess_cells_replacement_year
+        self.bess_cells_replacement_interval_years = bess_cells_replacement_interval_years
         self.dppo_pct = dppo_pct
         self.depr_years = depr_years
         self.discount_rate = discount_rate
@@ -201,6 +203,11 @@ class CashflowBuilder:
             if y == self.bess_inverter_replacement_year:
                 cy.cost_inverter_replacement = self.capex_bess * self.bess_inverter_replacement_pct
             if y == self.bess_cells_replacement_year:
+                cy.cost_bess_cells_replacement = self.capex_bess * 0.40
+            elif (self.bess_cells_replacement_interval_years
+                  and y > 0 and y < self.horizon_years
+                  and y % self.bess_cells_replacement_interval_years == 0):
+                # Výmena článkov po vyčerpaní warranty cyklov (40 % BESS capexu), capacita sa obnoví
                 cy.cost_bess_cells_replacement = self.capex_bess * 0.40
 
             # Tax shield
