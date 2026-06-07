@@ -33,7 +33,7 @@ class EMSConfig:
     max_efc_per_year: float = 1000.0      # warranty 10000 cy / 10 r = 1000/y target (LFP B2B)
 
     # Arbitráž triggery
-    lookahead_hours: int = 24             # 24h = OKTE D-1 published
+    lookahead_hours: int = 12             # 12h okno → zachytí intra-day sedlá/špičky (2 cykly/deň); pôvodne 24
     arb_min_spread_eur_mwh: float = 30.0  # Min ekonomický spread (po RTE straty)
     arb_threshold_charge_eur_mwh: float = 50.0   # Charge len pod touto cenou
     arb_threshold_discharge_eur_mwh: float = 120.0  # Discharge len nad touto
