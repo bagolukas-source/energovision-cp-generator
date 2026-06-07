@@ -25,6 +25,8 @@ from datetime import datetime
 
 log = logging.getLogger("generuj_pd")
 
+from pd_catalog import PANELY, STRIEDACE  # kompletný katalóg z Make data store
+
 # ============================================================
 # PATH KU TEMPLATOM
 # ============================================================
@@ -87,28 +89,7 @@ def _resolve_dis_from_psc(psc):
 # ============================================================
 # TECHNICKÉ CENNÍKY — synced z Make Data Store
 # ============================================================
-PANELY = {
-    "JAM72S20 460MR": {"Manufacturer": "JA Solar", "Type": "JAM72S20 460MR", "Dimensions": "2120x1052x40mm",
-        "Weight": "25", "IP": "IP68", "Temp": "-40÷85°C", "Class": "Trieda II", "Cell": "6x24 mono",
-        "DesignLoad": "3600Pa", "DesignPull": "1600Pa", "Cable": "MC4 4 mm² 2x0,3m", "UN_MAX": "1500",
-        "IREV_MAX": "20", "PMPP": "460", "ISC": "11,45", "UOC": "50,01",
-        "IMPP": "10,92", "UMPP": "42,13", "Efficiency": "20,6"},
-    "LR7-60HVH-535M": {"Manufacturer": "LONGi", "Type": "LR7-60HVH-535M", "Dimensions": "1990x1134x30mm",
-        "Weight": "25", "IP": "IP68", "Temp": "-40÷85°C", "Class": "Trieda II", "Cell": "6x20 mono",
-        "DesignLoad": "5400Pa", "DesignPull": "2400Pa", "Cable": "MC4 4 mm² 2x1,4m", "UN_MAX": "1500",
-        "IREV_MAX": "25", "PMPP": "535", "ISC": "15,15", "UOC": "44,78",
-        "IMPP": "14,46", "UMPP": "37,01", "Efficiency": "23,7"},
-    "LR7-60HVH-540M": {"Manufacturer": "LONGi", "Type": "LR7-60HVH-540M", "Dimensions": "1990x1134x30mm",
-        "Weight": "25", "IP": "IP68", "Temp": "-40÷85°C", "Class": "Trieda II", "Cell": "6x20 mono",
-        "DesignLoad": "5400Pa", "DesignPull": "2400Pa", "Cable": "MC4 4 mm² 2x1,4m", "UN_MAX": "1500",
-        "IREV_MAX": "25", "PMPP": "540", "ISC": "15,25", "UOC": "44,88",
-        "IMPP": "14,55", "UMPP": "37,11", "Efficiency": "23,9"},
-    "LR7-54HVH-485M": {"Manufacturer": "LONGi", "Type": "LR7-54HVH-485M", "Dimensions": "1800x1134x30mm",
-        "Weight": "21,6", "IP": "IP68", "Temp": "-40÷85°C", "Class": "Trieda II", "Cell": "6x18 mono",
-        "DesignLoad": "5400Pa", "DesignPull": "2400Pa", "Cable": "MC4 4 mm² 2x1,2m", "UN_MAX": "1500",
-        "IREV_MAX": "25", "PMPP": "485", "ISC": "15,23", "UOC": "40,4",
-        "IMPP": "14,53", "UMPP": "33,4", "Efficiency": "23,8"},
-}
+# PANELY — kompletný katalóg v pd_catalog.py (importované nižšie)
 
 PANEL_ALIAS = {
     "LONGi 470 Wp": "LR7-54HVH-485M",
@@ -117,64 +98,7 @@ PANEL_ALIAS = {
     "JA Solar 460 Wp": "JAM72S20 460MR",
 }
 
-STRIEDACE = {
-    "GW5K-ET": {"Manufacturer": "GoodWe", "Type": "GW5K-ET", "Grid": "Hybrid", "Dimensions": "415x516x180mm",
-        "Weight": "24", "IP": "IP66", "Temp": "-35÷60°C", "Humidity": "0÷95%", "Noise": "<30dB",
-        "Efficiency": "97,2", "MPPT": "2", "Strings_per_MPPT": "1", "UPV_MIN": "180",
-        "UMPP": "620", "UMPP_MAX": "1000", "IMPP": "12,5", "ISC": "15,2", "SPD_DC": "Type II",
-        "Cable_DC": "6", "UN": "400", "UN_MIN": "312", "UN_MAX": "528", "PMAX": "5",
-        "I_MAX": "8,5", "THD": "<3%", "PF": "0,99", "SPD_AC": "Type II", "Protection": "16",
-        "Cable_AC": "6"},
-    "MHT-5K-25": {"Manufacturer": "Solinteg", "Type": "MHT-5K-25", "Grid": "Hybrid", "Dimensions": "534x418x210mm",
-        "Weight": "26", "IP": "IP65", "Temp": "-30÷60°C", "Humidity": "0÷100%", "Noise": "<25dB",
-        "Efficiency": "98,1", "MPPT": "2", "Strings_per_MPPT": "1", "UPV_MIN": "135",
-        "UMPP": "120", "UMPP_MAX": "950", "IMPP": "15", "ISC": "20", "SPD_DC": "Type II",
-        "Cable_DC": "6", "UN": "400", "UN_MIN": "380", "UN_MAX": "415", "PMAX": "5",
-        "I_MAX": "8,3", "THD": "<3%", "PF": "0,99", "SPD_AC": "Type II", "Protection": "16",
-        "Cable_AC": "6"},
-    "MHT-6K-25": {"Manufacturer": "Solinteg", "Type": "MHT-6K-25", "Grid": "Hybrid", "Dimensions": "534x418x210mm",
-        "Weight": "26", "IP": "IP65", "Temp": "-30÷60°C", "Humidity": "0÷100%", "Noise": "<25dB",
-        "Efficiency": "98,1", "MPPT": "2", "Strings_per_MPPT": "1", "UPV_MIN": "135",
-        "UMPP": "120", "UMPP_MAX": "950", "IMPP": "15", "ISC": "20", "SPD_DC": "Type II",
-        "Cable_DC": "6", "UN": "400", "UN_MIN": "380", "UN_MAX": "415", "PMAX": "6",
-        "I_MAX": "10", "THD": "<3%", "PF": "0,99", "SPD_AC": "Type II", "Protection": "20",
-        "Cable_AC": "6"},
-    "MHT-8K-25": {"Manufacturer": "Solinteg", "Type": "MHT-8K-25", "Grid": "Hybrid", "Dimensions": "534x418x210mm",
-        "Weight": "26", "IP": "IP65", "Temp": "-30÷60°C", "Humidity": "0÷100%", "Noise": "<25dB",
-        "Efficiency": "98,2", "MPPT": "2", "Strings_per_MPPT": "1", "UPV_MIN": "135",
-        "UMPP": "200", "UMPP_MAX": "950", "IMPP": "15", "ISC": "20", "SPD_DC": "Type II",
-        "Cable_DC": "6", "UN": "400", "UN_MIN": "380", "UN_MAX": "415", "PMAX": "8",
-        "I_MAX": "13,3", "THD": "<3%", "PF": "0,99", "SPD_AC": "Type II", "Protection": "25",
-        "Cable_AC": "6"},
-    "MHT-10K-25": {"Manufacturer": "Solinteg", "Type": "MHT-10K-25", "Grid": "Hybrid", "Dimensions": "534x418x210mm",
-        "Weight": "26", "IP": "IP65", "Temp": "-30÷60°C", "Humidity": "0÷100%", "Noise": "<25dB",
-        "Efficiency": "98,2", "MPPT": "2", "Strings_per_MPPT": "1", "UPV_MIN": "135",
-        "UMPP": "200", "UMPP_MAX": "950", "IMPP": "15", "ISC": "20", "SPD_DC": "Type II",
-        "Cable_DC": "6", "UN": "400", "UN_MIN": "380", "UN_MAX": "415", "PMAX": "10",
-        "I_MAX": "16,5", "THD": "<3%", "PF": "0,99", "SPD_AC": "Type II", "Protection": "32",
-        "Cable_AC": "6"},
-    "SUN2000-5K": {"Manufacturer": "Huawei", "Type": "SUN2000-5KTL", "Grid": "Hybrid", "Dimensions": "525x470x146,5mm",
-        "Weight": "17", "IP": "IP65", "Temp": "-25÷60°C", "Humidity": "0÷100%", "Noise": "<29dB",
-        "Efficiency": "97,5", "MPPT": "2", "Strings_per_MPPT": "1", "UPV_MIN": "200",
-        "UMPP": "600", "UMPP_MAX": "1100", "IMPP": "11", "ISC": "15", "SPD_DC": "Type II",
-        "Cable_DC": "6", "UN": "400", "UN_MIN": "311", "UN_MAX": "478", "PMAX": "5",
-        "I_MAX": "8,5", "THD": "<3%", "PF": "0,99", "SPD_AC": "Type II", "Protection": "16",
-        "Cable_AC": "6"},
-    "SUN2000-8K": {"Manufacturer": "Huawei", "Type": "SUN2000-8KTL", "Grid": "Hybrid", "Dimensions": "525x470x146,5mm",
-        "Weight": "17", "IP": "IP65", "Temp": "-25÷60°C", "Humidity": "0÷100%", "Noise": "<29dB",
-        "Efficiency": "98", "MPPT": "2", "Strings_per_MPPT": "1", "UPV_MIN": "200",
-        "UMPP": "600", "UMPP_MAX": "1080", "IMPP": "11", "ISC": "15", "SPD_DC": "Type II",
-        "Cable_DC": "6", "UN": "400", "UN_MIN": "311", "UN_MAX": "478", "PMAX": "8",
-        "I_MAX": "13,5", "THD": "<3%", "PF": "0,99", "SPD_AC": "Type II", "Protection": "25",
-        "Cable_AC": "16"},
-    "SUN2000-10K": {"Manufacturer": "Huawei", "Type": "SUN2000-10KTL", "Grid": "Hybrid", "Dimensions": "525x470x146,5mm",
-        "Weight": "17", "IP": "IP65", "Temp": "-25÷60°C", "Humidity": "0÷100%", "Noise": "<29dB",
-        "Efficiency": "98", "MPPT": "2", "Strings_per_MPPT": "1", "UPV_MIN": "200",
-        "UMPP": "600", "UMPP_MAX": "1080", "IMPP": "11", "ISC": "15", "SPD_DC": "Type II",
-        "Cable_DC": "6", "UN": "400", "UN_MIN": "311", "UN_MAX": "478", "PMAX": "10",
-        "I_MAX": "16,9", "THD": "<3%", "PF": "0,99", "SPD_AC": "Type II", "Protection": "32",
-        "Cable_AC": "16"},
-}
+# STRIEDACE — kompletný katalóg v pd_catalog.py (importované nižšie)
 
 STRIEDAC_ALIAS = {
     "Solinteg MHT-10K-25": "MHT-10K-25",
