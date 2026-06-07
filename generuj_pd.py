@@ -25,7 +25,8 @@ from datetime import datetime
 
 log = logging.getLogger("generuj_pd")
 
-from pd_catalog import PANELY, STRIEDACE  # kompletný katalóg z Make data store
+from pd_catalog_db import get_catalog  # PD katalóg z dedikovanej Supabase DB (fallback pd_catalog.py)
+PANELY, STRIEDACE, _ALIAS_PANEL_DB, _ALIAS_STRIEDAC_DB = get_catalog()
 
 # ============================================================
 # PATH KU TEMPLATOM
@@ -110,6 +111,10 @@ STRIEDAC_ALIAS = {
     "Huawei SUN2000-10K": "SUN2000-10K",
     "GoodWe GW5K-ET": "GW5K-ET",
 }
+
+# zlúč aliasy z DB (ak nejaké) nad statické
+PANEL_ALIAS.update(_ALIAS_PANEL_DB)
+STRIEDAC_ALIAS.update(_ALIAS_STRIEDAC_DB)
 
 
 def _resolve_panel(typ_panela):
