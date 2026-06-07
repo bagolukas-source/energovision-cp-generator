@@ -204,3 +204,120 @@ def chart_energy_flow(ctx):
     arrow("grid","site",grid_load,GRID,-0.12)
     arrow("grid","bat",grid_bat,GRID,0.30)
     return _b64(fig)
+
+
+def chart_soc_profile(ctx):
+    """Orkestra-style denný SoC profil — riadený REÁLNYM ročným throughputom batérie z enginu
+    (pv_to_bat/grid_to_bat nabíjanie, bat_to_load vybíjanie), rozložený do PV a večerných hodín."""
+    cap=float(ctx.get("bess_kwh") or 0)
+    if cap<=0: return None
+    g=lambda k: float(ctx.get(k) or 0)
+    chg_day=(g("pv_to_bat_mwh")+g("grid_to_bat_mwh"))*1000/365.0
+    dis_day=g("bat_to_load_mwh")*1000/365.0
+    if chg_day<=0 or dis_day<=0:  # fallback ~0.7 cyklu/deň
+        chg_day=dis_day=cap*0.7
+    # váhy: nabíjanie cez PV poludnie (8–16), vybíjanie do večernej špičky (17–22)
+    cw=[0,0,0,0,0,0,0,0,0.06,0.12,0.17,0.19,0.18,0.14,0.09,0.05,0.01,0,0,0,0,0,0,0]
+    dw=[0,0,0,0,0,0,0.04,0.06,0,0,0,0,0,0,0,0,0,0.10,0.20,0.24,0.22,0.14,0,0]
+    cws=sum(cw) or 1; dws=sum(dw) or 1
+    cw=[w/cws for w in cw]; dw=[w/dws for w in dw]
+    chg=[chg_day*w for w in cw]; dis=[dis_day*w for w in dw]
+    cr=cap*0.6
+    chg=[min(c,cr) for c in chg]; dis=[min(d,cr) for d in dis]
+    eff=0.95; soc=cap*0.20; socs=[0.0]*24
+    for _ in range(2):
+        socs=[0.0]*24
+        for h in range(24):
+            soc=min(cap,max(0.0, soc+chg[h]*eff-dis[h])); socs[h]=soc/cap*100
+    fig,ax=plt.subplots(figsize=(9,3.0)); x=list(range(24))
+    ax.bar(x,chg,color=GREEN,width=0.7,alpha=0.55,zorder=2,label="Nabíjanie (z PV)")
+    ax.bar(x,[-d for d in dis],color=GRID,width=0.7,alpha=0.55,zorder=2,label="Vybíjanie (špička)")
+    mx=max(max(chg),max(dis),1.0)
+    ax.set_ylim(-mx*1.3,mx*1.3); ax.set_ylabel("Výkon kW"); ax.axhline(0,color="#CBD5E1",lw=1)
+    ax2=ax.twinx(); ax2.plot(x,socs,color="#102D4C",lw=2.8,zorder=4,label="Stav nabitia (SoC)")
+    ax2.fill_between(x,socs,color="#102D4C",alpha=0.06,zorder=1)
+    ax2.set_ylim(0,105); ax2.set_ylabel("SoC %",color="#102D4C"); ax2.grid(False)
+    ax2.tick_params(axis="y",colors="#102D4C")
+    ax.set_xlim(-0.5,23.5); ax.set_xticks(range(0,24,3)); ax.set_xticklabels([f"{h}:00" for h in range(0,24,3)])
+    _clean(ax); ax.spines["right"].set_visible(False)
+    h1,l1=ax.get_legend_handles_labels(); h2,l2=ax2.get_legend_handles_labels()
+    ax.legend(h1+h2,l1+l2,frameon=False,fontsize=9.5,ncol=3,loc="upper center",bbox_to_anchor=(0.5,1.16))
+    return _b64(fig)
+
+
+def chart_waterfall(ctx):
+    """Orkestra-style NPV most — bridge ktorý sa SČÍTA PRESNE na engine NPV (žiadny druhý NPV systém).
+    Prevádzkové úspory = reziduum (npv + net_capex - daň. štít - zostatok), aby bilancia sedela."""
+    full=ctx["scenarios3"][-1]
+    npv=float(full.get("npv") or 0)
+    net=float(ctx.get("net_capex_eur") or 0)
+    capex_gross=float(ctx.get("capex_total_eur") or net); dot=max(0.0,capex_gross-net)
+    tax=float(full.get("annual_tax") or 0)
+    DISC,LIFE,ODPIS,RESID=0.06,20,6,0.10
+    pv_tax=sum(tax/((1+DISC)**y) for y in range(1,ODPIS+1))
+    pv_res=(capex_gross*RESID)/((1+DISC)**LIFE)
+    pv_ops=(npv+net)-pv_tax-pv_res   # diskontované prevádzkové úspory po OPEX (reziduum → bilancia sedí)
+    steps=[("Investícia",-capex_gross,"#EF6B6B")]
+    if dot>1: steps.append(("Dotácia",dot,LIME))
+    steps += [("Prevádzkové\núspory (20 r.)",pv_ops,GREEN),("Daňový štít\n(r. 1–6)",pv_tax,AMBER),
+              ("Zostatková\nhodnota",pv_res,"#A7D08C")]
+    fig,ax=plt.subplots(figsize=(9,3.4)); acc=0.0; xs=[]
+    for i,(nm,val,col) in enumerate(steps):
+        bot=acc if val>=0 else acc+val
+        ax.bar(i,abs(val)/1000,bottom=bot/1000,color=col,width=0.66,zorder=3)
+        ax.text(i,(bot+abs(val)/2)/1000,f"{val/1000:+.0f}k",ha="center",va="center",fontsize=8.2,
+                color="white",weight="bold")
+        if i>0: ax.plot([i-1+0.33,i-0.33],[acc/1000,acc/1000],color="#CBD5E1",lw=1,ls=(0,(3,2)),zorder=1)
+        acc+=val; xs.append(nm)
+    ax.bar(len(steps),npv/1000,color="#102D4C",width=0.66,zorder=3)
+    ax.text(len(steps),npv/1000+(abs(npv)/1000*0.04+2),f"{npv/1000:+.0f}k",ha="center",va="bottom",
+            fontsize=9,color="#102D4C",weight="bold")
+    xs.append("NPV 20 r.")
+    ax.axhline(0,color="#1E293B",lw=1.2)
+    ax.set_xticks(range(len(xs))); ax.set_xticklabels(xs,fontsize=8.2)
+    ax.set_ylabel("k€ (diskontované)"); _clean(ax)
+    return _b64(fig)
+
+
+def chart_capex_split(ctx):
+    """Orkestra-style: rozpad investície FVE/BESS/ostatné + dotácia → čistá."""
+    pv=float(ctx.get("capex_pv_eur") or 0); bess=float(ctx.get("capex_bess_eur") or 0)
+    total=float(ctx.get("capex_total_eur") or (pv+bess)); other=max(0.0,total-pv-bess)
+    net=float(ctx.get("net_capex_eur") or total); dot=max(0.0,total-net)
+    fig,ax=plt.subplots(figsize=(9,2.2))
+    segs=[("FVE",pv,SOLAR),("Batéria",bess,GREEN),("Ostatné / inžiniering",other,"#94A3B8")]
+    segs=[s for s in segs if s[1]>1]
+    left=0
+    for nm,val,c in segs:
+        ax.barh(1,val/1000,left=left/1000,color=c,height=0.5,zorder=3)
+        if val>total*0.06: ax.text((left+val/2)/1000,1,f"{val/1000:.0f}k",ha="center",va="center",
+                                    color="white",fontsize=9,weight="bold")
+        left+=val
+    ax.barh(0,net/1000,color="#102D4C",height=0.5,zorder=3)
+    ax.text(net/1000/2,0,f"{net/1000:.0f}k",ha="center",va="center",color="white",fontsize=9,weight="bold")
+    if dot>1:
+        ax.barh(0,dot/1000,left=net/1000,color=LIME,height=0.5,zorder=3,alpha=0.85,hatch="///",edgecolor="white")
+        ax.text((net+dot/2)/1000,0,f"dotácia −{dot/1000:.0f}k",ha="center",va="center",color="#1A1A1A",fontsize=8.2,weight="bold")
+    ax.set_yticks([0,1]); ax.set_yticklabels(["Po dotácii","Hrubá investícia"],fontsize=10)
+    ax.set_xlabel("tis. € (bez DPH)"); ax.set_xlim(0,total/1000*1.08); _clean(ax,yg=False); ax.grid(False)
+    import matplotlib.patches as mp
+    hs=[mp.Patch(color=c) for _,v,c in segs]; ls=[f"{n} ({v/1000:.0f}k)" for n,v,c in segs]
+    ax.legend(hs,ls,frameon=False,fontsize=9,ncol=len(segs) or 1,loc="upper center",bbox_to_anchor=(0.5,1.28))
+    return _b64(fig)
+
+
+def chart_value_stream(ctx):
+    """Orkestra-style earnings by value stream: ročný € prínos podľa zdroja (horizontálne)."""
+    parts=[(n,v,c) for n,v,c in ctx.get("benefit_parts",[]) if v and v>1]
+    if not parts: return None
+    parts=sorted(parts,key=lambda p:p[1])
+    fig,ax=plt.subplots(figsize=(9,2.6)); y=np.arange(len(parts))
+    vals=[p[1]/1000 for p in parts]
+    bars=ax.barh(y,vals,color=[p[2] for p in parts],height=0.62,zorder=3)
+    for i,(b,(n,v,c)) in enumerate(zip(bars,parts)):
+        ax.text(b.get_width()+max(vals)*0.015,i,f"{v/1000:.1f}k €",va="center",fontsize=9.5,color="#374151",weight="bold")
+    ax.set_yticks(list(y)); ax.set_yticklabels([p[0] for p in parts],fontsize=10)
+    ax.set_xlim(0,max(vals)*1.18); ax.set_xlabel("€ / rok (plný scenár)"); _clean(ax,yg=False); ax.grid(False)
+    tot=sum(p[1] for p in parts)
+    ax.set_title(f"Ročný prínos spolu {tot/1000:.0f} tis. €",fontsize=10,color="#374151",loc="left",pad=6)
+    return _b64(fig)

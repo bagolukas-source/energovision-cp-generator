@@ -179,6 +179,7 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None) -> dict:
         "fve_prod_mwh":base.get("pv_total_mwh"),"self_use_mwh":self_mwh,"export_mwh":export_mwh,
         "grid_import_mwh":base.get("grid_import_mwh"),"samosp_pct":base.get("samospotreba_pct"),"coverage_pct":base.get("samostatnost_pct"),
         "year_mwh":base.get("load_total_mwh"),"max15_kw":peak_kw,"peak_estimated":peak_estimated,"capex_total_eur":capex,"net_capex_eur":net_capex,"save_peak_eur":save_peak,
+        "capex_pv_eur":float(base.get("capex_pv_eur") or 0),"capex_bess_eur":float(base.get("capex_bess_eur") or 0),
         "co2_avoided_tonnes":base.get("co2_avoided_tonnes"),
         # Orkestra vizuály — toky energie, donut samospotreby, carbon
         "pv_to_load_mwh":base.get("pv_to_load_mwh"),"pv_to_bat_mwh":base.get("pv_to_bat_mwh"),

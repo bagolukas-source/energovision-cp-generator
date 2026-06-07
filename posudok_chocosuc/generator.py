@@ -35,6 +35,13 @@ def render_chocosuc_html(ctx: dict) -> str:
     g_scen=C.chart_scenarios(ctx); g_cum=C.chart_cumcf(ctx); g_ben=C.chart_benefit(ctx)
     g_tor=C.chart_tornado(ctx); g_mc=C.chart_montecarlo(ctx)
     g_donut=C.chart_solar_donut(ctx); g_flow=C.chart_energy_flow(ctx)
+    g_soc=C.chart_soc_profile(ctx); g_wf=C.chart_waterfall(ctx)
+    g_capex=C.chart_capex_split(ctx); g_vs=C.chart_value_stream(ctx)
+    _gc=[0]
+    def gimg(src,text):
+        if not src: return ''
+        _gc[0]+=1
+        return f'<img class="img" src="{src}"><div class="cap">Graf {_gc[0]}: {text}</div>'
     S=ctx["scenarios3"]; bza=S[0]; full=S[-1]
     pm=ctx.get("profile_metrics",{})
     recs=ctx.get("recommendations",[])
@@ -172,8 +179,8 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
 <section class="newpage">
   <div class="kick">2 — Profil odberu</div><h2>Charakteristika spotreby</h2>
   <div class="narr">{ctx.get('profile_narrative','')}</div>
-  <img class="img" src="{g_daily}"><div class="cap">Graf 1: Denný profil odberu — pracovný deň vs víkend, s PV produkciou. {ctx.get('daily_cap','')}</div>
-  <img class="img" src="{g_month}"><div class="cap">Graf 2: Mesačná spotreba. {ctx.get('monthly_cap','')}</div>
+  {gimg(g_daily, "Denný profil odberu — pracovný deň vs víkend, s PV produkciou. "+ctx.get('daily_cap',''))}
+  {gimg(g_month, "Mesačná spotreba. "+ctx.get('monthly_cap',''))}
 </section>
 
 <section class="newpage">
@@ -196,10 +203,12 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
     {trow(["Import zo siete",f"{num(ctx.get('grid_import_mwh'))} MWh","—"])}
     {trow(["Pokrytie spotreby OM",f"{num(ctx.get('coverage_pct'),1)} %","FVE vs spotreba"])}
   </table>
-  <img class="img" src="{g_bal}"><div class="cap">Graf 3: Energetická bilancia.</div>
+  {gimg(g_bal, "Energetická bilancia.")}
   <div class="kick" style="margin-top:10px;">Tok energie a využitie výroby</div>
-  <img class="img" src="{g_flow}"><div class="cap">Graf 4: Ročný tok energie — výroba FVE, priama samospotreba, batéria a sieť (MWh/rok).</div>
-  <img class="img" src="{g_donut}"><div class="cap">Graf 5: Ako sa využije vyrobená FVE energia — priamo, cez batériu, export.</div>
+  {gimg(g_flow, "Ročný tok energie — výroba FVE, priama samospotreba, batéria a sieť (MWh/rok).")}
+  {gimg(g_donut, "Ako sa využije vyrobená FVE energia — priamo, cez batériu, export.")}
+  {('<div class="kick" style="margin-top:10px;">Prevádzka batérie — typický deň</div>' if g_soc else '')}
+  {gimg(g_soc, "Reprezentatívny denný cyklus batérie — nabíjanie z PV cez deň, vybíjanie do večernej špičky; krivka SoC (stav nabitia).")}
   <div class="kick" style="margin-top:12px;">Environmentálny prínos (CO₂)</div>
   <div class="benefits">
     <div class="bcard" style="border-top-color:#5E8E2A; background:#F4F8EE;"><div class="h" style="font-size:15pt; color:#5E8E2A;">−{num(ctx.get('co2_avoided_tonnes'),0)} t</div><div class="d">CO₂ ročne menej</div></div>
@@ -226,8 +235,11 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
     {"".join(trow([s['name'],eur(s['save_total']),f"{num(s['payback'],1)} r",eur(s['npv']),f"{num(s['irr'],1)} %"],em=("em" if s is full else None)) for s in S)}
   </table>
   <div class="scenexpl">{"".join(f'<div class="rec"><b>{nm}</b><span>{tx}</span></div>' for nm,tx in ctx.get('scenarios_bullets',[]))}</div>
-  <img class="img" src="{g_scen}"><div class="cap">Graf 4: Porovnanie 3 scenárov.</div>
-  <img class="img" src="{g_cum}"><div class="cap">Graf 5: Kumulatívny cashflow 20 rokov.</div>
+  <div class="kick">Štruktúra investície</div>
+  {gimg(g_capex, "Rozpad investície — FVE, batéria a ostatné náklady; dotácia znižuje na čistú investíciu.")}
+  {gimg(g_scen, "Porovnanie 3 scenárov.")}
+  {gimg(g_cum, "Kumulatívny cashflow 20 rokov.")}
+  {gimg(g_wf, "NPV most — od investície cez diskontované úspory, daňový štít a zostatkovú hodnotu po čisté NPV.")}
 </section>
 
 <section class="newpage">
@@ -237,10 +249,11 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
     {trow(["Ročná úspora SPOLU","",eur(full['save_total'])],em="em")}
     {trow(["Daňový štít z odpisu (r. 1–6)","6-r lineárny odpis × DPPO 21 %",eur(full.get('annual_tax',0))])}
   </table>
-  <img class="img" src="{g_ben}"><div class="cap">Graf 6: Skladba ročného prínosu.</div>
+  {gimg(g_ben, "Skladba ročného prínosu.")}
+  {gimg(g_vs, "Ročný prínos podľa zdroja (value stream) — samospotreba, export, batéria, arbitráž, daňový štít.")}
   <h2 style="margin-top:8px;">Citlivosť a riziko</h2>
-  <img class="img" src="{g_tor}"><div class="cap">Graf 7: Tornado — citlivosť NPV na ±15 % driverov.</div>
-  <img class="img" src="{g_mc}"><div class="cap">Graf 8: Monte Carlo ({ctx.get('mc_n',5000)} simulácií). P10 {eur(ctx['mc_p10'])}, medián {eur(ctx['mc_p50'])}, P90 {eur(ctx['mc_p90'])}; pravdepodobnosť kladného NPV {num(ctx.get('mc_prob_pos',0)*100,0)} %.</div>
+  {gimg(g_tor, "Tornado — citlivosť NPV na ±15 % driverov.")}
+  {gimg(g_mc, f"Monte Carlo ({ctx.get('mc_n',5000)} simulácií). P10 {eur(ctx['mc_p10'])}, medián {eur(ctx['mc_p50'])}, P90 {eur(ctx['mc_p90'])}; pravdepodobnosť kladného NPV {num(ctx.get('mc_prob_pos',0)*100,0)} %.")}
 </section>
 
 <section class="newpage">
