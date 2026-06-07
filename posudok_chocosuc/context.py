@@ -297,9 +297,9 @@ def _build_deterministic_narratives(ctx, S, full, prof, pm):
     # Optimalizácia RK — len ak je špička výrazne pod MRK (reálne z dát, nezávislé od batérie).
     # Peak-shaving cez batériu tvrdíme IBA ak ho model reálne oceňuje (save_peak>0), inak by išlo o blud.
     _save_peak = float(ctx.get("save_peak_eur") or 0)
-    if mrk > 0 and peak > 0 and peak < mrk * 0.85:
-        _t = (f"Špičkový odber {n(peak)} kW je výrazne pod zazmluvnenou MRK {n(mrk)} kW (využitie {n(peak/mrk*100,0)} %). "
-              f"Odberné miesto má priestor znížiť rezervovanú kapacitu a šetriť na pevnej zložke distribúcie")
+    if mrk > 0 and peak > 0 and peak < mrk * 0.65:
+        _t = (f"Špičkový odber {n(peak)} kW je len {n(peak/mrk*100,0)} % zazmluvnenej MRK {n(mrk)} kW. "
+              f"Odberné miesto má rezervu znížiť rezervovanú kapacitu (RK, min. 50 % MRK) a šetriť na pevnej zložke distribúcie")
         if _save_peak > 0:
             _t += f"; batéria toto zníženie zabezpečuje proti špičkám (modelovaná úspora {n(_save_peak)} €/r)."
         else:
