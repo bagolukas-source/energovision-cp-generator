@@ -111,10 +111,10 @@ def _build_request_from_analyza(analyza: dict, measured_block: dict = None) -> d
     max_export = float(analyza["max_export_kw"]) if analyza.get("max_export_kw") else None
     hard_cap_kwp = None
     if mrk_kw:
-        # FVE DC ≤ MRK × 1.2 (DC over-sizing pomer)
-        hard_cap_kwp = mrk_kw * 1.2
-    if max_export and (not hard_cap_kwp or max_export * 1.2 < hard_cap_kwp):
-        hard_cap_kwp = max_export * 1.2
+        # FVE aj BESS výkon ≤ MRK (kapacita pripojenia) — STRIKTNÝ limit (požiadavka užívateľa).
+        hard_cap_kwp = mrk_kw
+    if max_export and (not hard_cap_kwp or max_export < hard_cap_kwp):
+        hard_cap_kwp = max_export
     
     # Optimal FVE size — preferuj realny annual spotreba ak existuje
     if annual_kwh > 1000:
@@ -211,6 +211,14 @@ def _build_request_from_analyza(analyza: dict, measured_block: dict = None) -> d
         else:
             bess_options = [0, 500, 1000]
     
+    # ─── TVRDÝ LIMIT pripojenia: FVE kWp aj BESS výkon ≤ MRK (viac sieť neumožní) ───
+    if hard_cap_kwp and pv_options != [0]:
+        pv_options = sorted(set([min(float(p), hard_cap_kwp) for p in pv_options]))
+        pv_options = [p for p in pv_options if p >= 5] or [round(hard_cap_kwp, 0)]
+    if mrk_kw:
+        _max_bess_kwh = round(mrk_kw / 0.5, 0)  # bess_kw = bess_kwh × 0.5 (c-rate) ≤ MRK
+        bess_options = sorted(set([min(float(b), _max_bess_kwh) for b in bess_options]))
+
     if annual_kwh <= 0:
         annual_kwh = optimal_kwp * 1000  # ~1000 kWh/kWp rule of thumb
     
