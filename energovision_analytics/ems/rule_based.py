@@ -98,6 +98,12 @@ class RuleBasedEMS:
         _disch_spot = 0.0        # vybitie @ spot (pre grid-arbitraz)
         _disch_retail = 0.0      # vybitie @ retail (pre PV samospotrebu)
         _grid_charge_kwh = 0.0
+        # Per-interval cost-basis oceňovanie batérie (PRESNÝ arbitrážny spread — opravuje grid_frac priemer)
+        _pv_bucket = float(self.bat.soc_kwh)   # počiatočný SoC = PV-báza (neutrálne)
+        _grid_bucket = 0.0
+        _grid_cost = 0.0
+        _bess_self_acc = 0.0
+        _arbitrage_acc = 0.0
         _mon_max_load = {}   # mesiac -> max load kW
         _mon_max_net = {}    # mesiac -> max (load - peak_shave) kW
         for i in range(n):
@@ -207,6 +213,30 @@ class RuleBasedEMS:
             pv_to_bat_kwh = pv_to_bat  # už kWh
             grid_to_bat_kwh = grid_to_bat  # už kWh
 
+            # === Per-interval cost-basis oceňovanie (presný spread per kWh, v reálnych hodinách) ===
+            # Dve vedrá energie: PV-zdrojová (lacná) + grid-zdrojová (nabitá @ retail v lacnej hodine).
+            # Vybitie ocenené retailom AKTUÁLNEJ hodiny; grid-zdrojová mínus jej nákladová báza
+            # → arbitráž = spot_vybitia − spot_nabitia (poplatky sa vyrušia), presne kde sa to využíva.
+            if pv_to_bat_kwh > 0:
+                _pv_bucket += pv_to_bat_kwh
+            if grid_to_bat_kwh > 0:
+                _grid_bucket += grid_to_bat_kwh
+                _grid_cost += grid_to_bat_kwh * tarif_buy
+            if bat_to_load_kwh > 0:
+                _tot_b = _pv_bucket + _grid_bucket
+                if _tot_b > 1e-9:
+                    _pv_share = _pv_bucket / _tot_b
+                    _e_pv = bat_to_load_kwh * _pv_share
+                    _e_grid = bat_to_load_kwh - _e_pv
+                    _gcpk = (_grid_cost / _grid_bucket) if _grid_bucket > 1e-9 else 0.0
+                    _bess_self_acc += _e_pv * tarif_buy
+                    _arbitrage_acc += _e_grid * tarif_buy - _e_grid * _gcpk
+                    _pv_bucket = max(0.0, _pv_bucket - _e_pv)
+                    _grid_bucket = max(0.0, _grid_bucket - _e_grid)
+                    _grid_cost = max(0.0, _grid_cost - _e_grid * _gcpk)
+                else:
+                    _bess_self_acc += bat_to_load_kwh * tarif_buy
+
             # SAVING decomposition
             sav = self._compute_savings(
                 pv_to_load_kwh=pv_to_load_kwh,
@@ -297,10 +327,9 @@ class RuleBasedEMS:
         # Energia v baterii sa miesa (PV vs grid). PV-zdrojove vybitie usetri retail;
         # grid-zdrojove vybitie je BS-arbitraz ocenena spot spreadom (BS vyrovnava komoditu
         # za spot, ziadna distribucia). grid_frac = podiel grid nabijania na celkovom.
-        _total_charge = summary.bat_charge_total_kwh
-        _grid_frac = (_grid_charge_kwh / _total_charge) if _total_charge > 0 else 0.0
-        summary.sav_bess_self_cons_eur = _disch_retail * (1.0 - _grid_frac)
-        summary.sav_arbitrage_eur = _disch_spot * _grid_frac - _arb_charge_spot
+        # PRESNÝ rozklad (per-interval cost-basis) — nahrádza priemerujúcu grid_frac aproximáciu.
+        summary.sav_bess_self_cons_eur = _bess_self_acc
+        summary.sav_arbitrage_eur = _arbitrage_acc
 
         # === Peak shaving — REALNA redukcia mesacneho maxima x MRK kapacitny poplatok ===
         # MRK sa fakturuje z mesacneho 15-min maxima; baterka ho znizuje. Nie 200h pausal.
