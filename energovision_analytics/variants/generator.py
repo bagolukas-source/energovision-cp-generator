@@ -187,7 +187,6 @@ class VariantGenerator:
             usable_kwh=usable,
             power_kw_ac=bess_kw,
             c_rate_max=max(0.5, self.bess_c_rate),
-            warranty_cycles=10000,  # reálne LFP (Huawei LUNA2000 / Solinteg / BYD) — 70 % SoH po 10000 cykloch
         )
 
     # ------------------------------------------------------------------ Run single
@@ -226,10 +225,7 @@ class VariantGenerator:
             ems = RuleBasedEMS(
                 battery, self.site, tariff, retail,
                 EMSConfig(
-                    # Agresívna prevádzka — batéria má zarobiť maximum. Strop nech nebrzdí ekonomickú
-                    # arbitráž (min spread 30 €/MWh ju aj tak ohraničí); opotrebenie sa premietne cez
-                    # výmenu článkov naviazanú na reálne odjazdené cykly (nižšie).
-                    max_efc_per_year=2000.0,
+                    max_efc_per_year=int(bess.warranty_cycles / self.horizon_years),
                     peak_shave_enabled=(self.site.sadzba.value == "VN"),
                 ),
             )
@@ -256,17 +252,6 @@ class VariantGenerator:
             "sav_mrk_penalty_avoided_eur": summary.sav_mrk_penalty_avoided_eur,
         }
 
-        # Výmena článkov batérie naviazaná na REÁLNE odjazdené cykly (poctivá ekonomika agresívnej arbitráže).
-        # cycle_life = warranty_cycles / skutočné EFC/rok. Ak batéria dosiahne warranty cykly skôr ako koniec
-        # horizontu, články sa vymenia (cost = 40 % BESS capexu) a periodicky znova.
-        _repl_interval = None
-        if bess:
-            _efc_y = float(getattr(summary, "bat_efc", 0) or 0)
-            if _efc_y > 0:
-                _cyc_life = bess.warranty_cycles / _efc_y
-                if _cyc_life < self.horizon_years:
-                    _repl_interval = max(3, int(round(_cyc_life)))
-
         builder = CashflowBuilder(
             capex_solar_eur=capex_pv_total,
             capex_bess_eur=capex_bess_total,
@@ -276,7 +261,6 @@ class VariantGenerator:
             monitoring_eur_per_year=300,
             bess_inverter_replacement_year=12 if bess else None,
             bess_inverter_replacement_pct=0.10,
-            bess_cells_replacement_interval_years=_repl_interval,
             dppo_pct=self.dppo_pct,
             depr_years=self.depr_years,
             discount_rate=self.discount_rate,
