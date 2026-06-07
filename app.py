@@ -2486,6 +2486,64 @@ def generuj_pd():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@app.route("/webhook/generuj-pd-crm", methods=["POST"])
+@require_secret
+def generuj_pd_crm():
+    """PD generovanie pre CRM (B2B/projekcia). Na rozdiel od /webhook/generuj-pd
+    NEberie Notion page_id, ale priamo `lead_data` dict poskladaný z CRM projektu.
+    Vráti attachments (base64 DOCX) — CRM ich uploadne do Supabase storage."""
+    from datetime import datetime
+    body = request.get_json(force=True, silent=True) or {}
+    lead_data = body.get("lead_data") or {}
+    if not lead_data.get("meno_priezvisko"):
+        return jsonify({"success": False, "error": "missing lead_data.meno_priezvisko"}), 400
+
+    # default datum
+    if not lead_data.get("datum_dnes"):
+        lead_data["datum_dnes"] = datetime.now().strftime("%d.%m.%Y")
+
+    # voliteľný technický výkres z URL
+    solaredge_pdf_bytes = None
+    se_url = body.get("solaredge_pdf_url") or lead_data.get("solaredge_pdf_url")
+    if se_url:
+        try:
+            r = requests.get(se_url, timeout=60); r.raise_for_status()
+            solaredge_pdf_bytes = r.content
+            log.info("[generuj-pd-crm] SolarEdge PDF (%d B)", len(solaredge_pdf_bytes))
+        except Exception as e:
+            log.warning("[generuj-pd-crm] SolarEdge raw nedostupný: %s", e)
+
+    try:
+        from generuj_pd import vygeneruj_projektovu_dokumentaciu
+        import base64 as _b64
+        with tempfile.TemporaryDirectory() as tmpdir:
+            files = vygeneruj_projektovu_dokumentaciu(lead_data, tmpdir, solaredge_pdf_bytes=solaredge_pdf_bytes)
+            attachments = []
+            for kluc, path in files.items():
+                with open(path, "rb") as fh:
+                    raw = fh.read()
+                attachments.append({
+                    "kluc": kluc,
+                    "filename": Path(path).name,
+                    "data": _b64.b64encode(raw).decode("ascii"),
+                })
+            log.info("[generuj-pd-crm] %s: %d dokumentov", lead_data.get("meno_priezvisko"), len(attachments))
+            return jsonify({
+                "success": True,
+                "attachments": attachments,
+                "summary": {
+                    "klient": lead_data.get("meno_priezvisko"),
+                    "ev_id": lead_data.get("ev_id"),
+                    "vykon_kwp": lead_data.get("vykon_kwp"),
+                    "dis": lead_data.get("dis"),
+                    "variant": lead_data.get("variant"),
+                },
+            })
+    except Exception as e:
+        log.exception("[generuj-pd-crm] zlyhalo")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 # ============================================================
 # WEBHOOK: GENERUJ PO (Material Purchase Order)
 # Trigger: Notion automation pri Status = 💰 Faktúra
