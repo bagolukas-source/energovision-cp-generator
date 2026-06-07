@@ -187,6 +187,7 @@ class VariantGenerator:
             usable_kwh=usable,
             power_kw_ac=bess_kw,
             c_rate_max=max(0.5, self.bess_c_rate),
+            warranty_cycles=10000,  # reálne LFP (Huawei LUNA2000 / Solinteg / BYD) — 70 % SoH po 10000 cykloch
         )
 
     # ------------------------------------------------------------------ Run single
