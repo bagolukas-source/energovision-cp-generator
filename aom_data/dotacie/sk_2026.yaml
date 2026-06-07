@@ -9,6 +9,7 @@ zelena_podnikom:
   max_eur: 50000
   intensity_pct: 40         # základ 40 %; 45 % ak samospotreba > 80 % (SIEA)
   min_samospotreba_pct: 50  # SIEA: min 50 % samospotreba (45 % intenzita až pri >80 %)
+  max_kwp: 250              # Zelená podnikom je do 250 kW; nad to → Modernizačný fond
   applicable_to:
     - "FVE"
     - "FVE+BESS"
@@ -30,6 +31,7 @@ modernizacny_fond:
   max_eur: 1500000          # pre veľké projekty
   intensity_pct: 60         # OZE výroba — vyššia intenzita
   min_samospotreba_pct: 0   # bez kritéria samospotreby
+  max_kwp: 1000000          # Modernizačný fond — bez limitu výkonu (veľké projekty)
   applicable_to:
     - "FVE"
     - "FVE+BESS"

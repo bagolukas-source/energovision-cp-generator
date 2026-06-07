@@ -32,6 +32,7 @@ class DotaciaScheme:
     intensity_pct: float
     min_samospotreba_pct: float
     applicable_to: list[str]
+    max_kwp: float = 1e9
     notes: str = ""
     source_url: Optional[str] = None
     last_verified: Optional[str] = None
@@ -77,6 +78,7 @@ def load_dotacie_schemes(path: Optional[Path | str] = None) -> dict[str, Dotacia
             max_eur=float(fields.get("max_eur", 0)),
             intensity_pct=float(fields.get("intensity_pct", 0)),
             min_samospotreba_pct=float(fields.get("min_samospotreba_pct", 0)),
+            max_kwp=float(fields.get("max_kwp", 1e9)),
             applicable_to=fields.get("applicable_to", []),
             notes=fields.get("notes", ""),
             source_url=fields.get("source_url"),
@@ -91,6 +93,7 @@ def apply_dotacia(
     samospotreba_pct: float,
     project_type: str = "FVE+BESS",
     schemes: Optional[dict[str, DotaciaScheme]] = None,
+    installed_kw: float = 0.0,
 ) -> dict:
     """Vypočíta výšku dotácie pre daný scenár.
 
@@ -131,6 +134,14 @@ def apply_dotacia(
             "reason_if_ineligible": (
                 f"{s.nazov} sa nevzťahuje na typ projektu '{project_type}' "
                 f"(povolené: {', '.join(s.applicable_to)})"
+            ),
+        }
+    if installed_kw and s.max_kwp and installed_kw > s.max_kwp:
+        return {
+            "scheme": s, "eligible": False, "amount_eur": 0.0,
+            "intensity_applied": 0.0,
+            "reason_if_ineligible": (
+                f"{s.nazov} — inštalovaný výkon {installed_kw:.0f} kW > limit {s.max_kwp:.0f} kW"
             ),
         }
     if samospotreba_pct < s.min_samospotreba_pct:

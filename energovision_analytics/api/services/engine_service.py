@@ -185,13 +185,19 @@ def run_variants_pipeline(request_dict: dict, progress_cb=None) -> dict:
     dotacia = request_dict.get("dotacia", {})
     if dotacia.get("enabled", True) and dotacia.get("scheme_id") != "ziadna":
         schemes = load_dotacie_schemes()
+        _req_scheme = dotacia.get("scheme_id") or "zelena_podnikom"
         for r in results:
             proj_type = "FVE+BESS" if r.bess_kwh > 0 else "FVE"
+            # Auto-výber schémy podľa veľkosti: Zelená podnikom do 250 kW, nad to Modernizačný fond
+            _scheme = _req_scheme
+            if _scheme == "zelena_podnikom" and r.pv_kwp > 250 and "modernizacny_fond" in schemes:
+                _scheme = "modernizacny_fond"
             res = apply_dotacia(
-                scheme_id=dotacia["scheme_id"],
+                scheme_id=_scheme,
                 capex_eur=r.capex_total_eur,
                 samospotreba_pct=r.samospotreba_pct,
                 project_type=proj_type, schemes=schemes,
+                installed_kw=r.pv_kwp,
             )
             new_d = res["amount_eur"] if res["eligible"] else 0.0
             delta = new_d - r.dotacia_eur
@@ -305,14 +311,25 @@ def build_run_variants_response(
             })
 
         # === ENERGY FLOW (Sankey-style — pre 4-circle diagram) ===
+        # MASS-BALANCE uzáverou: grid_to_load = load − pv_to_load − bat_to_load (strana odberu
+        # vždy sedí); grid_import = grid_to_load + grid_to_bat; pv_curtailed = zvyšok výroby.
+        _pv_to_load = float(s.pv_to_load_kwh)
+        _pv_to_bat = float(s.pv_to_bat_kwh)
+        _pv_to_grid = float(s.pv_to_grid_kwh)
+        _bat_to_load = float(s.bat_discharge_total_kwh)
+        _grid_to_bat = max(0.0, float(s.bat_charge_total_kwh) - _pv_to_bat)
+        _grid_to_load = max(0.0, annual_load - _pv_to_load - _bat_to_load)
+        _pv_curtailed = max(0.0, annual_pv - _pv_to_load - _pv_to_bat - _pv_to_grid)
         energy_flow = {
             "pv_total_mwh": annual_pv / 1000.0,
-            "pv_to_load_mwh": float(s.pv_to_load_kwh) / 1000.0,
-            "pv_to_grid_mwh": float(s.pv_to_grid_kwh) / 1000.0,
-            "pv_to_bat_mwh": float(s.pv_to_bat_kwh) / 1000.0,
-            "grid_to_load_mwh": float(s.grid_import_kwh) / 1000.0,
-            "bat_to_load_mwh": float(s.bat_discharge_total_kwh) / 1000.0,
-            "grid_to_bat_mwh": max(0.0, float(s.bat_charge_total_kwh - s.pv_to_bat_kwh)) / 1000.0,  # BESS grid charging (arbitráž)
+            "pv_to_load_mwh": _pv_to_load / 1000.0,
+            "pv_to_grid_mwh": _pv_to_grid / 1000.0,
+            "pv_to_bat_mwh": _pv_to_bat / 1000.0,
+            "pv_curtailed_mwh": _pv_curtailed / 1000.0,
+            "grid_to_load_mwh": _grid_to_load / 1000.0,
+            "bat_to_load_mwh": _bat_to_load / 1000.0,
+            "grid_to_bat_mwh": _grid_to_bat / 1000.0,
+            "grid_import_mwh": (_grid_to_load + _grid_to_bat) / 1000.0,
             "load_total_mwh": annual_load / 1000.0,
             "grid_export_mwh": float(s.grid_export_kwh) / 1000.0,
         }
