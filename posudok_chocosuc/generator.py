@@ -66,7 +66,7 @@ def render_chocosuc_html(ctx: dict) -> str:
         trow(["Ročná spotreba",f"{num(ctx.get('year_mwh'))} MWh",ctx.get('consumption_source','')]),
         trow(["Max 15-min odber",f"{num(ctx.get('max15_kw'))} kW","odhad z profilu" if ctx.get("peak_estimated") else ""]),
         trow(["Priemerný odber",f"{num(pm.get('avg_kw'))} kW",f"load factor {num(pm.get('load_factor'),2)}"]),
-        trow(["MRK / RK",f"{num(ctx.get('om_mrk_kw'))} / {num(ctx.get('om_rk_kw'))} kW",f"využitie MRK {num((pm.get('avg_kw') or 0)/(ctx.get('om_mrk_kw') or 1)*100,0)} %"]),
+        trow(["MRK / RK",f"{num(ctx.get('om_mrk_kw'))} / {num(ctx.get('om_rk_kw'))} kW",f"špička {num(ctx.get('max15_kw'))} kW = {num((ctx.get('max15_kw') or 0)/(ctx.get('om_mrk_kw') or 1)*100,0)} % MRK"]),
     ])
     id_table=f'<table>{trow(["Údaj","Hodnota","Komentár"],head=True)}{_rows}</table>'
     if _missing:
@@ -77,11 +77,11 @@ def render_chocosuc_html(ctx: dict) -> str:
   @top-left {{ content: element(hdr); }}
   @bottom-center {{ content: "Energovision, s.r.o.  ·  IČO 53 036 280  ·  www.energovision.sk  ·  strana " counter(page) " / " counter(pages); font-family:Arial; font-size:7pt; color:#9CA3AF; }} }}
 #hdr {{ position: running(hdr); font-family:Arial; font-size:7.5pt; color:#9CA3AF; }}
-#hdr b {{ color:#16A34A; }}
+#hdr b {{ color:#5E8E2A; }}
 * {{ box-sizing:border-box; }}
 body {{ font-family:Arial, sans-serif; color:#1A1A1A; font-size:9.3pt; line-height:1.5; margin:0; }}
 h1 {{ font-size:17pt; margin:0 0 8px; }} h2 {{ font-size:13pt; margin:2px 0 8px; page-break-after:avoid; }}
-.kick {{ font-size:7.6pt; font-weight:bold; letter-spacing:2.6px; color:#16A34A; text-transform:uppercase; margin:0 0 4px; page-break-after:avoid; }}
+.kick {{ font-size:7.6pt; font-weight:bold; letter-spacing:2.6px; color:#5E8E2A; text-transform:uppercase; margin:0 0 4px; page-break-after:avoid; }}
 .sub {{ color:#6B7280; font-size:9pt; margin:0 0 12px; }}
 .cover-pg {{ page-break-after:always; }} .newpage {{ page-break-before:always; }}
 section {{ page-break-inside:auto; }}
@@ -95,11 +95,11 @@ tr.em td {{ background:#F0F7F0; font-weight:bold; }}
 .kpi .l {{ font-size:7pt; letter-spacing:1.4px; color:#9CA3AF; text-transform:uppercase; font-weight:bold; }}
 .kpi .v {{ font-size:15pt; font-weight:bold; color:#1A1A1A; margin-top:2px; }}
 .kpi .n {{ font-size:7.4pt; color:#6B7280; font-style:italic; }}
-.banner {{ background:#F0F7F0; border-left:4px solid #16A34A; padding:12px 16px; border-radius:6px; margin:8px 0 12px; page-break-inside:avoid; }}
-.banner .t {{ font-size:7.6pt; font-weight:bold; letter-spacing:2px; color:#16A34A; text-transform:uppercase; }}
+.banner {{ background:#F0F7F0; border-left:4px solid #5E8E2A; padding:12px 16px; border-radius:6px; margin:8px 0 12px; page-break-inside:avoid; }}
+.banner .t {{ font-size:7.6pt; font-weight:bold; letter-spacing:2px; color:#5E8E2A; text-transform:uppercase; }}
 .banner .b {{ font-size:11pt; font-weight:bold; margin-top:3px; }}
 .hero {{ background:#EFF6E8; border-radius:10px; padding:14px 18px; margin:12px 0; display:flex; align-items:center; justify-content:space-between; page-break-inside:avoid; }}
-.hero .big {{ font-size:23pt; font-weight:bold; color:#16A34A; }} .hero .lbl {{ font-size:8.6pt; color:#475569; max-width:46%; }}
+.hero .big {{ font-size:23pt; font-weight:bold; color:#5E8E2A; }} .hero .lbl {{ font-size:8.6pt; color:#475569; max-width:46%; }}
 .benefits {{ display:flex; gap:9px; margin:12px 0 4px; page-break-inside:avoid; }}
 .bcard {{ flex:1; background:#FFF; border:1px solid #E8EDF2; border-top:3px solid #92D050; border-radius:8px; padding:10px 11px; }}
 .bcard .h {{ font-weight:bold; font-size:9.2pt; margin-bottom:2px; }} .bcard .d {{ font-size:7.8pt; color:#64748B; line-height:1.35; }}
@@ -117,7 +117,7 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
 <div id="hdr"><b>energovision</b>  ·  Posudok · {ctx.get('client_name','')} · {ctx.get('posudok_number','')}</div>
 
 <section class="cover-pg">
-  <div style="text-align:right; margin-bottom:30px;">{f'<img src="{_logo_b64()}" style="height:42px;">' if _logo_b64() else '<b style="font-size:20pt;color:#16A34A;">energovision</b>'}</div>
+  <div style="text-align:right; margin-bottom:30px;">{f'<img src="{_logo_b64()}" style="height:42px;">' if _logo_b64() else '<b style="font-size:20pt;color:#5E8E2A;">energovision</b>'}</div>
   <div class="kick">Technicko-ekonomický posudok &nbsp;·&nbsp; {ctx.get('posudok_number','')}{(' (k '+ctx['pon_number']+')') if ctx.get('pon_number') else ''}</div>
   <h1 style="font-size:28pt; margin:6px 0;">{ctx.get('client_name','')}</h1>
   <div style="font-size:11pt; color:#374151;">FVE {num(ctx.get('fve_kwp'),0)} kWp{(' + BESS '+num(ctx.get('bess_kwh'),0)+' kWh') if ctx.get('bess_kwh') else ''}</div>

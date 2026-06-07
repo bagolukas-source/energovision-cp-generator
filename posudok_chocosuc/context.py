@@ -178,7 +178,7 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None) -> dict:
         "fve_kwp":base.get("pv_kwp"),"bess_kwh":bess_kwh,"yield":(base.get("pv_total_mwh",0)*1000/(base.get("pv_kwp") or 1)) if base.get("pv_kwp") else 1075,
         "fve_prod_mwh":base.get("pv_total_mwh"),"self_use_mwh":self_mwh,"export_mwh":export_mwh,
         "grid_import_mwh":base.get("grid_import_mwh"),"samosp_pct":base.get("samospotreba_pct"),"coverage_pct":base.get("samostatnost_pct"),
-        "year_mwh":base.get("load_total_mwh"),"max15_kw":peak_kw,"peak_estimated":peak_estimated,"capex_total_eur":capex,"net_capex_eur":net_capex,
+        "year_mwh":base.get("load_total_mwh"),"max15_kw":peak_kw,"peak_estimated":peak_estimated,"capex_total_eur":capex,"net_capex_eur":net_capex,"save_peak_eur":save_peak,
         "co2_avoided_tonnes":base.get("co2_avoided_tonnes"),
         "monthly_mwh":monthly_mwh,"months_filled":_months_filled,"hourly_wd":hourly_wd,"hourly_we":hourly_we,"profile_metrics":pm,"profile_sentence":profile_sentence,"profile":prof,
         "p_silova":p_silova,"p_dist_var":p_dist_var,"p_tps":p_tps,"p_so":p_so,"p_dist_pevna":p_dist_pevna,"p_sell":p_sell,"p_avoided":p_avoided,
@@ -294,9 +294,20 @@ def _build_deterministic_narratives(ctx, S, full, prof, pm):
     dan = capex * 0.21
     args.append(("Daňová optimalizácia",
                  f"6-ročný rovnomerný odpis predstavuje úsporu 21 % × {n(capex)} € = {n(dan)} € na dani z príjmu (priemerne {n(dan/6)} €/rok počas prvých 6 rokov)."))
-    if bess > 0:
+    # Optimalizácia RK — len ak je špička výrazne pod MRK (reálne z dát, nezávislé od batérie).
+    # Peak-shaving cez batériu tvrdíme IBA ak ho model reálne oceňuje (save_peak>0), inak by išlo o blud.
+    _save_peak = float(ctx.get("save_peak_eur") or 0)
+    if mrk > 0 and peak > 0 and peak < mrk * 0.85:
+        _t = (f"Špičkový odber {n(peak)} kW je výrazne pod zazmluvnenou MRK {n(mrk)} kW (využitie {n(peak/mrk*100,0)} %). "
+              f"Odberné miesto má priestor znížiť rezervovanú kapacitu a šetriť na pevnej zložke distribúcie")
+        if _save_peak > 0:
+            _t += f"; batéria toto zníženie zabezpečuje proti špičkám (modelovaná úspora {n(_save_peak)} €/r)."
+        else:
+            _t += " (úspora nezávislá od FVE/batérie — odporúčame preveriť s prevádzkovateľom distribučnej sústavy)."
+        args.append(("Optimalizácia rezervovanej kapacity (MRK/RK)", _t))
+    elif bess > 0 and _save_peak > 0:
         args.append(("Peak shaving cez batériu",
-                     f"Batéria {n(bess)} kWh znižuje špičkové odbery zo siete — umožní bezpečne požiadať o zníženie rezervovanej kapacity (RK {n(rk)} kW) a šetriť na pevnej zložke distribúcie."))
+                     f"Batéria {n(bess)} kWh znižuje 15-min špičky zo siete (modelovaná úspora {n(_save_peak)} €/r) — podklad pre zníženie rezervovanej kapacity (RK {n(rk)} kW)."))
     args.append(("ESG profil a CSRD reporting",
                  f"Ročná úspora ~{n(co2)} t CO₂ (pri SK emisnej intenzite ~0,33 kg/kWh) — doložiteľný podklad pre EU Taxonómiu a CSRD disclosures."))
     args.append(("Reziduálna hodnota po 20 rokoch",
