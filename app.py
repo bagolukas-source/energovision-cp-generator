@@ -2486,6 +2486,80 @@ def generuj_pd():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@app.route("/webhook/servisny-protokol", methods=["POST"])
+@require_secret
+def servisny_protokol():
+    """Servisny protokol PDF z dat ticketu (branded HTML -> weasyprint). Vrati base64."""
+    import base64, os
+    from weasyprint import HTML
+    d = request.get_json(force=True, silent=True) or {}
+    base = os.path.dirname(os.path.abspath(__file__))
+    def _b64img(name):
+        try:
+            with open(os.path.join(base, name), "rb") as fh:
+                return "data:image/png;base64," + base64.b64encode(fh.read()).decode()
+        except Exception:
+            return ""
+    def esc(x):
+        return (str(x) if x is not None else "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    header_src = _b64img("energovision_header.png")
+    footer_src = _b64img("energovision_footer.png")
+    header_html = f'<div class="lh"><img src="{header_src}"/></div><hr class="grn"/>' if header_src else ""
+    footer_css = (f'@bottom-center {{ content: ""; background: url({footer_src}) no-repeat center; background-size: contain; height: 16mm; }}') if footer_src else ""
+    typ_label = {"porucha": "Protokol o odstraneni zavady", "udrzba": "Protokol o udrzbe",
+                 "cistenie": "Protokol o cisteni", "zaruka": "Protokol o reklamacii",
+                 "preberaci": "Preberaci protokol"}.get((d.get("type") or "").lower(), "Servisny protokol")
+    def row(k, v):
+        return f"<tr><td style='width:38%;color:#555'>{esc(k)}</td><td>{esc(v)}</td></tr>" if v else ""
+    diely = d.get("materials_used") or []
+    if isinstance(diely, str): diely = [diely] if diely else []
+    diely_html = "".join(f"<li>{esc(x)}</li>" for x in diely) or "<li>&mdash;</li>"
+    checklist = d.get("checklist") or []
+    chk_html = ""
+    if isinstance(checklist, list) and checklist:
+        chk_rows = "".join(
+            "<tr><td>" + ("&#10004;" if (isinstance(c, dict) and c.get("done")) else "&#9744;") + "</td><td>" +
+            esc(c.get("label") if isinstance(c, dict) else c) + "</td></tr>"
+            for c in checklist)
+        chk_html = "<h3>Kontrolny zoznam</h3><table>" + chk_rows + "</table>"
+    tech_sig = esc(d.get("technician_signature_url") or "")
+    cust_sig = esc(d.get("customer_signature_url") or "")
+    tech_img = ('<img src="' + tech_sig + '" style="max-height:60px;max-width:100%"/>') if tech_sig else '<div style="height:50px"></div>'
+    cust_img = ('<img src="' + cust_sig + '" style="max-height:60px;max-width:100%"/>') if cust_sig else '<div style="height:50px"></div>'
+    sig_html = (
+        '<div style="display:flex;justify-content:space-between;margin-top:24pt;">'
+        '<div style="width:46%;text-align:center;">' + tech_img +
+        '<div style="border-top:0.6pt solid #333;padding-top:3pt;font-size:9pt">Servisny technik &middot; Energovision s.r.o.</div></div>'
+        '<div style="width:46%;text-align:center;">' + cust_img +
+        '<div style="border-top:0.6pt solid #333;padding-top:3pt;font-size:9pt">Za zakaznika</div></div></div>')
+    body = (
+        "<h1>" + esc(typ_label) + "</h1>"
+        "<p style='text-align:center;color:#666;margin-top:-4pt'>c. " + esc(d.get("ticket_number") or "&mdash;") + " &middot; " + esc(d.get("date") or "") + "</p>"
+        "<table>" + row("Zakaznik", d.get("customer_name")) + row("Miesto / zariadenie", d.get("site_name")) +
+        row("Seriove cislo", d.get("serial_number")) + row("Kategoria / typ", d.get("category")) + row("Priorita / SLA", d.get("sla_tier")) + "</table>"
+        "<h3>Popis problemu</h3><p>" + esc(d.get("title")) + "<br/>" + esc(d.get("description")) + "</p>" +
+        (("<h3>Diagnoza</h3><p>" + esc(d.get("root_cause")) + "</p>") if d.get("root_cause") else "") +
+        "<h3>Vykonane prace</h3><p>" + esc(d.get("resolution") or "&mdash;") + "</p>"
+        "<h3>Pouzite diely / material</h3><ul>" + diely_html + "</ul>" + chk_html +
+        "<table style='margin-top:6pt'>" +
+        row("Odpracovany cas", (str(d.get("hours_worked")) + " h") if d.get("hours_worked") else "") +
+        row("Najazdene km", (str(d.get("km_driven")) + " km") if d.get("km_driven") else "") +
+        row("Stav po zasahu", d.get("status_after")) + "</table>" +
+        (("<h3>Odporucania</h3><p>" + esc(d.get("recommendations")) + "</p>") if d.get("recommendations") else "") + sig_html)
+    css = ("@page { size:A4; margin:16mm 18mm 22mm 18mm; " + footer_css + " }"
+           " body { font-family:'Carlito','Calibri','Helvetica',sans-serif; font-size:10.5pt; color:#1a1a1a; line-height:1.45; }"
+           " .lh img { width:100%; display:block; } hr.grn { border:none; border-top:2.5px solid #92D050; margin:4pt 0 12pt; }"
+           " h1 { font-size:15pt; text-align:center; margin:14pt 0 4pt; } h3 { font-size:11pt; margin:9pt 0 3pt; color:#2c3e1a; }"
+           " table { border-collapse:collapse; margin:6pt 0; width:100%; } td,th { border:0.5pt solid #ccc; padding:4pt 6pt; } ul { margin:4pt 0 4pt 16pt; }")
+    html_full = "<!DOCTYPE html><html lang='sk'><head><meta charset='utf-8'><style>" + css + "</style></head><body>" + header_html + body + "</body></html>"
+    try:
+        pdf = HTML(string=html_full, base_url=base).write_pdf()
+        return jsonify({"ok": True, "pdf_base64": base64.b64encode(pdf).decode(), "size_bytes": len(pdf)})
+    except Exception as e:
+        log.exception("servisny-protokol failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/webhook/generuj-pd-crm", methods=["POST"])
 @require_secret
 def generuj_pd_crm():
