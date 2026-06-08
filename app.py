@@ -2516,6 +2516,16 @@ def generuj_pd_crm():
     try:
         import base64 as _b64
         mode = (body.get("mode") or "b2c").lower()
+        # KOMPLET režim: PD jadro + RDC + protokoly + admin (vracia hotové bytes)
+        if mode == "komplet":
+            from pd_komplet import vygeneruj_pd_komplet
+            docs = vygeneruj_pd_komplet(lead_data)
+            attachments = [{"kluc": d["kluc"], "filename": d["filename"],
+                            "data": _b64.b64encode(d["data"]).decode("ascii")} for d in docs]
+            log.info("[generuj-pd-crm] komplet: %d dokumentov", len(attachments))
+            return jsonify({"success": True, "attachments": attachments,
+                            "summary": {"klient": lead_data.get("meno_priezvisko"),
+                                        "ev_id": lead_data.get("ev_id"), "pocet": len(attachments)}})
         with tempfile.TemporaryDirectory() as tmpdir:
             if mode == "b2b":
                 from generuj_pd import vygeneruj_pd_b2b
