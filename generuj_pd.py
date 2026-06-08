@@ -179,6 +179,28 @@ def _build_ctx(lead_data):
     panel = _resolve_panel(lead_data.get('panel_typ'))
     striedac = _resolve_striedac(lead_data.get('menic'))
 
+    # Meniče (1-3) ako v Make: typ_menic1/2/3 + pocet_menic1/2/3 → Výkon AC = Σ PMAX×počet
+    def _numpd(v):
+        try:
+            return float(str(v).replace(",", ".").strip())
+        except Exception:
+            return 0.0
+    _inverters = []
+    for _i in (1, 2, 3):
+        _typ = lead_data.get('typ_menic%d' % _i)
+        if _typ:
+            _cnt = int(_numpd(lead_data.get('pocet_menic%d' % _i)) or 1)
+            _inverters.append((_resolve_striedac(_typ), max(_cnt, 1)))
+    _has_multi = len(_inverters) > 0
+    if not _inverters:
+        _inverters = [(striedac, 1)]
+    striedac = _inverters[0][0]  # primárny menič = prvý (detailné tabuľky/ISC)
+    _vykon_ac_calc = round(sum(_numpd(s.get("PMAX")) * c for s, c in _inverters), 1)
+    _pocet_menic_total = sum(c for _, c in _inverters)
+    _oznacenie_menic = " + ".join(
+        ((str(c) + "× ") if c > 1 else "") + _safe(s.get("Type"), "menič") for s, c in _inverters
+    )
+
     meno = _safe(lead_data.get('meno_priezvisko'))
     # Split meno na (prvé, posledné)
     parts = meno.split()
@@ -251,12 +273,12 @@ def _build_ctx(lead_data):
         **KOMISIA,
 
         # Technické údaje
-        "vykon_ac": _sk(vykon_kwp, 1).replace(",0", ""),  # 10 (zaokrúhlené)
+        "vykon_ac": (_sk(_vykon_ac_calc, 1).replace(",0", "") if _has_multi else _sk(vykon_kwp, 1).replace(",0", "")),
         "vykon_dc": _sk(vykon_kwp),
         "pocet_panel": str(pocet_panelov),
         "vykon_panel": _safe(panel.get("PMPP"), "535"),
-        "pocet_menic": "1",
-        "oznacenie_menic": _safe(striedac.get("Type"), "MHT-10K-25"),
+        "pocet_menic": (str(_pocet_menic_total) if _has_multi else "1"),
+        "oznacenie_menic": (_oznacenie_menic if _has_multi else _safe(striedac.get("Type"), "MHT-10K-25")),
         "oznacenie_RDC": "RDC1",
         "bateria": _sk(bateria_kwh) if ma_bateriu else "0",
         "typ_panel": f"{panel.get('Manufacturer', 'LONGi')} {panel.get('Type', 'LR7-60HVH-535M')}",
