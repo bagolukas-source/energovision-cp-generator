@@ -2602,8 +2602,8 @@ def generuj_pd_crm():
                                         "ev_id": lead_data.get("ev_id"), "pocet": len(attachments)}})
         with tempfile.TemporaryDirectory() as tmpdir:
             if mode == "b2b":
-                from generuj_pd import vygeneruj_pd_b2b
-                files = vygeneruj_pd_b2b(lead_data, tmpdir)
+                from generuj_pd import vygeneruj_pd_sada
+                files = vygeneruj_pd_sada(lead_data, tmpdir)
             else:
                 from generuj_pd import vygeneruj_projektovu_dokumentaciu
                 files = vygeneruj_projektovu_dokumentaciu(lead_data, tmpdir, solaredge_pdf_bytes=solaredge_pdf_bytes)

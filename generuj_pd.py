@@ -36,6 +36,7 @@ HERE = Path(__file__).resolve().parent
 # Možné cesty (skúsi v poradí)
 PROJEKCIA_DIRS = [
     HERE / "templates_projekcia",                 # primary — pri pushi
+    HERE / "templates_admin",                     # admin/úradné dokumenty (sada per stupeň)
     HERE.parent.parent / "Projekcia",             # local dev
     Path("/sessions/magical-eager-gates/mnt/Obchod/2026-05-03_B2C_cenove_ponuky_generator/Projekcia"),  # sandbox
 ]
@@ -252,6 +253,8 @@ def _build_ctx(lead_data):
         "psc": psc,
         "mesto": mesto,
         "psc_mesto": f"{psc} {mesto}".strip(),
+        "mesto_zak": mesto,
+        "cena": _safe(lead_data.get('cena')),
 
         # Prevádzka / Miesto stavby
         "prevadzka": prevadzka,
@@ -520,5 +523,73 @@ def vygeneruj_pd_b2b(lead_data, out_dir):
     out['titul_zoznam_pouvv'] = gen_tit_zoz_pouvv_b2b(lead_data, out_dir / f"{ev_id}_PD_01_Titul_Zoznam_PoUVV_{base}.docx")
     out['technicka'] = gen_technicka_sprava_b2b(lead_data, out_dir / f"{ev_id}_PD_02_Technicka_sprava_{base}.docx")
     log.info("[pd-b2b] %d dokumentov pre %s (stupeň=%s, dis=%s)", len(out), priezvisko,
+             lead_data.get('stupen_projektu'), lead_data.get('dis'))
+    return out
+
+
+# ============================================================
+# SADA PD per stupeň (RP/PSO/PSZaPS/RP ASDR/DSV) — jadro + admin/úradné dokumenty
+# Rozcestník zodpovedá Make (process_templates): nad 100 kW = URSO + IFT dátové prenosy.
+# ============================================================
+
+_POTVRDENIE_OCHRANA = {
+    "SSD": "Potvrdenie_ochrana_SSD.docx",
+    "VSD": "Potvrdenie_ochrana_VSD.docx",
+    "ZSDIS": "Potvrdenie_ochrana_ZSDIS.docx",
+}
+
+def _admin_docs_for(stupen, dis):
+    """Vráti list (kluc, filename) admin dokumentov podľa stupňa a distribučky."""
+    s = (stupen or "").upper()
+    d = (dis or "").upper()
+    docs = []
+    # Potvrdenie o ochrane údajov — per distribučka (vždy ak DIS známa)
+    if d in _POTVRDENIE_OCHRANA:
+        docs.append(("potvrdenie_ochrana", _POTVRDENIE_OCHRANA[d]))
+    # Vyhlásenie zodpovedného projektanta + revízna správa FVZ — súčasť odovzdania
+    docs.append(("vyhlasenie_projektant", "Vyhlasenie_projektant.docx"))
+    docs.append(("revizna_sprava", "Revizna_sprava_FVZ.docx"))
+    # PSZaPS (nad 100 kW): URSO + IFT zmluva o dátových prenosoch
+    if "PSZAPS" in s or "PSZ" in s:
+        docs += [
+            ("urso_oznamovacia", "URSO_oznamovacia_povinnost.docx"),
+            ("urso_vyroba_lz", "URSO_vyroba_LZ.docx"),
+            ("ift_zmluva", "IFT_zmluva_datove_prenosy.docx"),
+            ("ift_priloha", "IFT_priloha_1.docx"),
+        ]
+    # DSV (skutočné vyhotovenie): preberacie protokoly
+    if "DSV" in s or "SKUTO" in s:
+        docs += [
+            ("preberaci_komponenty", "Preberaci_protokol_komponenty.docx"),
+            ("preberaci_final", "Preberaci_protokol_final.docx"),
+        ]
+    return docs
+
+
+def vygeneruj_pd_sada(lead_data, out_dir):
+    """Kompletná sada PD podľa stupňa: jadro (B2B) + admin/úradné dokumenty. Vráti {kluc: path}."""
+    out_dir = Path(out_dir); out_dir.mkdir(parents=True, exist_ok=True)
+    if not lead_data.get('dis'):
+        g = _resolve_dis_from_psc(lead_data.get('psc'))
+        if g:
+            lead_data['dis'] = g
+    out = dict(vygeneruj_pd_b2b(lead_data, out_dir))  # jadro
+
+    priezvisko = lead_data.get('meno_priezvisko', 'Klient').split()[-1] if lead_data.get('meno_priezvisko') else 'Klient'
+    base = re.sub(r'[^A-Za-zÁ-ž0-9]+', '_', priezvisko).strip('_') or 'Klient'
+    ev_id = lead_data.get('ev_id', 'EV-XX')
+    ctx = _build_ctx(lead_data)
+
+    n = 2
+    for kluc, fname in _admin_docs_for(lead_data.get('stupen_projektu'), lead_data.get('dis')):
+        n += 1
+        label = re.sub(r'\.docx$', '', fname)
+        try:
+            path = out_dir / f"{ev_id}_PD_{n:02d}_{label}_{base}.docx"
+            out[kluc] = _render_template(fname, ctx, path)
+        except Exception as e:
+            log.warning("[pd-sada] admin dok %s zlyhal: %s", fname, e)
+            n -= 1
+    log.info("[pd-sada] %d dokumentov (stupeň=%s, dis=%s)", len(out),
              lead_data.get('stupen_projektu'), lead_data.get('dis'))
     return out
