@@ -23,3 +23,4 @@ xlrd==2.0.1
 extract-msg==0.50.1
 pdfplumber==0.11.4
 pypdf
+segno==1.6.1

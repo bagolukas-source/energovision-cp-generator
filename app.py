@@ -14708,3 +14708,66 @@ def webhook_vyroba_doklady():
     except Exception as e:
         log.exception("vyroba-doklady failed")
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/webhook/vyroba-fat-protokol", methods=["POST"])
+@require_secret
+def webhook_vyroba_fat_protokol():
+    import base64 as _b
+    body = request.get_json(force=True, silent=True) or {}
+    try:
+        import generuj_vyroba
+        pdf = generuj_vyroba.generuj_fat_protokol(body.get("rozvadzac") or {}, body.get("fat_body") or [])
+        return jsonify({"ok": True, "pdf_base64": _b.b64encode(pdf).decode()})
+    except Exception as e:
+        log.exception("vyroba-fat-protokol failed"); return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/webhook/vyroba-stitok", methods=["POST"])
+@require_secret
+def webhook_vyroba_stitok():
+    import base64 as _b
+    body = request.get_json(force=True, silent=True) or {}
+    try:
+        import generuj_vyroba
+        pdf = generuj_vyroba.generuj_stitok(body.get("rozvadzac") or {}, body.get("qr_url") or "")
+        return jsonify({"ok": True, "pdf_base64": _b.b64encode(pdf).decode()})
+    except Exception as e:
+        log.exception("vyroba-stitok failed"); return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/webhook/vyroba-ai-fat", methods=["POST"])
+@require_secret
+def webhook_vyroba_ai_fat():
+    """AI prečíta PDF schému zapojenia → navrhne FAT checklist + riziká. AI NESCHVAĽUJE."""
+    import base64, json, re
+    body = request.get_json(force=True, silent=True) or {}
+    pdf_b64 = body.get("pdf_base64")
+    if not pdf_b64: return jsonify({"ok": False, "error": "missing pdf_base64"}), 400
+    if not ANTHROPIC_API_KEY: return jsonify({"ok": False, "error": "ANTHROPIC_API_KEY not set"}), 500
+    try:
+        import fitz
+        doc = fitz.open(stream=base64.b64decode(pdf_b64), filetype="pdf")
+        imgs = []
+        for i in range(min(3, doc.page_count)):
+            pix = doc[i].get_pixmap(matrix=fitz.Matrix(2, 2))
+            imgs.append({"type": "image", "source": {"type": "base64", "media_type": "image/png",
+                         "data": base64.b64encode(pix.tobytes("png")).decode()}})
+        doc.close()
+        prompt = ("Si elektro-technik. Na obrázkoch je schéma zapojenia NN rozvádzača. Vráť LEN JSON:\n"
+                  '{"komponenty":["..."],"ochrany":["..."],"obvody":["..."],'
+                  '"fat_checklist":[{"bod":"...","preco":"..."}],"rizika":["..."]}\n'
+                  "fat_checklist = konkrétne body výstupnej kontroly (FAT) odvodené zo schémy. "
+                  "rizika = možné chyby/nezhody (poddimenzovanie, chýbajúce istenie/uzemnenie). "
+                  "NESCHVAĽUJ FAT, iba navrhni body pre človeka.")
+        content = imgs + [{"type": "text", "text": prompt}]
+        headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"}
+        payload = {"model": ANTHROPIC_MODEL, "max_tokens": 1500, "messages": [{"role": "user", "content": content}]}
+        r = _retry_request(lambda: requests.post("https://api.anthropic.com/v1/messages", headers=headers, json=payload, timeout=90))
+        r.raise_for_status()
+        raw = _safe_claude_text(r.json()).strip()
+        m = re.search(r'\{[\s\S]*\}', raw)
+        parsed = json.loads(m.group(0)) if m else {}
+        return jsonify({"ok": True, "navrh": parsed, "upozornenie": "AI návrh — FAT schvaľuje výhradne človek."})
+    except Exception as e:
+        log.exception("vyroba-ai-fat failed"); return jsonify({"ok": False, "error": str(e)}), 500

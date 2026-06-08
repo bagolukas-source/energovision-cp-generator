@@ -136,3 +136,77 @@ def generuj_vyroba_pdf(g: dict) -> bytes:
     """
     html = f"<!DOCTYPE html><html lang='sk'><head><meta charset='utf-8'><style>{css}</style></head><body>{pages}</body></html>"
     return HTML(string=html, base_url=BASE).write_pdf()
+
+
+def _qr_data_uri(url: str) -> str:
+    try:
+        import segno, io
+        buf = io.BytesIO()
+        segno.make(url, error="m").save(buf, kind="png", scale=4, border=2)
+        import base64 as _b
+        return "data:image/png;base64," + _b.b64encode(buf.getvalue()).decode()
+    except Exception:
+        return ""
+
+
+def generuj_fat_protokol(g: dict, body: list) -> bytes:
+    """FAT protokol PDF z vyplnených bodov vyroba_fat."""
+    from weasyprint import HTML
+    header = _b64img("energovision_header.png"); footer = _b64img("energovision_footer.png")
+    head_html = f"<div class='lh'><img src='{header}'/></div><hr class='grn'/>" if header else ""
+    footer_css = (f"@bottom-center {{ content:''; background:url({footer}) no-repeat center; background-size:contain; height:16mm; }}") if footer else ""
+    ST = {"ok": ("✓ OK", "#16a34a"), "chyba": ("✗ Chyba", "#dc2626"), "nerelevantne": ("— N/A", "#94a3b8")}
+    rows = ""
+    for b in body:
+        s = ST.get(b.get("stav") or "nerelevantne", ST["nerelevantne"])
+        rows += (f"<tr><td>{_esc(b.get('bod'))}</td>"
+                 f"<td class='c' style='color:{s[1]};font-weight:700'>{s[0]}</td>"
+                 f"<td class='c'>{_esc(b.get('hodnota'))}</td><td>{_esc(b.get('poznamka'))}</td>"
+                 f"<td class='c'>{_esc(b.get('zodpovedny'))}</td></tr>")
+    schv = (g.get("fat_stav") == "schvaleny")
+    verdikt = ("ROZVÁDZAČ VYHOVUJE — FAT SCHVÁLENÝ" if schv else "FAT NEUKONČENÝ / NESCHVÁLENÝ")
+    vcol = "#16a34a" if schv else "#d97706"
+    body_html = f"""
+    <h1>FAT PROTOKOL — výstupná kontrola rozvádzača</h1>
+    <table>
+      {_row('Výrobné číslo', g.get('vyrobne_cislo'))}{_row('Názov / typ', g.get('typ_rozvadzaca') or g.get('nazov_rozvadzaca'))}
+      {_row('Zákazka', g.get('akcia'))}{_row('Zákazník', g.get('zakaznik_nazov'))}
+      {_row('Výkon', g.get('vykon'))}{_row('Napätie / Ic / In', (g.get('napatie_hlavne') or '') + ' · ' + (g.get('ic') or '') + ' · ' + (g.get('in_prud') or ''))}
+    </table>
+    <h3>Kontrolné body</h3>
+    <table><tr><th>Bod</th><th class='c'>Stav</th><th class='c'>Meranie</th><th>Poznámka</th><th class='c'>Zodp.</th></tr>{rows}</table>
+    <p style='margin-top:10pt;font-weight:700;color:{vcol};font-size:12pt'>{verdikt}</p>
+    <p>Kontroloval / schválil: {_esc(g.get('zodpovedna_osoba') or 'Tinák Ondrej')} &nbsp;&nbsp; Dátum: {_d(g.get('fat_datum'))}</p>
+    <p class='small'>Schválenie FAT vykonáva výhradne zodpovedná osoba (nie AI).</p>
+    """
+    css = f"""@page {{ size:A4; margin:14mm 18mm 22mm 18mm; {footer_css} }}
+    body {{ font-family:'Carlito','Calibri',sans-serif; font-size:10.5pt; color:#1a1a1a; }}
+    .lh img {{ width:100%; }} hr.grn {{ border:none; border-top:2.5px solid #92D050; margin:4pt 0 10pt; }}
+    h1 {{ font-size:15pt; text-align:center; color:#1C3A05; }} h3 {{ font-size:11pt; color:#2E5008; margin-top:10pt; }}
+    table {{ border-collapse:collapse; width:100%; margin:6pt 0; }} td,th {{ border:.5pt solid #ccc; padding:4pt 6pt; }}
+    th {{ background:#EAF3DC; }} td.k {{ width:30%; color:#555; }} .c {{ text-align:center; }} .small {{ font-size:9pt; color:#555; }}"""
+    html = f"<!DOCTYPE html><html lang='sk'><head><meta charset='utf-8'><style>{css}</style></head><body>{head_html}{body_html}</body></html>"
+    return HTML(string=html, base_url=BASE).write_pdf()
+
+
+def generuj_stitok(g: dict, qr_url: str) -> bytes:
+    """Štítok rozvádzača s QR (malý formát na nálepku)."""
+    from weasyprint import HTML
+    qr = _qr_data_uri(qr_url)
+    html = f"""<!DOCTYPE html><html lang='sk'><head><meta charset='utf-8'><style>
+    @page {{ size:100mm 60mm; margin:4mm; }}
+    body {{ font-family:'Carlito','Calibri',sans-serif; color:#1a1a1a; }}
+    .box {{ border:1.5pt solid #1C3A05; border-radius:3mm; padding:3mm; display:flex; gap:3mm; height:52mm; box-sizing:border-box; }}
+    .l {{ flex:1; }} .r {{ width:32mm; text-align:center; }} .r img {{ width:30mm; }}
+    .brand {{ color:#2E5008; font-weight:800; font-size:13pt; }} .vc {{ font-size:16pt; font-weight:800; margin:2mm 0; }}
+    .kv {{ font-size:8.5pt; margin:.6mm 0; }} .kv b {{ color:#555; }} .foot {{ font-size:7pt; color:#777; margin-top:2mm; }}
+    </style></head><body><div class='box'><div class='l'>
+    <div class='brand'>ENERGOVISION · Rozvádzač</div>
+    <div class='vc'>{_esc(g.get('vyrobne_cislo'))}</div>
+    <div class='kv'><b>Typ:</b> {_esc(g.get('typ_rozvadzaca') or g.get('nazov_rozvadzaca'))}</div>
+    <div class='kv'><b>Výkon:</b> {_esc(g.get('vykon'))} &nbsp; <b>Napätie:</b> {_esc(g.get('napatie_hlavne'))}</div>
+    <div class='kv'><b>Ic/In:</b> {_esc(g.get('ic'))} / {_esc(g.get('in_prud'))} &nbsp; <b>IP:</b> {_esc(g.get('tech_udaje'))}</div>
+    <div class='kv'><b>Zákazka:</b> {_esc(g.get('akcia'))} &nbsp; <b>Rok:</b> {_esc(g.get('mesiac_rok_vyroby'))}</div>
+    <div class='foot'>Energovision s.r.o. · IČO 53036280 · +421 948 302 137</div>
+    </div><div class='r'>{('<img src="'+qr+'"/>' if qr else '')}<div class='kv'>Naskenuj pre dokumentáciu</div></div></div></body></html>"""
+    return HTML(string=html, base_url=BASE).write_pdf()
