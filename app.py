@@ -5879,6 +5879,7 @@ def webhook_aom_run_pipeline():
 
 
 @app.route("/webhook/aom-parse-only", methods=["POST"])
+@require_secret
 def webhook_aom_parse_only():
     """Iba parse consumption files — pre Krok 2.5 wizard preview."""
     if not _hs_auth_ok(request):
@@ -5935,6 +5936,7 @@ def webhook_ai_next_actions():
 
 
 @app.route("/webhook/draft-email", methods=["POST"])
+@require_secret
 def webhook_draft_email():
     """Vygeneruje AI draft emailu pre lead/project/customer. Uloží do email_drafts."""
     body = request.get_json(force=True) or {}
@@ -5954,6 +5956,7 @@ def webhook_draft_email():
 
 
 @app.route("/webhook/order-external", methods=["POST"])
+@require_secret
 def webhook_order_external():
     """Vytvorí draft objednávky externistu (PBS/statika/geodet/...)."""
     body = request.get_json(force=True) or {}
@@ -6067,6 +6070,7 @@ import eva_proactive as _eva_proactive
 
 
 @app.route("/webhook/eva-memory-extract", methods=["POST"])
+@require_secret
 def webhook_eva_memory_extract():
     """Po user→AI exchange, vyextrahuj memories. Volá sa po každom Eva reply."""
     body = request.get_json(force=True) or {}
@@ -6086,6 +6090,7 @@ def webhook_eva_memory_extract():
 
 
 @app.route("/webhook/eva-memory-search", methods=["POST"])
+@require_secret
 def webhook_eva_memory_search():
     """Vector search relevant memories pre query."""
     body = request.get_json(force=True) or {}
