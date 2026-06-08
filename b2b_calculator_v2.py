@@ -4,7 +4,7 @@ B2B Kalkulačka V2 — panely-driven + vendor stacks + AI compatibility
 Vstupy:
   typ_strechy: vychod_zapad | trapez | skridla | falcovany_plech | juzna | zemne_skrutky | corab
   pocet_panelov: int  (HLAVNÝ vstup — primary)
-  panel_sku: str (default "LONGI_430")
+  panel_sku: str (default "LONGI535")
   vendor_stack: 'sungrow' | 'huawei' | 'goodwe' | 'solinteg'
   has_bess: bool, bess_kwh: float
   has_wallbox: bool, wallbox_pocet: int
@@ -42,6 +42,27 @@ def _load_rule(sb, rule_type: str, rule_key: str = None) -> list[dict]:
         q = q.eq("rule_key", rule_key)
     res = q.execute()
     return res.data or []
+
+
+import re as _re
+
+def _eval_qty_formula(formula, kwp, pocet_panelov) -> int:
+    """Bezpečne vyhodnotí qty_formula z b2b_calc_rules (napr. 'ceil(kwp * 1.5)', 'kwp * 10', 'pocet_panelov').
+    Rešpektuje koeficienty z DB (predtým ich kód ignoroval → žľab dostal kWp×7 namiesto ×1.5)."""
+    f = (formula or "").strip().lower()
+    if not f:
+        return 1
+    # whitelist: čísla, operátory, zátvorky, povolené názvy funkcií/premenných
+    if not _re.fullmatch(r"[0-9.+\-*/() %a-z_]+", f):
+        return 1
+    env = {"ceil": math.ceil, "floor": math.floor, "round": round, "min": min, "max": max,
+           "kwp": float(kwp or 0), "kwp_actual": float(kwp or 0), "pocet_panelov": float(pocet_panelov or 0),
+           "panels": float(pocet_panelov or 0)}
+    try:
+        val = eval(f, {"__builtins__": {}}, env)
+        return max(1, int(math.ceil(float(val))))
+    except Exception:
+        return 1
 
 
 def _pick_inverters(inverters: list[dict], required_ac_kw: float) -> list[dict]:
@@ -101,7 +122,7 @@ def calculate_bom_v2(sb, config: dict) -> dict:
     """Hlavná V2 funkcia — panely-driven + vendor stack aware."""
     typ_strechy = config.get("typ_strechy", "vychod_zapad")
     vendor_key = config.get("vendor_stack", "sungrow")
-    panel_sku = config.get("panel_sku", "LONGI_430")
+    panel_sku = config.get("panel_sku", "LONGI535")
     pocet_panelov_input = int(config.get("pocet_panelov") or 0)
     
     has_bess = bool(config.get("has_bess"))
@@ -122,7 +143,7 @@ def calculate_bom_v2(sb, config: dict) -> dict:
     panels = stack.get("preferred_panels") or []
     panel = next((p for p in panels if p["sku"] == panel_sku), None)
     if not panel:
-        panel = panels[0] if panels else {"sku": "LONGI_430", "name": "Longi Hi-MO6 430 M", "wp": 430, "price_per_unit": 98.93, "cost": 76.10}
+        panel = panels[0] if panels else {"sku": "LONGI535", "name": "LONGi Hi-MO X10 EcoLife LR7-60HVH-535M 535 Wp", "wp": 535, "price_per_unit": 90.69, "cost": 72.55}
     
     # Ak pocet_panelov nie je zadané — odvodzuj z kWp
     if pocet_panelov_input <= 0:
@@ -243,13 +264,8 @@ def calculate_bom_v2(sb, config: dict) -> dict:
     for rk in ["zlab_kryt_50mm", "chranicka_25mm", "chranicka_40mm"]:
         r = next((x for x in _load_rule(sb, "ostatne", rk)), None)
         if r:
-            # qty formula evaluation — pocet_panelov/kwp
-            if "pocet_panelov" in (r.get("qty_formula") or ""):
-                qty = math.ceil(pocet_panelov * 1.5) if "1.5" in (r["qty_formula"] or "") else pocet_panelov
-            elif "kwp" in (r.get("qty_formula") or ""):
-                qty = math.ceil(kwp_actual * 10) if "10" in (r["qty_formula"] or "") else math.ceil(kwp_actual * 7)
-            else:
-                qty = 1
+            # qty z DB vzorca — reálne vyhodnotené (rešpektuje koeficient, napr. žľab kWp×1.5)
+            qty = _eval_qty_formula(r.get("qty_formula"), kwp_actual, pocet_panelov)
             items.append({
                 "position": pos, "category": "Ostatné",
                 "product_name": r["product_name"], "qty": qty, "unit": r["unit"],
@@ -449,7 +465,7 @@ OUTPUT JSON:
   "typ_strechy": "vychod_zapad" | "trapez" | "skridla" | "falcovany_plech" | "juzna" | "zemne_skrutky" | "corab",
   "kwp": float,
   "pocet_panelov": int (alebo null ak nie je v texte),
-  "panel_sku": "LONGI_430" | "LONGI_580" | "JA_440" | null,
+  "panel_sku": "LONGI535" | "LONGI_580" | "JA_440" | null,
   "vendor_stack": "sungrow" | "huawei" | "goodwe" | "solinteg" (default sungrow),
   "has_bess": bool,
   "bess_kwh": float (0 ak nie),
@@ -637,7 +653,7 @@ def ai_compatibility_checker(sb, config: dict) -> dict:
     has_rs = bool(config.get("has_rapid_shutdown"))
     has_wb = bool(config.get("has_wallbox"))
     pocet_panelov = int(config.get("pocet_panelov") or 0)
-    panel_sku = config.get("panel_sku") or "LONGI_430"
+    panel_sku = config.get("panel_sku") or "LONGI535"
 
     issues = []
 
