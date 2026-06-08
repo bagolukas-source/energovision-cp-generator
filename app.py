@@ -4695,6 +4695,13 @@ def parsuj_fakturu_ele():
             # Stačí prvých 3 strán (obsahuje všetko podstatné)
             for i in range(pages_count):
                 full_text += doc[i].get_text() + "\n\n"
+            # Ak je textová vrstva slabá (sken/obrázok), priprav obrázky strán pre vision OCR
+            _img_blocks = []
+            if len(full_text.strip()) < 200:
+                for i in range(pages_count):
+                    _pix = doc[i].get_pixmap(matrix=fitz.Matrix(2, 2))
+                    _png = _pix.tobytes("png")
+                    _img_blocks.append({"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": base64.b64encode(_png).decode()}})
             doc.close()
         except Exception as e:
             return jsonify({"error": f"pdf extract failed: {e}"}), 500
@@ -4738,10 +4745,14 @@ TEXT FAKTÚRY:
             "anthropic-version": "2023-06-01",
             "content-type": "application/json",
         }
+        if _img_blocks:
+            _content = _img_blocks + [{"type": "text", "text": prompt + "\n\n(Faktúra nemala textovú vrstvu — údaje prečítaj z priložených obrázkov strán faktúry.)"}]
+        else:
+            _content = prompt
         payload = {
             "model": ANTHROPIC_MODEL,
             "max_tokens": 2048,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [{"role": "user", "content": _content}],
         }
         r = _retry_request(lambda: requests.post("https://api.anthropic.com/v1/messages", headers=headers, json=payload, timeout=90))
         r.raise_for_status()
@@ -4759,7 +4770,7 @@ TEXT FAKTÚRY:
         except json.JSONDecodeError as e:
             return jsonify({"error": f"JSON parse: {e}", "raw": m.group(0)[:500]}), 500
 
-        return jsonify({"ok": True, "parsed": parsed, "pages_extracted": pages_count})
+        return jsonify({"ok": True, "parsed": parsed, "pages_extracted": pages_count, "mode": ("vision" if _img_blocks else "text")})
     except Exception as e:
         log.exception("parsuj-fakturu-ele failed")
         return jsonify({"error": str(e)}), 500
