@@ -281,9 +281,12 @@ def calculate_bom_v2(sb, config: dict) -> dict:
         opts = stack.get("optimizers") or []
         if opts:
             opt = opts[0]  # default first
+            # počet optimizérov: panels_per_unit (Huawei MERC = 2 panely/kus, Tigo = 1 panel/kus)
+            ppu = int(opt.get("panels_per_unit") or 1)
+            opt_qty = math.ceil(pocet_panelov / max(1, ppu))
             items.append({
                 "position": pos, "category": "Optimizéry",
-                "product_name": opt["name"], "qty": pocet_panelov, "unit": "ks",
+                "product_name": opt["name"], "qty": opt_qty, "unit": "ks",
                 "cost_per_unit": opt["price_per_panel"] * 0.77,
                 "price_per_unit": float(opt["price_per_panel"]),
                 "rule_id": f"optimizer.{vendor_key}.{opt['key']}",
@@ -291,10 +294,10 @@ def calculate_bom_v2(sb, config: dict) -> dict:
                 "ai_note": opt.get("notes", ""),
             })
             pos += 1
-            # Montáž optimizérov
+            # Montáž optimizérov (na kus optimizéra)
             items.append({
                 "position": pos, "category": "Montáž",
-                "product_name": "Montáž optimizér", "qty": pocet_panelov, "unit": "ks",
+                "product_name": "Montáž optimizér", "qty": opt_qty, "unit": "ks",
                 "cost_per_unit": 3.90 * 0.77, "price_per_unit": 3.90,
                 "rule_id": "montaz_optimizer",
             })
