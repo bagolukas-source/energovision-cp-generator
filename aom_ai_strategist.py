@@ -824,29 +824,11 @@ def accept_variant(sb, analyza_id: str, variant_label: str) -> dict:
     if not target:
         return {"ok": False, "error": f"Variant {variant_label} not found"}
     
-    # Insert do analyza_om_variants
-    next_pos = sb.table("analyza_om_variants").select("position").eq("analyza_id", analyza_id).order("position", desc=True).limit(1).execute()
-    pos = (next_pos.data[0]["position"] + 1) if next_pos.data else 1
-    
-    sb.table("analyza_om_variants").insert({
-        "analyza_id": analyza_id,
-        "name": target["label"],
-        "position": pos,
-        "fve_kwp": target["fve_kwp"],
-        "fve_tilt_deg": 25,
-        "fve_azimuth_deg": 180,
-        "fve_topology": "south",
-        "bess_kwh": target.get("bess_kwh", 0),
-        "bess_kw": target.get("bess_kwh", 0) * 0.5,
-        "bess_arbitrage_enabled": target.get("archetype") == "spot_arbitrage",
-        "capex_eur": target.get("capex_total_eur", 0),
-        "capex_source": "ai_strategist",
-        "result_samosp_pct": target.get("self_consumption_pct", 0),
-        "result_samostat_pct": target.get("self_sufficiency_pct", 0),
-        "result_npv_eur_base": target.get("npv_eur", 0),
-        "result_irr_pct_base": target.get("irr_pct", 0),
-        "result_payback_y_base": target.get("payback_years", 0),
-        "result_dotacia_eur": target.get("dotacia_eur", 0),
-    }).execute()
-    
-    return {"ok": True, "variant_label": variant_label, "position": pos}
+    # OSTRÝ ENGINE — AI návrh sa po akceptovaní prepočíta reálnym pipeline (konzistentné s maticou)
+    import analyza_om_v2 as _v2
+    res = _v2.insert_variant_via_engine(
+        sb, analyza_id, target["label"], target.get("fve_kwp", 0),
+        target.get("bess_kwh", 0), target.get("bess_kwh", 0) * 0.5)
+    if res.get("ok"):
+        res["variant_label"] = variant_label
+    return res

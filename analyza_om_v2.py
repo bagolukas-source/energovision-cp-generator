@@ -432,6 +432,47 @@ Píš ako energetik radí klientovi pri káve, nie ako AI. Konkrétne čísla. E
         return {"error": str(e)[:200], "scenario_type": analyza.get("scenario_type")}
 
 
+def insert_variant_via_engine(sb, analyza_id: str, name: str, fve_kwp, bess_kwh, bess_kw=None) -> dict:
+    """Spočíta JEDEN variant cez REÁLNY engine (rovnaký pipeline ako matica) a uloží do analyza_om_variants.
+    Nahrádza fallback ekonomiku z aom_ai_strategist → konzistentné CAPEX / dotácia / dispatch."""
+    from energovision_analytics.api.services.engine_service import run_variants_pipeline, build_run_variants_response
+    a_res = sb.table("analyza_om").select("*").eq("id", analyza_id).single().execute()
+    analyza = a_res.data
+    if not analyza:
+        return {"ok": False, "error": "analyza not found"}
+    fve_kwp = float(fve_kwp or 0); bess_kwh = float(bess_kwh or 0)
+    if fve_kwp <= 0:
+        return {"ok": False, "error": "Variant cez engine vyžaduje FVE > 0 kWp"}
+    req = _build_request_from_analyza(analyza, _measured_load_profile_block(sb, analyza))
+    req["variants"]["pv_kwp_options"] = [fve_kwp]
+    req["variants"]["bess_kwh_options"] = [bess_kwh]
+    raw = run_variants_pipeline(req)
+    res = build_run_variants_response(raw)
+    vs = res.get("variants") or []
+    if not vs:
+        return {"ok": False, "error": "engine vrátil 0 variantov"}
+    v = vs[0]
+    tp = _topology_params(analyza)
+    pos_res = sb.table("analyza_om_variants").select("position").eq("analyza_id", analyza_id).order("position", desc=True).limit(1).execute()
+    pos = (pos_res.data[0]["position"] + 1) if pos_res.data else 1
+    row = {
+        "analyza_id": analyza_id, "name": name or "Vlastný variant", "position": pos,
+        "fve_kwp": v.get("pv_kwp", fve_kwp), "fve_tilt_deg": int(tp[0]), "fve_azimuth_deg": int(tp[1]),
+        "fve_topology": (analyza.get("fve_topology") or "south"),
+        "bess_kwh": v.get("bess_kwh", bess_kwh), "bess_kw": v.get("bess_kw", bess_kw or bess_kwh * 0.5),
+        "bess_arbitrage_enabled": (v.get("bess_kwh", 0) or 0) > 0,
+        "capex_eur": v.get("capex_total_eur", 0), "capex_source": "engine",
+        "result_samosp_pct": v.get("samospotreba_pct", 0), "result_samostat_pct": v.get("samostatnost_pct", 0),
+        "result_export_mwh": (v.get("export_kwh", 0) or 0) / 1000, "result_import_mwh": (v.get("grid_import_kwh", 0) or 0) / 1000,
+        "result_npv_eur_base": v.get("npv_eur", 0), "result_irr_pct_base": v.get("irr_pct", 0),
+        "result_payback_y_base": v.get("payback_simple_y", 0), "result_dotacia_eur": v.get("dotacia_eur", 0),
+    }
+    sb.table("analyza_om_variants").insert(row).execute()
+    return {"ok": True, "position": pos, "capex_eur": row["capex_eur"],
+            "npv_eur": row["result_npv_eur_base"], "irr_pct": row["result_irr_pct_base"],
+            "payback_y": row["result_payback_y_base"]}
+
+
 def run_variants_premium(sb, analyza_id: str) -> dict:
     """
     Spustí VariantGenerator nad analyza_om → uloží varianty do analyza_om_variants.

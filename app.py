@@ -6640,34 +6640,15 @@ def webhook_aom_custom_variant():
         }
         capex_overrides = body.get("capex_overrides") or None
 
-        arch = _aom_ai.compute_custom_variant(analyza, custom_input, capex_overrides)
-
-        # Insert do analyza_om_variants
-        pos_res = sb.table("analyza_om_variants").select("position").eq("analyza_id", aid).order("position", desc=True).limit(1).execute()
-        next_pos = (pos_res.data[0]["position"] + 1) if pos_res.data else 1
-
-        sb.table("analyza_om_variants").insert({
-            "analyza_id": aid,
-            "name": custom_input["name"],
-            "position": next_pos,
-            "fve_kwp": custom_input["fve_kwp"],
-            "fve_tilt_deg": 25,
-            "fve_azimuth_deg": 180,
-            "fve_topology": "south",
-            "bess_kwh": custom_input["bess_kwh"],
-            "bess_kw": custom_input["bess_kw"],
-            "bess_arbitrage_enabled": False,
-            "capex_eur": arch.get("capex_total_eur", 0),
-            "capex_source": "ai_strategist",
-            "result_samosp_pct": arch.get("self_consumption_pct", 0),
-            "result_samostat_pct": arch.get("self_sufficiency_pct", 0),
-            "result_npv_eur_base": arch.get("npv_eur", 0),
-            "result_irr_pct_base": arch.get("irr_pct", 0),
-            "result_payback_y_base": arch.get("payback_years", 0),
-            "result_dotacia_eur": arch.get("dotacia_eur", 0),
-        }).execute()
-
-        return jsonify({"ok": True, "variant": arch, "position": next_pos})
+        # OSTRÝ ENGINE — custom variant sa počíta rovnakým pipeline ako matica (žiadny AI fallback)
+        if not _aom_v2:
+            return jsonify({"ok": False, "error": "analyza_om_v2 not loaded"}), 500
+        result = _aom_v2.insert_variant_via_engine(
+            sb, aid, custom_input["name"], custom_input["fve_kwp"],
+            custom_input["bess_kwh"], custom_input["bess_kw"])
+        if not result.get("ok"):
+            return jsonify(result), 400
+        return jsonify(result)
     except Exception as e:
         log.exception("[aom-custom-variant] failed")
         return jsonify({"ok": False, "error": str(e)[:500]}), 500
