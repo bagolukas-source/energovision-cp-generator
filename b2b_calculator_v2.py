@@ -191,7 +191,7 @@ def calculate_bom_v2(sb, config: dict) -> dict:
     sm = stack.get("smart_manager")
     if sm and kwp_actual > sm.get("required_above_kwp", 0):
         items.append({
-            "position": pos, "category": "Striedače",
+            "position": pos, "category": "Monitoring",
             "product_name": sm["name"], "qty": 1, "unit": "ks",
             "cost_per_unit": sm["price"] * 0.77, "price_per_unit": float(sm["price"]),
             "rule_id": f"smart_manager.{vendor_key}", "vendor_stack": vendor_key,
@@ -200,7 +200,7 @@ def calculate_bom_v2(sb, config: dict) -> dict:
     smtr = stack.get("smart_meter")
     if smtr:
         items.append({
-            "position": pos, "category": "Striedače",
+            "position": pos, "category": "Monitoring",
             "product_name": smtr["name"], "qty": 1, "unit": "ks",
             "cost_per_unit": smtr["price"] * 0.77, "price_per_unit": float(smtr["price"]),
             "rule_id": f"smart_meter.{vendor_key}", "vendor_stack": vendor_key,
