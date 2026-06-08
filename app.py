@@ -14693,3 +14693,18 @@ def webhook_spot_clear_override():
         return jsonify({"ok": False, "error": "site_id required"}), 400
     result = _hs.clear_manual_override(site_id)
     return jsonify(result)
+
+
+@app.route("/webhook/vyroba-doklady", methods=["POST"])
+@require_secret
+def webhook_vyroba_doklady():
+    """Výrobné dokumenty rozvádzača (Atest + Zhoda + 2× Záručný list) → branded PDF base64."""
+    import base64 as _b64
+    body = request.get_json(force=True, silent=True) or {}
+    try:
+        import generuj_vyroba
+        pdf = generuj_vyroba.generuj_vyroba_pdf(body)
+        return jsonify({"ok": True, "pdf_base64": _b64.b64encode(pdf).decode(), "size_bytes": len(pdf)})
+    except Exception as e:
+        log.exception("vyroba-doklady failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
