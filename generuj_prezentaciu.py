@@ -230,11 +230,11 @@ def generuj_prezentaciu_b2b(g: dict) -> bytes:
     charts = g.get("charts") or []; datum = _esc(g.get("datum") or "")
     kontakt = _esc(g.get("kontakt") or "obchod@energovision.sk · energovision.sk")
     logo_w = _b64img("energovision_logo_white.png"); logo_c = _b64img("energovision_logo.png")
-    hero_cover = _fileuri("ref_cover.png"); hero_close = _fileuri("ref_close.png")
-    ref_items = [(_fileuri("ref_cover.png"),"Žarnovica","1,56 MWp"),
-                 (_fileuri("ref_partizanske.png"),"Partizánske","1,32 MWp"),
-                 (_fileuri("ref_vlkanova.png"),"Vlkanová · KÜSTER","500,5 kWp"),
-                 (_fileuri("ref_krup.png"),"Nitra · KRUP","BESS 100 kW / 218 kWh")]
+    hero_cover = _b64img("ref_cover.png"); hero_close = _b64img("ref_close.png")
+    ref_items = [(_b64img("ref_cover.png"),"Žarnovica","1,56 MWp"),
+                 (_b64img("ref_partizanske.png"),"Partizánske","1,32 MWp"),
+                 (_b64img("ref_vlkanova.png"),"Vlkanová · KÜSTER","500,5 kWp"),
+                 (_b64img("ref_krup.png"),"Nitra · KRUP","BESS 100 kW / 218 kWh")]
     refcards = "".join(f"<div class='refcard'><div class='ri' style=\"background-image:url('{im}')\"></div>"
                        f"<div class='rl'><b>{_esc(t)}</b><span>{_esc(v)}</span></div></div>" for im,t,v in ref_items)
 
