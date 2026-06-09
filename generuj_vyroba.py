@@ -190,23 +190,23 @@ def generuj_fat_protokol(g: dict, body: list) -> bytes:
 
 
 def generuj_stitok(g: dict, qr_url: str) -> bytes:
-    """Štítok rozvádzača s QR (malý formát na nálepku)."""
+    """Malý štítok 30x40mm (š x v) s QR na nálepku."""
     from weasyprint import HTML
     qr = _qr_data_uri(qr_url)
     html = f"""<!DOCTYPE html><html lang='sk'><head><meta charset='utf-8'><style>
-    @page {{ size:100mm 60mm; margin:4mm; }}
-    body {{ font-family:'Carlito','Calibri',sans-serif; color:#1a1a1a; }}
-    .box {{ border:1.5pt solid #1C3A05; border-radius:3mm; padding:3mm; display:flex; gap:3mm; height:52mm; box-sizing:border-box; }}
-    .l {{ flex:1; }} .r {{ width:32mm; text-align:center; }} .r img {{ width:30mm; }}
-    .brand {{ color:#2E5008; font-weight:800; font-size:13pt; }} .vc {{ font-size:16pt; font-weight:800; margin:2mm 0; }}
-    .kv {{ font-size:8.5pt; margin:.6mm 0; }} .kv b {{ color:#555; }} .foot {{ font-size:7pt; color:#777; margin-top:2mm; }}
-    </style></head><body><div class='box'><div class='l'>
-    <div class='brand'>ENERGOVISION · Rozvádzač</div>
+    @page {{ size:30mm 40mm; margin:0; }}
+    * {{ box-sizing:border-box; }}
+    body {{ font-family:'Carlito','Calibri',sans-serif; color:#0f172a; margin:0; }}
+    .box {{ width:30mm; height:40mm; padding:1.6mm; border:0.4mm solid #1C3A05; border-radius:1.5mm; text-align:center; }}
+    .br {{ color:#2E5008; font-weight:800; font-size:5pt; letter-spacing:.2pt; }}
+    .vc {{ font-weight:800; font-size:9pt; margin:.4mm 0 .8mm; }}
+    .qr img {{ width:18mm; height:18mm; }}
+    .kv {{ font-size:4.6pt; line-height:1.25; color:#334155; margin-top:.6mm; }}
+    .kv b {{ color:#0f172a; }}
+    </style></head><body><div class='box'>
+    <div class='br'>ENERGOVISION</div>
     <div class='vc'>{_esc(g.get('vyrobne_cislo'))}</div>
-    <div class='kv'><b>Typ:</b> {_esc(g.get('typ_rozvadzaca') or g.get('nazov_rozvadzaca'))}</div>
-    <div class='kv'><b>Výkon:</b> {_esc(g.get('vykon'))} &nbsp; <b>Napätie:</b> {_esc(g.get('napatie_hlavne'))}</div>
-    <div class='kv'><b>Ic/In:</b> {_esc(g.get('ic'))} / {_esc(g.get('in_prud'))} &nbsp; <b>IP:</b> {_esc(g.get('tech_udaje'))}</div>
-    <div class='kv'><b>Zákazka:</b> {_esc(g.get('akcia'))} &nbsp; <b>Rok:</b> {_esc(g.get('mesiac_rok_vyroby'))}</div>
-    <div class='foot'>Energovision s.r.o. · IČO 53036280 · +421 948 302 137</div>
-    </div><div class='r'>{('<img src="'+qr+'"/>' if qr else '')}<div class='kv'>Naskenuj pre dokumentáciu</div></div></div></body></html>"""
+    <div class='qr'>{('<img src="'+qr+'"/>' if qr else '')}</div>
+    <div class='kv'><b>{_esc(g.get('vykon') or g.get('in_prud'))}</b> · {_esc(g.get('tech_udaje'))}<br>{_esc(g.get('mesiac_rok_vyroby'))}</div>
+    </div></body></html>"""
     return HTML(string=html, base_url=BASE).write_pdf()
