@@ -25,7 +25,7 @@ def generuj_prezentaciu_pdf(g: dict) -> bytes:
     if disp and not disp.startswith("data:"):
         disp = "data:image/png;base64," + disp
     variants = g.get("varianty") or []     # [{nazov, cena, popis}]
-    kontakt = g.get("kontakt") or "Dominik Galaba · +421 917 424 564 · dominik.galaba@energovision.sk"
+    kontakt = g.get("kontakt") or "obchod@energovision.sk · energovision.sk"
 
     vcards = ""
     for i, v in enumerate(variants[:3]):
@@ -153,13 +153,64 @@ def _eur(v):
 def _stat(label, val, sub=""):
     return f"<div class='stat'><div class='sv'>{_esc(val)}</div><div class='sl'>{_esc(label)}</div>{('<div class=ss>'+_esc(sub)+'</div>') if sub else ''}</div>"
 
+
+def _ai_prez_texty(payload: dict) -> dict:
+    """Claude napíše B2B prezentačné texty NA MIERU, grounded v reálnych číslach.
+    Pri akejkoľvek chybe vráti {} → deck použije statické fallbacky (nikdy nespadne)."""
+    import os, json, re
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not key:
+        return {}
+    try:
+        import requests
+        model = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-5-20250929")
+        system = (
+            "Si senior energetický konzultant firmy Energovision (priemyselné FVE, batériové úložiská, "
+            "trafostanice a VN, odborné revízie, elektrotechnické práce). Píšeš texty do B2B prezentácie "
+            "pre vedenie veľkej firmy.\n\n"
+            "PRAVIDLÁ:\n"
+            "- Slovenčina, vecne, profesionálne, sebavedomo. ŽIADNE reklamné superlatívy ani vata.\n"
+            "- Používaj IBA čísla z podkladu. Nič nevymýšľaj, nedopĺňaj žiadne nové hodnoty.\n"
+            "- Krátke vety. Hovor jazykom úspor, rizika, návratnosti a prevádzkovej istoty.\n"
+            "- Kde sa hodí, prepoj na širšie kompetencie Energovision (trafostanice, revízie, elektro), ale nenásilne.\n"
+            "- Vráť IBA platný JSON, žiadny markdown, presne v tejto štruktúre:\n"
+            "{\n"
+            '  "podtitul": "1 veta pod titulok na titulke (max 140 znakov)",\n'
+            '  "vychodisko_lead": "2 vety o východiskovej situácii OM, použi reálne čísla spotreby/špičky/MRK",\n'
+            '  "riesenie_lead": "2 vety prečo je navrhnutá konfigurácia vhodná pre túto prevádzku",\n'
+            '  "ekonomika_lead": "2 vety rámcujúce ekonomiku (návratnosť, NPV, dotácia) bez vymýšľania",\n'
+            '  "prinosy": [{"t":"názov (2-4 slová)","d":"1 veta, konkrétne"}, ...presne 4 položky...],\n'
+            '  "zaver_lead": "1-2 vety výzva na ďalší krok (obhliadka, projekt, dotácia)"\n'
+            "}\n"
+        )
+        user = "Podklad k odbernému miestu a návrhu (reálne dáta):\n" + json.dumps(payload, ensure_ascii=False, indent=2)
+        headers = {"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
+        body = {"model": model, "max_tokens": 1400, "temperature": 0.4,
+                "system": system, "messages": [{"role": "user", "content": user}]}
+        r = requests.post("https://api.anthropic.com/v1/messages", headers=headers, json=body, timeout=60)
+        r.raise_for_status()
+        content = r.json().get("content") or []
+        txt = (content[0].get("text") if content and isinstance(content[0], dict) else "") or ""
+        txt = re.sub(r"^```(?:json)?\s*", "", txt.strip()); txt = re.sub(r"\s*```$", "", txt).strip()
+        data = json.loads(txt)
+        if isinstance(data, dict) and isinstance(data.get("prinosy"), list):
+            data["prinosy"] = [p for p in data["prinosy"] if isinstance(p, dict) and p.get("t") and p.get("d")][:4]
+        return data if isinstance(data, dict) else {}
+    except Exception as e:
+        try:
+            import logging; logging.getLogger("evo").warning("AI prez texty zlyhali: %s", e)
+        except Exception:
+            pass
+        return {}
+
+
 def generuj_prezentaciu_b2b(g: dict) -> bytes:
     """Podrobná B2B prezentácia z technickej analýzy — editorial premium dizajn."""
     from weasyprint import HTML
     cust = _esc(g.get("zakaznik") or "Vážený klient")
     om = g.get("om") or {}; rec = g.get("variant") or {}; variants = g.get("varianty") or []
     charts = g.get("charts") or []; datum = _esc(g.get("datum") or "")
-    kontakt = _esc(g.get("kontakt") or "Dominik Galaba · +421 917 424 564 · dominik.galaba@energovision.sk")
+    kontakt = _esc(g.get("kontakt") or "obchod@energovision.sk · energovision.sk")
     logo_w = _b64img("energovision_logo_white.png"); logo_c = _b64img("energovision_logo.png")
 
     def num(x, suf="", dec=1):
@@ -177,6 +228,27 @@ def generuj_prezentaciu_b2b(g: dict) -> bytes:
     npv = _eur(rec.get("result_npv_eur_base")); irr = num(rec.get("result_irr_pct_base"), " %")
     payback = num(rec.get("result_payback_y_base"), ""); capex = _eur(rec.get("capex_eur")); dotacia = _eur(rec.get("result_dotacia_eur"))
     fve = num(rec.get("fve_kwp"), " kWp"); bess = num(rec.get("bess_kwh"), " kWh") if rec.get("bess_kwh") else "—"
+
+    # AI texty na mieru (grounded; fallback = statika)
+    _ai = _ai_prez_texty({
+        "zakaznik": g.get("zakaznik"),
+        "rocna_spotreba_mwh": om.get("consumption_annual_mwh"),
+        "spicka_kw": om.get("consumption_peak_kw_hourly") or om.get("consumption_peak_kw_15min"),
+        "mrk_kw": om.get("om_mrk_kw"), "vyuzitie_mrk_pct": om.get("consumption_mrk_utilization_pct"),
+        "navrh_variant": rec.get("name"), "fve_kwp": rec.get("fve_kwp"), "bess_kwh": rec.get("bess_kwh"),
+        "capex_eur": rec.get("capex_eur"), "dotacia_eur": rec.get("result_dotacia_eur"),
+        "npv_eur": rec.get("result_npv_eur_base"), "irr_pct": rec.get("result_irr_pct_base"),
+        "navratnost_rokov": rec.get("result_payback_y_base"),
+        "samospotreba_pct": samosp_v, "sebestacnost_pct": samostat_v,
+        "varianty": [{"nazov": v.get("name"), "fve_kwp": v.get("fve_kwp"), "bess_kwh": v.get("bess_kwh"),
+                      "capex_eur": v.get("capex_eur"), "npv_eur": v.get("result_npv_eur_base")} for v in variants[:4]],
+    }) or {}
+    ai_podtitul = _esc(_ai.get("podtitul") or "Technicko-ekonomická analýza odberného miesta a riešenie na mieru pre Vašu prevádzku.")
+    ai_vych = _esc(_ai.get("vychodisko_lead") or "Vychádzame z reálnych 15-minútových meraných dát Vášho odberného miesta.")
+    ai_ries = _esc(_ai.get("riesenie_lead") or "Konfigurácia je optimalizovaná na maximálnu samospotrebu a návratnosť.")
+    ai_ekon = _esc(_ai.get("ekonomika_lead") or "Vychádza z reálneho profilu spotreby a aktuálnych tarív; zahŕňa daňový odpis a dotáciu podľa platnej schémy.")
+    ai_zaver = _esc(_ai.get("zaver_lead") or "Navrhujeme obhliadku a spresnenie projektu. Pripravíme zmluvu, dotáciu a harmonogram realizácie.")
+    _ai_pr = _ai.get("prinosy") or []
 
     def donut(pct, big):
         try: p = max(0, min(100, float(pct)))
@@ -213,10 +285,11 @@ def generuj_prezentaciu_b2b(g: dict) -> bytes:
               ("Elektrotechnické práce","Komplexné realizačné a technické činnosti v energetike.")]
     srows = "".join(f"<div class='srow'><div class='sno'>{i+1:02d}</div><div><div class='st'>{t}</div><div class='sd'>{d}</div></div></div>" for i,(t,d) in enumerate(sluzby))
 
-    benefits = [("Nižšie prevádzkové náklady","Zníženie odberu zo siete a faktúr za elektrinu."),
-                ("Energetická sebestačnosť",f"Samospotreba {samosp}, sebestačnosť {samostat}."),
-                ("ESG & dekarbonizácia","Zníženie uhlíkovej stopy — výhoda v tendroch a reportingu."),
-                ("Garancia a servis","Vlastný servisný tím, monitoring a garancia výkonu.")]
+    benefits = ([(p["t"], p["d"]) for p in _ai_pr] if len(_ai_pr) == 4 else
+                [("Nižšie prevádzkové náklady","Zníženie odberu zo siete a faktúr za elektrinu."),
+                 ("Energetická sebestačnosť",f"Samospotreba {samosp}, sebestačnosť {samostat}."),
+                 ("ESG & dekarbonizácia","Zníženie uhlíkovej stopy — výhoda v tendroch a reportingu."),
+                 ("Garancia a servis","Vlastný servisný tím, monitoring a garancia výkonu.")])
     bcards = "".join(f"<div class='bcard'><div class='bt2'>{t}</div><div class='bd2'>{d}</div></div>" for t,d in benefits)
 
     chart_slides = ""
@@ -270,7 +343,7 @@ def generuj_prezentaciu_b2b(g: dict) -> bytes:
     cover = (f"<div class='slide dark'><img class='cov-logo' src='{logo_w}'/>"
              f"<div class='cov-rule'></div>"
              f"<div class='cov-t'>Návrh fotovoltického<br/>a batériového riešenia</div>"
-             f"<div class='cov-s'>Technicko-ekonomická analýza odberného miesta a riešenie na mieru pre Vašu prevádzku.</div>"
+             f"<div class='cov-s'>{ai_podtitul}</div>"
              f"<div class='cov-for'><div class='k'>PRIPRAVENÉ PRE</div><div class='v'>{cust}</div><div class='d'>{datum}</div></div>"
              f"<div class='cov-pg'>ENERGOVISION · DÔVERNÉ</div></div>")
     s_firma = (f"<div class='slide light'>{hdr('01','Spoločnosť')}"
@@ -279,7 +352,7 @@ def generuj_prezentaciu_b2b(g: dict) -> bytes:
                f"<div style='margin-top:8mm'>{srows}</div>{_ftr('01')}</div>")
     s_vych = (f"<div class='slide light'>{hdr('02','Východisko')}"
               f"<div class='kicker'>Profil odberného miesta</div><h2>Analyzovali sme Vašu reálnu spotrebu</h2>"
-              f"<div class='lead'>Na základe 15-minútových meraných dát.</div>"
+              f"<div class='lead'>{ai_vych}</div>"
               f"<div class='metrics'>"
               f"<div class='metric'><div class='mv'>{spotreba}</div><div class='ml'>Ročná spotreba</div></div>"
               f"<div class='metric'><div class='mv'>{peak}</div><div class='ml'>Špička odberu</div></div>"
@@ -292,7 +365,7 @@ def generuj_prezentaciu_b2b(g: dict) -> bytes:
               f"<div class='metrics' style='margin-top:6mm'>"
               f"<div class='metric'><div class='mv acc'>{fve}</div><div class='ml'>Výkon FVE</div></div>"
               f"<div class='metric'><div class='mv acc'>{bess}</div><div class='ml'>Batéria (BESS)</div></div></div>"
-              f"<div class='lead' style='margin-top:9mm'>Konfigurácia optimalizovaná na maximálnu samospotrebu a návratnosť.</div>"
+              f"<div class='lead' style='margin-top:9mm'>{ai_ries}</div>"
               f"</div><div class='r'>{donut(samosp_v, samosp)}<div style='font-size:10pt;color:#6B7280;margin-top:4mm'>Sebestačnosť {samostat}</div></div></div>{_ftr('03')}</div>")
     s_ekon = (f"<div class='slide light'>{hdr('04','Ekonomika')}"
               f"<div class='kicker'>Návratnosť investície</div><h2>Ekonomika riešenia</h2>"
@@ -301,7 +374,7 @@ def generuj_prezentaciu_b2b(g: dict) -> bytes:
               f"<div class='metric'><div class='mv'>{dotacia}</div><div class='ml'>Dotácia</div></div>"
               f"<div class='metric'><div class='mv acc'>{npv}</div><div class='ml'>NPV (20 rokov)</div></div>"
               f"<div class='metric'><div class='mv acc'>{payback} r</div><div class='ml'>Návratnosť · IRR {irr}</div></div>"
-              f"</div><div class='lead' style='margin-top:14mm'>Vychádza z reálneho profilu spotreby a aktuálnych tarív; zahŕňa daňový odpis a dotáciu podľa platnej schémy.</div>{_ftr('04')}</div>")
+              f"</div><div class='lead' style='margin-top:14mm'>{ai_ekon}</div>{_ftr('04')}</div>")
     s_var = (f"<div class='slide light'>{hdr('05','Varianty')}"
              f"<div class='kicker'>Porovnanie</div><h2>Vyberte si úroveň riešenia</h2>"
              f"<table><tr><th>Variant</th><th>FVE</th><th>Batéria</th><th>Investícia</th><th>Samospotreba</th><th>Návratnosť</th></tr>{vrows}</table>"
@@ -311,7 +384,7 @@ def generuj_prezentaciu_b2b(g: dict) -> bytes:
              f"<div class='bgrid'>{bcards}</div>{_ftr('06')}</div>")
     s_close = (f"<div class='slide dark'><img class='cov-logo' src='{logo_w}'/><div class='cov-rule'></div>"
                f"<div class='cov-t' style='font-size:34pt'>Poďme overiť<br/>potenciál naživo</div>"
-               f"<div class='cov-s'>Navrhujeme obhliadku a spresnenie projektu. Pripravíme zmluvu, dotáciu a harmonogram realizácie.</div>"
+               f"<div class='cov-s'>{ai_zaver}</div>"
                f"<div class='cta'>Kontakt: <b>{kontakt}</b></div>"
                f"<div class='cov-pg'>ENERGOVISION · energovision.sk</div></div>")
     html = (f"<!DOCTYPE html><html lang='sk'><head><meta charset='utf-8'><style>{css}</style></head><body>"
