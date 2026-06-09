@@ -14804,3 +14804,79 @@ def webhook_parse_uloha():
         return jsonify({"ok": True, "uloha": parsed})
     except Exception as e:
         log.exception("parse-uloha failed"); return jsonify({"ok": False, "error": str(e)}), 500
+
+
+def _parse_uloha_ai(text, users, today):
+    """Spoločná AI logika: z textu → úloha {assignee_id, assignee_name, title, description, due_date, priority}."""
+    import json as _j, re as _re
+    names = "\n".join(f'- {u.get("full_name") or u.get("name")} (id={u.get("id")})' for u in users)
+    prompt = (f"Dnes je {today}. Z diktátu vytvor úlohu. Kolegovia:\n{names}\n\nDiktát: \"{text}\"\n\n"
+              "Vráť LEN JSON: {\"assignee_id\":\"<id alebo null>\",\"assignee_name\":\"<meno>\",\"title\":\"<názov>\","
+              "\"description\":\"<detail alebo null>\",\"due_date\":\"<YYYY-MM-DD alebo null>\",\"priority\":\"low|normal|high\"}. "
+              "Priraď kolegu podľa mena (aj krstné stačí). 'do piatku/zajtra/o týždeň' prepočítaj na dátum.")
+    headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"}
+    payload = {"model": ANTHROPIC_MODEL, "max_tokens": 500, "messages": [{"role": "user", "content": prompt}]}
+    r = _retry_request(lambda: requests.post("https://api.anthropic.com/v1/messages", headers=headers, json=payload, timeout=60))
+    r.raise_for_status()
+    raw = _safe_claude_text(r.json()).strip()
+    m = _re.search(r'\{[\s\S]*\}', raw)
+    return _j.loads(m.group(0)) if m else {}
+
+
+def _supa_headers():
+    return {"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+            "Content-Type": "application/json", "Prefer": "return=representation"}
+
+
+@app.route("/webhook/whatsapp-uloha", methods=["POST"])
+def webhook_whatsapp_uloha():
+    """Twilio WhatsApp inbound → zadanie úlohy. Gated: odosielateľ musí byť známe firemné číslo."""
+    import re
+    frm = (request.form.get("From") or "").strip()       # 'whatsapp:+421...'
+    body = (request.form.get("Body") or "").strip()
+    num_media = int(request.form.get("NumMedia") or 0)
+    def twiml(msg):
+        return (f"<?xml version='1.0' encoding='UTF-8'?><Response><Message>{msg}</Message></Response>", 200, {"Content-Type": "text/xml"})
+    try:
+        sender9 = re.sub(r"\D", "", frm)[-9:]
+        if not sender9:
+            return twiml("Neviem identifikovať číslo.")
+        # nájdi odosielateľa medzi usermi
+        ur = requests.get(f"{SUPABASE_URL}/rest/v1/users?select=id,full_name,phone&is_active=eq.true", headers=_supa_headers(), timeout=20)
+        users = ur.json() if ur.ok else []
+        me = next((u for u in users if re.sub(r"\D", "", u.get("phone") or "")[-9:] == sender9 and sender9), None)
+        if not me:
+            return twiml("Tvoje číslo nie je v CRM. Kontaktuj administrátora, nech ťa pridá.")
+        if num_media > 0 and not body:
+            return twiml("Hlasovky zatiaľ neviem spracovať — napíš úlohu textom. 🙏")
+        if not body:
+            return twiml("Napíš úlohu, napr.: Tinák vyrobiť rozvádzač pre AGROPO do piatku.")
+        # AI parse
+        try:
+            p = _parse_uloha_ai(body, users, __import__("datetime").date.today().isoformat())
+        except Exception:
+            p = {}
+        assignee = p.get("assignee_id")
+        if not assignee and p.get("assignee_name"):
+            nm = str(p["assignee_name"]).lower().split(" ")[0]
+            hit = next((u for u in users if nm and nm in str(u.get("full_name") or "").lower()), None)
+            assignee = hit.get("id") if hit else None
+        title = (p.get("title") or body)[:120]
+        prio = p.get("priority") if p.get("priority") in ("low", "normal", "high") else "normal"
+        row = {"title": title, "description": p.get("description"), "assignee_user_id": assignee,
+               "created_by": me["id"], "due_date": p.get("due_date"), "priority": prio, "source": "whatsapp"}
+        requests.post(f"{SUPABASE_URL}/rest/v1/personal_tasks", headers=_supa_headers(), json=row, timeout=20)
+        try:
+            if assignee:
+                requests.post(f"{SUPABASE_URL}/rest/v1/notifications", headers=_supa_headers(),
+                              json={"channel": "in_app", "icon": "✅", "recipient_user_id": assignee,
+                                    "title": "Nová úloha: " + title, "body": f"Od {me['full_name']} (WhatsApp)",
+                                    "link": "/moje-ulohy", "priority": "high" if prio == "high" else "normal"}, timeout=15)
+        except Exception:
+            pass
+        an = next((u.get("full_name") for u in users if u.get("id") == assignee), p.get("assignee_name") or "nepriradené")
+        due = f" · termín {p.get('due_date')}" if p.get("due_date") else ""
+        return twiml(f"✅ Úloha zadaná: {title}\nPre: {an}{due}")
+    except Exception as e:
+        log.exception("whatsapp-uloha failed")
+        return twiml("Nepodarilo sa spracovať úlohu, skús znova.")
