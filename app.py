@@ -14893,3 +14893,16 @@ def webhook_generuj_prezentaciu():
         return jsonify({"ok": True, "pdf_base64": _b.b64encode(pdf).decode()})
     except Exception as e:
         log.exception("generuj-prezentaciu failed"); return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/webhook/prezentacia-b2b", methods=["POST"])
+@require_secret
+def webhook_prezentacia_b2b():
+    import base64 as _b
+    body = request.get_json(force=True, silent=True) or {}
+    try:
+        import generuj_prezentaciu
+        pdf = generuj_prezentaciu.generuj_prezentaciu_b2b(body)
+        return jsonify({"ok": True, "pdf_base64": _b.b64encode(pdf).decode()})
+    except Exception as e:
+        log.exception("prezentacia-b2b failed"); return jsonify({"ok": False, "error": str(e)}), 500
