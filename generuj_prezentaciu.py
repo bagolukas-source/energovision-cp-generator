@@ -5,8 +5,10 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 
 def _b64img(name):
     try:
+        ext = os.path.splitext(name)[1].lower()
+        mime = {".png":"image/png",".jpg":"image/jpeg",".jpeg":"image/jpeg",".webp":"image/webp",".svg":"image/svg+xml",".gif":"image/gif"}.get(ext,"image/png")
         with open(os.path.join(BASE, name), "rb") as fh:
-            return "data:image/png;base64," + base64.b64encode(fh.read()).decode()
+            return f"data:{mime};base64," + base64.b64encode(fh.read()).decode()
     except Exception:
         return ""
 
@@ -150,6 +152,16 @@ def _eur(v):
     try: return f"{float(v):,.0f} €".replace(",", " ")
     except Exception: return "—"
 
+def _eur_c(v):
+    """Kompaktné euro pre karty: >=1 mil. → '1,24 mil. €'."""
+    try:
+        f = float(v)
+        if abs(f) >= 1_000_000:
+            return (f"{f/1e6:.2f}".replace(".", ",")) + " mil. €"
+        return _eur(v)
+    except Exception:
+        return _eur(v)
+
 def _stat(label, val, sub=""):
     return f"<div class='stat'><div class='sv'>{_esc(val)}</div><div class='sl'>{_esc(label)}</div>{('<div class=ss>'+_esc(sub)+'</div>') if sub else ''}</div>"
 
@@ -224,7 +236,7 @@ def generuj_prezentaciu_b2b(g: dict) -> bytes:
         try:
             f = float(x); v = f"{f:,.{dec}f}".replace(",", " ")
             if dec and v.endswith("." + "0"*dec): v = v[:-(dec+1)]
-            return v + suf
+            return v.replace(".", ",") + suf
         except Exception: return "—"
     def i_num(x, suf=""): return num(x, suf, 0)
 
@@ -345,6 +357,13 @@ def generuj_prezentaciu_b2b(g: dict) -> bytes:
     .cov-for { position:absolute; left:22mm; bottom:24mm; } .cov-for .k { font-size:8.5pt; letter-spacing:3pt; color:#92D050; } .cov-for .v { font-size:18pt; font-weight:700; margin-top:2mm; } .cov-for .d { font-size:9.5pt; color:#7c8a80; margin-top:1mm; }
     .cov-pg { position:absolute; right:22mm; bottom:24mm; font-size:8.5pt; color:#5f6f64; letter-spacing:2pt; }
     .cta { margin-top:12mm; font-size:13pt; } .cta b { color:#92D050; }
+    .cards { display:flex; gap:7mm; margin-top:11mm; }
+    .card { flex:1; border:0.4mm solid #E6E3DB; border-radius:2.6mm; overflow:hidden; background:#fff; }
+    .card .ch { padding:3.6mm 5mm; color:#fff; font-size:8.5pt; letter-spacing:2pt; text-transform:uppercase; font-weight:700; }
+    .card .cb { padding:7mm 5mm 6mm; }
+    .card .cval { font-size:29pt; font-weight:800; color:#1f7a1f; letter-spacing:-0.5pt; line-height:1; }
+    .card .cunit { font-size:9.5pt; color:#6B7280; margin-top:2.5mm; }
+    .card .cbul { margin-top:5mm; padding-top:4mm; border-top:0.4mm solid #EEEBE3; font-size:8.5pt; color:#6B7280; line-height:1.75; }
     .cover2 { position:relative; overflow:hidden; padding:24mm 22mm; color:#fff; background:#0a140d; }
     .cover2 .cimg { position:absolute; inset:0; background-size:cover; background-position:center; z-index:0; }
     .cover2 .covl { position:absolute; inset:0; z-index:1;
@@ -379,22 +398,24 @@ def generuj_prezentaciu_b2b(g: dict) -> bytes:
               f"<div class='metric'><div class='mv'>{mrk}</div><div class='ml'>Rezervovaná kapacita</div></div>"
               f"<div class='metric'><div class='mv'>{mrk_util}</div><div class='ml'>Využitie MRK</div></div>"
               f"</div>{_ftr('07')}</div>")
+    GR, LM, DK = "#2e7d32", "#6cb33f", "#14181F"
     s_ries = (f"<div class='slide light'>{hdr('04','Riešenie')}"
               f"<div class='kicker'>{_esc(rec.get('name') or 'Odporúčaná konfigurácia')}</div><h2>Navrhované riešenie</h2>"
-              f"<div class='split'><div class='l'>"
-              f"<div class='metrics' style='margin-top:6mm'>"
-              f"<div class='metric'><div class='mv acc'>{fve}</div><div class='ml'>Výkon FVE</div></div>"
-              f"<div class='metric'><div class='mv acc'>{bess}</div><div class='ml'>Batéria (BESS)</div></div></div>"
-              f"<div class='lead' style='margin-top:9mm'>{ai_ries}</div>"
-              f"</div><div class='r'>{donut(samosp_v, samosp)}<div style='font-size:10pt;color:#6B7280;margin-top:4mm'>Sebestačnosť {samostat}</div></div></div>{_ftr('03')}</div>")
+              f"<div class='cards'>"
+              + _card("FVE na kľúč", fve, "Inštalovaný výkon", ["Strešná / pozemná inštalácia","Optimalizované na samospotrebu","Projekt, montáž a revízie"], GR)
+              + _card("Batéria (BESS)", bess, "Kapacita úložiska", ["Ukladanie denných prebytkov","Špičkovanie a záloha","Vyššia sebestačnosť"], DK)
+              + _card("Samospotreba", samosp, f"Sebestačnosť {samostat}", ["Podiel vlastnej spotreby","Nižší odber zo siete","Ochrana pred rastom cien"], LM)
+              + f"</div>"
+              f"<div class='lead' style='margin-top:11mm'>{ai_ries}</div>{_ftr('04')}</div>")
     s_ekon = (f"<div class='slide light'>{hdr('05','Ekonomika')}"
               f"<div class='kicker'>Návratnosť investície</div><h2>Ekonomika riešenia</h2>"
-              f"<div class='metrics'>"
-              f"<div class='metric'><div class='mv'>{capex}</div><div class='ml'>Investícia (CAPEX)</div></div>"
-              f"<div class='metric'><div class='mv'>{dotacia}</div><div class='ml'>Dotácia</div></div>"
-              f"<div class='metric'><div class='mv acc'>{npv}</div><div class='ml'>NPV (20 rokov)</div></div>"
-              f"<div class='metric'><div class='mv acc'>{payback} r</div><div class='ml'>Návratnosť · IRR {irr}</div></div>"
-              f"</div><div class='lead' style='margin-top:14mm'>{ai_ekon}</div>{_ftr('04')}</div>")
+              f"<div class='cards'>"
+              + _card("Investícia", _eur_c(rec.get("capex_eur")), "CAPEX na kľúč", ["Dodávka a montáž","Projekt + revízie"], "#14181F")
+              + _card("Dotácia", _eur_c(rec.get("result_dotacia_eur")), "Nenávratný príspevok", ["Zelená podnikom / FST","Znižuje vstup"], "#6cb33f")
+              + _card("NPV", _eur_c(rec.get("result_npv_eur_base")), "Čistá hodnota · 20 r", ["Po zdanení, reálne ceny","Vrátane daň. odpisu"], "#2e7d32")
+              + _card("Návratnosť", f"{payback} r", f"IRR {irr}", ["Prostá návratnosť","Z reálneho profilu"], "#2e7d32")
+              + f"</div>"
+              f"<div class='lead' style='margin-top:12mm'>{ai_ekon}</div>{_ftr('05')}</div>")
     s_var = (f"<div class='slide light'>{hdr('06','Varianty')}"
              f"<div class='kicker'>Porovnanie</div><h2>Vyberte si úroveň riešenia</h2>"
              f"<table><tr><th>Variant</th><th>FVE</th><th>Batéria</th><th>Investícia</th><th>Samospotreba</th><th>Návratnosť</th></tr>{vrows}</table>"
@@ -423,3 +444,9 @@ def _hdr(logo, name, no):
 
 def _ftr(page):
     return (f"<div class='ftr'><span>Energovision s.r.o. · Dôverné</span><span>{_esc(page)}</span></div>")
+
+def _card(label, val, unit, bullets, color):
+    bl = "".join(f"<div>{_esc(b)}</div>" for b in bullets if b)
+    return (f"<div class='card'><div class='ch' style='background:{color}'>{_esc(label)}</div>"
+            f"<div class='cb'><div class='cval'>{val}</div><div class='cunit'>{_esc(unit)}</div>"
+            f"<div class='cbul'>{bl}</div></div></div>")
