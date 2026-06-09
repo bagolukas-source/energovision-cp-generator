@@ -14771,3 +14771,36 @@ def webhook_vyroba_ai_fat():
         return jsonify({"ok": True, "navrh": parsed, "upozornenie": "AI návrh — FAT schvaľuje výhradne človek."})
     except Exception as e:
         log.exception("vyroba-ai-fat failed"); return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/webhook/parse-uloha", methods=["POST"])
+@require_secret
+def webhook_parse_uloha():
+    """Rozpozná z textu úlohu: komu (z poskytnutého zoznamu kolegov), čo, dokedy, priorita."""
+    import json, re
+    body = request.get_json(force=True, silent=True) or {}
+    text = (body.get("text") or "").strip()
+    users = body.get("users") or []  # [{"id":..,"name":..}]
+    today = body.get("today") or ""
+    if not text: return jsonify({"ok": False, "error": "missing text"}), 400
+    if not ANTHROPIC_API_KEY: return jsonify({"ok": False, "error": "ANTHROPIC_API_KEY not set"}), 500
+    try:
+        names = "\n".join(f'- {u.get("name")} (id={u.get("id")})' for u in users)
+        prompt = (f"Dnes je {today}. Z nasledujúceho diktátu vytvor úlohu. Zoznam kolegov:\n{names}\n\n"
+                  f'Diktát: "{text}"\n\n'
+                  "Vráť LEN JSON: {\"assignee_id\":\"<id kolegu z zoznamu alebo null>\","
+                  "\"assignee_name\":\"<meno>\",\"title\":\"<stručný názov úlohy>\","
+                  "\"description\":\"<detail alebo null>\",\"due_date\":\"<YYYY-MM-DD alebo null>\","
+                  "\"priority\":\"low|normal|high\"}\n"
+                  "Priraď kolegu podľa mena z diktátu (aj krstné meno stačí). Termíny ako 'do piatku','zajtra','o týždeň' prepočítaj na dátum. "
+                  "Ak nikto nie je spomenutý, assignee_id=null.")
+        headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"}
+        payload = {"model": ANTHROPIC_MODEL, "max_tokens": 600, "messages": [{"role": "user", "content": prompt}]}
+        r = _retry_request(lambda: requests.post("https://api.anthropic.com/v1/messages", headers=headers, json=payload, timeout=60))
+        r.raise_for_status()
+        raw = _safe_claude_text(r.json()).strip()
+        m = re.search(r'\{[\s\S]*\}', raw)
+        parsed = json.loads(m.group(0)) if m else {}
+        return jsonify({"ok": True, "uloha": parsed})
+    except Exception as e:
+        log.exception("parse-uloha failed"); return jsonify({"ok": False, "error": str(e)}), 500
