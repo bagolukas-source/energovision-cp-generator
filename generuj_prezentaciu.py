@@ -154,138 +154,173 @@ def _stat(label, val, sub=""):
     return f"<div class='stat'><div class='sv'>{_esc(val)}</div><div class='sl'>{_esc(label)}</div>{('<div class=ss>'+_esc(sub)+'</div>') if sub else ''}</div>"
 
 def generuj_prezentaciu_b2b(g: dict) -> bytes:
-    """Podrobná B2B prezentácia z technickej analýzy (Analýza OM)."""
+    """Podrobná B2B prezentácia z technickej analýzy — editorial premium dizajn."""
     from weasyprint import HTML
     cust = _esc(g.get("zakaznik") or "Vážený klient")
-    om = g.get("om") or {}
-    rec = g.get("variant") or {}             # odporúčaný variant
-    variants = g.get("varianty") or []       # všetky pre porovnanie
-    charts = g.get("charts") or []           # data URI obrázky (voliteľné)
-    datum = _esc(g.get("datum") or "")
-    kontakt = g.get("kontakt") or "Dominik Galaba · +421 917 424 564 · dominik.galaba@energovision.sk"
+    om = g.get("om") or {}; rec = g.get("variant") or {}; variants = g.get("varianty") or []
+    charts = g.get("charts") or []; datum = _esc(g.get("datum") or "")
+    kontakt = _esc(g.get("kontakt") or "Dominik Galaba · +421 917 424 564 · dominik.galaba@energovision.sk")
+    logo_w = _b64img("energovision_logo_white.png"); logo_c = _b64img("energovision_logo.png")
 
-    def num(x, suf=""):
-        try: return f"{float(x):,.1f}{suf}".replace(",", " ").replace(".0"+suf, suf)
+    def num(x, suf="", dec=1):
+        try:
+            f = float(x); v = f"{f:,.{dec}f}".replace(",", " ")
+            if dec and v.endswith("." + "0"*dec): v = v[:-(dec+1)]
+            return v + suf
         except Exception: return "—"
+    def i_num(x, suf=""): return num(x, suf, 0)
 
-    # východisko
-    spotreba = num(om.get("consumption_annual_mwh"), " MWh/rok")
-    peak = num(om.get("consumption_peak_kw_hourly") or om.get("consumption_peak_kw_15min"), " kW")
-    mrk = num(om.get("om_mrk_kw"), " kW")
-    mrk_util = num(om.get("consumption_mrk_utilization_pct"), " %")
+    spotreba = num(om.get("consumption_annual_mwh"), " MWh"); peak = i_num(om.get("consumption_peak_kw_hourly") or om.get("consumption_peak_kw_15min"), " kW")
+    mrk = i_num(om.get("om_mrk_kw"), " kW"); mrk_util = i_num(om.get("consumption_mrk_utilization_pct"), " %")
+    samosp_v = rec.get("result_samosp_pct"); samostat_v = rec.get("result_samostat_pct")
+    samosp = i_num(samosp_v, " %"); samostat = i_num(samostat_v, " %")
+    npv = _eur(rec.get("result_npv_eur_base")); irr = num(rec.get("result_irr_pct_base"), " %")
+    payback = num(rec.get("result_payback_y_base"), ""); capex = _eur(rec.get("capex_eur")); dotacia = _eur(rec.get("result_dotacia_eur"))
+    fve = num(rec.get("fve_kwp"), " kWp"); bess = num(rec.get("bess_kwh"), " kWh") if rec.get("bess_kwh") else "—"
 
-    # odporúčaný variant
-    samosp = num(rec.get("result_samosp_pct"), " %")
-    samostat = num(rec.get("result_samostat_pct"), " %")
-    npv = _eur(rec.get("result_npv_eur_base"))
-    irr = num(rec.get("result_irr_pct_base"), " %")
-    payback = num(rec.get("result_payback_y_base"), " r")
-    capex = _eur(rec.get("capex_eur"))
-    dotacia = _eur(rec.get("result_dotacia_eur"))
-    fve = num(rec.get("fve_kwp"), " kWp")
-    bess = num(rec.get("bess_kwh"), " kWh") if rec.get("bess_kwh") else "—"
+    def donut(pct, big):
+        try: p = max(0, min(100, float(pct)))
+        except Exception: p = 0
+        C = 2*3.14159*52; off = C*(1-p/100)
+        return (f"<svg viewBox='0 0 120 120' width='42mm' height='42mm'>"
+                f"<circle cx='60' cy='60' r='52' fill='none' stroke='#E6E3DB' stroke-width='10'/>"
+                f"<circle cx='60' cy='60' r='52' fill='none' stroke='#92D050' stroke-width='10' stroke-linecap='round'"
+                f" stroke-dasharray='{C:.0f}' stroke-dashoffset='{off:.0f}' transform='rotate(-90 60 60)'/>"
+                f"<text x='60' y='58' text-anchor='middle' font-size='26' font-weight='800' fill='#14181F'>{big}</text>"
+                f"<text x='60' y='74' text-anchor='middle' font-size='8' fill='#6B7280'>samospotreba</text></svg>")
 
-    # porovnanie variantov
+    # NPV bary
+    npvs = [(_esc(v.get('name')), float(v.get('result_npv_eur_base') or 0)) for v in variants[:4]]
+    mx = max([n for _,n in npvs] + [1])
+    bars = ""
+    best = max(npvs, key=lambda t:t[1])[0] if npvs else None
+    for nm, val in npvs:
+        w = max(2, val/mx*100); hl = (nm==best)
+        bars += (f"<div class='bar'><div class='bl'>{nm}</div>"
+                 f"<div class='bt'><div class='bf' style='width:{w:.0f}%;background:{'#92D050' if hl else '#cfd8c4'}'></div></div>"
+                 f"<div class='bv'>{_eur(val)}</div></div>")
+
     vrows = ""
     for v in variants[:4]:
-        vrows += (f"<tr><td><b>{_esc(v.get('name'))}</b></td><td>{num(v.get('fve_kwp'),' kWp')}</td>"
+        vrows += (f"<tr><td class='vn'>{_esc(v.get('name'))}</td><td>{num(v.get('fve_kwp'),' kWp')}</td>"
                   f"<td>{num(v.get('bess_kwh'),' kWh') if v.get('bess_kwh') else '—'}</td>"
-                  f"<td>{_eur(v.get('capex_eur'))}</td><td>{num(v.get('result_samosp_pct'),' %')}</td>"
-                  f"<td><b>{_eur(v.get('result_npv_eur_base'))}</b></td><td>{num(v.get('result_payback_y_base'),' r')}</td></tr>")
+                  f"<td>{_eur(v.get('capex_eur'))}</td><td>{i_num(v.get('result_samosp_pct'),' %')}</td>"
+                  f"<td>{num(v.get('result_payback_y_base'),' r')}</td></tr>")
 
-    sluzby = [("☀️","Fotovoltika & BESS","Návrh, dodávka, montáž na kľúč pre priemysel."),
-              ("🔌","Trafostanice a VN","Servis, údržba, pripojenia."),
-              ("🛡️","Revízie VTZ","Odborné prehliadky a skúšky."),
-              ("⚡","Elektro & realizácia","Komplexné technické činnosti.")]
-    scards = "".join(f"<div class='scard'><div class='si'>{i}</div><div class='st'>{t}</div><div class='sd'>{d}</div></div>" for i,t,d in sluzby)
+    sluzby = [("Fotovoltika & batériové úložiská","Návrh, dodávka a montáž na kľúč pre priemyselné prevádzky."),
+              ("Trafostanice a VN pripojenia","Servis, údržba a realizácia vysokonapäťových rozvodov."),
+              ("Odborné revízie VTZ","Prehliadky a skúšky vyhradených technických zariadení."),
+              ("Elektrotechnické práce","Komplexné realizačné a technické činnosti v energetike.")]
+    srows = "".join(f"<div class='srow'><div class='sno'>{i+1:02d}</div><div><div class='st'>{t}</div><div class='sd'>{d}</div></div></div>" for i,(t,d) in enumerate(sluzby))
+
+    benefits = [("Nižšie prevádzkové náklady","Zníženie odberu zo siete a faktúr za elektrinu."),
+                ("Energetická sebestačnosť",f"Samospotreba {samosp}, sebestačnosť {samostat}."),
+                ("ESG & dekarbonizácia","Zníženie uhlíkovej stopy — výhoda v tendroch a reportingu."),
+                ("Garancia a servis","Vlastný servisný tím, monitoring a garancia výkonu.")]
+    bcards = "".join(f"<div class='bcard'><div class='bt2'>{t}</div><div class='bd2'>{d}</div></div>" for t,d in benefits)
 
     chart_slides = ""
-    for c in charts[:2]:
-        chart_slides += f"<div class='slide'><div class='brand' style='color:#2E5008'>ANALÝZA</div><h2 style='margin-top:4mm'>Energetická a ekonomická analýza</h2><div class='chartwrap'><img src='{c}'/></div></div>"
+    for idx,c in enumerate(charts[:2]):
+        chart_slides += (f"<div class='slide light'>{_hdr(logo_c,'Analýza','A'+str(idx+1))}"
+                         f"<div class='chartwrap'><img src='{c}'/></div>{_ftr('— ')}</div>")
 
     css = """
-    @page { size:A4 landscape; margin:0; } * { box-sizing:border-box; margin:0; padding:0; }
-    body { font-family:'Carlito','Calibri',sans-serif; color:#0f172a; }
-    .slide { width:297mm; height:210mm; page-break-after:always; position:relative; overflow:hidden; padding:18mm 20mm; }
+    @page { size:A4 landscape; margin:0; }
+    * { box-sizing:border-box; margin:0; padding:0; }
+    body { font-family:'Helvetica Neue','Arial',sans-serif; color:#14181F; -webkit-font-smoothing:antialiased; }
+    .slide { width:297mm; height:210mm; page-break-after:always; position:relative; overflow:hidden; }
     .slide:last-child { page-break-after:auto; }
-    .dark { background:linear-gradient(135deg,#0b1220,#0d2818 58%,#0b1220); color:#fff; }
-    .glow { position:absolute; width:130mm; height:130mm; border-radius:50%; filter:blur(60px); opacity:.28; background:#92D050; right:-40mm; top:-40mm; }
-    .brand { font-size:13pt; font-weight:800; letter-spacing:3pt; color:#92D050; }
-    .tag { color:#cbd5e1; font-size:10pt; margin-top:2mm; }
-    h1 { font-size:32pt; font-weight:800; line-height:1.05; margin:16mm 0 6mm; }
-    h2 { font-size:21pt; font-weight:800; color:#1C3A05; } .dark h2 { color:#fff; }
-    .lead { font-size:11.5pt; color:#475569; max-width:210mm; } .dark .lead { color:#cbd5e1; }
-    .for { position:absolute; bottom:18mm; left:20mm; } .for .k { color:#92D050; font-size:9pt; letter-spacing:2pt; } .for .v { font-size:16pt; font-weight:700; }
-    .grid4 { display:flex; gap:7mm; margin-top:8mm; } .scard { flex:1; background:#f8fafc; border:1px solid #e2e8f0; border-radius:4mm; padding:6mm; } .si { font-size:20pt; } .st { font-weight:700; font-size:11pt; margin:2mm 0 1mm; } .sd { font-size:9pt; color:#64748b; }
-    .stats { display:flex; gap:7mm; margin-top:9mm; flex-wrap:wrap; }
-    .stat { flex:1 1 22%; background:#f8fafc; border:1px solid #e2e8f0; border-radius:4mm; padding:7mm; text-align:center; }
-    .stat.hl { background:linear-gradient(135deg,#0d2818,#16351c); color:#fff; border:none; }
-    .sv { font-size:24pt; font-weight:800; color:#1C3A05; } .stat.hl .sv { color:#92D050; } .sl { font-size:9.5pt; color:#64748b; margin-top:1.5mm; } .stat.hl .sl { color:#cbd5e1; } .ss { font-size:8pt; color:#94a3b8; }
-    table { width:100%; border-collapse:collapse; margin-top:8mm; font-size:11pt; }
-    th,td { border-bottom:1px solid #e2e8f0; padding:4mm 3mm; text-align:left; } th { color:#2E5008; font-size:9.5pt; text-transform:uppercase; }
-    .chartwrap { margin-top:6mm; height:150mm; display:flex; align-items:center; justify-content:center; } .chartwrap img { max-width:100%; max-height:100%; object-fit:contain; }
-    .bgrid { display:flex; gap:7mm; margin-top:9mm; flex-wrap:wrap; } .bcard { flex:1 1 40%; background:#f8fafc; border-left:4px solid #92D050; border-radius:3mm; padding:6mm; } .bt { font-weight:700; font-size:11.5pt; color:#1C3A05; } .bd { font-size:9.5pt; color:#64748b; margin-top:1mm; }
-    .cta { background:#92D050; color:#10220a; border-radius:5mm; padding:9mm; font-size:13pt; font-weight:700; margin-top:9mm; }
-    .foot { position:absolute; bottom:12mm; left:20mm; right:20mm; font-size:8.5pt; color:#94a3b8; border-top:1px solid #e2e8f0; padding-top:3mm; } .dark .foot { color:#64748b; border-color:#1e293b; }
+    .light { background:#FBFAF7; padding:20mm 22mm 16mm; }
+    .dark { background:radial-gradient(120% 120% at 80% 0%,#143020 0%,#0a140d 60%); color:#fff; padding:24mm 22mm; }
+    .hdr { display:flex; align-items:center; justify-content:space-between; border-bottom:0.4mm solid #E6E3DB; padding-bottom:5mm; }
+    .hdr img { height:7mm; } .hdr .sec { font-size:8.5pt; letter-spacing:2.5pt; text-transform:uppercase; color:#6B7280; }
+    .kicker { font-size:9pt; letter-spacing:3pt; text-transform:uppercase; color:#92D050; font-weight:700; margin-top:14mm; }
+    h2 { font-size:27pt; font-weight:800; letter-spacing:-0.3pt; margin-top:3mm; line-height:1.04; }
+    .lead { font-size:11pt; color:#6B7280; max-width:175mm; margin-top:4mm; line-height:1.5; }
+    .ftr { position:absolute; left:22mm; right:22mm; bottom:11mm; display:flex; justify-content:space-between; font-size:8pt; color:#9aa3af; border-top:0.4mm solid #E6E3DB; padding-top:3.5mm; }
+    /* metriky bez boxíkov */
+    .metrics { display:flex; margin-top:14mm; }
+    .metric { flex:1; padding:0 8mm; border-left:0.4mm solid #E6E3DB; }
+    .metric:first-child { padding-left:0; border-left:none; }
+    .mv { font-size:30pt; font-weight:800; letter-spacing:-0.5pt; } .mv.acc { color:#1f7a1f; }
+    .ml { font-size:9pt; letter-spacing:1.5pt; text-transform:uppercase; color:#6B7280; margin-top:2.5mm; }
+    .split { display:flex; gap:16mm; margin-top:14mm; align-items:center; }
+    .split .l { flex:1.2; } .split .r { flex:1; text-align:center; }
+    .srow { display:flex; gap:8mm; padding:6mm 0; border-bottom:0.4mm solid #E6E3DB; }
+    .sno { font-size:18pt; font-weight:300; color:#cbd2c2; width:14mm; } .st { font-size:13pt; font-weight:700; } .sd { font-size:10pt; color:#6B7280; margin-top:1mm; }
+    table { width:100%; border-collapse:collapse; margin-top:12mm; font-size:11pt; }
+    th { text-align:left; font-size:8.5pt; letter-spacing:1.5pt; text-transform:uppercase; color:#6B7280; padding:0 4mm 4mm; border-bottom:0.5mm solid #14181F; }
+    td { padding:4.5mm 4mm; border-bottom:0.4mm solid #E6E3DB; } td.vn { font-weight:700; }
+    .bars { margin-top:12mm; } .bar { display:flex; align-items:center; gap:6mm; margin:3.5mm 0; }
+    .bl { width:60mm; font-size:10pt; } .bt { flex:1; height:6mm; background:#F0EEE7; border-radius:3mm; overflow:hidden; }
+    .bf { height:100%; border-radius:3mm; } .bv { width:34mm; text-align:right; font-weight:700; font-size:11pt; }
+    .bgrid { display:flex; flex-wrap:wrap; gap:0; margin-top:12mm; }
+    .bcard { flex:1 1 50%; padding:8mm 10mm 8mm 0; border-top:0.6mm solid #92D050; margin-right:10mm; margin-top:8mm; }
+    .bt2 { font-size:13pt; font-weight:700; } .bd2 { font-size:10pt; color:#6B7280; margin-top:2mm; }
+    .chartwrap { height:150mm; display:flex; align-items:center; justify-content:center; margin-top:8mm; } .chartwrap img { max-width:100%; max-height:100%; object-fit:contain; }
+    /* cover */
+    .cov-logo { height:9mm; } .cov-rule { width:30mm; height:0.8mm; background:#92D050; margin:18mm 0 7mm; }
+    .cov-t { font-size:40pt; font-weight:800; letter-spacing:-1pt; line-height:1.02; max-width:230mm; }
+    .cov-s { font-size:12pt; color:#b9c4bd; margin-top:7mm; max-width:170mm; }
+    .cov-for { position:absolute; left:22mm; bottom:24mm; } .cov-for .k { font-size:8.5pt; letter-spacing:3pt; color:#92D050; } .cov-for .v { font-size:18pt; font-weight:700; margin-top:2mm; } .cov-for .d { font-size:9.5pt; color:#7c8a80; margin-top:1mm; }
+    .cov-pg { position:absolute; right:22mm; bottom:24mm; font-size:8.5pt; color:#5f6f64; letter-spacing:2pt; }
+    .cta { margin-top:12mm; font-size:13pt; } .cta b { color:#92D050; }
     """
-    benefits = [("Nižšie náklady","Zníženie odberu zo siete a faktúr za elektrinu."),
-                ("Energetická sebestačnosť",f"Samospotreba {samosp}, sebestačnosť {samostat}."),
-                ("ESG & dekarbonizácia","Zníženie uhlíkovej stopy — argument pre tendre a reporting."),
-                ("Záruky a servis","Vlastný servisný tím, monitoring, garancia výkonu.")]
-    bcards = "".join(f"<div class='bcard'><div class='bt'>{t}</div><div class='bd'>{d}</div></div>" for t,d in benefits)
-
-    html = f"""<!DOCTYPE html><html lang='sk'><head><meta charset='utf-8'><style>{css}</style></head><body>
-
-    <div class='slide dark'><div class='glow'></div>
-      <div class='brand'>ENERGOVISION</div><div class='tag'>Moderné energetické riešenia, ktoré hľadáte</div>
-      <h1>Technicko-ekonomický návrh<br>FVE + batériové úložisko</h1>
-      <div class='lead'>Komplexná analýza odberného miesta a návrh riešenia na mieru pre Vašu prevádzku.</div>
-      <div class='for'><div class='k'>PRIPRAVENÉ PRE</div><div class='v'>{cust}</div><div style='color:#94a3b8;font-size:10pt;margin-top:1mm'>{datum}</div></div>
-    </div>
-
-    <div class='slide'>
-      <div class='brand' style='color:#2E5008'>O SPOLOČNOSTI</div><h2 style='margin-top:4mm'>Energovision — partner pre priemyselnú energetiku</h2>
-      <div class='lead'>Pokrývame celý životný cyklus: od analýzy a projektu cez realizáciu po servis a monitoring.</div>
-      <div class='grid4'>{scards}</div>
-      <div class='foot'>Energovision s.r.o. · IČO 53036280 · Lamačská cesta 1738/111, Bratislava · energovision.sk</div>
-    </div>
-
-    <div class='slide'>
-      <div class='brand' style='color:#2E5008'>VÝCHODISKOVÁ SITUÁCIA</div><h2 style='margin-top:4mm'>Profil Vášho odberného miesta</h2>
-      <div class='lead'>Analýza reálnych 15-minútových dát spotreby.</div>
-      <div class='stats'>{_stat("Ročná spotreba", spotreba)}{_stat("Špička odberu", peak)}{_stat("Rezervovaná kapacita (MRK)", mrk)}{_stat("Využitie MRK", mrk_util)}</div>
-    </div>
-
-    <div class='slide'>
-      <div class='brand' style='color:#2E5008'>NAVRHOVANÉ RIEŠENIE</div><h2 style='margin-top:4mm'>Odporúčaná konfigurácia</h2>
-      <div class='stats'>{_stat("Výkon FVE", fve)}{_stat("Batéria (BESS)", bess)}{_stat("Samospotreba", samosp)}{_stat("Sebestačnosť", samostat)}</div>
-      <div class='lead' style='margin-top:8mm'>{_esc(rec.get('name') or '')} — riešenie optimalizované na maximálnu samospotrebu a návratnosť.</div>
-    </div>
-
-    <div class='slide'>
-      <div class='brand' style='color:#2E5008'>EKONOMIKA</div><h2 style='margin-top:4mm'>Návratnosť investície</h2>
-      <div class='stats'>{_stat("Investícia (CAPEX)", capex)}{_stat("Dotácia", dotacia)}{_stat("Čistá súčasná hodnota (NPV)", npv, "20 rokov")}<div class='stat hl'><div class='sv'>{payback}</div><div class='sl'>Návratnosť</div><div class='ss'>IRR {irr}</div></div></div>
-      <div class='foot'>Ekonomika vychádza z reálneho profilu spotreby a aktuálnych tarív. Daňový odpis a dotácia podľa platnej schémy.</div>
-    </div>
-
-    <div class='slide'>
-      <div class='brand' style='color:#2E5008'>POROVNANIE VARIANTOV</div><h2 style='margin-top:4mm'>Vyberte si úroveň riešenia</h2>
-      <table><tr><th>Variant</th><th>FVE</th><th>Batéria</th><th>Investícia</th><th>Samospotreba</th><th>NPV (20r)</th><th>Návratnosť</th></tr>{vrows or "<tr><td colspan=7>Varianty budú doplnené.</td></tr>"}</table>
-    </div>
-
-    {chart_slides}
-
-    <div class='slide'>
-      <div class='brand' style='color:#2E5008'>PRÍNOSY</div><h2 style='margin-top:4mm'>Čo Vám riešenie prinesie</h2>
-      <div class='bgrid'>{bcards}</div>
-    </div>
-
-    <div class='slide dark'><div class='glow'></div>
-      <div class='brand'>ĎALŠIE KROKY</div><h1 style='margin-top:12mm;font-size:28pt'>Poďme overiť potenciál naživo</h1>
-      <div class='lead'>Navrhujeme obhliadku a spresnenie projektu. Pripravíme zmluvu, dotáciu a harmonogram realizácie.</div>
-      <div class='cta'>Kontakt: {_esc(kontakt)}</div>
-      <div class='foot'>Energovision s.r.o. · +421 948 302 137 · energovision.sk</div>
-    </div>
-
-    </body></html>"""
+    def hdr(no, name): return _hdr(logo_c, name, no)
+    cover = (f"<div class='slide dark'><img class='cov-logo' src='{logo_w}'/>"
+             f"<div class='cov-rule'></div>"
+             f"<div class='cov-t'>Návrh fotovoltického<br/>a batériového riešenia</div>"
+             f"<div class='cov-s'>Technicko-ekonomická analýza odberného miesta a riešenie na mieru pre Vašu prevádzku.</div>"
+             f"<div class='cov-for'><div class='k'>PRIPRAVENÉ PRE</div><div class='v'>{cust}</div><div class='d'>{datum}</div></div>"
+             f"<div class='cov-pg'>ENERGOVISION · DÔVERNÉ</div></div>")
+    s_firma = (f"<div class='slide light'>{hdr('01','Spoločnosť')}"
+               f"<div class='kicker'>Energovision</div><h2>Partner pre priemyselnú energetiku</h2>"
+               f"<div class='lead'>Pokrývame celý životný cyklus — od analýzy a projektu cez realizáciu po servis a monitoring.</div>"
+               f"<div style='margin-top:8mm'>{srows}</div>{_ftr('01')}</div>")
+    s_vych = (f"<div class='slide light'>{hdr('02','Východisko')}"
+              f"<div class='kicker'>Profil odberného miesta</div><h2>Analyzovali sme Vašu reálnu spotrebu</h2>"
+              f"<div class='lead'>Na základe 15-minútových meraných dát.</div>"
+              f"<div class='metrics'>"
+              f"<div class='metric'><div class='mv'>{spotreba}</div><div class='ml'>Ročná spotreba</div></div>"
+              f"<div class='metric'><div class='mv'>{peak}</div><div class='ml'>Špička odberu</div></div>"
+              f"<div class='metric'><div class='mv'>{mrk}</div><div class='ml'>Rezervovaná kapacita</div></div>"
+              f"<div class='metric'><div class='mv'>{mrk_util}</div><div class='ml'>Využitie MRK</div></div>"
+              f"</div>{_ftr('02')}</div>")
+    s_ries = (f"<div class='slide light'>{hdr('03','Riešenie')}"
+              f"<div class='kicker'>{_esc(rec.get('name') or 'Odporúčaná konfigurácia')}</div><h2>Navrhované riešenie</h2>"
+              f"<div class='split'><div class='l'>"
+              f"<div class='metrics' style='margin-top:6mm'>"
+              f"<div class='metric'><div class='mv acc'>{fve}</div><div class='ml'>Výkon FVE</div></div>"
+              f"<div class='metric'><div class='mv acc'>{bess}</div><div class='ml'>Batéria (BESS)</div></div></div>"
+              f"<div class='lead' style='margin-top:9mm'>Konfigurácia optimalizovaná na maximálnu samospotrebu a návratnosť.</div>"
+              f"</div><div class='r'>{donut(samosp_v, samosp)}<div style='font-size:10pt;color:#6B7280;margin-top:4mm'>Sebestačnosť {samostat}</div></div></div>{_ftr('03')}</div>")
+    s_ekon = (f"<div class='slide light'>{hdr('04','Ekonomika')}"
+              f"<div class='kicker'>Návratnosť investície</div><h2>Ekonomika riešenia</h2>"
+              f"<div class='metrics'>"
+              f"<div class='metric'><div class='mv'>{capex}</div><div class='ml'>Investícia (CAPEX)</div></div>"
+              f"<div class='metric'><div class='mv'>{dotacia}</div><div class='ml'>Dotácia</div></div>"
+              f"<div class='metric'><div class='mv acc'>{npv}</div><div class='ml'>NPV (20 rokov)</div></div>"
+              f"<div class='metric'><div class='mv acc'>{payback} r</div><div class='ml'>Návratnosť · IRR {irr}</div></div>"
+              f"</div><div class='lead' style='margin-top:14mm'>Vychádza z reálneho profilu spotreby a aktuálnych tarív; zahŕňa daňový odpis a dotáciu podľa platnej schémy.</div>{_ftr('04')}</div>")
+    s_var = (f"<div class='slide light'>{hdr('05','Varianty')}"
+             f"<div class='kicker'>Porovnanie</div><h2>Vyberte si úroveň riešenia</h2>"
+             f"<table><tr><th>Variant</th><th>FVE</th><th>Batéria</th><th>Investícia</th><th>Samospotreba</th><th>Návratnosť</th></tr>{vrows}</table>"
+             f"<div class='bars'>{bars}</div><div style='font-size:8.5pt;color:#9aa3af;margin-top:4mm'>Stĺpce: čistá súčasná hodnota (NPV) za 20 rokov.</div>{_ftr('05')}</div>")
+    s_pri = (f"<div class='slide light'>{hdr('06','Prínosy')}"
+             f"<div class='kicker'>Pridaná hodnota</div><h2>Čo Vám riešenie prinesie</h2>"
+             f"<div class='bgrid'>{bcards}</div>{_ftr('06')}</div>")
+    s_close = (f"<div class='slide dark'><img class='cov-logo' src='{logo_w}'/><div class='cov-rule'></div>"
+               f"<div class='cov-t' style='font-size:34pt'>Poďme overiť<br/>potenciál naživo</div>"
+               f"<div class='cov-s'>Navrhujeme obhliadku a spresnenie projektu. Pripravíme zmluvu, dotáciu a harmonogram realizácie.</div>"
+               f"<div class='cta'>Kontakt: <b>{kontakt}</b></div>"
+               f"<div class='cov-pg'>ENERGOVISION · energovision.sk</div></div>")
+    html = (f"<!DOCTYPE html><html lang='sk'><head><meta charset='utf-8'><style>{css}</style></head><body>"
+            f"{cover}{s_firma}{s_vych}{s_ries}{s_ekon}{s_var}{chart_slides}{s_pri}{s_close}</body></html>")
     return HTML(string=html, base_url=BASE).write_pdf()
+
+
+def _hdr(logo, name, no):
+    return (f"<div class='hdr'><img src='{logo}'/><div class='sec'>{_esc(name)} · {_esc(no)}</div></div>")
+
+def _ftr(page):
+    return (f"<div class='ftr'><span>Energovision s.r.o. · Dôverné</span><span>{_esc(page)}</span></div>")
