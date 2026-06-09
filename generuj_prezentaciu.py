@@ -371,14 +371,14 @@ def generuj_prezentaciu_b2b(g: dict) -> bytes:
     .card .cunit { font-size:9.5pt; color:#6B7280; margin-top:2.5mm; }
     .card .cbul { margin-top:5mm; padding-top:4mm; border-top:0.4mm solid #EEEBE3; font-size:8.5pt; color:#6B7280; line-height:1.75; }
     .cover2 { position:relative; overflow:hidden; padding:24mm 22mm; color:#fff; background:#0a140d; }
-    .cover2 .cimg { position:absolute; inset:0; background-size:cover; background-position:center; z-index:0; }
-    .cover2 .covl { position:absolute; inset:0; z-index:1;
+    .cover2 .cimg { position:absolute; top:0; right:0; bottom:0; left:0; background-size:cover; background-position:center; z-index:0; }
+    .cover2 .covl { position:absolute; top:0; right:0; bottom:0; left:0; z-index:1;
        background:linear-gradient(105deg, rgba(7,16,10,.96) 0%, rgba(7,16,10,.88) 38%, rgba(7,16,10,.5) 72%, rgba(7,16,10,.22) 100%); }
     .cover2 .cc { position:relative; z-index:3; }
     .cover2 .cov-for, .cover2 .cov-pg { z-index:3; }
     .refgrid { display:flex; flex-wrap:wrap; gap:6mm; margin-top:9mm; }
     .refcard { flex:1 1 45%; height:60mm; position:relative; border-radius:2.2mm; overflow:hidden; }
-    .refcard .ri { position:absolute; inset:0; background-size:cover; background-position:center; }
+    .refcard .ri { position:absolute; top:0; right:0; bottom:0; left:0; background-size:cover; background-position:center; }
     .refcard .rl { position:absolute; left:0; right:0; bottom:0; padding:5mm 6mm 4.5mm;
        background:linear-gradient(to top, rgba(7,16,10,.9) 0%, rgba(7,16,10,.45) 55%, rgba(7,16,10,0) 100%); color:#fff; }
     .refcard .rl b { font-size:12.5pt; font-weight:800; } .refcard .rl span { display:block; font-size:9pt; color:#bfe39a; letter-spacing:1.5pt; margin-top:1mm; }
