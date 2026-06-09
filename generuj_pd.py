@@ -291,100 +291,78 @@ def _build_ctx(lead_data):
         "ISC": _safe(striedac.get("ISC"), "15"),
     }
 
-    # ===== Tabuľka 1 — Distribúcia / meranie (technická správa) =====
+    # ============================================================
+    # Tabuľky technickej správy — číslovanie PODĽA ŠABLÓN (overené z DOCX):
+    #   tab1 = FV PANEL (19 polí), tab2/tab3/tab4 = MENIČ 1/2/3 (27 polí + 28=ks, 29=výkon)
+    # Jednotky (kg/V/A/%/mm²/„Typ ") sú V ŠABLÓNE — sem idú len čisté hodnoty.
+    # ============================================================
+
+    # ===== tab1 — FV panel =====
     ctx.update({
-        "tab1_1": dis,
-        "tab1_2": DIS_FULL.get(dis, ""),
-        "tab1_3": _safe(lead_data.get('eic'), "—"),
-        "tab1_4": _safe(lead_data.get('cislo_obch_partnera'), "—"),
-        "tab1_5": _safe(lead_data.get('hlavny_istic'), "3x25A"),
-        "tab1_6": _safe(lead_data.get('predajca_energii'), "—"),
-        "tab1_7": "3+N+PE 400/230V~50Hz TN-C-S",
-        "tab1_8": "AC",
-        "tab1_9": "Trafostanica VSD",
-        "tab1_10": "Existujúca",
-        "tab1_11": _safe(lead_data.get('spotreba'), "—") + " kWh/rok",
-        "tab1_12": "—",
-        "tab1_13": "—",
-        "tab1_14": "—",
-        "tab1_15": "—",
-        "tab1_16": "—",
-        "tab1_17": "—",
-        "tab1_18": "—",
-        "tab1_19": "—",
+        "tab1_1": panel.get("Manufacturer", "LONGi"),
+        "tab1_2": panel.get("Type", "LR7-60HVH-535M"),
+        "tab1_3": panel.get("Dimensions", "1990x1134x30mm"),
+        "tab1_4": panel.get("Weight", "25"),
+        "tab1_5": panel.get("IP", "IP68"),
+        "tab1_6": panel.get("Temp", "-40÷85°C"),
+        "tab1_7": panel.get("Class", "Trieda II"),
+        "tab1_8": panel.get("Cell", "6x20 monokryštál"),
+        "tab1_9": panel.get("DesignLoad", "5400Pa"),
+        "tab1_10": panel.get("DesignPull", "2400Pa"),
+        "tab1_11": panel.get("UN_MAX", "1500"),
+        "tab1_12": panel.get("IREV_MAX", "25"),
+        "tab1_13": panel.get("Cable", "MC4"),
+        "tab1_14": panel.get("PMPP", "535"),
+        "tab1_15": panel.get("ISC", "15,15"),
+        "tab1_16": panel.get("UOC", "44,78"),
+        "tab1_17": panel.get("IMPP", "14,46"),
+        "tab1_18": panel.get("UMPP", "37,01"),
+        "tab1_19": panel.get("Efficiency", "23,7"),
     })
 
-    # ===== Tabuľka 2 — FV panel parametre =====
-    ctx.update({
-        "tab2_1": panel.get("Manufacturer", "LONGi"),
-        "tab2_2": panel.get("Type", "LR7-60HVH-535M"),
-        "tab2_3": panel.get("Cell", "6x20 mono"),
-        "tab2_4": panel.get("Dimensions", "1990x1134x30mm"),
-        "tab2_5": panel.get("Weight", "25") + " kg",
-        "tab2_6": panel.get("IP", "IP68"),
-        "tab2_7": panel.get("Temp", "-40÷85°C"),
-        "tab2_8": panel.get("Class", "Trieda II"),
-        "tab2_9": panel.get("DesignLoad", "5400Pa"),
-        "tab2_10": panel.get("DesignPull", "2400Pa"),
-        "tab2_11": panel.get("Cable", "MC4 4 mm²"),
-        "tab2_12": panel.get("UN_MAX", "1500") + " V",
-        "tab2_13": panel.get("IREV_MAX", "25") + " A",
-        "tab2_14": panel.get("PMPP", "535") + " Wp",
-        "tab2_15": panel.get("UMPP", "37,01") + " V",
-        "tab2_16": panel.get("IMPP", "14,46") + " A",
-        "tab2_17": panel.get("UOC", "44,78") + " V",
-        "tab2_18": panel.get("ISC", "15,15") + " A",
-        "tab2_19": panel.get("Efficiency", "23,7") + " %",
-        "tab2_20": "—",
-        "tab2_21": "—",
-        "tab2_22": "—",
-        "tab2_23": "—",
-        "tab2_24": "—",
-        "tab2_25": "—",
-        "tab2_26": "—",
-        "tab2_27": "—",
-        "tab2_28": "—",
-        "tab2_29": "—",
-    })
-
-    # ===== Tabuľka 3 — Striedač parametre =====
-    def _striedac_rows(s):
+    # ===== tab2/tab3/tab4 — meniče 1..3 =====
+    def _striedac_tab(s, count):
         return {
             "1": s.get("Manufacturer", ""),
             "2": s.get("Type", ""),
-            "3": s.get("Grid", "Hybrid"),
-            "4": s.get("Dimensions", ""),
-            "5": s.get("Weight", "") + " kg",
-            "6": s.get("IP", ""),
-            "7": s.get("Temp", ""),
-            "8": s.get("Humidity", ""),
-            "9": s.get("Noise", ""),
-            "10": s.get("Efficiency", "") + " %",
+            "3": s.get("Dimensions", ""),
+            "4": s.get("Weight", ""),
+            "5": s.get("IP", ""),
+            "6": s.get("Temp", ""),
+            "7": s.get("Humidity", ""),
+            "8": s.get("Noise", ""),
+            "9": s.get("Efficiency", ""),
+            "10": s.get("SPD_DC", "2"),
             "11": str(s.get("MPPT", "")),
             "12": str(s.get("Strings_per_MPPT", "")),
-            "13": s.get("UPV_MIN", "") + " V",
-            "14": s.get("UMPP", "") + " V",
-            "15": s.get("UMPP_MAX", "") + " V",
-            "16": s.get("IMPP", "") + " A",
-            "17": s.get("ISC", "") + " A",
-            "18": s.get("SPD_DC", ""),
-            "19": s.get("Cable_DC", "") + " mm²",
-            "20": s.get("UN", "") + " V",
-            "21": s.get("UN_MIN", "") + " V",
-            "22": s.get("UN_MAX", "") + " V",
-            "23": s.get("PMAX", "") + " kW",
-            "24": s.get("I_MAX", "") + " A",
-            "25": s.get("THD", ""),
-            "26": s.get("PF", ""),
-            "27": s.get("SPD_AC", ""),
-            "28": s.get("Protection", "") + " A",
-            "29": s.get("Cable_AC", "") + " mm²",
+            "13": s.get("UPV_MIN", ""),
+            "14": s.get("UMPP", ""),
+            "15": s.get("UMPP_MAX", ""),
+            "16": s.get("IMPP", ""),
+            "17": s.get("ISC", ""),
+            "18": s.get("Cable_DC", ""),
+            "19": s.get("SPD_AC", "2"),
+            "20": s.get("UN", "400"),
+            "21": s.get("UN_MIN", ""),
+            "22": s.get("UN_MAX", ""),
+            "23": s.get("THD", ""),
+            "24": s.get("PF", ""),
+            "25": s.get("PMAX", ""),
+            "26": s.get("I_MAX", ""),
+            "27": s.get("Cable_AC", ""),
+            "28": str(count),
+            "29": (s.get("PMAX", "") + "kW") if s.get("PMAX") else "",
         }
 
-    striedac_rows = _striedac_rows(striedac)
-    for k, v in striedac_rows.items():
-        ctx[f"tab3_{k}"] = v
-        ctx[f"tab4_{k}"] = v  # Pre 2. striedač (zatiaľ rovnaký) — neskôr ak je 2. striedač iný, treba rozlíšiť
+    for _idx in range(3):
+        _key = "tab%d" % (_idx + 2)
+        if _idx < len(_inverters):
+            _s, _c = _inverters[_idx]
+            _rows = _striedac_tab(_s, _c)
+        else:
+            _rows = {str(_i): "—" for _i in range(1, 30)}
+        for _k, _v in _rows.items():
+            ctx["%s_%s" % (_key, _k)] = _v
 
     return ctx
 
@@ -398,7 +376,7 @@ def _render_template(template_name, ctx, output_path):
     from docxtpl import DocxTemplate
     template_path = _find_template(template_name)
     doc = DocxTemplate(str(template_path))
-    doc.render(ctx)
+    doc.render(ctx, autoescape=True)
     doc.save(str(output_path))
     return output_path
 
