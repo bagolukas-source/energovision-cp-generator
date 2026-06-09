@@ -14848,7 +14848,26 @@ def webhook_whatsapp_uloha():
         if not me:
             return twiml("Tvoje číslo nie je v CRM. Kontaktuj administrátora, nech ťa pridá.")
         if num_media > 0 and not body:
-            return twiml("Hlasovky zatiaľ neviem spracovať — napíš úlohu textom. 🙏")
+            # Hlasovka → stiahni z Twilia (basic auth) → Groq Whisper prepis → text úlohy
+            media_url = request.form.get("MediaUrl0")
+            media_type = (request.form.get("MediaContentType0") or "audio/ogg").lower()
+            groq = os.environ.get("GROQ_API_KEY", "")
+            tw_sid = os.environ.get("TWILIO_ACCOUNT_SID", ""); tw_tok = os.environ.get("TWILIO_AUTH_TOKEN", "")
+            if media_url and groq and tw_sid and tw_tok and "audio" in media_type:
+                try:
+                    ar = requests.get(media_url, auth=(tw_sid, tw_tok), timeout=30)
+                    if ar.ok and ar.content:
+                        ext = "ogg" if "ogg" in media_type else ("mp3" if "mpeg" in media_type or "mp3" in media_type else ("wav" if "wav" in media_type else "m4a"))
+                        files = {"file": (f"hlasovka.{ext}", ar.content, media_type)}
+                        data = {"model": "whisper-large-v3-turbo", "language": "sk", "response_format": "json"}
+                        tr = requests.post("https://api.groq.com/openai/v1/audio/transcriptions",
+                                           headers={"Authorization": f"Bearer {groq}"}, files=files, data=data, timeout=60)
+                        if tr.ok:
+                            body = (tr.json().get("text") or "").strip()
+                except Exception:
+                    log.exception("whatsapp voice transcribe failed")
+            if not body:
+                return twiml("Hlasovku sa nepodarilo prepísať — napíš úlohu textom, prosím. 🙏")
         if not body:
             return twiml("Napíš úlohu, napr.: Tinák vyrobiť rozvádzač pre AGROPO do piatku.")
         # AI parse
