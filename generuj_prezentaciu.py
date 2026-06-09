@@ -12,6 +12,12 @@ def _b64img(name):
     except Exception:
         return ""
 
+def _fileuri(name):
+    """Absolútna file:// cesta — proven path na Render (weasyprint číta priamo z disku,
+    bez data-URI, bez MIME, bez veľkostného limitu). Pre fotky (JPEG) spoľahlivejšie než base64."""
+    p = os.path.join(BASE, name)
+    return ("file://" + p) if os.path.exists(p) else ""
+
 def _esc(x):
     return (str(x) if x not in (None, "") else "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
@@ -224,11 +230,11 @@ def generuj_prezentaciu_b2b(g: dict) -> bytes:
     charts = g.get("charts") or []; datum = _esc(g.get("datum") or "")
     kontakt = _esc(g.get("kontakt") or "obchod@energovision.sk · energovision.sk")
     logo_w = _b64img("energovision_logo_white.png"); logo_c = _b64img("energovision_logo.png")
-    hero_cover = _b64img("ref_cover.jpg"); hero_close = _b64img("ref_close.jpg")
-    ref_items = [(_b64img("ref_cover.jpg"),"Žarnovica","1,56 MWp"),
-                 (_b64img("ref_partizanske.jpg"),"Partizánske","1,32 MWp"),
-                 (_b64img("ref_vlkanova.jpg"),"Vlkanová · KÜSTER","500,5 kWp"),
-                 (_b64img("ref_krup.jpg"),"Nitra · KRUP","BESS 100 kW / 218 kWh")]
+    hero_cover = _fileuri("ref_cover.jpg"); hero_close = _fileuri("ref_close.jpg")
+    ref_items = [(_fileuri("ref_cover.jpg"),"Žarnovica","1,56 MWp"),
+                 (_fileuri("ref_partizanske.jpg"),"Partizánske","1,32 MWp"),
+                 (_fileuri("ref_vlkanova.jpg"),"Vlkanová · KÜSTER","500,5 kWp"),
+                 (_fileuri("ref_krup.jpg"),"Nitra · KRUP","BESS 100 kW / 218 kWh")]
     refcards = "".join(f"<div class='refcard'><div class='ri' style=\"background-image:url('{im}')\"></div>"
                        f"<div class='rl'><b>{_esc(t)}</b><span>{_esc(v)}</span></div></div>" for im,t,v in ref_items)
 
