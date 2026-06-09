@@ -190,7 +190,7 @@ def _ai_prez_texty(payload: dict) -> dict:
             "- Slovenčina, vecne, profesionálne, sebavedomo. ŽIADNE reklamné superlatívy ani vata.\n"
             "- Používaj IBA čísla z podkladu. Nič nevymýšľaj, nedopĺňaj žiadne nové hodnoty.\n"
             "- Krátke vety. Hovor jazykom úspor, rizika, návratnosti a prevádzkovej istoty.\n"
-            "- Kde sa hodí, prepoj na širšie kompetencie Energovision (trafostanice, revízie, elektro), ale nenásilne.\n"
+            "- Kde sa hodí, prepoj na širšie kompetencie Energovision (trafostanice, revízie, elektro), ale nenásilne.\n"            "- Ak dostaneš ZAMERANIE/POKYNY obchodníka, sú nadradené — píš presne v tom duchu (čo zdôrazniť, čo vynechať).\n"            "- Nepíš o tom, čo v podklade nie je (napr. ak nie je batéria, nepíš o batérii; ak nie je dotácia alebo je zakázaná, nespomínaj ju).\n"
             "- Vráť IBA platný JSON, žiadny markdown, presne v tejto štruktúre:\n"
             "{\n"
             '  "podtitul": "1 veta pod titulok na titulke (max 140 znakov)",\n'
@@ -201,7 +201,14 @@ def _ai_prez_texty(payload: dict) -> dict:
             '  "zaver_lead": "1-2 vety výzva na ďalší krok (obhliadka, projekt, dotácia)"\n'
             "}\n"
         )
-        user = "Podklad k odbernému miestu a návrhu (reálne dáta):\n" + json.dumps(payload, ensure_ascii=False, indent=2)
+        zameranie = (payload.get("zameranie") or "").strip()
+        pokyny = []
+        if zameranie:
+            pokyny.append("ZAMERANIE/POKYNY OBCHODNÍKA (toto je najdôležitejšie — prispôsob tomu CELÝ obsah, tón aj dôraz):\n" + zameranie)
+        if payload.get("zobraz_dotaciu") is False:
+            pokyny.append("DÔLEŽITÉ: Dotáciu vôbec NESPOMÍNAJ v žiadnom texte (ani ekonomika_lead, ani zaver). Túto ponuku prezentujeme bez dotácie.")
+        user = ("Podklad k odbernému miestu a návrhu (reálne dáta):\n" + json.dumps(payload, ensure_ascii=False, indent=2)
+                + (("\n\n" + "\n\n".join(pokyny)) if pokyny else ""))
         headers = {"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
         body = {"model": model, "max_tokens": 1400, "temperature": 0.4,
                 "system": system, "messages": [{"role": "user", "content": user}]}
@@ -229,6 +236,8 @@ def generuj_prezentaciu_b2b(g: dict) -> bytes:
     om = g.get("om") or {}; rec = g.get("variant") or {}; variants = g.get("varianty") or []
     charts = g.get("charts") or []; datum = _esc(g.get("datum") or "")
     kontakt = _esc(g.get("kontakt") or "obchod@energovision.sk · energovision.sk")
+    brief = (g.get("zameranie") or g.get("brief") or "").strip()
+    zobraz_dotacia = g.get("zobraz_dotaciu", True)
     logo_w = _b64img("energovision_logo_white.png"); logo_c = _b64img("energovision_logo.png")
     hero_cover = _b64img("ref_cover.png"); hero_close = _b64img("ref_close.png")
     ref_items = [(_b64img("ref_cover.png"),"Žarnovica","1,56 MWp"),
@@ -256,6 +265,7 @@ def generuj_prezentaciu_b2b(g: dict) -> bytes:
 
     # AI texty na mieru (grounded; fallback = statika)
     _ai = _ai_prez_texty({
+        "zameranie": brief, "zobraz_dotaciu": zobraz_dotacia,
         "zakaznik": g.get("zakaznik"),
         "rocna_spotreba_mwh": om.get("consumption_annual_mwh"),
         "spicka_kw": om.get("consumption_peak_kw_hourly") or om.get("consumption_peak_kw_15min"),
@@ -271,7 +281,7 @@ def generuj_prezentaciu_b2b(g: dict) -> bytes:
     ai_podtitul = _esc(_ai.get("podtitul") or "Technicko-ekonomická analýza odberného miesta a riešenie na mieru pre Vašu prevádzku.")
     ai_vych = _esc(_ai.get("vychodisko_lead") or "Vychádzame z reálnych 15-minútových meraných dát Vášho odberného miesta.")
     ai_ries = _esc(_ai.get("riesenie_lead") or "Konfigurácia je optimalizovaná na maximálnu samospotrebu a návratnosť.")
-    ai_ekon = _esc(_ai.get("ekonomika_lead") or "Vychádza z reálneho profilu spotreby a aktuálnych tarív; zahŕňa daňový odpis a dotáciu podľa platnej schémy.")
+    ai_ekon = _esc(_ai.get("ekonomika_lead") or "Vychádza z reálneho profilu spotreby a aktuálnych tarív; zahŕňa daňový odpis.")
     ai_zaver = _esc(_ai.get("zaver_lead") or "Navrhujeme obhliadku a spresnenie projektu. Pripravíme zmluvu, dotáciu a harmonogram realizácie.")
     _ai_pr = _ai.get("prinosy") or []
 
@@ -395,31 +405,32 @@ def generuj_prezentaciu_b2b(g: dict) -> bytes:
                f"<div class='kicker'>Energovision</div><h2>Partner pre priemyselnú energetiku</h2>"
                f"<div class='lead'>Pokrývame celý životný cyklus — od analýzy a projektu cez realizáciu po servis a monitoring.</div>"
                f"<div style='margin-top:8mm'>{srows}</div>{_ftr('01')}</div>")
+    _vm = []
+    if _has(om.get("consumption_annual_mwh")): _vm.append((spotreba, "Ročná spotreba"))
+    if _has(om.get("consumption_peak_kw_hourly") or om.get("consumption_peak_kw_15min")): _vm.append((peak, "Špička odberu"))
+    if _has(om.get("om_mrk_kw")): _vm.append((mrk, "Rezervovaná kapacita"))
+    if _has(om.get("consumption_mrk_utilization_pct")): _vm.append((mrk_util, "Využitie MRK"))
+    _vm_html = "".join(f"<div class='metric'><div class='mv'>{v}</div><div class='ml'>{_esc(l)}</div></div>" for v, l in _vm)
     s_vych = (f"<div class='slide light'>{hdr('03','Východisko')}"
               f"<div class='kicker'>Profil odberného miesta</div><h2>Analyzovali sme Vašu reálnu spotrebu</h2>"
               f"<div class='lead'>{ai_vych}</div>"
-              f"<div class='metrics'>"
-              f"<div class='metric'><div class='mv'>{spotreba}</div><div class='ml'>Ročná spotreba</div></div>"
-              f"<div class='metric'><div class='mv'>{peak}</div><div class='ml'>Špička odberu</div></div>"
-              f"<div class='metric'><div class='mv'>{mrk}</div><div class='ml'>Rezervovaná kapacita</div></div>"
-              f"<div class='metric'><div class='mv'>{mrk_util}</div><div class='ml'>Využitie MRK</div></div>"
-              f"</div>{_ftr('07')}</div>")
+              f"<div class='metrics'>{_vm_html}</div>{_ftr('03')}</div>")
     GR, LM, DK = "#2e7d32", "#6cb33f", "#14181F"
     s_ries = (f"<div class='slide light'>{hdr('04','Riešenie')}"
               f"<div class='kicker'>{_esc(rec.get('name') or 'Odporúčaná konfigurácia')}</div><h2>Navrhované riešenie</h2>"
               f"<div class='cards'>"
-              + _card("FVE na kľúč", fve, "Inštalovaný výkon", ["Strešná / pozemná inštalácia","Optimalizované na samospotrebu","Projekt, montáž a revízie"], GR)
-              + _card("Batéria (BESS)", bess, "Kapacita úložiska", ["Ukladanie denných prebytkov","Špičkovanie a záloha","Vyššia sebestačnosť"], DK)
-              + _card("Samospotreba", samosp, f"Sebestačnosť {samostat}", ["Podiel vlastnej spotreby","Nižší odber zo siete","Ochrana pred rastom cien"], LM)
+              + (_card("FVE na kľúč", fve, "Inštalovaný výkon", ["Strešná / pozemná inštalácia","Optimalizované na samospotrebu","Projekt, montáž a revízie"], GR) if _has(rec.get("fve_kwp")) else "")
+              + (_card("Batéria (BESS)", bess, "Kapacita úložiska", ["Ukladanie denných prebytkov","Špičkovanie a záloha","Vyššia sebestačnosť"], DK) if _has(rec.get("bess_kwh")) else "")
+              + (_card("Samospotreba", samosp, (f"Sebestačnosť {samostat}" if _has(samostat_v) else "Podiel vlastnej spotreby"), ["Podiel vlastnej spotreby","Nižší odber zo siete","Ochrana pred rastom cien"], LM) if _has(samosp_v) else "")
               + f"</div>"
               f"<div class='lead' style='margin-top:11mm'>{ai_ries}</div>{_ftr('04')}</div>")
     s_ekon = (f"<div class='slide light'>{hdr('05','Ekonomika')}"
               f"<div class='kicker'>Návratnosť investície</div><h2>Ekonomika riešenia</h2>"
               f"<div class='cards'>"
-              + _card("Investícia", _eur_c(rec.get("capex_eur")), "CAPEX na kľúč", ["Dodávka a montáž","Projekt + revízie"], "#14181F")
-              + _card("Dotácia", _eur_c(rec.get("result_dotacia_eur")), "Nenávratný príspevok", ["Zelená podnikom / FST","Znižuje vstup"], "#6cb33f")
-              + _card("NPV", _eur_c(rec.get("result_npv_eur_base")), "Čistá hodnota · 20 r", ["Po zdanení, reálne ceny","Vrátane daň. odpisu"], "#2e7d32")
-              + _card("Návratnosť", f"{payback} r", f"IRR {irr}", ["Prostá návratnosť","Z reálneho profilu"], "#2e7d32")
+              + (_card("Investícia", _eur_c(rec.get("capex_eur")), "CAPEX na kľúč", ["Dodávka a montáž","Projekt + revízie"], "#14181F") if _has(rec.get("capex_eur")) else "")
+              + (_card("Dotácia", _eur_c(rec.get("result_dotacia_eur")), "Nenávratný príspevok", ["Zelená podnikom / FST","Znižuje vstup"], "#6cb33f") if (zobraz_dotacia and _has(rec.get("result_dotacia_eur"))) else "")
+              + (_card("NPV", _eur_c(rec.get("result_npv_eur_base")), "Čistá hodnota · 20 r", ["Po zdanení, reálne ceny","Vrátane daň. odpisu"], "#2e7d32") if _has(rec.get("result_npv_eur_base")) else "")
+              + (_card("Návratnosť", f"{payback} r", (f"IRR {irr}" if _has(rec.get("result_irr_pct_base")) else "Prostá návratnosť"), ["Prostá návratnosť","Z reálneho profilu"], "#2e7d32") if _has(rec.get("result_payback_y_base")) else "")
               + f"</div>"
               f"<div class='lead' style='margin-top:12mm'>{ai_ekon}</div>{_ftr('05')}</div>")
     s_var = (f"<div class='slide light'>{hdr('06','Varianty')}"
@@ -456,3 +467,8 @@ def _card(label, val, unit, bullets, color):
     return (f"<div class='card'><div class='ch' style='background:{color}'>{_esc(label)}</div>"
             f"<div class='cb'><div class='cval'>{val}</div><div class='cunit'>{_esc(unit)}</div>"
             f"<div class='cbul'>{bl}</div></div></div>")
+
+def _has(x):
+    if x is None: return False
+    try: return float(x) != 0
+    except Exception: return str(x).strip() not in ("", "—", "None")
