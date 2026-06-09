@@ -362,8 +362,8 @@ def generuj_prezentaciu_b2b(g: dict) -> bytes:
     .bars { margin-top:12mm; } .bar { display:flex; align-items:center; gap:6mm; margin:3.5mm 0; }
     .bl { width:60mm; font-size:10pt; } .bt { flex:1; height:6mm; background:#F0EEE7; border-radius:3mm; overflow:hidden; }
     .bf { height:100%; border-radius:3mm; } .bv { width:34mm; text-align:right; font-weight:700; font-size:11pt; }
-    .bgrid { display:flex; flex-wrap:wrap; gap:0; margin-top:12mm; }
-    .bcard { flex:1 1 50%; padding:8mm 10mm 8mm 0; border-top:0.6mm solid #92D050; margin-right:10mm; margin-top:8mm; }
+    .bgrid { display:flex; flex-wrap:wrap; gap:7mm 9mm; margin-top:9mm; }
+    .bcard { flex:0 0 44%; padding:5mm 0 0; border-top:0.6mm solid #92D050; }
     .bt2 { font-size:13pt; font-weight:700; } .bd2 { font-size:10pt; color:#6B7280; margin-top:2mm; }
     .chartwrap { height:150mm; display:flex; align-items:center; justify-content:center; margin-top:8mm; } .chartwrap img { max-width:100%; max-height:100%; object-fit:contain; }
     /* cover */
@@ -436,10 +436,10 @@ def generuj_prezentaciu_b2b(g: dict) -> bytes:
     s_var = (f"<div class='slide light'>{hdr('06','Varianty')}"
              f"<div class='kicker'>Porovnanie</div><h2>Vyberte si úroveň riešenia</h2>"
              f"<table><tr><th>Variant</th><th>FVE</th><th>Batéria</th><th>Investícia</th><th>Samospotreba</th><th>Návratnosť</th></tr>{vrows}</table>"
-             f"<div class='bars'>{bars}</div><div style='font-size:8.5pt;color:#9aa3af;margin-top:4mm'>Stĺpce: čistá súčasná hodnota (NPV) za 20 rokov.</div>{_ftr('05')}</div>")
+             f"<div class='bars'>{bars}</div><div style='font-size:8.5pt;color:#9aa3af;margin-top:4mm'>Stĺpce: čistá súčasná hodnota (NPV) za 20 rokov.</div>{_ftr('06')}</div>")
     s_pri = (f"<div class='slide light'>{hdr('07','Prínosy')}"
              f"<div class='kicker'>Pridaná hodnota</div><h2>Čo Vám riešenie prinesie</h2>"
-             f"<div class='bgrid'>{bcards}</div>{_ftr('06')}</div>")
+             f"<div class='bgrid'>{bcards}</div>{_ftr('07')}</div>")
     s_ref = (f"<div class='slide light'>{hdr('02','Realizácie')}"
              f"<div class='kicker'>Vybrané realizácie</div><h2>163 inštalácií naprieč Slovenskom</h2>"
              f"<div class='lead'>Od priemyselných megawattových striech až po batériové úložiská — realizácia na kľúč.</div>"
