@@ -14880,3 +14880,16 @@ def webhook_whatsapp_uloha():
     except Exception as e:
         log.exception("whatsapp-uloha failed")
         return twiml("Nepodarilo sa spracovať úlohu, skús znova.")
+
+
+@app.route("/webhook/generuj-prezentaciu", methods=["POST"])
+@require_secret
+def webhook_generuj_prezentaciu():
+    import base64 as _b
+    body = request.get_json(force=True, silent=True) or {}
+    try:
+        import generuj_prezentaciu
+        pdf = generuj_prezentaciu.generuj_prezentaciu_pdf(body)
+        return jsonify({"ok": True, "pdf_base64": _b.b64encode(pdf).decode()})
+    except Exception as e:
+        log.exception("generuj-prezentaciu failed"); return jsonify({"ok": False, "error": str(e)}), 500
