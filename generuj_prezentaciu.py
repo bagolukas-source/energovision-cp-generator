@@ -212,6 +212,13 @@ def generuj_prezentaciu_b2b(g: dict) -> bytes:
     charts = g.get("charts") or []; datum = _esc(g.get("datum") or "")
     kontakt = _esc(g.get("kontakt") or "obchod@energovision.sk · energovision.sk")
     logo_w = _b64img("energovision_logo_white.png"); logo_c = _b64img("energovision_logo.png")
+    hero_cover = _b64img("ref_cover.jpg"); hero_close = _b64img("ref_close.jpg")
+    ref_items = [(_b64img("ref_cover.jpg"),"Žarnovica","1,56 MWp"),
+                 (_b64img("ref_partizanske.jpg"),"Partizánske","1,32 MWp"),
+                 (_b64img("ref_vlkanova.jpg"),"Vlkanová · KÜSTER","500,5 kWp"),
+                 (_b64img("ref_krup.jpg"),"Nitra · KRUP","BESS 100 kW / 218 kWh")]
+    refcards = "".join(f"<div class='refcard'><div class='ri' style=\"background-image:url('{im}')\"></div>"
+                       f"<div class='rl'><b>{_esc(t)}</b><span>{_esc(v)}</span></div></div>" for im,t,v in ref_items)
 
     def num(x, suf="", dec=1):
         try:
@@ -338,19 +345,32 @@ def generuj_prezentaciu_b2b(g: dict) -> bytes:
     .cov-for { position:absolute; left:22mm; bottom:24mm; } .cov-for .k { font-size:8.5pt; letter-spacing:3pt; color:#92D050; } .cov-for .v { font-size:18pt; font-weight:700; margin-top:2mm; } .cov-for .d { font-size:9.5pt; color:#7c8a80; margin-top:1mm; }
     .cov-pg { position:absolute; right:22mm; bottom:24mm; font-size:8.5pt; color:#5f6f64; letter-spacing:2pt; }
     .cta { margin-top:12mm; font-size:13pt; } .cta b { color:#92D050; }
+    .cover2 { position:relative; overflow:hidden; padding:24mm 22mm; color:#fff; background:#0a140d; }
+    .cover2 .cimg { position:absolute; inset:0; background-size:cover; background-position:center; z-index:0; }
+    .cover2 .covl { position:absolute; inset:0; z-index:1;
+       background:linear-gradient(105deg, rgba(7,16,10,.96) 0%, rgba(7,16,10,.88) 38%, rgba(7,16,10,.5) 72%, rgba(7,16,10,.22) 100%); }
+    .cover2 .cc { position:relative; z-index:3; }
+    .cover2 .cov-for, .cover2 .cov-pg { z-index:3; }
+    .refgrid { display:flex; flex-wrap:wrap; gap:6mm; margin-top:9mm; }
+    .refcard { flex:1 1 45%; height:60mm; position:relative; border-radius:2.2mm; overflow:hidden; }
+    .refcard .ri { position:absolute; inset:0; background-size:cover; background-position:center; }
+    .refcard .rl { position:absolute; left:0; right:0; bottom:0; padding:5mm 6mm 4.5mm;
+       background:linear-gradient(to top, rgba(7,16,10,.9) 0%, rgba(7,16,10,.45) 55%, rgba(7,16,10,0) 100%); color:#fff; }
+    .refcard .rl b { font-size:12.5pt; font-weight:800; } .refcard .rl span { display:block; font-size:9pt; color:#bfe39a; letter-spacing:1.5pt; margin-top:1mm; }
     """
     def hdr(no, name): return _hdr(logo_c, name, no)
-    cover = (f"<div class='slide dark'><img class='cov-logo' src='{logo_w}'/>"
-             f"<div class='cov-rule'></div>"
+    cover = (f"<div class='slide cover2'>"
+             f"<div class='cimg' style=\"background-image:url('{hero_cover}')\"></div><div class='covl'></div>"
+             f"<div class='cc'><img class='cov-logo' src='{logo_w}'/><div class='cov-rule'></div>"
              f"<div class='cov-t'>Návrh fotovoltického<br/>a batériového riešenia</div>"
-             f"<div class='cov-s'>{ai_podtitul}</div>"
+             f"<div class='cov-s'>{ai_podtitul}</div></div>"
              f"<div class='cov-for'><div class='k'>PRIPRAVENÉ PRE</div><div class='v'>{cust}</div><div class='d'>{datum}</div></div>"
              f"<div class='cov-pg'>ENERGOVISION · DÔVERNÉ</div></div>")
     s_firma = (f"<div class='slide light'>{hdr('01','Spoločnosť')}"
                f"<div class='kicker'>Energovision</div><h2>Partner pre priemyselnú energetiku</h2>"
                f"<div class='lead'>Pokrývame celý životný cyklus — od analýzy a projektu cez realizáciu po servis a monitoring.</div>"
                f"<div style='margin-top:8mm'>{srows}</div>{_ftr('01')}</div>")
-    s_vych = (f"<div class='slide light'>{hdr('02','Východisko')}"
+    s_vych = (f"<div class='slide light'>{hdr('03','Východisko')}"
               f"<div class='kicker'>Profil odberného miesta</div><h2>Analyzovali sme Vašu reálnu spotrebu</h2>"
               f"<div class='lead'>{ai_vych}</div>"
               f"<div class='metrics'>"
@@ -358,8 +378,8 @@ def generuj_prezentaciu_b2b(g: dict) -> bytes:
               f"<div class='metric'><div class='mv'>{peak}</div><div class='ml'>Špička odberu</div></div>"
               f"<div class='metric'><div class='mv'>{mrk}</div><div class='ml'>Rezervovaná kapacita</div></div>"
               f"<div class='metric'><div class='mv'>{mrk_util}</div><div class='ml'>Využitie MRK</div></div>"
-              f"</div>{_ftr('02')}</div>")
-    s_ries = (f"<div class='slide light'>{hdr('03','Riešenie')}"
+              f"</div>{_ftr('07')}</div>")
+    s_ries = (f"<div class='slide light'>{hdr('04','Riešenie')}"
               f"<div class='kicker'>{_esc(rec.get('name') or 'Odporúčaná konfigurácia')}</div><h2>Navrhované riešenie</h2>"
               f"<div class='split'><div class='l'>"
               f"<div class='metrics' style='margin-top:6mm'>"
@@ -367,7 +387,7 @@ def generuj_prezentaciu_b2b(g: dict) -> bytes:
               f"<div class='metric'><div class='mv acc'>{bess}</div><div class='ml'>Batéria (BESS)</div></div></div>"
               f"<div class='lead' style='margin-top:9mm'>{ai_ries}</div>"
               f"</div><div class='r'>{donut(samosp_v, samosp)}<div style='font-size:10pt;color:#6B7280;margin-top:4mm'>Sebestačnosť {samostat}</div></div></div>{_ftr('03')}</div>")
-    s_ekon = (f"<div class='slide light'>{hdr('04','Ekonomika')}"
+    s_ekon = (f"<div class='slide light'>{hdr('05','Ekonomika')}"
               f"<div class='kicker'>Návratnosť investície</div><h2>Ekonomika riešenia</h2>"
               f"<div class='metrics'>"
               f"<div class='metric'><div class='mv'>{capex}</div><div class='ml'>Investícia (CAPEX)</div></div>"
@@ -375,20 +395,26 @@ def generuj_prezentaciu_b2b(g: dict) -> bytes:
               f"<div class='metric'><div class='mv acc'>{npv}</div><div class='ml'>NPV (20 rokov)</div></div>"
               f"<div class='metric'><div class='mv acc'>{payback} r</div><div class='ml'>Návratnosť · IRR {irr}</div></div>"
               f"</div><div class='lead' style='margin-top:14mm'>{ai_ekon}</div>{_ftr('04')}</div>")
-    s_var = (f"<div class='slide light'>{hdr('05','Varianty')}"
+    s_var = (f"<div class='slide light'>{hdr('06','Varianty')}"
              f"<div class='kicker'>Porovnanie</div><h2>Vyberte si úroveň riešenia</h2>"
              f"<table><tr><th>Variant</th><th>FVE</th><th>Batéria</th><th>Investícia</th><th>Samospotreba</th><th>Návratnosť</th></tr>{vrows}</table>"
              f"<div class='bars'>{bars}</div><div style='font-size:8.5pt;color:#9aa3af;margin-top:4mm'>Stĺpce: čistá súčasná hodnota (NPV) za 20 rokov.</div>{_ftr('05')}</div>")
-    s_pri = (f"<div class='slide light'>{hdr('06','Prínosy')}"
+    s_pri = (f"<div class='slide light'>{hdr('07','Prínosy')}"
              f"<div class='kicker'>Pridaná hodnota</div><h2>Čo Vám riešenie prinesie</h2>"
              f"<div class='bgrid'>{bcards}</div>{_ftr('06')}</div>")
-    s_close = (f"<div class='slide dark'><img class='cov-logo' src='{logo_w}'/><div class='cov-rule'></div>"
+    s_ref = (f"<div class='slide light'>{hdr('02','Realizácie')}"
+             f"<div class='kicker'>Vybrané realizácie</div><h2>163 inštalácií naprieč Slovenskom</h2>"
+             f"<div class='lead'>Od priemyselných megawattových striech až po batériové úložiská — realizácia na kľúč.</div>"
+             f"<div class='refgrid'>{refcards}</div>{_ftr('02')}</div>")
+    s_close = (f"<div class='slide cover2'>"
+               f"<div class='cimg' style=\"background-image:url('{hero_close}')\"></div><div class='covl'></div>"
+               f"<div class='cc'><img class='cov-logo' src='{logo_w}'/><div class='cov-rule'></div>"
                f"<div class='cov-t' style='font-size:34pt'>Poďme overiť<br/>potenciál naživo</div>"
                f"<div class='cov-s'>{ai_zaver}</div>"
-               f"<div class='cta'>Kontakt: <b>{kontakt}</b></div>"
+               f"<div class='cta'>Kontakt: <b>{kontakt}</b></div></div>"
                f"<div class='cov-pg'>ENERGOVISION · energovision.sk</div></div>")
     html = (f"<!DOCTYPE html><html lang='sk'><head><meta charset='utf-8'><style>{css}</style></head><body>"
-            f"{cover}{s_firma}{s_vych}{s_ries}{s_ekon}{s_var}{chart_slides}{s_pri}{s_close}</body></html>")
+            f"{cover}{s_firma}{s_ref}{s_vych}{s_ries}{s_ekon}{s_var}{chart_slides}{s_pri}{s_close}</body></html>")
     return HTML(string=html, base_url=BASE).write_pdf()
 
 
