@@ -167,6 +167,16 @@ def _sk(value, decimals=2):
 # BUILD KONTEXTU pre docxtpl
 # ============================================================
 
+def _stupen_skratka(stupen):
+    """Skratka stupňa PD (Make: Stupenskr) — RP/PSO/PSZaPS/RP ASDR/DSV."""
+    s = (stupen or "").upper()
+    if "ASDR" in s: return "RP ASDR"
+    if "PSZ" in s: return "PSZaPS"
+    if "PSO" in s: return "PSO"
+    if "DSV" in s or "SKUTO" in s: return "DSV"
+    return "RP"
+
+
 def _build_ctx(lead_data):
     """
     Z lead_data zostav celý Jinja2 kontext pre Lukášove projekčné templaty.
@@ -245,6 +255,7 @@ def _build_ctx(lead_data):
         "meno_zak": meno_zak,
         "priez_zak": priez_zak,
         "mail_zak": _safe(lead_data.get('email')),
+        "email_obchodnik": _safe(lead_data.get('email_obchodnik')),
         "tel_zak": _safe(lead_data.get('telefon')),
         "ico_zak": _safe(lead_data.get('ico_zak')),
         "dic_zak": _safe(lead_data.get('dic_zak')),
@@ -267,7 +278,7 @@ def _build_ctx(lead_data):
         "SO01": so01,
         "stupen_projektu": _safe(lead_data.get("stupen_projektu"), "DPP — Dokumentácia pre pripojenie"),
         "STUPEN_PROJEKTU": _safe(lead_data.get("stupen_projektu"), "DPP — Dokumentácia pre pripojenie").upper(),
-        "OZN": "FVE",
+        "OZN": _stupen_skratka(lead_data.get("stupen_projektu")),
         "cislo_zakazky": ev_id,
         "datum": _safe(lead_data.get('datum_dnes'), datetime.now().strftime("%d.%m.%Y")),
         "dis": dis,
@@ -283,12 +294,12 @@ def _build_ctx(lead_data):
         "pocet_menic": (str(_pocet_menic_total) if _has_multi else "1"),
         "oznacenie_menic": (_oznacenie_menic if _has_multi else _safe(striedac.get("Type"), "MHT-10K-25")),
         "oznacenie_RDC": "RDC1",
-        "bateria": _sk(bateria_kwh) if ma_bateriu else "0",
+        "bateria": _safe(lead_data.get("bateria_typ")) or (_sk(bateria_kwh) + " kWh" if ma_bateriu else "—"),
         "typ_panel": f"{panel.get('Manufacturer', 'LONGi')} {panel.get('Type', 'LR7-60HVH-535M')}",
         "typ_konstrukcia": konstrukcia,
         "EIC": _safe(lead_data.get('eic')),
         "EIC1": _safe(lead_data.get('eic_dodavka')),
-        "ISC": _safe(striedac.get("ISC"), "15"),
+        "ISC": _safe(panel.get("ISC"), "15,15"),  # Make: 644.ISC = panel
     }
 
     # ============================================================
