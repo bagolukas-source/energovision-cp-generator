@@ -295,6 +295,7 @@ def _build_ctx(lead_data):
         "oznacenie_menic": (_oznacenie_menic if _has_multi else _safe(striedac.get("Type"), "MHT-10K-25")),
         "oznacenie_RDC": "RDC1",
         "bateria": _safe(lead_data.get("bateria_typ")) or (_sk(bateria_kwh) + " kWh" if ma_bateriu else "—"),
+        "ma_bateriu": ma_bateriu,
         "typ_panel": f"{panel.get('Manufacturer', 'LONGi')} {panel.get('Type', 'LR7-60HVH-535M')}",
         "typ_konstrukcia": konstrukcia,
         "EIC": _safe(lead_data.get('eic')),
@@ -513,6 +514,33 @@ def vygeneruj_pd_b2b(lead_data, out_dir):
     out['technicka'] = gen_technicka_sprava_b2b(lead_data, out_dir / f"{ev_id}_PD_02_Technicka_sprava_{base}.docx")
     log.info("[pd-b2b] %d dokumentov pre %s (stupeň=%s, dis=%s)", len(out), priezvisko,
              lead_data.get('stupen_projektu'), lead_data.get('dis'))
+    return out
+
+
+def vygeneruj_pd_dsv(lead_data, out_dir):
+    """DSV — Dokumentácia skutočného vyhotovenia. Texty v stavovom/minulom čase
+    (šablóny *_DSV), stupeň DSV, + preberacie protokoly. Vráti {kluc: path}."""
+    out_dir = Path(out_dir); out_dir.mkdir(parents=True, exist_ok=True)
+    lead = dict(lead_data)
+    lead["stupen_projektu"] = "DSV (Dokumentácia skutočného vyhotovenia)"
+    if not lead.get('dis'):
+        g = _resolve_dis_from_psc(lead.get('psc'))
+        if g:
+            lead['dis'] = g
+    priezvisko = lead.get('meno_priezvisko', 'Klient').split()[-1] if lead.get('meno_priezvisko') else 'Klient'
+    base = re.sub(r'[^A-Za-zÁ-ž0-9]+', '_', priezvisko).strip('_') or 'Klient'
+    ev_id = lead.get('ev_id', 'EV-XX')
+    ctx = _build_ctx(lead)
+    out = {}
+    out['titul_zoznam_pouvv'] = _render_template("Tit_Zoz_POUVV.docx", ctx, out_dir / f"{ev_id}_DSV_01_Titul_Zoznam_PoUVV_{base}.docx")
+    out['technicka'] = _render_template("technicka_sprava_b2b_DSV.docx", ctx, out_dir / f"{ev_id}_DSV_02_Technicka_sprava_{base}.docx")
+    out['suhrnna'] = _render_template("suhr_technicka_sprava_DSV.docx", ctx, out_dir / f"{ev_id}_DSV_03_Suhrnna_technicka_sprava_{base}.docx")
+    try:
+        out['preberaci_komponenty'] = _render_template("Preberaci_protokol_komponenty.docx", ctx, out_dir / f"{ev_id}_DSV_04_Preberaci_protokol_komponenty_{base}.docx")
+        out['preberaci_final'] = _render_template("Preberaci_protokol_final.docx", ctx, out_dir / f"{ev_id}_DSV_05_Preberaci_protokol_final_{base}.docx")
+    except Exception as e:
+        log.warning("[pd-dsv] preberacie protokoly zlyhali: %s", e)
+    log.info("[pd-dsv] %d dokumentov pre %s", len(out), priezvisko)
     return out
 
 

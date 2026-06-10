@@ -2601,7 +2601,10 @@ def generuj_pd_crm():
                             "summary": {"klient": lead_data.get("meno_priezvisko"),
                                         "ev_id": lead_data.get("ev_id"), "pocet": len(attachments)}})
         with tempfile.TemporaryDirectory() as tmpdir:
-            if mode == "b2b":
+            if mode == "dsv":
+                from generuj_pd import vygeneruj_pd_dsv
+                files = vygeneruj_pd_dsv(lead_data, tmpdir)
+            elif mode == "b2b":
                 from generuj_pd import vygeneruj_pd_sada
                 files = vygeneruj_pd_sada(lead_data, tmpdir)
             else:
