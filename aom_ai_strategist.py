@@ -174,9 +174,11 @@ def generate_smart_variants(sb, analyza: dict, profile: dict, capex_overrides: d
     else:
         max_fve_kwp = 9999
 
-    # Base kWp = 80% pokrytie ročnej spotreby (PVGIS yield 1050 kWh/kWp), ALE cap max_fve_kwp
+    # Base kWp — B2B pravidlo (Lukáš 2026-06-11): spotreba_kWh / 3000, NAHOR na násobok 5
+    # (~80 % samospotreba / ~20 % prebytky; napr. 200 784 kWh → 70 kWp), cap max_fve_kwp
     if annual_kwh > 0:
-        base_kwp = round(min(annual_kwh * 0.8 / 1050, max_fve_kwp), 0)
+        import math as _math
+        base_kwp = round(min(_math.ceil(annual_kwh / 3000.0 / 5.0) * 5.0, max_fve_kwp), 0)
     else:
         base_kwp = round(min(20, max_fve_kwp), 0)
     base_kwp = max(5, base_kwp)

@@ -117,9 +117,11 @@ def _cp_capex(analyza: dict) -> dict:
 
 def _build_request_from_analyza(analyza: dict, measured_block: dict = None) -> dict:
     """Konvertuje DB záznam analyza_om na engine RunVariantsRequest dict.
-    
+
     Sizing logika (priority order):
-    1. annual MWh known → optimal kWp = annual_MWh × 1000 / 1050 (PV yield SK)
+    1. annual kWh known → navrhovaný kWp = spotreba_kWh / 3000, zaokrúhlené NAHOR na násobok 5
+       (Lukáš 2026-06-11: B2B cieľ ~80 % samospotreba / ~20 % prebytky; energetické 1:1
+       cez /1050 navrhovalo zbytočne veľké systémy s veľkými prebytkami)
     2. MRK known → siz okolo MRK (50%/80%/100%/150%)
     3. RK known → siz okolo RK
     4. fallback 30 kWp (small residential)
@@ -143,8 +145,10 @@ def _build_request_from_analyza(analyza: dict, measured_block: dict = None) -> d
     
     # Optimal FVE size — preferuj realny annual spotreba ak existuje
     if annual_kwh > 1000:
-        # 100% self-consumption target = annual_MWh × 1000 / 1050 kWh/kWp
-        optimal_kwp = annual_kwh / 1050
+        # B2B pravidlo (Lukáš 2026-06-11): kWp = spotreba_kWh / 3000, NAHOR na násobok 5
+        # → ~80 % samospotreba / ~20 % prebytky (napr. 200 784 kWh → 66,9 → 70 kWp).
+        import math as _math
+        optimal_kwp = max(5.0, _math.ceil(annual_kwh / 3000.0 / 5.0) * 5.0)
     elif mrk_kw:
         # B2B without consumption history — sizuj na MRK (DC:AC 1.0)
         optimal_kwp = mrk_kw
