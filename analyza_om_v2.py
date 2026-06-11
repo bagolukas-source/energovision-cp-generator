@@ -452,7 +452,10 @@ def insert_variant_via_engine(sb, analyza_id: str, name: str, fve_kwp, bess_kwh,
     req["variants"]["pv_kwp_options"] = [fve_kwp]
     req["variants"]["bess_kwh_options"] = [bess_kwh]
     if capex_per_kwp:
+        # Používateľ zadal CENU DIELA €/kWp — presne podľa zadania, žiadny fixný prídavok
+        # (default engine fix ~38k € by cenu skreslil; kWp×rate = celé dielo).
         req["capex"]["capex_pv_eur_per_kwp"] = float(capex_per_kwp)
+        req["capex"]["capex_pv_fixed_eur"] = 0.0
     raw = run_variants_pipeline(req)
     res = build_run_variants_response(raw)
     vs = res.get("variants") or []
