@@ -517,9 +517,19 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
     # Save variants do DB — variants sú teraz JSON-serializable dicts
     variants = result.get("variants") or []
     if variants:
+        # pred delete si zapamätaj (kwp,bess) akceptovaného variantu — UUID po reinsertne neprežije
+        _old_sel = analyza.get("selected_variant_id")
+        _old_sel_key = None
+        if _old_sel:
+            try:
+                _osr = sb.table("analyza_om_variants").select("fve_kwp,bess_kwh").eq("id", _old_sel).maybe_single().execute()
+                if _osr and _osr.data:
+                    _old_sel_key = (float(_osr.data.get("fve_kwp") or 0), float(_osr.data.get("bess_kwh") or 0))
+            except Exception:
+                _old_sel_key = None
         # Clear existing variants
         sb.table("analyza_om_variants").delete().eq("analyza_id", analyza_id).execute()
-        
+
         rows = []
         for idx, v in enumerate(variants):
             rows.append({
@@ -544,8 +554,25 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
                 "result_payback_y_base": v.get("payback_simple_y", 0),
                 "result_dotacia_eur": v.get("dotacia_eur", 0),
             })
-        sb.table("analyza_om_variants").insert(rows).execute()
-    
+        _ins = sb.table("analyza_om_variants").insert(rows).execute()
+        # selected_variant_id remap: delete+insert by nechal selection visieť na neexistujúcom UUID.
+        # Premapuj podľa (kwp,bess) na nový riadok; ak sa rovnaký variant už negeneroval -> NULL (treba vybrať znova).
+        if _old_sel:
+            _new_sel = None
+            if _old_sel_key:
+                for r in (_ins.data or []):
+                    try:
+                        if abs(float(r.get("fve_kwp") or 0) - _old_sel_key[0]) < 0.51 and abs(float(r.get("bess_kwh") or 0) - _old_sel_key[1]) < 1.01:
+                            _new_sel = r.get("id")
+                            break
+                    except Exception:
+                        continue
+            try:
+                sb.table("analyza_om").update({"selected_variant_id": _new_sel}).eq("id", analyza_id).execute()
+                analyza["selected_variant_id"] = _new_sel
+            except Exception:
+                logging.exception("selected_variant_id remap failed")
+
     # AI NARRATIVE — Claude úvaha pre posudok (energetik perspective)
     ai_narrative = _generate_ai_narrative(analyza, result.get("variants", []), result.get("top_picks", []))
 
@@ -1951,6 +1978,49 @@ def _generate_chocosuc_ai(ctx: dict) -> dict:
         "recommendations": _recs_t or fb["recommendations"],
     }
 
+def _rich_variant_for_row(sb, analyza, row, econ_variants):
+    """K tabuľkovému riadku (analyza_om_variants) nájde BOHATÝ engine variant:
+    1) match vo full_response podľa (pv_kwp, bess_kwh) — rovnaký beh enginu,
+    2) inak JEDEN čerstvý engine beh s capexom odvodeným z riadku (custom/exact varianty).
+    Vráti rich dict s id = tabuľkové UUID (aby selected match v build_orkestra_context sedel), alebo None."""
+    try:
+        kwp = float(row.get("fve_kwp") or 0)
+        bess = float(row.get("bess_kwh") or 0)
+    except Exception:
+        return None
+    if kwp <= 0:
+        return None
+    for v in econ_variants or []:
+        try:
+            if abs(float(v.get("pv_kwp") or 0) - kwp) < 0.51 and abs(float(v.get("bess_kwh") or 0) - bess) < 1.01:
+                rv = dict(v)
+                rv["id"] = row.get("id")
+                return rv
+        except Exception:
+            continue
+    # custom/exact variant nie je vo full_response -> prepočítaj 1×1 cez engine s capexom z riadku
+    try:
+        from energovision_analytics.api.services.engine_service import run_variants_pipeline, build_run_variants_response
+        req = _build_request_from_analyza(analyza, _measured_load_profile_block(sb, analyza))
+        req["variants"]["pv_kwp_options"] = [kwp]
+        req["variants"]["bess_kwh_options"] = [bess]
+        cap = float(row.get("capex_eur") or 0)
+        if cap > 0:
+            bess_rate = float((req.get("capex") or {}).get("capex_bess_eur_per_kwh") or 0)
+            pv_part = max(0.0, cap - bess * bess_rate)
+            req["capex"]["capex_pv_eur_per_kwp"] = pv_part / kwp
+            req["capex"]["capex_pv_fixed_eur"] = 0.0
+        res = build_run_variants_response(run_variants_pipeline(req))
+        vs = res.get("variants") or []
+        if vs:
+            rv = dict(vs[0])
+            rv["id"] = row.get("id")
+            return rv
+    except Exception:
+        logging.exception("posudok rich rerun for selected variant failed")
+    return None
+
+
 def render_posudok_chocosuc(sb, analyza_id: str) -> dict:
     """ChocoSuc-grade posudok: deterministické fakty + AI naratív (grounded) -> HTML->PDF."""
     from posudok_chocosuc.context import build_chocosuc_context
@@ -1971,6 +2041,29 @@ def render_posudok_chocosuc(sb, analyza_id: str) -> dict:
                              "payback_simple_y": float(v.get("result_payback_y_base") or 0)})
     if not variants:
         raise ValueError("No variants — run simulation first")
+
+    # === KONZISTENCIA POSUDOK == ANALÝZA ===
+    # Pravda o tom, čo tím vidí/akceptoval, je tabuľka analyza_om_variants (selected_variant_id ukazuje na jej UUID).
+    # full_response varianty tabuľkové UUID NEMAJÚ -> bez tohto kroku posudok ignoroval akceptovaný variant
+    # a bral max NPV z posledného behu enginu (KraussMaffei: akceptované 422 kWp, posudok počítal 650 kWp).
+    try:
+        v_res2 = sb.table("analyza_om_variants").select("*").eq("analyza_id", analyza_id).order("position").execute()
+        table_rows = v_res2.data or []
+        sel_id = analyza.get("selected_variant_id")
+        sel_row = next((r for r in table_rows if str(r.get("id")) == str(sel_id)), None) if sel_id else None
+        if sel_id and not sel_row:
+            logging.warning("posudok: selected_variant_id %s neexistuje v analyza_om_variants (po rerune?) — beriem top NPV z tabuľky", sel_id)
+        if not sel_row and table_rows:
+            sel_row = max(table_rows, key=lambda r: float(r.get("result_npv_eur_base") or -1e18))
+        if sel_row:
+            rich = _rich_variant_for_row(sb, analyza, sel_row, variants)
+            if rich:
+                variants = [rich] + [v for v in variants if not (v.get("id") == rich.get("id") or (
+                    abs(float(v.get("pv_kwp") or 0) - float(rich.get("pv_kwp") or 0)) < 0.51 and
+                    abs(float(v.get("bess_kwh") or 0) - float(rich.get("bess_kwh") or 0)) < 1.01))]
+                analyza["selected_variant_id"] = rich["id"]  # in-memory: build_orkestra_context matchne istotne
+    except Exception:
+        logging.exception("posudok selected-variant resolution failed — fallback na pôvodné správanie")
 
     # --- načítať hodinový profil zo storage (analyza-om bucket) pre full profile metriky ---
     hourly = None
