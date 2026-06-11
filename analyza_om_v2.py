@@ -436,9 +436,10 @@ Píš ako energetik radí klientovi pri káve, nie ako AI. Konkrétne čísla. E
         return {"error": str(e)[:200], "scenario_type": analyza.get("scenario_type")}
 
 
-def insert_variant_via_engine(sb, analyza_id: str, name: str, fve_kwp, bess_kwh, bess_kw=None) -> dict:
+def insert_variant_via_engine(sb, analyza_id: str, name: str, fve_kwp, bess_kwh, bess_kw=None, capex_per_kwp=None) -> dict:
     """Spočíta JEDEN variant cez REÁLNY engine (rovnaký pipeline ako matica) a uloží do analyza_om_variants.
-    Nahrádza fallback ekonomiku z aom_ai_strategist → konzistentné CAPEX / dotácia / dispatch."""
+    Nahrádza fallback ekonomiku z aom_ai_strategist → konzistentné CAPEX / dotácia / dispatch.
+    capex_per_kwp: voliteľný override ceny diela €/kWp (napr. zadanie s/bez optimizérov)."""
     from energovision_analytics.api.services.engine_service import run_variants_pipeline, build_run_variants_response
     a_res = sb.table("analyza_om").select("*").eq("id", analyza_id).single().execute()
     analyza = a_res.data
@@ -450,6 +451,8 @@ def insert_variant_via_engine(sb, analyza_id: str, name: str, fve_kwp, bess_kwh,
     req = _build_request_from_analyza(analyza, _measured_load_profile_block(sb, analyza))
     req["variants"]["pv_kwp_options"] = [fve_kwp]
     req["variants"]["bess_kwh_options"] = [bess_kwh]
+    if capex_per_kwp:
+        req["capex"]["capex_pv_eur_per_kwp"] = float(capex_per_kwp)
     raw = run_variants_pipeline(req)
     res = build_run_variants_response(raw)
     vs = res.get("variants") or []
@@ -2069,7 +2072,7 @@ def aom_chat(sb, analyza_id: str, message: str, history=None) -> dict:
         "FVE/BESS pre konkrétneho klienta a chce ho doladiť. Máš kontext (JSON). Odpovedaj po slovensky, vecne, krátko.\n\n"
         "Rozhodni zámer používateľa a VRÁŤ IBA JSON:\n"
         "{\n"
-        '  "intent": "explain" | "adjust" | "run_analysis",\n'
+        '  "intent": "explain" | "adjust" | "run_analysis" | "exact_variant",\n'
         '  "reply": "text odpovede používateľovi (po slovensky, 1-4 vety)",\n'
         '  "adjustments": {\n'
         '     "add_pv_kwp": [čísla kWp ktoré má engine navýše preštudovať, alebo []],\n'
@@ -2079,11 +2082,23 @@ def aom_chat(sb, analyza_id: str, message: str, history=None) -> dict:
         '     "dotacia_enabled": true|false|null,\n'
         '     "arb_min_spread_eur_mwh": číslo alebo null,\n'
         '     "scenario_emphasis": "optimisticky"|"konzervativny"|null\n'
+        "  },\n"
+        '  "exact_spec": {   // LEN pri intent=exact_variant — PRESNE čísla zo zadania, NIČ nedopočítavaj\n'
+        '     "fve_kwp": číslo,\n'
+        '     "ac_kw": číslo|null,            // výkon meniča v kW ak ho zadal\n'
+        '     "bess_kwh": číslo|0,\n'
+        '     "orientation": "juh"|"vychod_zapad"|"carport"|"tracker"|null,\n'
+        '     "tilt_deg": číslo|null, "azimuth_deg": číslo|null,\n'
+        '     "capex_per_kwp_s_opt": číslo|null, "capex_per_kwp_bez_opt": číslo|null,\n'
+        '     "capex_total_s_opt": číslo|null, "capex_total_bez_opt": číslo|null,\n'
+        '     "compare_optimizers": true|false  // chce porovnať s optimizérmi a bez\n'
         "  }\n"
         "}\n\n"
         "Pravidlá: ak sa používateľ iba pýta / chce vysvetlenie → intent=explain, adjustments prázdne. "
         "Ak chce zmeniť konfiguráciu (väčšia FVE, pridať/zväčšiť batériu, iné ceny, zapnúť dotáciu, optimistickejší pohľad) "
         "→ intent=adjust a vyplň adjustments. "
+        "Ak ZADÁ PRESNÉ parametre inštalácie (výkon v kWp / kW, sklon, orientácia modulov, cena diela, s/bez optimizérov) "
+        "a chce ich analyzovať PRESNE podľa zadania → intent=exact_variant + exact_spec s JEHO číslami (nezaokrúhľuj, nemeň). "
         "Ak chce SPUSTIŤ alebo PREPOČÍTAŤ celú analýzu (napr. „spusti analýzu“, „prepočítaj to“, urguje výsledok a varianty_count=0) "
         "→ intent=run_analysis; spustenie vykoná SYSTÉM po tvojej odpovedi, ty ho len ohlás.\n"
         "ZÁSADNÉ — ŽIADNE FALOŠNÉ AKCIE A ČÍSLA: NIKDY netvrď, že si niečo spustil/vykonal/načítal pri intent=explain. "
@@ -2113,6 +2128,94 @@ def aom_chat(sb, analyza_id: str, message: str, history=None) -> dict:
     intent = parsed.get("intent", "explain")
     reply = parsed.get("reply") or ""
     adj = parsed.get("adjustments") or {}
+
+    # --- EXACT_VARIANT: analýza PRESNE podľa zadania (výkon, orientácia/sklon, cena s/bez optimizérov) ---
+    if intent == "exact_variant":
+        spec = parsed.get("exact_spec") or {}
+        try:
+            kwp = float(spec.get("fve_kwp") or 0)
+        except Exception:
+            kwp = 0.0
+        if kwp <= 0:
+            return {"ok": True, "intent": "explain", "rerender": False,
+                    "reply": "Na presnú analýzu potrebujem aspoň výkon FVE v kWp (voliteľne kW meniča, sklon, orientáciu, cenu diela)."}
+        if a.get("consumption_annual_mwh") is None:
+            return {"ok": True, "intent": "explain", "rerender": False,
+                    "reply": "Spotreba ešte nie je načítaná — najprv nahraj 15-min profil alebo faktúru do Podkladov."}
+
+        # orientácia / sklon / azimut → ulož na analýzu (engine ich pri výpočte číta cez _topology_params)
+        upd = {}
+        topo_raw = str(spec.get("orientation") or "").strip().lower().replace("-", "_").replace(" ", "_").replace("á", "a").replace("ý", "y").replace("í", "i")
+        topo_map = {"juh": "south", "south": "south", "j": "south",
+                    "vychod_zapad": "east_west", "east_west": "east_west", "ew": "east_west", "v_z": "east_west",
+                    "carport": "carport", "tracker": "tracker"}
+        if topo_raw and topo_map.get(topo_raw):
+            upd["fve_topology"] = topo_map[topo_raw]
+        for src, col in (("tilt_deg", "fve_tilt_deg"), ("azimuth_deg", "fve_azimuth_deg")):
+            if spec.get(src) is not None:
+                try:
+                    upd[col] = float(spec[src])
+                except Exception:
+                    pass
+        if upd:
+            try:
+                sb.table("analyza_om").update(upd).eq("id", analyza_id).execute()
+                a.update(upd)
+            except Exception:
+                logging.exception("exact_variant topology update failed")
+
+        bess = 0.0
+        try:
+            bess = float(spec.get("bess_kwh") or 0)
+        except Exception:
+            pass
+        ac_kw = spec.get("ac_kw")
+
+        def _per_kwp(direct, total):
+            try:
+                if spec.get(direct) is not None:
+                    return float(spec[direct])
+                if spec.get(total) is not None:
+                    return float(spec[total]) / kwp
+            except Exception:
+                pass
+            return None
+        capex_s = _per_kwp("capex_per_kwp_s_opt", "capex_total_s_opt")
+        capex_b = _per_kwp("capex_per_kwp_bez_opt", "capex_total_bez_opt")
+        compare = bool(spec.get("compare_optimizers")) or (capex_s is not None and capex_b is not None)
+
+        OPT_ADDER_EUR_KWP = 35.0  # default prirážka optimizérov, ak používateľ nezadal obe ceny
+        adder_assumed = False
+        label_kw = f"{kwp:g} kWp" + (f" / {float(ac_kw):g} kW" if ac_kw else "")
+        runs = []
+        if compare:
+            if capex_b is None and capex_s is not None:
+                capex_b = max(0.0, capex_s - OPT_ADDER_EUR_KWP); adder_assumed = True
+            if capex_s is None:
+                capex_s = (capex_b + OPT_ADDER_EUR_KWP) if capex_b is not None else None; adder_assumed = capex_b is not None
+            runs.append((f"{label_kw} — s optimizérmi", capex_s))
+            runs.append((f"{label_kw} — bez optimizérov", capex_b))
+        else:
+            runs.append((f"{label_kw} — podľa zadania", capex_s if capex_s is not None else capex_b))
+
+        results = []
+        for nm, cpk in runs:
+            r = insert_variant_via_engine(sb, analyza_id, nm, kwp, bess, capex_per_kwp=cpk)
+            if not r.get("ok"):
+                return {"ok": True, "intent": "exact_variant", "rerender": False,
+                        "reply": f"Variant „{nm}“ sa nepodarilo spočítať: {r.get('error')}"}
+            results.append((nm, r))
+
+        tp = _topology_params(a)
+        _f = lambda x: f"{round(float(x or 0)):,}".replace(",", " ")
+        lines = [f"Spočítané presne podľa zadania (sklon {tp[0]:g}°, azimut {tp[1]:g}°, topológia {a.get('fve_topology') or 'south'}):"]
+        for nm, r in results:
+            lines.append(f"• {nm}: cena diela {_f(r.get('capex_eur'))} €, NPV {_f(r.get('npv_eur'))} €, návratnosť {float(r.get('payback_y') or 0):.1f} r")
+        if adder_assumed:
+            lines.append(f"(Cenu druhého variantu som odvodil prirážkou {OPT_ADDER_EUR_KWP:g} €/kWp za optimizéry — ak máš presnú cenu, napíš ju a prepočítam.)")
+        lines.append("Varianty sú uložené v záložke Výsledky.")
+        return {"ok": True, "intent": "exact_variant", "rerender": False, "refresh": True,
+                "reply": "\n".join(lines)}
 
     # --- RUN_ANALYSIS: REÁLNE spustenie celého výpočtu (engine + posudok) na pozadí ---
     if intent == "run_analysis":
