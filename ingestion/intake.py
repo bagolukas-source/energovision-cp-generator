@@ -92,6 +92,16 @@ def _download(sb, bucket, path):
     return sb.storage.from_(bucket).download(path)
 
 
+def _txt_is_bare_profile(raw: bytes) -> bool:
+    """.txt s holým zoznamom hodnôt = profil spotreby, nie opis projektu.
+    35040 hodnôt -> 15-min ročný profil v kW (1.1. 00:00 - 31.12. 23:45); parsuje normalizer."""
+    try:
+        from ingestion.normalizer import _bare_numeric_kw
+        return _bare_numeric_kw(raw) is not None
+    except Exception:
+        return False
+
+
 def run_intake(sb, analyza_id: str, files: list, bucket: str = "analyza-om") -> dict:
     """files: [{storage_path, filename}]. Roztriedi, parsuj, ulož podklady, extrahuj parametre."""
     from ingestion.faktura_parser import parse_faktura
@@ -104,6 +114,13 @@ def run_intake(sb, analyza_id: str, files: list, bucket: str = "analyza-om") -> 
             continue
         kind, label, role = classify_file(fn)
         _pdf_text = None
+        # .txt môže byť holý profil spotreby (35040 hodnôt = 15-min rok v kW) — over obsahom
+        if kind == "opis" and fn.lower().endswith(".txt"):
+            try:
+                if _txt_is_bare_profile(_download(sb, bucket, path)):
+                    kind, label, role = "15min", "15-min spotreba (hlavný odber)", "hlavný odber"
+            except Exception as e:
+                warnings.append(f"Sniff profilu '{fn}': {str(e)[:100]}")
         if kind == "pdf_unknown":
             try:
                 from ingestion.faktura_parser import extract_text as _xt

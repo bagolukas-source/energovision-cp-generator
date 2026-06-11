@@ -248,8 +248,62 @@ def _kw_to_15min_mwh(kw: pd.Series) -> pd.Series:
 # ============================================================
 # Fast-path (existujúce SK parsery)
 # ============================================================
+# Holý zoznam hodnôt bez časových pečiatok: počet hodnôt -> (granularita min, prestupný rok)
+_BARE_GRID = {35040: (15, False), 35136: (15, True),
+              17520: (30, False), 17568: (30, True),
+              8760: (60, False), 8784: (60, True)}
+
+
+def _bare_numeric_kw(raw: bytes):
+    """.txt/.csv s holým zoznamom číselných hodnôt bez timestampov (Lukáš 2026-06-11):
+    35040 hodnôt = 15-min ročný profil ČINNÉHO ODBERU v kW, zoradený od 1.1. 00:00
+    do 31.12. 23:45. Rok = posledný ukončený rok so zhodnou dĺžkou (prestupný/nie).
+    Podporené aj 30-min/hodinové rady a prestupné roky. Vráti kW series alebo None."""
+    import re
+    from datetime import datetime
+    try:
+        txt = raw.decode("utf-8", "replace")
+    except Exception:
+        return None
+    if "<" in txt[:200]:  # HTML/XML maskované ako text
+        return None
+    lines = [l.strip() for l in txt.splitlines() if l.strip()]
+    if len(lines) == 1:
+        toks = re.split(r"[;,\t ]+", lines[0])
+    else:
+        # viacriadkový: vezmi prvý stĺpec (oddelený ; alebo tab), toleruj medzery v číslach
+        toks = [re.split(r"[;\t]", l)[0].strip().replace("\xa0", "").replace(" ", "") for l in lines]
+    vals, bad = [], 0
+    for t in toks:
+        if t and re.fullmatch(r"-?\d+(?:[.,]\d+)?", t):
+            vals.append(float(t.replace(",", ".")))
+        else:
+            bad += 1
+    if len(vals) < 1000 or bad > max(3, 0.05 * len(toks)):
+        return None
+    n = len(vals)
+    if n not in _BARE_GRID:
+        return None
+    gran, leap = _BARE_GRID[n]
+    y = datetime.now().year - 1
+    _is_leap = lambda yy: yy % 4 == 0 and (yy % 100 != 0 or yy % 400 == 0)
+    while _is_leap(y) != leap:
+        y -= 1
+    idx = pd.date_range(f"{y}-01-01 00:00", periods=n, freq=f"{gran}min")
+    kw = pd.Series(vals, index=idx)
+    kw.attrs["granularity_min"] = gran
+    return kw
+
+
 def _fastpath_kw(raw: bytes, filename: str):
     """Skús známe parsery. Vráti (kw_series, label) alebo None."""
+    # 0) holý číselný rad bez timestampov (.txt s 35040 hodnotami a pod.)
+    try:
+        bare = _bare_numeric_kw(raw)
+        if bare is not None:
+            return bare, "fastpath:bare_series"
+    except Exception:
+        pass
     from analyza_om import extract_consumption as ec
     suffix = Path(filename).suffix.lower()
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tf:
