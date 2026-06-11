@@ -127,7 +127,10 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None) -> dict:
     _reco_idx = {"konzervativny":1, "optimisticky":2}.get(_emph, 0)
     for _i,_sc in enumerate(S):
         _sc["recommended"] = (_i == _reco_idx)
-    full = S[-1]
+    # HEADLINE = odporúčaný scenár (default Báza = ENGINE čísla, tie isté čo vidí tím v analýze).
+    # Predtým full=S[-1] (Optimistický +12 %) -> posudok ukazoval iné NPV než analýza (KraussMaffei 233k vs 134k).
+    full = S[_reco_idx]
+    opti = S[-1]
 
     # --- tornado (citlivosť NPV na engine bázu) ---
     base_npv = full["npv"]
@@ -207,11 +210,11 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None) -> dict:
         }.get(analyza.get("consumption_strategy"), ("skutočné 15-min dáta" if analyza.get("consumption_15min_path") else "modelovaný profil")),
         "variant_title":f"Navrhnutý variant — FVE {base.get('pv_kwp',0):.0f} kWp" + (f" + BESS {bess_kwh:.0f} kWh" if bess_kwh else ""),
         "summary_headline":"Audit odberu: investícia je ekonomicky výhodná vo všetkých scenároch",
-        "recommendation_line":f"Realizovať — návratnosť {full['payback']:.1f}–{S[0]['payback']:.1f} r, NPV {full['npv']:,.0f} €, kladné NPV s pravdepodobnosťou {sum(1 for x in res if x>0)/len(res)*100:.0f} %.".replace(","," "),
+        "recommendation_line":f"Realizovať — návratnosť {opti['payback']:.1f}–{S[0]['payback']:.1f} r, NPV {full['npv']:,.0f} € (báza), kladné NPV s pravdepodobnosťou {sum(1 for x in res if x>0)/len(res)*100:.0f} %.".replace(","," "),
         "cover_subtitle":"Analýza odberu, simulácia výroby a dispatch, ekonomické posúdenie v 3 scenároch s rizikovou analýzou.",
         "podklady":({"measured":"15-min profil · ","extrapolated":"15-min profil (časť roka) · ","synthesized":"profil z faktúry · "}.get(analyza.get("consumption_strategy"), "15-min profil · " if analyza.get("consumption_15min_path") else ""))+"PVGIS · OKTE 2025"+(" · faktúra" if tarif_real else ""),
         "zaver_headline":"Odporúčanie pre klienta",
-        "zaver_text":f"Investícia {capex:,.0f} € do FVE {base.get('pv_kwp',0):.0f} kWp".replace(","," ")+(f" + BESS {bess_kwh:.0f} kWh" if bess_kwh else "")+f" prinesie ročné úspory {S[0]['save_total']:,.0f} € (báza) až {full['save_total']:,.0f} € (plný scenár). Návratnosť {full['payback']:.1f}–{S[0]['payback']:.1f} r, NPV 20 r. {full['npv']:,.0f} €, IRR {full['irr']:.1f} %.".replace(","," "),
+        "zaver_text":f"Investícia {capex:,.0f} € do FVE {base.get('pv_kwp',0):.0f} kWp".replace(","," ")+(f" + BESS {bess_kwh:.0f} kWh" if bess_kwh else "")+f" prinesie ročné úspory {S[0]['save_total']:,.0f} € (báza) až {opti['save_total']:,.0f} € (optimistický scenár). Návratnosť {opti['payback']:.1f}–{S[0]['payback']:.1f} r, NPV 20 r. {full['npv']:,.0f} € (báza), IRR {full['irr']:.1f} %.".replace(","," "),
         "recommendations":[],  # doplní AI/deterministic neskôr
     }
     _build_deterministic_narratives(ctx, S, full, prof, pm)

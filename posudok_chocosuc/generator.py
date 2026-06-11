@@ -44,7 +44,7 @@ def render_chocosuc_html(ctx: dict) -> str:
         if not src: return ''
         _gc[0]+=1
         return f'<img class="img" src="{src}"><div class="cap">Graf {_gc[0]}: {text}</div>'
-    S=ctx["scenarios3"]; bza=S[0]; full=S[-1]
+    S=ctx["scenarios3"]; bza=S[0]; full=next((x for x in S if x.get("recommended")), bza); opti=S[-1]
     pm=ctx.get("profile_metrics",{})
     recs=ctx.get("recommendations",[])
     summ_nar=ctx.get("ai_summary_html") or ctx.get("ai_commentary_html") or ""
@@ -158,13 +158,13 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
   <div class="hero"><div class="lbl"><b>Čistý prínos investície (NPV 20 r.)</b> pri diskonte 6 % — po odpočítaní celej investície a prevádzkových nákladov.</div><div class="big">+{eur(full['npv'])}</div></div>
   <div class="kpis">
     <div class="kpi"><div class="l">Investícia</div><div class="v">{eur(ctx.get('capex_total_eur'))}</div><div class="n">bez DPH</div></div>
-    <div class="kpi"><div class="l">Ročný prínos · rok 1</div><div class="v">{num(bza['save_total']/1000,0)}–{num(full['save_total']/1000,0)} tis. €</div><div class="n">báza → plný scenár</div></div>
-    <div class="kpi"><div class="l">Návratnosť</div><div class="v">{num(full['payback'],1)}–{num(bza['payback'],1)} r</div><div class="n">s daňovým odpisom</div></div>
+    <div class="kpi"><div class="l">Ročný prínos · rok 1</div><div class="v">{num(bza['save_total']/1000,0)}–{num(opti['save_total']/1000,0)} tis. €</div><div class="n">báza → optimistický</div></div>
+    <div class="kpi"><div class="l">Návratnosť</div><div class="v">{num(opti['payback'],1)}–{num(bza['payback'],1)} r</div><div class="n">s daňovým odpisom</div></div>
     <div class="kpi"><div class="l">IRR · NPV</div><div class="v">{num(full['irr'],0)} %</div><div class="n">NPV {eur(full['npv'])}</div></div>
   </div>
   <div class="kick" style="margin-top:10px;">Čo získate</div>
   <div class="benefits">
-    <div class="bcard"><div class="h">Nižšie účty</div><div class="d">Úspora {eur(bza['save_total'])}–{eur(full['save_total'])}/rok na elektrine a distribúcii.</div></div>
+    <div class="bcard"><div class="h">Nižšie účty</div><div class="d">Úspora {eur(bza['save_total'])}–{eur(opti['save_total'])}/rok na elektrine a distribúcii.</div></div>
     <div class="bcard"><div class="h">Stabilná cena 20+ r.</div><div class="d">Vlastná výroba je hedge proti rastu cien — chráni hodnotu až {eur(ctx.get('inaction_infl_20y',0))}.</div></div>
     <div class="bcard"><div class="h">Nezávislosť</div><div class="d">{num(ctx.get('coverage_pct'),1)} % spotreby z vlastného zdroja pri {num(ctx.get('samosp_pct'),1)} % samospotrebe.</div></div>
     <div class="bcard"><div class="h">ESG</div><div class="d">−{num(ctx.get('co2_avoided_tonnes'),0)} t CO₂ ročne; doložiteľný príspevok k udržateľnosti.</div></div>

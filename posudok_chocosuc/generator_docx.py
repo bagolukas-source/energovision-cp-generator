@@ -60,7 +60,7 @@ def generate_chocosuc_docx(ctx: dict) -> bytes:
     doc=Document()
     for sec in doc.sections:
         sec.top_margin=Cm(1.8); sec.bottom_margin=Cm(1.6); sec.left_margin=Cm(1.7); sec.right_margin=Cm(1.7)
-    S=ctx["scenarios3"]; bza=S[0]; full=S[-1]; pm=ctx.get("profile_metrics",{})
+    S=ctx["scenarios3"]; bza=S[0]; full=next((x for x in S if x.get("recommended")), bza); opti=S[-1]; pm=ctx.get("profile_metrics",{})
 
     # COVER
     _kick(doc, f"Technicko-ekonomický posudok · {ctx.get('posudok_number','')}" + ((" (k "+ctx['pon_number']+")") if ctx.get('pon_number') else ""))
