@@ -2055,6 +2055,9 @@ def aom_chat(sb, analyza_id: str, message: str, history=None) -> dict:
         "mrk_kw": a.get("om_mrk_kw"), "max_export_kw": a.get("max_export_kw"),
         "existing_fve_kwp": a.get("existing_fve_kwp"), "scenario_type": a.get("scenario_type"),
         "varianty": vlist, "aktualne_overrides": cur_over,
+        "ma_nacitanu_spotrebu": a.get("consumption_annual_mwh") is not None,
+        "varianty_count": len(variants),
+        "vypocet_bezi": (a.get("chat_job_status") == "running"),
     }
 
     sysp = (
@@ -2062,7 +2065,7 @@ def aom_chat(sb, analyza_id: str, message: str, history=None) -> dict:
         "FVE/BESS pre konkrétneho klienta a chce ho doladiť. Máš kontext (JSON). Odpovedaj po slovensky, vecne, krátko.\n\n"
         "Rozhodni zámer používateľa a VRÁŤ IBA JSON:\n"
         "{\n"
-        '  "intent": "explain" | "adjust",\n'
+        '  "intent": "explain" | "adjust" | "run_analysis",\n'
         '  "reply": "text odpovede používateľovi (po slovensky, 1-4 vety)",\n'
         '  "adjustments": {\n'
         '     "add_pv_kwp": [čísla kWp ktoré má engine navýše preštudovať, alebo []],\n'
@@ -2076,7 +2079,13 @@ def aom_chat(sb, analyza_id: str, message: str, history=None) -> dict:
         "}\n\n"
         "Pravidlá: ak sa používateľ iba pýta / chce vysvetlenie → intent=explain, adjustments prázdne. "
         "Ak chce zmeniť konfiguráciu (väčšia FVE, pridať/zväčšiť batériu, iné ceny, zapnúť dotáciu, optimistickejší pohľad) "
-        "→ intent=adjust a vyplň adjustments. NIKDY si nevymýšľaj čísla mimo toho čo používateľ žiada. "
+        "→ intent=adjust a vyplň adjustments. "
+        "Ak chce SPUSTIŤ alebo PREPOČÍTAŤ celú analýzu (napr. „spusti analýzu“, „prepočítaj to“, urguje výsledok a varianty_count=0) "
+        "→ intent=run_analysis; spustenie vykoná SYSTÉM po tvojej odpovedi, ty ho len ohlás.\n"
+        "ZÁSADNÉ — ŽIADNE FALOŠNÉ AKCIE A ČÍSLA: NIKDY netvrď, že si niečo spustil/vykonal/načítal pri intent=explain. "
+        "NIKDY nepíš čísla (spotreba, MRK, výsledky), ktoré NIE SÚ v KONTEXTE — ak je rocna_spotreba_mwh null, "
+        "povedz, že spotreba ešte nie je načítaná a čo treba nahrať. Ak vypocet_bezi=true, povedz, že výpočet práve beží. "
+        "NIKDY nesľubuj „výsledky do minúty“ — o behu informuje systém. "
         "Rešpektuj fyzikálne limity: FVE AC ≤ MRK, export ≤ max_export_kw — ak žiada nezmysel, v reply slušne upozorni."
     )
     msgs = []
@@ -2100,6 +2109,38 @@ def aom_chat(sb, analyza_id: str, message: str, history=None) -> dict:
     intent = parsed.get("intent", "explain")
     reply = parsed.get("reply") or ""
     adj = parsed.get("adjustments") or {}
+
+    # --- RUN_ANALYSIS: REÁLNE spustenie celého výpočtu (engine + posudok) na pozadí ---
+    if intent == "run_analysis":
+        if a.get("chat_job_status") == "running":
+            return {"ok": True, "intent": "run_analysis", "rerender": False, "pending": True,
+                    "reply": "Výpočet už beží — výsledky sa zobrazia automaticky, prosím o chvíľu strpenia."}
+        if a.get("consumption_annual_mwh") is None:
+            return {"ok": True, "intent": "explain", "rerender": False,
+                    "reply": "Nemôžem spustiť analýzu — spotreba ešte nie je načítaná (rocna_spotreba_mwh je prázdna). "
+                             "Nahraj 15-min profil alebo faktúru do Podkladov, prípadne ich nechaj znova spracovať."}
+        import threading
+        def _bg_run(aid):
+            try:
+                run_variants_premium(sb, aid)
+                render_posudok_chocosuc(sb, aid)
+                try:
+                    sb.table("analyza_om").update({"chat_job_status": "done"}).eq("id", aid).execute()
+                except Exception:
+                    pass
+            except Exception:
+                logging.exception("aom_chat run_analysis bg failed")
+                try:
+                    sb.table("analyza_om").update({"chat_job_status": "failed"}).eq("id", aid).execute()
+                except Exception:
+                    pass
+        try:
+            sb.table("analyza_om").update({"chat_job_status": "running"}).eq("id", analyza_id).execute()
+        except Exception:
+            pass
+        threading.Thread(target=_bg_run, args=(analyza_id,), daemon=True).start()
+        return {"ok": True, "intent": "run_analysis", "rerender": False, "pending": True,
+                "reply": (reply or "Spúšťam analýzu.")}
 
     if intent != "adjust" or not any(adj.get(k) for k in ("add_pv_kwp","add_bess_kwh","capex_per_kwp","capex_per_kwh_bess","dotacia_enabled","scenario_emphasis","arb_min_spread_eur_mwh")):
         return {"ok": True, "intent": "explain", "reply": reply or "Rozumiem.", "rerender": False}
