@@ -220,6 +220,7 @@ def calculate_bom_v2(sb, config: dict) -> dict:
             "qty": k_qty, "unit": r["unit"],
             "cost_per_unit": k_cost,
             "price_per_unit": float(r["price_per_unit"]),
+            "price_locked": True,  # predaj podľa cenníka 2026-06-12 — globálna marža ho neprepisuje
             "rule_id": f"konstrukcia.{r['rule_key']}",
         })
         pos += 1
@@ -391,7 +392,9 @@ def calculate_bom_v2(sb, config: dict) -> dict:
         factor = 1 + margin_pct / 100
         for it in items:
             cost = it["cost_per_unit"]
-            it["price_per_unit"] = round(cost * factor, 2)
+            # price_locked (konštrukcia z cenníka): predaj z DB, marža ho neprepisuje
+            if not it.get("price_locked"):
+                it["price_per_unit"] = round(cost * factor, 2)
             it["total_cost"] = round(cost * it["qty"], 2)
             it["total_price"] = round(it["price_per_unit"] * it["qty"], 2)
     else:
