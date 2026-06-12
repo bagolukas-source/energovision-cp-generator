@@ -210,11 +210,15 @@ def calculate_bom_v2(sb, config: dict) -> dict:
     # ===== 3. KONŠTRUKCIA =====
     k_rules = _load_konstrukcia_rule(sb, typ_strechy)
     for r in k_rules:
+        # Nový cenník 2026-06-12: konštrukcia sa účtuje podľa POČTU PANELOV (ks), nie kWp.
+        # qty_formula z DB ('pocet_panelov' / 'kwp') sa rešpektuje; cost_per_unit z DB má prednosť pred paušálom 0.77.
+        k_qty = _eval_qty_formula(r.get("qty_formula"), kwp_actual, pocet_panelov)
+        k_cost = float(r["cost_per_unit"]) if r.get("cost_per_unit") is not None else float(r["price_per_unit"]) * 0.77
         items.append({
             "position": pos, "category": "Konštrukcia",
             "product_name": r["product_name"],
-            "qty": kwp_actual, "unit": r["unit"],
-            "cost_per_unit": float(r["price_per_unit"]) * 0.77,
+            "qty": k_qty, "unit": r["unit"],
+            "cost_per_unit": k_cost,
             "price_per_unit": float(r["price_per_unit"]),
             "rule_id": f"konstrukcia.{r['rule_key']}",
         })
