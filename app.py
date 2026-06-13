@@ -14928,3 +14928,17 @@ def webhook_prezentacia_b2b():
         return jsonify({"ok": True, "pdf_base64": _b.b64encode(pdf).decode()})
     except Exception as e:
         log.exception("prezentacia-b2b failed"); return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/webhook/financovanie-report", methods=["POST"])
+@require_secret
+def webhook_financovanie_report():
+    import base64 as _b
+    body = request.get_json(force=True, silent=True) or {}
+    try:
+        from financovanie_report.generator import generate_financovanie_pdf
+        pdf = generate_financovanie_pdf(body)
+        return jsonify({"ok": True, "pdf_base64": _b.b64encode(pdf).decode()})
+    except Exception as e:
+        log.exception("financovanie-report failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
