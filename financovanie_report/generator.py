@@ -76,11 +76,14 @@ def _fmt_eur(value: Any) -> str:
 
 def _fmt_pct(value: Any, decimals: int = 1) -> str:
     if value is None or isinstance(value, Undefined):
-        return "—"
+        return "N/A"
     try:
-        return f"{float(value):.{decimals}f} %".replace(".", ",")
+        v = float(value)
+        if v <= -99.9:
+            return "N/A"
+        return f"{v:.{decimals}f} %".replace(".", ",")
     except (TypeError, ValueError):
-        return "—"
+        return "N/A"
 
 
 def _fmt_num(value: Any, decimals: int = 0) -> str:
@@ -164,7 +167,7 @@ def _cumulative_svg(variants: list[dict], cf_data: list[dict]) -> str:
         return PAD_T + (1 - (v - min_v) / (max_v - min_v)) * (H - PAD_T - PAD_B)
 
     color_map = {
-        "ppa10": "#22c55e", "ppa15": "#16a34a", "leas": "#f59e0b",
+        "ppa10": "#6366f1", "ppa15": "#a855f7", "leas": "#f59e0b",
         "sih": "#3b82f6", "dot": "#8b5cf6", "vl": "#92D050",
     }
 
@@ -173,7 +176,7 @@ def _cumulative_svg(variants: list[dict], cf_data: list[dict]) -> str:
         k = vc["key"]
         col = color_map.get(k, vc.get("color", "#94a3b8"))
         pts = " ".join(f"{sx(i):.1f},{sy(v):.1f}" for i, v in enumerate(cum[k]))
-        lines.append(f'<polyline points="{pts}" fill="none" stroke="{col}" stroke-width="2" stroke-linejoin="round"/>')
+        lines.append(f'<polyline points="{pts}" fill="none" stroke="{col}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>')
 
     # zero line
     zy = sy(0)
