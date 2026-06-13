@@ -37,8 +37,20 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from jinja2 import Environment, FileSystemLoader, Undefined
+from jinja2 import Environment, FileSystemLoader, Undefined, ChainableUndefined
 from weasyprint import HTML, CSS
+
+
+class _SafeUndefined(ChainableUndefined):
+    """Return empty string / empty list on any attribute/item access instead of raising."""
+    def __str__(self) -> str:
+        return ""
+    def __iter__(self):
+        return iter([])
+    def __len__(self) -> int:
+        return 0
+    def __bool__(self) -> bool:
+        return False
 
 _HERE = Path(__file__).parent
 _TEMPLATES_DIR = _HERE / "templates"
@@ -96,7 +108,7 @@ def _make_env() -> Environment:
     env = Environment(
         loader=FileSystemLoader(str(_TEMPLATES_DIR)),
         autoescape=True,
-        undefined=Undefined,
+        undefined=_SafeUndefined,
     )
     env.filters["eur"] = _fmt_eur
     env.filters["pct"] = _fmt_pct

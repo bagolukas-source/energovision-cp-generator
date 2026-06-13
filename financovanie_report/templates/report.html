@@ -188,9 +188,9 @@
       {% if v.key == best_key %}<span style="background:rgba(0,0,0,0.2);color:#fff;padding:2pt 8pt;border-radius:99pt;font-size:8pt;font-weight:700;">★ ODPORÚČANÉ</span>{% endif %}
     </div>
     <div class="variant-card-body">
-      {% if v.items %}
+      {% if v.spec_rows %}
       <ul class="variant-items">
-        {% for item in v.items %}
+        {% for item in v.spec_rows %}
         <li>
           <span class="vi-label">{{ item.label }}</span>
           <span class="vi-value">{{ item.value }}</span>
