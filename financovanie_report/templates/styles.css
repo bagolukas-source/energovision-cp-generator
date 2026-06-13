@@ -216,6 +216,9 @@ body {
 .cf-odd { background: #ffffff; }
 .cf-even { background: #f9fafb; }
 .cf-waiting { background: #fef9c3; }
+.cf-event-row { background: #ecfdf5; }
+.cf-event-cell { padding: 3px 6px; text-align: center; font-size: 7.5pt; font-weight: 700; color: #15803d; }
+.cf-event-after { background: #f0fdf4; }
 .cf-bold { font-weight: 700; }
 .cf-green { color: #15803d; }
 .cf-red { color: #dc2626; }

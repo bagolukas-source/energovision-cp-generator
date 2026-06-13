@@ -193,9 +193,14 @@
             </tr>
           </thead>
           <tbody>
-            {% for row in v.cf_breakdown %}
-            <tr class="{% if row.is_waiting %}cf-waiting{% elif loop.index is odd %}cf-odd{% else %}cf-even{% endif %}">
-              <td class="cf-td cf-year">{{ row.y }}{% if row.is_waiting %} ⏳{% endif %}</td>
+            {% for row in v['cf_breakdown'] %}
+            {% if row.event_label %}
+            <tr class="cf-event-row">
+              <td colspan="{{ 5 if v.has_payment_col else 4 }}" class="cf-event-cell">{{ row.event_label }}</td>
+            </tr>
+            {% endif %}
+            <tr class="{% if row.is_waiting %}cf-waiting{% elif row.event_label %}cf-event-after{% elif loop.index is odd %}cf-odd{% else %}cf-even{% endif %}">
+              <td class="cf-td cf-year">{% if row.y == 1 %}1 ½r{% else %}{{ row.y }}{% endif %}{% if row.is_waiting %} ⏳{% endif %}</td>
               <td class="cf-td">{% if row.is_waiting %}–{% else %}{{ row.gross|eur }}{% endif %}</td>
               {% if v.has_payment_col %}
               <td class="cf-td {% if row.payment > 0 %}cf-red{% else %}cf-grey{% endif %}">

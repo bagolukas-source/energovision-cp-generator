@@ -39,17 +39,9 @@ def _fmt_eur(value: Any) -> str:
         return "—"
     sign = "-" if v < 0 else ""
     v = abs(v)
-    if v >= 1_000_000:
-        s = f"{v/1_000_000:,.3f}".replace(",", " ").replace(".", ",")
-        # trim trailing zeros after comma
-        parts = s.split(",")
-        dec = parts[1].rstrip("0") if len(parts) > 1 else ""
-        if dec:
-            return f"{sign}{parts[0]},{dec} M €"
-        return f"{sign}{parts[0]} M €"
-    if v >= 1000:
-        return f"{sign}{v:,.0f} €".replace(",", " ")
-    return f"{sign}{v:,.0f} €"
+    # Always full integer — no M€ abbreviation (user requirement)
+    formatted = f"{v:,.0f}".replace(",", " ")
+    return f"{sign}{formatted} €"
 
 
 def _fmt_pct(value: Any, decimals: int = 1) -> str:
