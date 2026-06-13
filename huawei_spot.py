@@ -270,6 +270,20 @@ def huawei_login(force: bool = False) -> Optional[str]:
     """
     global _huawei_session
     now = time.time()
+    # Step 0: OAuth token PREDNOSTNE — NBI userName/systemCode účet expiroval (failCode 20400 od 06/2026).
+    # Po dokončení authorization_code autorizácie (majiteľ FusionSolar) je v DB owner-token,
+    # ktorý funguje na /thirdData/* ako XSRF-TOKEN. NBI login zostáva fallback.
+    try:
+        from huawei_oauth import get_valid_access_token
+        oauth_tok = get_valid_access_token("huawei")
+        if oauth_tok:
+            _huawei_session["token"] = oauth_tok
+            _huawei_session["expires_at"] = now + 20 * 60
+            _huawei_session["base"] = (_load_huawei_credentials_from_db().get("base_url") or HUAWEI_BASE)
+            return oauth_tok
+    except Exception as _e:
+        log.warning("[huawei_login] OAuth token path failed, fallback na NBI: %s", _e)
+
     # Step 1: RAM cache
     if not force and _huawei_session["token"] and _huawei_session["expires_at"] > now + 60:
         return _huawei_session["token"]

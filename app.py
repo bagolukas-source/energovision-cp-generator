@@ -13036,7 +13036,9 @@ def huawei_oauth_callback():
     code = request.args.get("code")
     state = request.args.get("state")
     error = request.args.get("error")
-    redirect_uri = "https://energovision-cp-generator.onrender.com/api/auth/huawei/callback"
+    # redirect_uri MUSÍ sedieť s tým, ktorý poslal /api/auth/huawei/start (app.energovision.sk),
+    # inak Huawei token exchange zlyhá (redirect_uri_mismatch). Obe URL sú registrované v Huawei app.
+    redirect_uri = "https://app.energovision.sk/api/auth/huawei/callback"
     
     if error:
         return f"<h1>Authorization Error</h1><p>{error}</p>", 400
