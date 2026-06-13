@@ -970,7 +970,9 @@ def huawei_get_station_list(debug: bool = False, force_refresh: bool = False):
 
     base = _huawei_session.get("base") or HUAWEI_BASE
     url = f"{base}/stations"
-    headers = {"XSRF-TOKEN": token, "Content-Type": "application/json"}
+    # Huawei eu5 NBI odteraz vyžaduje XSRF-TOKEN aj ako COOKIE (nielen hlavičku) — bez cookie
+    # vracia prázdne telo (2026-06-13). Cookie hodnota == token hodnota.
+    headers = {"XSRF-TOKEN": token, "Cookie": f"XSRF-TOKEN={token}", "Content-Type": "application/json"}
     debug_info["url"] = url
 
     all_stations: List[Dict[str, Any]] = []
