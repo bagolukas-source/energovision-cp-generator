@@ -242,7 +242,7 @@
         {# Parametre & podmienky #}
         <div class="params-box">
           <div class="params-title">Parametre &amp; podmienky</div>
-          {% for item in v.items %}
+          {% for item in v['items'] %}
           <div class="params-item" style="border-left:2px solid {{ v.color }};">{{ item }}</div>
           {% endfor %}
         </div>
