@@ -46,6 +46,18 @@
         <span>{{ (annual_prod_mwh * 1000)|num(0) }} kWh</span>
       </div>
       {% endif %}
+      {% if tarif_buy %}
+      <div class="cover-meta-item">
+        <label>Tarif nákup</label>
+        <span>{{ "%.3f"|format(tarif_buy) }} €/kWh</span>
+      </div>
+      {% endif %}
+      {% if samosp_pct %}
+      <div class="cover-meta-item">
+        <label>Samospotreba</label>
+        <span>{{ samosp_pct }} %</span>
+      </div>
+      {% endif %}
       <div class="cover-meta-item">
         <label>Dátum</label>
         <span>{{ report_date }}</span>
