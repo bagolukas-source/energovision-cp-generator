@@ -35,7 +35,7 @@ body {
   align-items: center;
   margin-bottom: 40mm;
 }
-.cover-logo img { height: 36px; filter: brightness(10); }
+.cover-logo img { height: 36px; filter: brightness(0) invert(1); }
 .cover-badge {
   background: #92D050;
   color: #0f172a;
@@ -291,4 +291,10 @@ body {
   font-size: 8pt;
   color: #6b7280;
   line-height: 1.7;
+  page-break-before: avoid;
+  page-break-inside: avoid;
+}
+/* Posledná strana variant nesmie dostať page-break, keďže footer nasleduje hneď */
+.variant-page:last-of-type {
+  page-break-after: avoid;
 }
