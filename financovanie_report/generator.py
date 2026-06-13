@@ -2,37 +2,10 @@
 
 Public API:
     generate_financovanie_pdf(context: dict) -> bytes
-
-Context dict structure:
-    project_name, project_id, client_name, site_address, report_date
-    capex               float  — celkový CAPEX v EUR
-    pv_kwp              float
-    annual_prod_mwh     float
-    scenario            str    — "base"|"optimistic"|"pessimistic"
-
-    Per-variant dicts in `variants` list:
-      key, label, color
-      npv, irr_pct, payback, dscr (optional)
-      monthly_payment (optional), annual_payment (optional)
-      initial_investment
-
-    Best variant: best_key, best_label, best_irr, best_npv, best_payback
-
-    Leasing specifics (optional):
-      leas_akontacia_pct, leas_akontacia_eur, leas_principal, leas_monthly, leas_yr, leas_r_pct
-
-    SIH specifics (optional):
-      sih_ann, sih_r_pct, sih_yr
-
-    Dotacia specifics (optional):
-      dot_grant, dot_own, dot_pct
-
-    cf_data: list of dicts {year, variant_key: net_cf, ...} — for chart
 """
 from __future__ import annotations
 
 import base64
-import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -42,7 +15,6 @@ from weasyprint import HTML, CSS
 
 
 class _SafeUndefined(ChainableUndefined):
-    """Return empty string / empty list on any attribute/item access instead of raising."""
     def __str__(self) -> str:
         return ""
     def __iter__(self):
@@ -52,11 +24,11 @@ class _SafeUndefined(ChainableUndefined):
     def __bool__(self) -> bool:
         return False
 
+
 _HERE = Path(__file__).parent
 _TEMPLATES_DIR = _HERE / "templates"
 
-
-# ──────────────────────────── helpers ────────────────────────────
+# ──────────────────── helpers ────────────────────
 
 def _fmt_eur(value: Any) -> str:
     if value is None or isinstance(value, Undefined):
@@ -68,9 +40,15 @@ def _fmt_eur(value: Any) -> str:
     sign = "-" if v < 0 else ""
     v = abs(v)
     if v >= 1_000_000:
-        return f"{sign}{v/1_000_000:,.2f} M €".replace(",", " ").replace(".", ",")
+        s = f"{v/1_000_000:,.3f}".replace(",", " ").replace(".", ",")
+        # trim trailing zeros after comma
+        parts = s.split(",")
+        dec = parts[1].rstrip("0") if len(parts) > 1 else ""
+        if dec:
+            return f"{sign}{parts[0]},{dec} M €"
+        return f"{sign}{parts[0]} M €"
     if v >= 1000:
-        return f"{sign}{v:,.0f} €".replace(",", " ")
+        return f"{sign}{v:,.0f} €".replace(",", " ")
     return f"{sign}{v:,.0f} €"
 
 
@@ -91,7 +69,7 @@ def _fmt_num(value: Any, decimals: int = 0) -> str:
         return "—"
     try:
         v = float(value)
-        return f"{v:,.{decimals}f}".replace(",", " ").replace(".", ",")
+        return f"{v:,.{decimals}f}".replace(",", " ").replace(".", ",")
     except (TypeError, ValueError):
         return "—"
 
@@ -119,39 +97,36 @@ def _make_env() -> Environment:
     env.globals["now"] = datetime.now
     return env
 
-
-# ──────────────────────────── inline SVG chart ────────────────────────────
+# ──────────────────── SVG charts ────────────────────
 
 def _cumulative_svg(variants: list[dict], cf_data: list[dict]) -> str:
-    """Simple inline SVG cumulative cashflow chart — no external deps."""
+    """Overview cumulative cashflow chart — all variants."""
     if not cf_data or not variants:
         return ""
 
-    W, H = 540, 220
-    PAD_L, PAD_R, PAD_T, PAD_B = 56, 16, 16, 36
+    W, H = 540, 200
+    PL, PR, PT, PB = 60, 16, 14, 36
 
-    # collect all net_cf values
-    all_vals: list[float] = []
     variant_keys = [v["key"] for v in variants]
     cum: dict[str, list[float]] = {k: [] for k in variant_keys}
-    years = [row["year"] for row in cf_data]
+    years = [row["year"] for row in cf_data if "year" in row]
 
-    for row in cf_data:
-        for k in variant_keys:
-            cum[k].append(float(row.get(k, 0) or 0))
-
-    # cumulative
+    # build running cumulative from net CF
     for k in variant_keys:
         running = 0.0
-        cumulative = []
-        for v in cum[k]:
-            running += v
-            cumulative.append(running)
-        cum[k] = cumulative
+        pts: list[float] = []
+        for row in cf_data:
+            if "year" not in row:
+                continue
+            if row["year"] == 0:
+                # initial investment already captured in init_inv
+                running += float(row.get(k, 0) or 0)
+            else:
+                running += float(row.get(k, 0) or 0)
+            pts.append(running)
+        cum[k] = pts
 
-    for k in variant_keys:
-        all_vals.extend(cum[k])
-
+    all_vals = [v for lst in cum.values() for v in lst]
     if not all_vals:
         return ""
 
@@ -160,51 +135,118 @@ def _cumulative_svg(variants: list[dict], cf_data: list[dict]) -> str:
     if max_v == min_v:
         max_v = min_v + 1
 
+    n = len(years)
+
     def sx(i: int) -> float:
-        return PAD_L + (i / (len(years) - 1)) * (W - PAD_L - PAD_R) if len(years) > 1 else PAD_L
+        return PL + (i / max(n - 1, 1)) * (W - PL - PR)
 
     def sy(v: float) -> float:
-        return PAD_T + (1 - (v - min_v) / (max_v - min_v)) * (H - PAD_T - PAD_B)
+        return PT + (1 - (v - min_v) / (max_v - min_v)) * (H - PT - PB)
 
     color_map = {
         "ppa10": "#6366f1", "ppa15": "#a855f7", "leas": "#f59e0b",
         "sih": "#3b82f6", "dot": "#8b5cf6", "vl": "#92D050",
     }
 
-    lines = []
+    parts: list[str] = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}">',
+        '<rect width="100%" height="100%" fill="white"/>',
+    ]
+
+    # zero line
+    if min_v < 0 < max_v:
+        zy = sy(0)
+        parts.append(f'<line x1="{PL}" y1="{zy:.1f}" x2="{W-PR}" y2="{zy:.1f}" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="4,3"/>')
+        parts.append(f'<text x="{PL-4}" y="{zy:.1f}" text-anchor="end" dominant-baseline="middle" font-size="8" fill="#9ca3af">0</text>')
+
     for vc in variants:
         k = vc["key"]
         col = color_map.get(k, vc.get("color", "#94a3b8"))
-        pts = " ".join(f"{sx(i):.1f},{sy(v):.1f}" for i, v in enumerate(cum[k]))
-        lines.append(f'<polyline points="{pts}" fill="none" stroke="{col}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>')
+        pts_str = " ".join(f"{sx(i):.1f},{sy(v):.1f}" for i, v in enumerate(cum[k]))
+        parts.append(f'<polyline points="{pts_str}" fill="none" stroke="{col}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>')
 
-    # zero line
-    zy = sy(0)
-    zero_line = f'<line x1="{PAD_L}" y1="{zy:.1f}" x2="{W-PAD_R}" y2="{zy:.1f}" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="4,3"/>'
-
-    # x-axis labels every 5 years
-    x_labels = []
+    # x-axis labels
     for i, yr in enumerate(years):
         if yr % 5 == 0:
             x = sx(i)
-            x_labels.append(f'<text x="{x:.1f}" y="{H-PAD_B+14}" text-anchor="middle" font-size="8" fill="#9ca3af">{yr}</text>')
+            parts.append(f'<text x="{x:.1f}" y="{H-PB+14}" text-anchor="middle" font-size="8" fill="#9ca3af">{yr}</text>')
 
-    # y-axis label
-    y_label = f'<text x="{PAD_L-4}" y="{sy(0):.1f}" text-anchor="end" dominant-baseline="middle" font-size="8" fill="#9ca3af">0</text>'
+    # y-axis: max label
+    parts.append(f'<text x="{PL-4}" y="{PT+4}" text-anchor="end" font-size="8" fill="#9ca3af">{_fmt_eur(max_v)}</text>')
 
-    svg_parts = [
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _mini_svg(cf_breakdown: list[dict], init_inv: float, color: str) -> str:
+    """Per-variant mini cumulative chart."""
+    if not cf_breakdown:
+        return ""
+
+    W, H = 260, 120
+    PL, PR, PT, PB = 46, 8, 8, 24
+
+    # build pts: start from init_inv, then add each row's cumulative
+    pts: list[float] = [init_inv]
+    for row in cf_breakdown:
+        pts.append(float(row.get("cum", 0) or 0))
+
+    min_v = min(pts)
+    max_v = max(pts)
+    if max_v == min_v:
+        max_v = min_v + 1
+
+    n = len(pts)
+
+    def sx(i: int) -> float:
+        return PL + (i / max(n - 1, 1)) * (W - PL - PR)
+
+    def sy(v: float) -> float:
+        return PT + (1 - (v - min_v) / (max_v - min_v)) * (H - PT - PB)
+
+    # fill area
+    fill_pts = [f"{sx(0):.1f},{sy(0):.1f}"]
+    for i, v in enumerate(pts):
+        fill_pts.append(f"{sx(i):.1f},{sy(v):.1f}")
+    fill_pts.append(f"{sx(n-1):.1f},{sy(0):.1f}")
+    fill_str = " ".join(fill_pts)
+
+    line_pts = " ".join(f"{sx(i):.1f},{sy(v):.1f}" for i, v in enumerate(pts))
+
+    # axis labels
+    min_label = _fmt_eur(min_v)
+    max_label = _fmt_eur(max_v)
+
+    parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}">',
         '<rect width="100%" height="100%" fill="white"/>',
-        zero_line,
-        *lines,
-        *x_labels,
-        y_label,
-        "</svg>",
     ]
-    return "".join(svg_parts)
 
+    # zero line
+    if min_v < 0:
+        zy = sy(0)
+        parts.append(f'<line x1="{PL}" y1="{zy:.1f}" x2="{W-PR}" y2="{zy:.1f}" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="3,2"/>')
+        parts.append(f'<text x="{PL-3}" y="{zy:.1f}" text-anchor="end" dominant-baseline="middle" font-size="7" fill="#9ca3af">0</text>')
 
-# ──────────────────────────── public API ────────────────────────────
+    # fill + line
+    parts.append(f'<polygon points="{fill_str}" fill="{color}18"/>')
+    parts.append(f'<polyline points="{line_pts}" fill="none" stroke="{color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>')
+
+    # x labels at r5, r10, r15, r20, r25
+    for yr in [5, 10, 15, 20, 25]:
+        i = yr  # index = year number (pts[0]=init, pts[1]=yr1, ..., pts[25]=yr25)
+        if i < n:
+            x = sx(i)
+            parts.append(f'<text x="{x:.1f}" y="{H-PB+12}" text-anchor="middle" font-size="7" fill="#9ca3af">r{yr}</text>')
+
+    # y labels
+    parts.append(f'<text x="{PL-3}" y="{PT+5}" text-anchor="end" font-size="7" fill="#9ca3af">{max_label}</text>')
+    parts.append(f'<text x="{PL-3}" y="{H-PB-1}" text-anchor="end" font-size="7" fill="#9ca3af">{min_label}</text>')
+
+    parts.append("</svg>")
+    return "".join(parts)
+
+# ──────────────────── public API ────────────────────
 
 def generate_financovanie_pdf(context: dict) -> bytes:
     env = _make_env()
@@ -218,7 +260,20 @@ def generate_financovanie_pdf(context: dict) -> bytes:
 
     variants = ctx.get("variants", [])
     cf_data = ctx.get("cf_data", [])
+
+    # overview chart
     ctx["cumulative_svg"] = _cumulative_svg(variants, cf_data)
+
+    # per-variant mini SVG
+    color_map = {
+        "ppa10": "#6366f1", "ppa15": "#a855f7", "leas": "#f59e0b",
+        "sih": "#3b82f6", "dot": "#8b5cf6", "vl": "#92D050",
+    }
+    for v in variants:
+        breakdown = v.get("cf_breakdown", [])
+        init_inv = float(v.get("init_inv", 0) or 0)
+        color = color_map.get(v.get("key", ""), v.get("color", "#94a3b8"))
+        v["mini_svg"] = _mini_svg(breakdown, init_inv, color)
 
     tmpl = env.get_template("report.html")
     html_str = tmpl.render(**ctx)

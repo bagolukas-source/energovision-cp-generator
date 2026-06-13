@@ -13,7 +13,7 @@
       {% if logo_b64 %}
         <img src="data:image/png;base64,{{ logo_b64 }}" alt="Energovision"/>
       {% else %}
-        <strong style="font-size:14pt;color:#0F172A;">Energovision</strong>
+        <strong style="font-size:14pt;color:#0F172A;">energovision</strong>
       {% endif %}
     </div>
     <div class="cover-badge">ANALÝZA FINANCOVANIA</div>
@@ -59,11 +59,11 @@
   </div>
 </div>
 
-{# ═══════════════════════════ PAGE 2: POROVNANIE ═══════════════════════════ #}
+{# ═══════════════════════════ PAGE 2: POROVNANIE MODELOV ═══════════════════════════ #}
 <div class="page">
   <div class="section-header">
     <div class="section-title">Porovnanie modelov financovania</div>
-    <div class="section-meta">Scenár: {{ scenario|default('Realistický') }}<br/>CAPEX: {{ capex|eur }}</div>
+    <div class="section-meta">Scenár: {{ scenario|default('Realistický') }} · CAPEX: {{ capex|eur }}</div>
   </div>
 
   {% if best_key %}
@@ -76,30 +76,6 @@
   </div>
   {% endif %}
 
-  <div class="kpi-grid">
-    {% if capex %}
-    <div class="kpi-card">
-      <div class="kpi-label">Investícia (CAPEX)</div>
-      <div class="kpi-value">{{ capex|eur }}</div>
-      <div class="kpi-sub">celkové náklady projektu</div>
-    </div>
-    {% endif %}
-    {% if best_irr is not none and best_irr %}
-    <div class="kpi-card accent">
-      <div class="kpi-label">Najlepšie IRR</div>
-      <div class="kpi-value green">{{ best_irr|pct }}</div>
-      <div class="kpi-sub">{{ best_label }}</div>
-    </div>
-    {% endif %}
-    {% if best_payback %}
-    <div class="kpi-card">
-      <div class="kpi-label">Návratnosť</div>
-      <div class="kpi-value">{{ best_payback|num(1) }} r</div>
-      <div class="kpi-sub">{{ best_label }}</div>
-    </div>
-    {% endif %}
-  </div>
-
   {% if variants %}
   <table class="variant-table">
     <thead>
@@ -108,28 +84,28 @@
         <th>IRR</th>
         <th>NPV (25 r)</th>
         <th>Návratnosť</th>
+        <th>Kumulatív 25r</th>
         <th>Počiatočný výdaj</th>
-        <th>Ročná splátka</th>
       </tr>
     </thead>
     <tbody>
       {% for v in variants %}
       <tr {% if v.key == best_key %}class="best-row"{% endif %}>
         <td>
-          <span class="variant-chip" style="background:{{ v.color }}22;color:{{ v.color }};">{{ v.label }}</span>
+          <span class="variant-chip" style="background:{{ v.color }}22;color:{{ v.color }};border:1px solid {{ v.color }}44;">{{ v.label }}</span>
           {% if v.key == best_key %} ★{% endif %}
         </td>
         <td>
           {% if v.irr_pct is none or v.irr_pct == none %}
-            <span style="color:#94a3b8;">N/A</span>
+            <span class="na-text">N/A</span>
           {% else %}
-            {{ v.irr_pct|pct }}
+            <strong>{{ v.irr_pct|pct }}</strong>
           {% endif %}
         </td>
-        <td>{{ v.npv|eur }}</td>
+        <td><strong style="color:{% if v.npv and v.npv > 0 %}#15803d{% else %}#dc2626{% endif %}">{{ v.npv|eur }}</strong></td>
         <td>{% if v.payback %}{{ v.payback|num(1) }} r{% else %}—{% endif %}</td>
+        <td><strong>{{ v.total_cum_25|eur }}</strong></td>
         <td>{{ v.initial_investment|eur }}</td>
-        <td>{% if v.annual_payment %}{{ v.annual_payment|eur }}{% else %}—{% endif %}</td>
       </tr>
       {% endfor %}
     </tbody>
@@ -138,7 +114,7 @@
 
   {% if cumulative_svg %}
   <div class="chart-container">
-    <div class="chart-title">Kumulatívny cashflow za 25 rokov</div>
+    <div class="chart-title">Kumulatívny cashflow za 25 rokov (€)</div>
     {{ cumulative_svg|safe }}
     {% if variants %}
     <div class="legend">
@@ -156,79 +132,153 @@
 
 {# ═══════════════════════════ PAGES 3+: DETAIL PER VARIANT ═══════════════════════════ #}
 {% for v in variants %}
-<div class="page">
-  <div class="section-header">
-    <div class="section-title">{{ v.label }}</div>
-    <div class="section-meta">Model {{ loop.index }} z {{ variants|length }}</div>
-  </div>
+<div class="page variant-page">
 
-  <div class="kpi-grid">
-    <div class="kpi-card {% if v.key == best_key %}accent{% endif %}">
-      <div class="kpi-label">IRR</div>
-      {% if v.irr_pct is none or v.irr_pct == none %}
-        <div class="kpi-value" style="color:#94a3b8;">N/A</div>
-        <div class="kpi-sub">bez počiatočnej investície</div>
-      {% else %}
-        <div class="kpi-value {% if v.irr_pct and v.irr_pct > 0 %}green{% else %}red{% endif %}">{{ v.irr_pct|pct }}</div>
-        <div class="kpi-sub">vnútorná miera výnosnosti</div>
-      {% endif %}
+  {# Colored header #}
+  <div class="variant-header" style="background:{{ v.color }};">
+    <div class="variant-header-left">
+      <div class="variant-header-eyebrow">Model {{ loop.index }} z {{ variants|length }} · Detailná analýza · {{ scenario|default('Realistický') }} scenár</div>
+      <div class="variant-header-title">{{ v.label }}</div>
     </div>
-    <div class="kpi-card">
-      <div class="kpi-label">NPV (25 rokov)</div>
-      <div class="kpi-value {% if v.npv and v.npv > 0 %}green{% else %}red{% endif %}">{{ v.npv|eur }}</div>
-      <div class="kpi-sub">čistá súčasná hodnota</div>
-    </div>
-    <div class="kpi-card">
-      <div class="kpi-label">Návratnosť</div>
-      <div class="kpi-value">{% if v.payback %}{{ v.payback|num(1) }} r{% else %}—{% endif %}</div>
-      <div class="kpi-sub">bod zvratu</div>
+    <div class="variant-header-right">
+      {% if client_name %}<div>{{ client_name }}</div>{% endif %}
+      <div>{% if pv_kwp %}{{ pv_kwp|num(0) }} kWp · {% endif %}{{ capex|eur }}</div>
     </div>
   </div>
 
-  <div class="variant-card" style="border-color:{{ v.color }};">
-    <div class="variant-card-header" style="background:{{ v.color }};">
-      <span>{{ v.label }} — Podmienky a parametre</span>
-      {% if v.key == best_key %}<span class="recommended-badge">★ ODPORÚČANÉ</span>{% endif %}
+  {# 4 KPI cards #}
+  <div class="kpi4-grid">
+    <div class="kpi4-card {% if v.npv and v.npv > 0 %}kpi-good{% else %}kpi-bad{% endif %}">
+      <div class="kpi4-label">Čistá súčasná hodnota (NPV)</div>
+      <div class="kpi4-value">{{ v.npv|eur }}</div>
+      <div class="kpi4-sub">diskontovaný prínos 25r</div>
     </div>
-    <div class="variant-card-body">
-      {% if v.spec_rows %}
-      <table class="spec-table">
-        {% for item in v.spec_rows %}
-        <tr>
-          <td class="spec-label">{{ item.label }}</td>
-          <td class="spec-value">{{ item.value }}</td>
-        </tr>
-        {% endfor %}
-      </table>
-      {% endif %}
-
-      {% if v.pros or v.cons %}
-      <div class="pros-cons">
-        {% if v.pros %}
-        <div class="pros">
-          <h4>✔ Výhody</h4>
-          <ul>{% for p in v.pros %}<li>{{ p }}</li>{% endfor %}</ul>
-        </div>
-        {% endif %}
-        {% if v.cons %}
-        <div class="cons">
-          <h4>✘ Nevýhody</h4>
-          <ul>{% for c in v.cons %}<li>{{ c }}</li>{% endfor %}</ul>
-        </div>
+    <div class="kpi4-card {% if v.total_cum_25 and v.total_cum_25 > 0 %}kpi-good{% else %}kpi-bad{% endif %}">
+      <div class="kpi4-label">Celkový zisk 25 rokov</div>
+      <div class="kpi4-value">{{ v.total_cum_25|eur }}</div>
+      <div class="kpi4-sub">kumulatívny cashflow</div>
+    </div>
+    <div class="kpi4-card kpi-good">
+      <div class="kpi4-label">{% if v.key == "ppa10" or v.key == "ppa15" %}Prevod FVE (zadarmo){% else %}Bod zvratu{% endif %}</div>
+      <div class="kpi4-value">{% if v.payback %}rok {{ v.payback|int + 2026 }}{% else %}—{% endif %}</div>
+      <div class="kpi4-sub">{% if v.key == "ppa10" or v.key == "ppa15" %}bezplatný prevod po zmluve{% else %}investícia splatená{% endif %}</div>
+    </div>
+    <div class="kpi4-card {% if v.irr_pct is none or v.irr_pct == none or v.irr_pct > 8 %}kpi-good{% else %}kpi-neutral{% endif %}">
+      <div class="kpi4-label">Vnútorná výnosnosť (IRR)</div>
+      <div class="kpi4-value">
+        {% if v.irr_pct is none or v.irr_pct == none %}
+          <span class="na-text">N/A</span>
+        {% else %}
+          {{ v.irr_pct|pct }}
         {% endif %}
       </div>
-      {% endif %}
+      <div class="kpi4-sub">{% if v.irr_pct is none or v.irr_pct == none %}N/A — nulová vstupná investícia{% else %}ročná výnosnosť projektu{% endif %}</div>
     </div>
   </div>
+
+  {# Main 2-col layout #}
+  <table class="two-col-layout">
+    <tr>
+      <td class="col-left">
+        {# Cashflow table #}
+        <div class="section-label" style="border-left:3px solid {{ v.color }};">Rok po roku — cashflow ({{ scenario|default('realistický') }} scenár)</div>
+        <table class="cf-table">
+          <thead>
+            <tr style="background:{{ v.color }};color:#fff;">
+              <th class="cf-th">Rok</th>
+              <th class="cf-th">Prínos FVE</th>
+              {% if v.has_payment_col %}<th class="cf-th">Splátka</th>{% endif %}
+              <th class="cf-th">Čistý CF</th>
+              <th class="cf-th">Kumulatív</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in v.cf_breakdown %}
+            <tr class="{% if row.is_waiting %}cf-waiting{% elif loop.index is odd %}cf-odd{% else %}cf-even{% endif %}">
+              <td class="cf-td cf-year">{{ row.y }}{% if row.is_waiting %} ⏳{% endif %}</td>
+              <td class="cf-td">{% if row.is_waiting %}–{% else %}{{ row.gross|eur }}{% endif %}</td>
+              {% if v.has_payment_col %}
+              <td class="cf-td {% if row.payment > 0 %}cf-red{% else %}cf-grey{% endif %}">
+                {% if row.payment > 0 %}−{{ row.payment|eur }}{% else %}–{% endif %}
+              </td>
+              {% endif %}
+              <td class="cf-td cf-bold {% if not row.is_waiting and row.net >= 0 %}cf-green{% elif not row.is_waiting %}cf-red{% endif %}">
+                {% if row.is_waiting %}–{% elif row.net >= 0 %}+{{ row.net|eur }}{% else %}{{ row.net|eur }}{% endif %}
+              </td>
+              <td class="cf-td {% if row.cum >= 0 %}cf-green{% else %}cf-red{% endif %}">
+                {% if row.cum >= 0 %}+{{ row.cum|eur }}{% else %}{{ row.cum|eur }}{% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+          <tfoot>
+            <tr class="cf-total">
+              <td class="cf-td cf-year">Spolu</td>
+              <td class="cf-td">{{ v.total_gross|eur }}</td>
+              {% if v.has_payment_col %}
+              <td class="cf-td cf-red">−{{ v.total_payment|eur }}</td>
+              {% endif %}
+              <td class="cf-td cf-bold {% if v.total_cum_25 and v.total_cum_25 > 0 %}cf-green{% else %}cf-red{% endif %}">
+                {% if v.total_cum_25 and v.total_cum_25 >= 0 %}+{{ v.total_cum_25|eur }}{% else %}{{ v.total_cum_25|eur }}{% endif %}
+              </td>
+              <td class="cf-td cf-bold {% if v.total_cum_25 and v.total_cum_25 > 0 %}cf-green{% else %}cf-red{% endif %}">
+                {% if v.total_cum_25 and v.total_cum_25 >= 0 %}+{{ v.total_cum_25|eur }}{% else %}{{ v.total_cum_25|eur }}{% endif %}
+              </td>
+            </tr>
+          </tfoot>
+        </table>
+        {% if v.ppa_note %}
+        <div class="ppa-note">{{ v.ppa_note }}</div>
+        {% endif %}
+      </td>
+
+      <td class="col-right">
+        {# Mini chart #}
+        <div class="section-label" style="border-left:3px solid {{ v.color }};">Kumulatívny vývoj (25 rokov)</div>
+        <div class="mini-chart-wrap">
+          {{ v.mini_svg|safe }}
+        </div>
+
+        {# Parametre & podmienky #}
+        <div class="params-box">
+          <div class="params-title">Parametre &amp; podmienky</div>
+          {% for item in v.items %}
+          <div class="params-item" style="border-left:2px solid {{ v.color }};">{{ item }}</div>
+          {% endfor %}
+        </div>
+
+        {# Výhody / Nevýhody #}
+        <div class="pros-cons-grid">
+          <div class="pros-box">
+            <div class="pros-title">✓ Výhody</div>
+            {% for p in v.pros %}
+            <div class="pros-item">✓ {{ p }}</div>
+            {% endfor %}
+          </div>
+          <div class="cons-box">
+            <div class="cons-title">✗ Nevýhody</div>
+            {% for c in v.cons %}
+            <div class="cons-item">✗ {{ c }}</div>
+            {% endfor %}
+          </div>
+        </div>
+      </td>
+    </tr>
+  </table>
+
+  {# Description footer #}
+  {% if v.description %}
+  <div class="description-banner" style="border-left:4px solid {{ v.color }};">{{ v.description }}</div>
+  {% endif %}
+
 </div>
 {% endfor %}
 
-{# ═══════════════════════════ ZÁVEREČNÁ STRANA ═══════════════════════════ #}
-<div class="footer-note">
-  Táto analýza bola vypracovaná spoločnosťou Energovision s.r.o. (IČO 53036280) dňa {{ report_date }}.
-  Uvedené hodnoty sú modelové odhady na základe dodaných vstupných dát. Skutočné výsledky sa môžu líšiť
-  v závislosti od trhových podmienok, cien energií a prevádzkových parametrov.
-  Analýza nenahrádza finančné poradenstvo. Kontakt: obchod@energovision.sk · +421 948 302 137.
+{# ═══════════════════════════ FOOTER PAGE ═══════════════════════════ #}
+<div class="report-footer">
+  <strong>Energovision s.r.o.</strong> · IČO: 53036280 · Tomášikova 19, Bratislava<br/>
+  obchod@energovision.sk · +421 948 302 137 · www.energovision.sk<br/>
+  <span style="color:#94a3b8;">Správa vygenerovaná {{ report_date }} · Hodnoty sú orientačné a slúžia pre rozhodovaciu podporu.</span>
 </div>
 
 </body>
