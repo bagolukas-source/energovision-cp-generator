@@ -23,6 +23,10 @@ from typing import Optional
 log = logging.getLogger(__name__)
 
 DC_AC_RATIO = 1.10
+# ASDR sa vyžaduje pri súčte meničov >= 100 kW AC (cena ~30k). Pri oversizingu panelov
+# do MAX_KWP_NO_ASDR preferujeme kombináciu meničov < 100 kW (napr. 40+50) a ušetríme ASDR.
+MAX_KWP_NO_ASDR = 130.0
+MAX_OVERSIZE_NO_ASDR = 1.45
 
 
 def _load_vendor_stack(sb, vendor_key: str) -> Optional[dict]:
@@ -65,8 +69,55 @@ def _eval_qty_formula(formula, kwp, pocet_panelov) -> int:
         return 1
 
 
+def _combo_under_100(inverters: list[dict], kwp_actual: float) -> list[dict] | None:
+    """Nájdi kombináciu meničov so súčtom AC < 100 kW (vyhne sa ASDR), ktorá uvezie kwp_actual.
+    Rešpektuje min_kwp/max_kwp každého meniča (rozdelenie DC podľa podielu AC) a strop oversizingu.
+    Ak sa nedá (málo modelov / privysoké oversizing), vráti None → volajúci použije bežný výber."""
+    import itertools
+    invs = [i for i in inverters if (i.get("ac_kw") or 0) > 0]
+    if not invs:
+        return None
+    best = None  # (sort_key, combo_list)
+    for r in (1, 2, 3):
+        for combo in itertools.combinations_with_replacement(invs, r):
+            ac = sum(i["ac_kw"] for i in combo)
+            if ac <= 0 or ac >= 100:
+                continue
+            maxk = sum((i.get("max_kwp") or 0) for i in combo)
+            if maxk < kwp_actual:
+                continue
+            if kwp_actual / ac > MAX_OVERSIZE_NO_ASDR:
+                continue
+            ok = True
+            for i in combo:
+                share = kwp_actual * (i["ac_kw"] / ac)
+                if share < (i.get("min_kwp") or 0) or share > (i.get("max_kwp") or 99999):
+                    ok = False
+                    break
+            if not ok:
+                continue
+            cost = sum(float(i.get("price") or 0) for i in combo)
+            key = (-ac, r, cost)  # preferuj najvyššie AC < 100, potom menej kusov, potom lacnejšie
+            if best is None or key < best[0]:
+                best = (key, combo)
+    if not best:
+        return None
+    picked: list[dict] = []
+    seen: dict = {}
+    for i in best[1]:
+        k = i.get("key") or i.get("name")
+        if k in seen:
+            seen[k]["qty"] += 1
+        else:
+            seen[k] = {"inverter": i, "qty": 1}
+            picked.append(seen[k])
+    return picked
+
+
 def _pick_inverters(inverters: list[dict], required_ac_kw: float) -> list[dict]:
-    """Greedy fill — vyber kombináciu meničov ktoré pokryjú required_ac_kw."""
+    """Greedy fill — vyber kombináciu meničov ktoré pokryjú required_ac_kw.
+    Pri oversizingu do MAX_KWP_NO_ASDR uprednostní kombináciu < 100 kW AC (vyhne sa ASDR)."""
+    kwp_actual = required_ac_kw * DC_AC_RATIO
     sorted_inv = sorted(inverters, key=lambda x: -x["ac_kw"])
     remaining = required_ac_kw
     picked = []
@@ -98,7 +149,15 @@ def _pick_inverters(inverters: list[dict], required_ac_kw: float) -> list[dict]:
                 existing["qty"] += 1
             else:
                 picked.append({"inverter": smallest, "qty": 1})
-    
+
+    # ASDR-avoidance: ak by súčet meničov dosiahol >= 100 kW, ale panely sú do MAX_KWP_NO_ASDR,
+    # skús kombináciu < 100 kW (napr. 40+50) — ušetrí ASDR (~30k). Bezpečné: ak sa nezmestí, ostane pôvodné.
+    total_ac = sum(p["inverter"]["ac_kw"] * p["qty"] for p in picked)
+    if total_ac >= 100 and kwp_actual <= MAX_KWP_NO_ASDR:
+        alt = _combo_under_100(inverters, kwp_actual)
+        if alt:
+            return alt
+
     return picked
 
 
