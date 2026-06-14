@@ -29,7 +29,7 @@ MAX_KWP_NO_ASDR = 130.0      # hranica, do ktorej sa snažíme udržať AC < 100
 MAX_OVERSIZE = 1.50          # max DC/AC oversizing (panely vs menič)
 TARGET_OVERSIZE = 1.15       # ideálny DC/AC pomer
 MAX_INVERTER_UNITS = 3       # max počet meničov v zostave (nestackovať mikro-meniče)
-OVERSIZE_BAND = (0.85, 1.30)  # zdravé pásmo DC/AC; mimo neho penalizuj
+OVERSIZE_BAND = (0.85, 1.35)  # zdravé pásmo DC/AC; mimo neho penalizuj (1.35 = bežný komerčný oversizing)
 
 
 def _load_vendor_stack(sb, vendor_key: str) -> Optional[dict]:
@@ -97,9 +97,10 @@ def _pick_inverters(inverters: list[dict], required_ac_kw: float) -> list[dict]:
             ov = kwp / ac
             if ov > MAX_OVERSIZE or ov < 0.6:
                 continue
-            # žiadny menič nesmie dostať viac DC než jeho max (rozdelenie podľa podielu AC)
-            if any(kwp * (i["ac_kw"] / ac) > (i.get("max_kwp") or 99999) for i in combo):
-                continue
+            # Kapacita: panely sa medzi meniče rozdelia voľne (nie proporcionálne podľa AC),
+            # takže combo uvezie kwp, ak Σmax_kwp >= kwp (overené vyššie). Žiadny ďalší
+            # per-menič proporcionálny limit — inak by sme zbytočne zamietli napr. 50+40,
+            # kde 50KTL dostane viac panelov (do svojho max) a 40KTL menej.
             cands.append((combo, ac, r, ov, sum(float(i.get("price") or 0) for i in combo)))
     if not cands:
         big = max(invs, key=lambda x: x["ac_kw"])
