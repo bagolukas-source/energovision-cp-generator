@@ -26,6 +26,7 @@
     <div class="cover-meta">
       {% if pv_kwp %}<div class="cover-meta-item"><label>Výkon FVE</label><span>{{ pv_kwp|num(1) }} kWp</span></div>{% endif %}
       {% if capex %}<div class="cover-meta-item"><label>Investícia (CAPEX)</label><span>{{ capex|eur }}</span></div>{% endif %}
+      {% if bess_kwh and bess_kwh > 0 %}<div class="cover-meta-item"><label>Batéria (BESS)</label><span>{{ bess_kwh|num(0) }} kWh / {{ bess_kw|num(0) }} kW</span></div>{% endif %}
       {% if annual_prod_mwh %}<div class="cover-meta-item"><label>Výroba / rok</label><span>{{ (annual_prod_mwh * 1000)|num(0) }} kWh</span></div>{% endif %}
       {% if tarif_buy %}<div class="cover-meta-item"><label>Cena elektriny</label><span>{{ "%.3f"|format(tarif_buy) }} €/kWh</span></div>{% endif %}
       {% if samosp_pct %}<div class="cover-meta-item"><label>Samospotreba</label><span>{{ samosp_pct }} %</span></div>{% endif %}
@@ -47,7 +48,7 @@
   </div>
 
   <div class="intro-box">
-    Tento report porovnáva spôsoby financovania rovnakej fotovoltickej elektrárne{% if pv_kwp %} ({{ pv_kwp|num(0) }} kWp{% if capex %}, investícia {{ capex|eur }}{% endif %}){% endif %} — vlastná kúpa, SIH zelený úver, lízing, PPA a dotácia. Pri každej možnosti vidíte počiatočný výdaj, návratnosť, kedy bude FVE 100 % vaša a celkový 25-ročný prínos. Čísla vychádzajú z reálnej spotreby a cien odberného miesta (scenár {{ scenario|default('Realistický') }}). Na konci nájdete súhrnnú tabuľku a vyhodnotenie.
+    Tento report porovnáva spôsoby financovania rovnakej zostavy{% if pv_kwp %} ({{ pv_kwp|num(0) }} kWp FVE{% if bess_kwh and bess_kwh > 0 %} + batéria {{ bess_kwh|num(0) }} kWh{% endif %}{% if capex %}, investícia {{ capex|eur }}{% endif %}){% endif %} — vlastná kúpa, SIH zelený úver, lízing, PPA a dotácia. Pri každej možnosti vidíte počiatočný výdaj, návratnosť, kedy bude FVE 100 % vaša a celkový 25-ročný prínos. Čísla vychádzajú z reálnej spotreby a cien odberného miesta (scenár {{ scenario|default('Realistický') }}). Na konci nájdete súhrnnú tabuľku a vyhodnotenie.
   </div>
 
   {% if best_key %}
@@ -127,7 +128,7 @@
     </div>
     <div class="variant-header-right">
       {% if client_name %}<div>{{ client_name }}</div>{% endif %}
-      <div>{% if pv_kwp %}{{ pv_kwp|num(0) }} kWp · {% endif %}{{ capex|eur }}</div>
+      <div>{% if pv_kwp %}{{ pv_kwp|num(0) }} kWp{% if bess_kwh and bess_kwh > 0 %} + {{ bess_kwh|num(0) }} kWh batéria{% endif %} · {% endif %}{{ capex|eur }}</div>
     </div>
   </div>
 
