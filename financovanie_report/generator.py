@@ -68,6 +68,8 @@ def _fmt_num(value: Any, decimals: int = 0) -> str:
 
 def _logo_b64() -> str:
     candidates = [
+        _HERE / "energovision_logo.png",          # čisté logo (transparentné) — preferované
+        _HERE.parent / "energovision_logo.png",
         _HERE.parent / "energovision_header.png",
         _HERE.parent / "analyza_om" / "logo.png",
     ]
@@ -280,6 +282,45 @@ def generate_financovanie_pdf(context: dict) -> bytes:
                 except (TypeError, ValueError):
                     pass
         v["cum_milestones"] = [cum_by_year.get(yr) for yr in (5, 10, 15, 20, 25)]
+        v["cum_by_year"] = {int(k): val for k, val in cum_by_year.items()}
+
+    # Záverečná tabuľka: roky 1–10 po jednom + 15/20/25
+    ctx["final_years"] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25]
+
+    # Odporúčanie + záver (vždy prítomné, deterministické z dát)
+    def _n(x):
+        try:
+            return float(x)
+        except (TypeError, ValueError):
+            return -1e18
+    if variants:
+        npv_winner = max(variants, key=lambda v: _n(v.get("npv")))
+        recommended = next((v for v in variants if v.get("key") == "sih"), None) or npv_winner
+        low_up = min(variants, key=lambda v: (v.get("initial_investment") or 0))
+        ctx["npv_winner"] = npv_winner
+        ctx["recommended"] = recommended
+        # prepíš headline odporúčanie na vyváženú voľbu (konzistentne s webom)
+        ctx["best_key"] = recommended.get("key")
+        ctx["best_label"] = recommended.get("label")
+        ctx["best_npv"] = recommended.get("npv")
+        ctx["best_payback"] = recommended.get("payback")
+        lines = []
+        lines.append(
+            f"Najvyššiu čistú súčasnú hodnotu za 25 rokov dosahuje {npv_winner.get('label')} "
+            f"({_fmt_eur(npv_winner.get('npv'))}). Je to dôsledok nulového vstupného kapitálu — "
+            f"celý tok je kladný a nič neviažete vopred."
+        )
+        lines.append(
+            f"Najnižší vstupný náklad ({_fmt_eur(low_up.get('initial_investment') or 0)}) a kladný tok "
+            f"od začiatku znamenajú okamžitú návratnosť kapitálu pri možnostiach bez vstupného vkladu (PPA, SIH)."
+        )
+        lines.append(
+            f"Ako vyváženú voľbu odporúčame {recommended.get('label')}: nulový vstup, vlastníctvo elektrárne "
+            f"od prvého dňa, fixná sadzba a kladný mesačný tok už počas splácania. Vlastná kúpa dáva najvyšší "
+            f"absolútny zisk za 25 rokov, ak má firma voľný kapitál; PPA má najvyššiu NPV, no 10 rokov bez vlastníctva "
+            f"a so závislosťou na poskytovateľovi."
+        )
+        ctx["conclusion_lines"] = lines
 
     tmpl = env.get_template("report.html")
     html_str = tmpl.render(**ctx)

@@ -325,3 +325,8 @@ body {
   margin: 0 0 9px;
 }
 .ai-box p:last-child { margin-bottom: 0; }
+
+/* Záverečná matica (roky × možnosti) */
+.final-matrix { font-size: 7.5pt; }
+.final-matrix th, .final-matrix td { padding: 4px 7px; }
+.final-matrix thead tr { background: #14532d; }

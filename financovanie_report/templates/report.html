@@ -57,6 +57,7 @@
     <strong>{{ best_label }}</strong>{% if best_irr is not none and best_irr %} s IRR {{ best_irr|pct }}{% endif %}
     a návratnosťou {{ best_payback|num(1) }} rokov.
     {% if best_npv %}Čistá súčasná hodnota investície dosahuje <strong>{{ best_npv|eur }}</strong>.{% endif %}
+    {% if npv_winner and npv_winner.key != best_key %}<br/><span style="color:#475569;">Najvyššiu NPV ({{ npv_winner.npv|eur }}) síce dosahuje {{ npv_winner.label }}, no viaže na 10-ročnú zmluvu bez vlastníctva — preto odporúčame vyváženejší model vyššie.</span>{% endif %}
   </div>
   {% endif %}
 
@@ -271,30 +272,38 @@
     <div class="section-meta">Kumulatív v míľnikových rokoch · Scenár: {{ scenario|default('Realistický') }}</div>
   </div>
 
-  <table class="variant-table">
+  <table class="variant-table final-matrix">
     <thead>
       <tr>
-        <th>Model</th><th>Vklad dnes</th><th>Rok 5</th><th>Rok 10</th><th>Rok 15</th><th>Rok 20</th><th>Rok 25</th><th>NPV 25r</th>
+        <th>Rok / ukazovateľ</th>
+        {% for v in variants %}<th style="text-align:right;">{{ v.label }}</th>{% endfor %}
       </tr>
     </thead>
     <tbody>
-      {% for v in variants %}
-      <tr {% if v.key == best_key %}class="best-row"{% endif %}>
-        <td><span class="variant-chip" style="background:{{ v.color }}22;color:{{ v.color }};border:1px solid {{ v.color }}44;">{{ v.label }}</span></td>
-        <td>{{ v.initial_investment|eur }}</td>
-        {% for m in v.cum_milestones %}
-        <td><strong style="color:{% if m is not none and m >= 0 %}#15803d{% else %}#dc2626{% endif %}">{{ m|eur }}</strong></td>
-        {% endfor %}
-        <td><strong style="color:{% if v.npv and v.npv > 0 %}#15803d{% else %}#dc2626{% endif %}">{{ v.npv|eur }}</strong></td>
+      <tr>
+        <td><strong>Vklad dnes</strong></td>
+        {% for v in variants %}<td style="text-align:right;">{% if v.initial_investment and v.initial_investment > 0 %}{{ v.initial_investment|eur }}{% else %}0 €{% endif %}</td>{% endfor %}
+      </tr>
+      {% for yr in final_years %}
+      <tr {% if yr in [10, 15, 20, 25] %}class="best-row"{% endif %}>
+        <td>{% if yr == 1 %}1. rok{% else %}Rok {{ yr }}{% endif %}</td>
+        {% for v in variants %}{% set c = v.cum_by_year[yr] %}<td style="text-align:right;color:{% if c is not none and c >= 0 %}#15803d{% else %}#b91c1c{% endif %};{% if yr in [10, 15, 20, 25] %}font-weight:700;{% endif %}">{{ c|eur }}</td>{% endfor %}
       </tr>
       {% endfor %}
+      <tr style="border-top:2px solid #cbd5e1;">
+        <td><strong>NPV 25r</strong></td>
+        {% for v in variants %}<td style="text-align:right;"><strong>{{ v.npv|eur }}</strong></td>{% endfor %}
+      </tr>
     </tbody>
   </table>
-  <div class="milestone-note">Kumulatívny čistý tok = súčet ročných prínosov mínus splátky vrátane vstupného vkladu. Zelená = v pluse, červená = ešte v mínuse.</div>
+  <div class="milestone-note">Kumulatívny čistý tok = súčet ročných prínosov mínus splátky, vrátane vstupného vkladu. Roky 10/15/20/25 sú zvýraznené. Zelená = v pluse, červená = ešte v mínuse.</div>
 
-  {% if ai_text %}
-  <div class="ai-head">Náš pohľad — odporúčanie Energovision</div>
-  <div class="ai-box">{% for para in ai_text.split('\n\n') %}{% if para.strip() %}<p>{{ para.strip() }}</p>{% endif %}{% endfor %}</div>
+  {% if conclusion_lines %}
+  <div class="ai-head">Záver — odporúčanie Energovision</div>
+  <div class="ai-box">
+    {% for line in conclusion_lines %}<p>{{ line }}</p>{% endfor %}
+    {% if ai_text %}{% for para in ai_text.split('\n\n') %}{% if para.strip() %}<p>{{ para.strip() }}</p>{% endif %}{% endfor %}{% endif %}
+  </div>
   {% endif %}
 
   <div class="report-footer">
