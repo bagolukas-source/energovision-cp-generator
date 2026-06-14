@@ -6664,7 +6664,9 @@ def webhook_aom_custom_variant():
             return jsonify({"ok": False, "error": "analyza_om_v2 not loaded"}), 500
         result = _aom_v2.insert_variant_via_engine(
             sb, aid, custom_input["name"], custom_input["fve_kwp"],
-            custom_input["bess_kwh"], custom_input["bess_kw"])
+            custom_input["bess_kwh"], custom_input["bess_kw"],
+            capex_per_kwp=custom_input.get("capex_per_kwp"),
+            capex_per_kwh_bess=custom_input.get("capex_per_kwh_bess"))
         if not result.get("ok"):
             return jsonify(result), 400
         return jsonify(result)

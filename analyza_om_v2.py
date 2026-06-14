@@ -436,7 +436,7 @@ Píš ako energetik radí klientovi pri káve, nie ako AI. Konkrétne čísla. E
         return {"error": str(e)[:200], "scenario_type": analyza.get("scenario_type")}
 
 
-def insert_variant_via_engine(sb, analyza_id: str, name: str, fve_kwp, bess_kwh, bess_kw=None, capex_per_kwp=None) -> dict:
+def insert_variant_via_engine(sb, analyza_id: str, name: str, fve_kwp, bess_kwh, bess_kw=None, capex_per_kwp=None, capex_per_kwh_bess=None) -> dict:
     """Spočíta JEDEN variant cez REÁLNY engine (rovnaký pipeline ako matica) a uloží do analyza_om_variants.
     Nahrádza fallback ekonomiku z aom_ai_strategist → konzistentné CAPEX / dotácia / dispatch.
     capex_per_kwp: voliteľný override ceny diela €/kWp (napr. zadanie s/bez optimizérov)."""
@@ -456,6 +456,9 @@ def insert_variant_via_engine(sb, analyza_id: str, name: str, fve_kwp, bess_kwh,
         # (default engine fix ~38k € by cenu skreslil; kWp×rate = celé dielo).
         req["capex"]["capex_pv_eur_per_kwp"] = float(capex_per_kwp)
         req["capex"]["capex_pv_fixed_eur"] = 0.0
+    if capex_per_kwh_bess is not None:
+        # Reálna cena BESS z ponuky (CP→Analýza): celkový CAPEX = presne suma z ponuky
+        req["capex"]["capex_bess_eur_per_kwh"] = float(capex_per_kwh_bess)
     raw = run_variants_pipeline(req)
     res = build_run_variants_response(raw)
     vs = res.get("variants") or []
