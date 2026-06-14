@@ -255,7 +255,7 @@ def generuj_prezentaciu_b2b(g: dict) -> bytes:
         except Exception: return "—"
     def i_num(x, suf=""): return num(x, suf, 0)
 
-    spotreba = num(om.get("consumption_annual_mwh"), " MWh"); peak = i_num(om.get("consumption_peak_kw_hourly") or om.get("consumption_peak_kw_15min"), " kW")
+    spotreba = num(om.get("consumption_annual_mwh"), " MWh"); peak = i_num(om.get("consumption_peak_kw_15min") or om.get("consumption_peak_kw_hourly"), " kW")
     mrk = i_num(om.get("om_mrk_kw"), " kW"); mrk_util = i_num(om.get("consumption_mrk_utilization_pct"), " %")
     samosp_v = rec.get("result_samosp_pct"); samostat_v = rec.get("result_samostat_pct")
     samosp = i_num(samosp_v, " %"); samostat = i_num(samostat_v, " %")
@@ -268,7 +268,7 @@ def generuj_prezentaciu_b2b(g: dict) -> bytes:
         "zameranie": brief, "zobraz_dotaciu": zobraz_dotacia,
         "zakaznik": g.get("zakaznik"),
         "rocna_spotreba_mwh": om.get("consumption_annual_mwh"),
-        "spicka_kw": om.get("consumption_peak_kw_hourly") or om.get("consumption_peak_kw_15min"),
+        "spicka_kw": om.get("consumption_peak_kw_15min") or om.get("consumption_peak_kw_hourly"),
         "mrk_kw": om.get("om_mrk_kw"), "vyuzitie_mrk_pct": om.get("consumption_mrk_utilization_pct"),
         "navrh_variant": rec.get("name"), "fve_kwp": rec.get("fve_kwp"), "bess_kwh": rec.get("bess_kwh"),
         "capex_eur": rec.get("capex_eur"), "dotacia_eur": rec.get("result_dotacia_eur"),
@@ -407,7 +407,7 @@ def generuj_prezentaciu_b2b(g: dict) -> bytes:
                f"<div style='margin-top:8mm'>{srows}</div>{_ftr('01')}</div>")
     _vm = []
     if _has(om.get("consumption_annual_mwh")): _vm.append((spotreba, "Ročná spotreba"))
-    if _has(om.get("consumption_peak_kw_hourly") or om.get("consumption_peak_kw_15min")): _vm.append((peak, "Špička odberu"))
+    if _has(om.get("consumption_peak_kw_15min") or om.get("consumption_peak_kw_hourly")): _vm.append((peak, "Špička odberu"))
     if _has(om.get("om_mrk_kw")): _vm.append((mrk, "Rezervovaná kapacita"))
     if _has(om.get("consumption_mrk_utilization_pct")): _vm.append((mrk_util, "Využitie MRK"))
     _vm_html = "".join(f"<div class='metric'><div class='mv'>{v}</div><div class='ml'>{_esc(l)}</div></div>" for v, l in _vm)

@@ -41,7 +41,8 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None) -> dict:
     dotacia=float(base.get("dotacia_eur") or 0)
     net_capex=capex-dotacia
     opex=capex*OPEX_RATE
-    self_mwh=float(base.get("pv_to_load_mwh") or 0)+float(base.get("bat_to_load_mwh") or 0)
+    self_mwh=float(base.get("pv_to_load_mwh") or 0)+float(base.get("bat_to_load_mwh") or 0)  # krytie odberu z vlastných zdrojov (pre pokrytie)
+    pv_self_mwh=float(base.get("pv_to_load_mwh") or 0)+float(base.get("pv_to_bat_mwh") or 0)  # PV samospotreba (≤ výroba) — pre energetickú bilanciu
     export_mwh=float(base.get("pv_to_grid_mwh") or 0)
     bess_kwh=float(base.get("bess_kwh") or 0)
     mrk=float(base.get("mrk_kw") or 0); rk=float(analyza.get("om_rk_kw") or mrk*0.9 or 0)
@@ -161,7 +162,7 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None) -> dict:
                 "konstrukcia":base.get("fve_topology","E-W / Juh")}
 
     # benefit_rows = REÁLNE engine zložky (z dispatchu), žiadny paušál
-    benefit_rows=[("FVE samospotreba (priama)",f"{self_mwh:.0f} MWh priamo do odberu",save_self),
+    benefit_rows=[("FVE samospotreba",f"{pv_self_mwh:.0f} MWh do odberu (priamo + cez batériu)",save_self),
                   ("FVE export prebytkov",f"{export_mwh:.0f} MWh do siete",save_export)]
     if save_bess>0: benefit_rows.append(("Batéria — posun PV do odberu","PV uskladnené a využité neskôr",save_bess))
     if abs(save_arb)>1: benefit_rows.append(("BESS arbitráž (spot v BS)","nabíjanie lacno / vybíjanie draho",save_arb))
@@ -179,7 +180,7 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None) -> dict:
         "posudok_date":datetime.now().strftime("%d.%m.%Y"),
         "prepared_by_name":base.get("prepared_by_name"),"prepared_by_email":base.get("prepared_by_email"),"prepared_by_phone":base.get("prepared_by_phone"),
         "fve_kwp":base.get("pv_kwp"),"bess_kwh":bess_kwh,"yield":(base.get("pv_total_mwh",0)*1000/(base.get("pv_kwp") or 1)) if base.get("pv_kwp") else 1075,
-        "fve_prod_mwh":base.get("pv_total_mwh"),"self_use_mwh":self_mwh,"export_mwh":export_mwh,
+        "fve_prod_mwh":base.get("pv_total_mwh"),"self_use_mwh":pv_self_mwh,"export_mwh":export_mwh,
         "grid_import_mwh":base.get("grid_import_mwh"),"samosp_pct":base.get("samospotreba_pct"),"coverage_pct":base.get("samostatnost_pct"),
         "year_mwh":base.get("load_total_mwh"),"max15_kw":peak_kw,"peak_estimated":peak_estimated,"capex_total_eur":capex,"net_capex_eur":net_capex,"save_peak_eur":save_peak,
         "capex_pv_eur":float(base.get("capex_pv_eur") or 0),"capex_bess_eur":float(base.get("capex_bess_eur") or 0),
