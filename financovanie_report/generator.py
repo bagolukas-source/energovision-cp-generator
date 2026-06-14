@@ -149,7 +149,7 @@ def _cumulative_svg(variants: list[dict], cf_data: list[dict]) -> str:
 
     # vertikálne gridlines
     for i, yr in enumerate(years):
-        if yr in (5, 10, 15, 20, 25):
+        if yr in (5, 10, 15, 20):
             parts.append(f'<line x1="{sx(i):.1f}" y1="{PT}" x2="{sx(i):.1f}" y2="{PT+(H-PT-PB):.1f}" stroke="#f4f6f9" stroke-width="1"/>')
 
     # nulová os
@@ -169,7 +169,7 @@ def _cumulative_svg(variants: list[dict], cf_data: list[dict]) -> str:
 
     # x popisy
     for i, yr in enumerate(years):
-        if yr in (5, 10, 15, 20, 25):
+        if yr in (5, 10, 15, 20):
             parts.append(f'<text x="{sx(i):.1f}" y="{H-PB+16}" text-anchor="middle" font-size="8" fill="#64748b">r{yr}</text>')
 
     parts.append("</svg>")
@@ -231,7 +231,7 @@ def _mini_svg(cf_breakdown: list[dict], init_inv: float, color: str) -> str:
     parts.append(f'<polyline points="{line_pts}" fill="none" stroke="{color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>')
 
     # x labels at r5, r10, r15, r20, r25
-    for yr in [5, 10, 15, 20, 25]:
+    for yr in [5, 10, 15, 20]:
         i = yr  # index = year number (pts[0]=init, pts[1]=yr1, ..., pts[25]=yr25)
         if i < n:
             x = sx(i)
@@ -285,7 +285,7 @@ def generate_financovanie_pdf(context: dict) -> bytes:
         v["cum_by_year"] = {int(k): val for k, val in cum_by_year.items()}
 
     # Záverečná tabuľka: roky 1–10 po jednom + 15/20/25
-    ctx["final_years"] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25]
+    ctx["final_years"] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20]
 
     # Odporúčanie + záver (vždy prítomné, deterministické z dát)
     def _n(x):
@@ -306,7 +306,7 @@ def generate_financovanie_pdf(context: dict) -> bytes:
         ctx["best_payback"] = recommended.get("payback")
         lines = []
         lines.append(
-            f"Najvyššiu čistú súčasnú hodnotu za 25 rokov dosahuje {npv_winner.get('label')} "
+            f"Najvyššiu čistú súčasnú hodnotu za 20 rokov dosahuje {npv_winner.get('label')} "
             f"({_fmt_eur(npv_winner.get('npv'))}). Je to dôsledok nulového vstupného kapitálu — "
             f"celý tok je kladný a nič neviažete vopred."
         )
@@ -317,7 +317,7 @@ def generate_financovanie_pdf(context: dict) -> bytes:
         lines.append(
             f"Ako vyváženú voľbu odporúčame {recommended.get('label')}: nulový vstup, vlastníctvo elektrárne "
             f"od prvého dňa, fixná sadzba a kladný mesačný tok už počas splácania. Vlastná kúpa dáva najvyšší "
-            f"absolútny zisk za 25 rokov, ak má firma voľný kapitál; PPA má najvyššiu NPV, no 10 rokov bez vlastníctva "
+            f"absolútny zisk za 20 rokov, ak má firma voľný kapitál; PPA má najvyššiu NPV, no 10 rokov bez vlastníctva "
             f"a so závislosťou na poskytovateľovi."
         )
         ctx["conclusion_lines"] = lines

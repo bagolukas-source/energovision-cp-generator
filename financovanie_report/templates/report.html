@@ -68,7 +68,7 @@
       <tr>
         <th>Model</th>
         <th>IRR</th>
-        <th>NPV (25 r)</th>
+        <th>NPV (20 r)</th>
         <th>Návratnosť</th>
         <th>Kumulatív 25r</th>
         <th>Počiatočný výdaj</th>
@@ -100,7 +100,7 @@
 
   {% if cumulative_svg %}
   <div class="chart-container">
-    <div class="chart-title">Kumulatívny cashflow za 25 rokov (€)</div>
+    <div class="chart-title">Kumulatívny cashflow za 20 rokov (€)</div>
     {{ cumulative_svg|safe }}
     {% if variants %}
     <div class="legend">
@@ -140,7 +140,7 @@
       <div class="kpi4-sub">diskontovaný prínos 25r</div>
     </div>
     <div class="kpi4-card {% if v.total_cum_25 and v.total_cum_25 > 0 %}kpi-good{% else %}kpi-bad{% endif %}">
-      <div class="kpi4-label">Celkový zisk 25 rokov</div>
+      <div class="kpi4-label">Celkový zisk 20 rokov</div>
       <div class="kpi4-value">{{ v.total_cum_25|eur }}</div>
       <div class="kpi4-sub">kumulatívny cashflow</div>
     </div>
@@ -225,7 +225,7 @@
 
       <td class="col-right">
         {# Mini chart #}
-        <div class="section-label" style="border-left:3px solid {{ v.color }};">Kumulatívny vývoj (25 rokov)</div>
+        <div class="section-label" style="border-left:3px solid {{ v.color }};">Kumulatívny vývoj (20 rokov)</div>
         <div class="mini-chart-wrap">
           {{ v.mini_svg|safe }}
         </div>
@@ -269,7 +269,7 @@
 {% if variants %}
 <div class="page">
   <div class="section-header">
-    <div class="section-title">Záverečné porovnanie — kumulatívny tok (25 rokov)</div>
+    <div class="section-title">Záverečné porovnanie — kumulatívny tok (20 rokov)</div>
     <div class="section-meta">Kumulatív v míľnikových rokoch · Scenár: {{ scenario|default('Realistický') }}</div>
   </div>
 
@@ -286,13 +286,13 @@
         {% for v in variants %}<td style="text-align:right;">{% if v.initial_investment and v.initial_investment > 0 %}{{ v.initial_investment|eur }}{% else %}0 €{% endif %}</td>{% endfor %}
       </tr>
       {% for yr in final_years %}
-      <tr {% if yr in [10, 15, 20, 25] %}class="best-row"{% endif %}>
+      <tr {% if yr in [10, 15, 20] %}class="best-row"{% endif %}>
         <td>{% if yr == 1 %}1. rok{% else %}Rok {{ yr }}{% endif %}</td>
-        {% for v in variants %}{% set c = v.cum_by_year[yr] %}<td style="text-align:right;color:{% if c is not none and c >= 0 %}#15803d{% else %}#b91c1c{% endif %};{% if yr in [10, 15, 20, 25] %}font-weight:700;{% endif %}">{{ c|eur }}</td>{% endfor %}
+        {% for v in variants %}{% set c = v.cum_by_year[yr] %}<td style="text-align:right;color:{% if c is not none and c >= 0 %}#15803d{% else %}#b91c1c{% endif %};{% if yr in [10, 15, 20] %}font-weight:700;{% endif %}">{{ c|eur }}</td>{% endfor %}
       </tr>
       {% endfor %}
       <tr style="border-top:2px solid #cbd5e1;">
-        <td><strong>NPV 25r</strong></td>
+        <td><strong>NPV 20r</strong></td>
         {% for v in variants %}<td style="text-align:right;"><strong>{{ v.npv|eur }}</strong></td>{% endfor %}
       </tr>
     </tbody>
