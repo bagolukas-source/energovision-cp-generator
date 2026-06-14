@@ -266,6 +266,16 @@ def generate_financovanie_pdf(context: dict) -> bytes:
         init_inv = float(v.get("init_inv", 0) or 0)
         color = color_map.get(v.get("key", ""), v.get("color", "#94a3b8"))
         v["mini_svg"] = _mini_svg(breakdown, init_inv, color)
+        # Míľnikový kumulatív (r5/r10/r15/r20/r25) pre záverečnú porovnávaciu tabuľku
+        cum_by_year = {}
+        for row in breakdown:
+            yy = row.get("y")
+            if yy is not None:
+                try:
+                    cum_by_year[int(yy)] = row.get("cum")
+                except (TypeError, ValueError):
+                    pass
+        v["cum_milestones"] = [cum_by_year.get(yr) for yr in (5, 10, 15, 20, 25)]
 
     tmpl = env.get_template("report.html")
     html_str = tmpl.render(**ctx)

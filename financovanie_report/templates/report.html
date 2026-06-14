@@ -78,6 +78,10 @@
     <div class="section-meta">Scenár: {{ scenario|default('Realistický') }} · CAPEX: {{ capex|eur }}</div>
   </div>
 
+  <div class="intro-box">
+    Tento report porovnáva spôsoby financovania rovnakej fotovoltickej elektrárne{% if pv_kwp %} ({{ pv_kwp|num(0) }} kWp{% if capex %}, investícia {{ capex|eur }}{% endif %}){% endif %} — vlastná kúpa, SIH zelený úver, lízing, PPA a dotácia. Pri každej možnosti vidíte počiatočný výdaj, návratnosť, kedy bude FVE 100 % vaša a celkový 25-ročný prínos. Čísla vychádzajú z reálnej spotreby a cien odberného miesta (scenár {{ scenario|default('Realistický') }}). Na konci nájdete súhrnnú tabuľku a vyhodnotenie.
+  </div>
+
   {% if best_key %}
   <div class="recommendation">
     <strong>Odporúčaný model: {{ best_label }}</strong><br/>
@@ -290,6 +294,42 @@
 
 </div>
 {% endfor %}
+
+{# ═══════════════════════════ ZÁVER: míľnikový kumulatív + AI ═══════════════════════════ #}
+{% if variants %}
+<div class="page">
+  <div class="section-header">
+    <div class="section-title">Záverečné porovnanie — kumulatívny tok (25 rokov)</div>
+    <div class="section-meta">Kumulatív v míľnikových rokoch · Scenár: {{ scenario|default('Realistický') }}</div>
+  </div>
+
+  <table class="variant-table">
+    <thead>
+      <tr>
+        <th>Model</th><th>Vklad dnes</th><th>Rok 5</th><th>Rok 10</th><th>Rok 15</th><th>Rok 20</th><th>Rok 25</th><th>NPV 25r</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for v in variants %}
+      <tr {% if v.key == best_key %}class="best-row"{% endif %}>
+        <td><span class="variant-chip" style="background:{{ v.color }}22;color:{{ v.color }};border:1px solid {{ v.color }}44;">{{ v.label }}</span></td>
+        <td>{{ v.initial_investment|eur }}</td>
+        {% for m in v.cum_milestones %}
+        <td><strong style="color:{% if m is not none and m >= 0 %}#15803d{% else %}#dc2626{% endif %}">{{ m|eur }}</strong></td>
+        {% endfor %}
+        <td><strong style="color:{% if v.npv and v.npv > 0 %}#15803d{% else %}#dc2626{% endif %}">{{ v.npv|eur }}</strong></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <div class="milestone-note">Kumulatívny čistý tok = súčet ročných prínosov mínus splátky vrátane vstupného vkladu. Zelená = v pluse, červená = ešte v mínuse.</div>
+
+  {% if ai_text %}
+  <div class="section-label" style="border-left:3px solid #7c3aed;margin-top:18px;">Vyhodnotenie (AI analýza)</div>
+  <div class="ai-box">{{ ai_text|e|replace('\n', '<br/>')|safe }}</div>
+  {% endif %}
+</div>
+{% endif %}
 
 {# ═══════════════════════════ FOOTER PAGE ═══════════════════════════ #}
 <div class="report-footer">
