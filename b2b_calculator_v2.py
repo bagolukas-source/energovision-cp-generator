@@ -213,7 +213,11 @@ def calculate_bom_v2(sb, config: dict) -> dict:
         pos += 1
     
     # Smart manager + smart meter (povinné pri väčších inštaláciách)
+    # Väčšie inštalácie (napr. Huawei >10 kWp) vyžadujú Smart Logger namiesto dongle.
     sm = stack.get("smart_manager")
+    sm_large = stack.get("smart_manager_large")
+    if sm_large and kwp_actual > sm_large.get("required_above_kwp", 10):
+        sm = sm_large
     if sm and kwp_actual > sm.get("required_above_kwp", 0):
         items.append({
             "position": pos, "category": "Monitoring",
