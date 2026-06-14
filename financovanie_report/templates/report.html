@@ -8,66 +8,34 @@
 
 {# ═══════════════════════════ COVER PAGE ═══════════════════════════ #}
 <div class="page cover">
-  <div class="cover-header">
+  <div class="cover-accent"></div>
+
+  <div class="cover-top">
     <div class="cover-logo">
-      {% if logo_b64 %}
-        <img src="data:image/png;base64,{{ logo_b64 }}" alt="Energovision"/>
-      {% else %}
-        <strong style="font-size:14pt;color:#0F172A;">energovision</strong>
-      {% endif %}
+      {% if logo_b64 %}<img src="data:image/png;base64,{{ logo_b64 }}" alt="Energovision"/>{% else %}<strong style="font-size:16pt;color:#0F172A;">energovision</strong>{% endif %}
     </div>
     <div class="cover-badge">ANALÝZA FINANCOVANIA</div>
   </div>
 
   <div class="cover-body">
     <div class="cover-eyebrow">Technicko-ekonomická analýza · Modely financovania</div>
-    <h1 class="cover-title">Financovanie FVE</h1>
-    <div class="cover-client">{{ project_name }}</div>
-    {% if client_name and client_name != project_name %}
-    <div class="cover-sub">{{ client_name }}{% if site_address %} · {{ site_address }}{% endif %}</div>
-    {% endif %}
+    <h1 class="cover-title">Financovanie fotovoltickej elektrárne</h1>
+    {% if client_name %}<div class="cover-client">{{ client_name }}</div>{% endif %}
+    <div class="cover-tagline">Moderné energetické riešenia, ktoré hľadáte.</div>
 
     <div class="cover-meta">
-      {% if pv_kwp %}
-      <div class="cover-meta-item">
-        <label>Výkon FVE</label>
-        <span>{{ pv_kwp|num(1) }} kWp</span>
-      </div>
-      {% endif %}
-      {% if capex %}
-      <div class="cover-meta-item">
-        <label>CAPEX</label>
-        <span>{{ capex|eur }}</span>
-      </div>
-      {% endif %}
-      {% if annual_prod_mwh %}
-      <div class="cover-meta-item">
-        <label>Výroba / rok</label>
-        <span>{{ (annual_prod_mwh * 1000)|num(0) }} kWh</span>
-      </div>
-      {% endif %}
-      {% if tarif_buy %}
-      <div class="cover-meta-item">
-        <label>Tarif nákup</label>
-        <span>{{ "%.3f"|format(tarif_buy) }} €/kWh</span>
-      </div>
-      {% endif %}
-      {% if samosp_pct %}
-      <div class="cover-meta-item">
-        <label>Samospotreba</label>
-        <span>{{ samosp_pct }} %</span>
-      </div>
-      {% endif %}
-      <div class="cover-meta-item">
-        <label>Dátum</label>
-        <span>{{ report_date }}</span>
-      </div>
+      {% if pv_kwp %}<div class="cover-meta-item"><label>Výkon FVE</label><span>{{ pv_kwp|num(1) }} kWp</span></div>{% endif %}
+      {% if capex %}<div class="cover-meta-item"><label>Investícia (CAPEX)</label><span>{{ capex|eur }}</span></div>{% endif %}
+      {% if annual_prod_mwh %}<div class="cover-meta-item"><label>Výroba / rok</label><span>{{ (annual_prod_mwh * 1000)|num(0) }} kWh</span></div>{% endif %}
+      {% if tarif_buy %}<div class="cover-meta-item"><label>Cena elektriny</label><span>{{ "%.3f"|format(tarif_buy) }} €/kWh</span></div>{% endif %}
+      {% if samosp_pct %}<div class="cover-meta-item"><label>Samospotreba</label><span>{{ samosp_pct }} %</span></div>{% endif %}
+      <div class="cover-meta-item"><label>Dátum</label><span>{{ report_date }}</span></div>
     </div>
   </div>
 
-  <div class="cover-footer">
-    <div>Energovision s.r.o. · Tomášikova 19, Bratislava · energovision.sk</div>
-    <div>{{ report_date }}</div>
+  <div class="cover-foot">
+    <div><strong style="color:#475569;">Energovision s.r.o.</strong> · Tomášikova 19, Bratislava · energovision.sk</div>
+    <div>obchod@energovision.sk · +421 948 302 137</div>
   </div>
 </div>
 
@@ -119,7 +87,7 @@
           {% endif %}
         </td>
         <td><strong style="color:{% if v.npv and v.npv > 0 %}#15803d{% else %}#dc2626{% endif %}">{{ v.npv|eur }}</strong></td>
-        <td>{% if v.payback %}{{ v.payback|num(1) }} r{% else %}—{% endif %}</td>
+        <td>{% if v.payback and v.payback > 0 %}{{ v.payback|num(1) }} r{% else %}<strong style="color:#15803d;">okamžite</strong>{% endif %}</td>
         <td><strong>{{ v.total_cum_25|eur }}</strong></td>
         <td>{{ v.initial_investment|eur }}</td>
       </tr>
@@ -176,7 +144,7 @@
     </div>
     <div class="kpi4-card kpi-good">
       <div class="kpi4-label">{% if v.key == "ppa10" or v.key == "ppa15" %}Prevod FVE (zadarmo){% else %}Bod zvratu{% endif %}</div>
-      <div class="kpi4-value">{% if v.payback %}rok {{ v.payback|int + 2026 }}{% else %}—{% endif %}</div>
+      <div class="kpi4-value">{% if v.payback and v.payback > 0 %}rok {{ v.payback|int + 2026 }}{% else %}okamžite{% endif %}</div>
       <div class="kpi4-sub">{% if v.key == "ppa10" or v.key == "ppa15" %}bezplatný prevod po zmluve{% else %}investícia splatená{% endif %}</div>
     </div>
     <div class="kpi4-card {% if v.irr_pct is none or v.irr_pct == none or v.irr_pct > 8 %}kpi-good{% else %}kpi-neutral{% endif %}">
@@ -325,18 +293,17 @@
   <div class="milestone-note">Kumulatívny čistý tok = súčet ročných prínosov mínus splátky vrátane vstupného vkladu. Zelená = v pluse, červená = ešte v mínuse.</div>
 
   {% if ai_text %}
-  <div class="section-label" style="border-left:3px solid #7c3aed;margin-top:18px;">Vyhodnotenie (AI analýza)</div>
-  <div class="ai-box">{{ ai_text|e|replace('\n', '<br/>')|safe }}</div>
+  <div class="ai-head">Náš pohľad — odporúčanie Energovision</div>
+  <div class="ai-box">{% for para in ai_text.split('\n\n') %}{% if para.strip() %}<p>{{ para.strip() }}</p>{% endif %}{% endfor %}</div>
   {% endif %}
+
+  <div class="report-footer">
+    <strong>Energovision s.r.o.</strong> · IČO: 53036280 · Tomášikova 19, Bratislava<br/>
+    obchod@energovision.sk · +421 948 302 137 · www.energovision.sk<br/>
+    <span style="color:#94a3b8;">Správa vygenerovaná {{ report_date }} · Hodnoty sú orientačné a slúžia pre rozhodovaciu podporu.</span>
+  </div>
 </div>
 {% endif %}
-
-{# ═══════════════════════════ FOOTER PAGE ═══════════════════════════ #}
-<div class="report-footer">
-  <strong>Energovision s.r.o.</strong> · IČO: 53036280 · Tomášikova 19, Bratislava<br/>
-  obchod@energovision.sk · +421 948 302 137 · www.energovision.sk<br/>
-  <span style="color:#94a3b8;">Správa vygenerovaná {{ report_date }} · Hodnoty sú orientačné a slúžia pre rozhodovaciu podporu.</span>
-</div>
 
 </body>
 </html>

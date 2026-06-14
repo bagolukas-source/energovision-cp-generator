@@ -92,41 +92,33 @@ def _make_env() -> Environment:
 # ──────────────────── SVG charts ────────────────────
 
 def _cumulative_svg(variants: list[dict], cf_data: list[dict]) -> str:
-    """Overview cumulative cashflow chart — all variants."""
+    """Overview cumulative cashflow chart — všetky varianty, web-kvalita."""
     if not cf_data or not variants:
         return ""
 
-    W, H = 540, 200
-    PL, PR, PT, PB = 60, 16, 14, 36
+    W, H = 600, 250
+    PL, PR, PT, PB = 70, 24, 16, 34
 
     variant_keys = [v["key"] for v in variants]
     cum: dict[str, list[float]] = {k: [] for k in variant_keys}
     years = [row["year"] for row in cf_data if "year" in row]
-
-    # build running cumulative from net CF
     for k in variant_keys:
         running = 0.0
         pts: list[float] = []
         for row in cf_data:
             if "year" not in row:
                 continue
-            if row["year"] == 0:
-                # initial investment already captured in init_inv
-                running += float(row.get(k, 0) or 0)
-            else:
-                running += float(row.get(k, 0) or 0)
+            running += float(row.get(k, 0) or 0)
             pts.append(running)
         cum[k] = pts
 
     all_vals = [v for lst in cum.values() for v in lst]
     if not all_vals:
         return ""
-
-    min_v = min(all_vals)
-    max_v = max(all_vals)
+    min_v = min(all_vals) * 1.08
+    max_v = max(all_vals) * 1.05
     if max_v == min_v:
         max_v = min_v + 1
-
     n = len(years)
 
     def sx(i: int) -> float:
@@ -137,7 +129,7 @@ def _cumulative_svg(variants: list[dict], cf_data: list[dict]) -> str:
 
     color_map = {
         "ppa10": "#6366f1", "ppa15": "#a855f7", "leas": "#f59e0b",
-        "sih": "#3b82f6", "dot": "#8b5cf6", "vl": "#92D050",
+        "sih": "#10b981", "dot": "#ef4444", "vl": "#3b82f6",
     }
 
     parts: list[str] = [
@@ -145,26 +137,38 @@ def _cumulative_svg(variants: list[dict], cf_data: list[dict]) -> str:
         '<rect width="100%" height="100%" fill="white"/>',
     ]
 
-    # zero line
+    # horizontálne gridlines + y popisy (5 úrovní)
+    for f in (0.0, 0.25, 0.5, 0.75, 1.0):
+        val = min_v + f * (max_v - min_v)
+        y = sy(val)
+        parts.append(f'<line x1="{PL}" y1="{y:.1f}" x2="{W-PR}" y2="{y:.1f}" stroke="#eef2f7" stroke-width="1"/>')
+        lab = f"{val/1000:.0f}k €" if abs(val) >= 1000 else f"{val:.0f} €"
+        parts.append(f'<text x="{PL-8}" y="{y+3:.1f}" text-anchor="end" font-size="8" fill="#94a3b8">{lab}</text>')
+
+    # vertikálne gridlines
+    for i, yr in enumerate(years):
+        if yr in (5, 10, 15, 20, 25):
+            parts.append(f'<line x1="{sx(i):.1f}" y1="{PT}" x2="{sx(i):.1f}" y2="{PT+(H-PT-PB):.1f}" stroke="#f4f6f9" stroke-width="1"/>')
+
+    # nulová os
     if min_v < 0 < max_v:
         zy = sy(0)
-        parts.append(f'<line x1="{PL}" y1="{zy:.1f}" x2="{W-PR}" y2="{zy:.1f}" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="4,3"/>')
-        parts.append(f'<text x="{PL-4}" y="{zy:.1f}" text-anchor="end" dominant-baseline="middle" font-size="8" fill="#9ca3af">0</text>')
+        parts.append(f'<line x1="{PL}" y1="{zy:.1f}" x2="{W-PR}" y2="{zy:.1f}" stroke="#475569" stroke-width="1.4" stroke-dasharray="5,3"/>')
+        parts.append(f'<text x="{W-PR}" y="{zy-4:.1f}" text-anchor="end" font-size="7.5" fill="#64748b">bod zvratu (0 €)</text>')
 
+    # krivky + koncový bod
     for vc in variants:
         k = vc["key"]
         col = color_map.get(k, vc.get("color", "#94a3b8"))
         pts_str = " ".join(f"{sx(i):.1f},{sy(v):.1f}" for i, v in enumerate(cum[k]))
-        parts.append(f'<polyline points="{pts_str}" fill="none" stroke="{col}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>')
+        parts.append(f'<polyline points="{pts_str}" fill="none" stroke="{col}" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>')
+        if cum[k]:
+            parts.append(f'<circle cx="{sx(len(cum[k])-1):.1f}" cy="{sy(cum[k][-1]):.1f}" r="2.8" fill="{col}"/>')
 
-    # x-axis labels
+    # x popisy
     for i, yr in enumerate(years):
-        if yr % 5 == 0:
-            x = sx(i)
-            parts.append(f'<text x="{x:.1f}" y="{H-PB+14}" text-anchor="middle" font-size="8" fill="#9ca3af">{yr}</text>')
-
-    # y-axis: max label
-    parts.append(f'<text x="{PL-4}" y="{PT+4}" text-anchor="end" font-size="8" fill="#9ca3af">{_fmt_eur(max_v)}</text>')
+        if yr in (5, 10, 15, 20, 25):
+            parts.append(f'<text x="{sx(i):.1f}" y="{H-PB+16}" text-anchor="middle" font-size="8" fill="#64748b">r{yr}</text>')
 
     parts.append("</svg>")
     return "".join(parts)
