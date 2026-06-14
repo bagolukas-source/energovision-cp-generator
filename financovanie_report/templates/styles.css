@@ -330,3 +330,14 @@ body {
 .final-matrix { font-size: 7.5pt; }
 .final-matrix th, .final-matrix td { padding: 4px 7px; }
 .final-matrix thead tr { background: #14532d; }
+
+/* Sprievodca rozhodnutím + hodnotové argumenty */
+.guide { margin: 14px 0 4px; }
+.guide-title { font-size: 11pt; font-weight: 800; color: #0f172a; margin-bottom: 8px; }
+.guide-table { width: 100%; border-collapse: separate; border-spacing: 8px 0; }
+.guide-cell { width: 33%; vertical-align: top; background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px 12px; }
+.guide-tag { font-size: 6.8pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px; }
+.guide-opt { font-size: 11pt; font-weight: 800; color: #111827; margin-bottom: 5px; }
+.guide-desc { font-size: 8pt; color: #374151; line-height: 1.45; }
+.vprops { width: 100%; border-collapse: separate; border-spacing: 8px; margin-top: 4px; }
+.vprops td { width: 50%; background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 8px; padding: 9px 12px; font-size: 8.5pt; color: #374151; }

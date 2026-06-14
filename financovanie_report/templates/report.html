@@ -53,12 +53,27 @@
 
   {% if best_key %}
   <div class="recommendation">
-    <strong>Odporúčaný model: {{ best_label }}</strong><br/>
-    Na základe finančnej analýzy (NPV, IRR, návratnosť) je pre vašu firmu najvýhodnejší model
-    <strong>{{ best_label }}</strong>{% if best_irr is not none and best_irr %} s IRR {{ best_irr|pct }}{% endif %}
-    a návratnosťou {{ best_payback|num(1) }} rokov.
-    {% if best_npv %}Čistá súčasná hodnota investície dosahuje <strong>{{ best_npv|eur }}</strong>.{% endif %}
+    <strong>Odporúčaný model: {{ best_label }}</strong> — bez jediného eura z vrecka<br/>
+    Elektráreň postaví financujúci partner a vy ju splácate z úspory, ktorú sama vyrobí — od prvého mesiaca ste v pluse.
+    Vlastníctvo máte od začiatku a váš kapitál medzitým ostáva pracovať vo firme.
+    {% if best_npv %}Čistá súčasná hodnota dosahuje <strong>{{ best_npv|eur }}</strong>.{% endif %}
     {% if npv_winner and npv_winner.key != best_key %}<br/><span style="color:#475569;">Najvyššiu NPV ({{ npv_winner.npv|eur }}) síce dosahuje {{ npv_winner.label }}, no viaže na 10-ročnú zmluvu bez vlastníctva — preto odporúčame vyváženejší model vyššie.</span>{% endif %}
+  </div>
+
+  <div class="guide">
+    <div class="guide-title">Ktorá voľba je pre vás?</div>
+    <table class="guide-table"><tr>
+      <td class="guide-cell" style="border-left:3px solid #3b82f6;"><div class="guide-tag" style="color:#3b82f6;">Máte voľný kapitál</div><div class="guide-opt">Vlastná kúpa</div><div class="guide-desc">Najvyšší celkový zisk a vlastníctvo od prvého dňa. Žiadny dlh, žiadne úroky.</div></td>
+      <td class="guide-cell" style="border-left:3px solid #10b981;"><div class="guide-tag" style="color:#10b981;">Chcete si nechať hotovosť</div><div class="guide-opt">SIH zelený úver</div><div class="guide-desc">0 € z vrecka, vlastníctvo od začiatku, splátka sa platí z úspor. Kapitál ostáva vo firme.</div></td>
+      <td class="guide-cell" style="border-left:3px solid #6366f1;"><div class="guide-tag" style="color:#6366f1;">Nechcete vklad ani záväzok</div><div class="guide-opt">PPA / ENERY</div><div class="guide-desc">Elektráreň postaví a vlastní ENERY, vy platíte len nižšiu cenu za prúd. Po zmluve prejde zadarmo na vás.</div></td>
+    </tr></table>
+    <table class="vprops"><tr>
+      <td>🔒 <strong>Fixná cena energie 20+ rokov</strong> — hedge proti rastu cien.</td>
+      <td>🧾 <strong>Daňová výhoda</strong> — odpis aj splátky znižujú základ dane.</td>
+    </tr><tr>
+      <td>🌱 <strong>ESG / CSRD</strong> — doložiteľné zníženie CO₂.</td>
+      <td>🤝 <strong>Jeden partner</strong> — projekt, realizácia, revízie aj servis.</td>
+    </tr></table>
   </div>
   {% endif %}
 
