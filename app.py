@@ -14935,6 +14935,44 @@ def webhook_whatsapp_uloha():
         return twiml("Nepodarilo sa spracovať úlohu, skús znova.")
 
 
+@app.route("/webhook/task-reminders", methods=["POST", "GET"])
+def webhook_task_reminders():
+    """Denný cron: pripomenie osobné úlohy splatné DNES alebo PO TERMÍNE (in-app notifikácia
+    pre priradeného), dedup cez personal_tasks.reminded_on (max 1x denne na úlohu)."""
+    from datetime import date as _date
+    try:
+        today = _date.today().isoformat()
+        q = (f"{SUPABASE_URL}/rest/v1/personal_tasks?"
+             "select=id,title,due_date,assignee_user_id,priority,status,reminded_on"
+             "&status=not.in.(done,cancelled,completed)&assignee_user_id=not.is.null"
+             f"&due_date=not.is.null&due_date=lte.{today}&order=due_date.asc&limit=500")
+        r = requests.get(q, headers=_supa_headers(), timeout=30)
+        tasks = r.json() if r.ok else []
+        sent = 0
+        for t in tasks:
+            if t.get("reminded_on") == today:
+                continue
+            uid = t.get("assignee_user_id"); title = (t.get("title") or "Úloha")[:120]
+            overdue = (t.get("due_date") or "") < today
+            label = "Po termíne" if overdue else "Dnes termín"
+            prio = "high" if (overdue or t.get("priority") == "high") else "normal"
+            try:
+                requests.post(f"{SUPABASE_URL}/rest/v1/notifications", headers=_supa_headers(),
+                              json={"channel": "in_app", "icon": "⏰", "recipient_user_id": uid,
+                                    "title": f"⏰ {label}: {title}",
+                                    "body": f"Termín úlohy {t.get('due_date')}",
+                                    "link": "/moje-ulohy", "priority": prio}, timeout=15)
+                requests.patch(f"{SUPABASE_URL}/rest/v1/personal_tasks?id=eq.{t['id']}",
+                               headers=_supa_headers(), json={"reminded_on": today}, timeout=15)
+                sent += 1
+            except Exception:
+                log.exception("task-reminder send failed for %s", t.get("id"))
+        return jsonify({"ok": True, "reminded": sent, "checked": len(tasks)})
+    except Exception as e:
+        log.exception("task-reminders failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/webhook/generuj-prezentaciu", methods=["POST"])
 @require_secret
 def webhook_generuj_prezentaciu():
