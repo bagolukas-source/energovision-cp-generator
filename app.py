@@ -14914,6 +14914,9 @@ def webhook_whatsapp_uloha():
             nm = str(p["assignee_name"]).lower().split(" ")[0]
             hit = next((u for u in users if nm and nm in str(u.get("full_name") or "").lower()), None)
             assignee = hit.get("id") if hit else None
+        # Ak v správe nie je menovaný kolega → úloha patrí odosielateľovi (jeho vlastné „to-do")
+        if not assignee:
+            assignee = me["id"]
         title = (p.get("title") or body)[:120]
         prio = p.get("priority") if p.get("priority") in ("low", "normal", "high") else "normal"
         row = {"title": title, "description": p.get("description"), "assignee_user_id": assignee,
