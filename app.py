@@ -14846,14 +14846,41 @@ def webhook_whatsapp_uloha():
         return (f"<?xml version='1.0' encoding='UTF-8'?><Response><Message>{msg}</Message></Response>", 200, {"Content-Type": "text/xml"})
     try:
         sender9 = re.sub(r"\D", "", frm)[-9:]
+        phone_e164 = ("+" + re.sub(r"\D", "", frm)) if frm else ""
         if not sender9:
             return twiml("Neviem identifikovať číslo.")
-        # nájdi odosielateľa medzi usermi
+        # users (na AI parse priradenia + notifikáciu)
         ur = requests.get(f"{SUPABASE_URL}/rest/v1/users?select=id,full_name,phone&is_active=eq.true", headers=_supa_headers(), timeout=20)
         users = ur.json() if ur.ok else []
-        me = next((u for u in users if re.sub(r"\D", "", u.get("phone") or "")[-9:] == sender9 and sender9), None)
+
+        # 1) Párovací kód v tele → spáruj číslo s účtom (code-first onboarding /settings/whatsapp)
+        code_tok = (body or "").strip().upper()
+        if re.fullmatch(r"EV[A-Z0-9]{4,10}", code_tok):
+            try:
+                lr = requests.post(f"{SUPABASE_URL}/rest/v1/rpc/whatsapp_link_by_code", headers=_supa_headers(),
+                                   json={"p_phone": phone_e164, "p_code": code_tok}, timeout=20)
+                linked_uid = lr.json() if lr.ok else None
+            except Exception:
+                linked_uid = None
+            if linked_uid:
+                nm = next((u.get("full_name") for u in users if u.get("id") == linked_uid), "")
+                return twiml(f"✅ Spárované{(' — ' + nm) if nm else ''}! Teraz mi píš úlohy, napr.: Tinák vyrobiť rozvádzač pre AGROPO do piatku.")
+            return twiml("Tento párovací kód je neplatný alebo expirovaný. Vygeneruj nový v CRM: Nastavenia → WhatsApp.")
+
+        # 2) Identita odosielateľa: najprv spárovaný účet (whatsapp_accounts), potom fallback users.phone
+        me = None
+        try:
+            rr = requests.post(f"{SUPABASE_URL}/rest/v1/rpc/whatsapp_resolve_user", headers=_supa_headers(),
+                               json={"p_phone": phone_e164}, timeout=20)
+            ruid = rr.json() if rr.ok else None
+            if ruid:
+                me = next((u for u in users if u.get("id") == ruid), {"id": ruid, "full_name": ""})
+        except Exception:
+            me = None
         if not me:
-            return twiml("Tvoje číslo nie je v CRM. Kontaktuj administrátora, nech ťa pridá.")
+            me = next((u for u in users if re.sub(r"\D", "", u.get("phone") or "")[-9:] == sender9 and sender9), None)
+        if not me:
+            return twiml("Tvoje číslo nie je spárované. V CRM otvor Nastavenia → WhatsApp, vygeneruj párovací kód (EV…) a pošli mi ho sem. 🔗")
         if num_media > 0 and not body:
             # Hlasovka → stiahni z Twilia (basic auth) → Groq Whisper prepis → text úlohy
             media_url = request.form.get("MediaUrl0")
