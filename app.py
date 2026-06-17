@@ -15042,6 +15042,28 @@ def _eva_tool_priprav_ponuku_b2b(args, ctx):
     popis = (args.get("popis") or "").strip()
     if not popis:
         return {"error": "chýba popis (napr. '50 kWp trapéz Huawei')"}
+    # Ponuka musí mať zákazníka (lead_id + customer_id sú NOT NULL). Rozlíš klienta.
+    lead_id = args.get("lead_id"); customer_id = args.get("customer_id")
+    if lead_id and not customer_id:
+        lr = requests.get(f"{SUPABASE_URL}/rest/v1/leads?id=eq.{lead_id}&select=id,customer_id&limit=1", headers=_supa_headers(), timeout=15)
+        row = (lr.json() or [{}])[0] if lr.ok else {}
+        customer_id = row.get("customer_id")
+    if (not lead_id or not customer_id) and args.get("lead_ev_id"):
+        ev = str(args["lead_ev_id"]).strip()
+        lr = requests.get(f"{SUPABASE_URL}/rest/v1/leads?ev_id=eq.{ev}&select=id,customer_id&limit=1", headers=_supa_headers(), timeout=15)
+        row = (lr.json() or [{}])[0] if lr.ok else {}
+        lead_id = lead_id or row.get("id"); customer_id = customer_id or row.get("customer_id")
+    if (not lead_id or not customer_id) and args.get("klient"):
+        q = str(args["klient"]).strip()
+        cr = requests.get(f"{SUPABASE_URL}/rest/v1/customers?or=(company_name.ilike.*{q}*,last_name.ilike.*{q}*)&select=id&limit=1", headers=_supa_headers(), timeout=15)
+        crow = (cr.json() or [{}])[0] if cr.ok else {}
+        if crow.get("id"):
+            customer_id = customer_id or crow["id"]
+            lr = requests.get(f"{SUPABASE_URL}/rest/v1/leads?customer_id=eq.{customer_id}&select=id&order=created_at.desc&limit=1", headers=_supa_headers(), timeout=15)
+            lrow = (lr.json() or [{}])[0] if lr.ok else {}
+            lead_id = lead_id or lrow.get("id")
+    if not lead_id or not customer_id:
+        return {"chyba_klient": "Ponuka potrebuje zákazníka (lead). Najprv použi vytvor_lead, alebo zadaj EV-kód leadu (lead_ev_id) či presný názov firmy (klient)."}
     try:
         cfg = _b2b_v2.ai_smart_configurator(_sb(), popis)
     except Exception as e:
@@ -15052,7 +15074,7 @@ def _eva_tool_priprav_ponuku_b2b(args, ctx):
         return {"chyba_param": "Chýba výkon (kWp). Opýtaj sa kolegu na kWp.", "config": {k: v for k, v in cfg.items() if k != "ok"}}
     try:
         bundle = _b2b_calc.save_quote_as_bundle(_sb(), base_config={k: v for k, v in cfg.items() if k != "ok"},
-                                                customer_id=args.get("customer_id"), lead_id=args.get("lead_id"),
+                                                customer_id=customer_id, lead_id=lead_id,
                                                 user_id=ctx["me"]["id"])
     except Exception as e:
         return {"error": "uloženie ponuky zlyhalo: " + str(e)[:160]}
@@ -15098,8 +15120,8 @@ def _eva_tools_spec():
          "input_schema": s(query={"type": "string"}, due_date={"type": "string"})},
         {"name": "vytvor_lead", "description": "Založí nový lead + kontakt v CRM z dopytu (napr. z preposlaného emailu/obrázka). firma → B2B, inak B2C.",
          "input_schema": s(meno={"type": "string"}, firma={"type": "string"}, email={"type": "string"}, telefon={"type": "string"}, predmet={"type": "string"}, b2b={"type": "boolean"})},
-        {"name": "priprav_ponuku_b2b", "description": "Vygeneruje DRAFT B2B cenovú ponuku cez kalkulačku z popisu (napr. '50 kWp trapéz Huawei'). Ak poznáš lead_id/customer_id, pripoj ju. Ak chýba kWp, dopýtaj sa.",
-         "input_schema": s(popis={"type": "string"}, lead_id={"type": "string"}, customer_id={"type": "string"})},
+        {"name": "priprav_ponuku_b2b", "description": "Vygeneruje DRAFT B2B cenovú ponuku cez kalkulačku z popisu (napr. '50 kWp trapéz Huawei'). Ponuka MUSÍ mať zákazníka — odovzdaj lead_id/customer_id (z vytvor_lead), alebo lead_ev_id (napr. EV-26-0146), alebo presný názov firmy v klient. Ak chýba kWp, dopýtaj sa.",
+         "input_schema": s(popis={"type": "string"}, lead_id={"type": "string"}, customer_id={"type": "string"}, lead_ev_id={"type": "string"}, klient={"type": "string"})},
     ]
 
 def _eva_load_history(phone, limit=12, minutes=90):
