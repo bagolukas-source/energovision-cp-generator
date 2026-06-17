@@ -772,6 +772,150 @@ def notion_update_page(page_id, properties):
     return r.json()
 
 
+DASHBOARD_DB_ID = "2671b0e51aa3803b9ee2dde6da0fb130"
+
+def _notion_query_all(db_id, delta_days=0):
+    """Načíta všetky pages z Notion DB (paginate); delta_days>0 → len last_edited >= N dní."""
+    import datetime as _dt
+    pages = []
+    cursor = None
+    body_base = {"page_size": 100}
+    if delta_days and delta_days > 0:
+        since = (_dt.datetime.utcnow() - _dt.timedelta(days=int(delta_days))).isoformat() + "Z"
+        body_base["filter"] = {"timestamp": "last_edited_time", "last_edited_time": {"on_or_after": since}}
+    for _ in range(40):
+        body = dict(body_base)
+        if cursor:
+            body["start_cursor"] = cursor
+        r = _retry_request(lambda: requests.post(f"{NOTION_API}/databases/{db_id}/query", headers=NOTION_HEADERS, json=body, timeout=40))
+        r.raise_for_status()
+        j = r.json()
+        pages.extend(j.get("results", []))
+        if j.get("has_more"):
+            cursor = j.get("next_cursor")
+        else:
+            break
+    return pages
+
+def _page_title(pg):
+    for _n, pr in (pg.get("properties") or {}).items():
+        if pr.get("type") == "title":
+            return "".join(t.get("plain_text", "") for t in pr.get("title", []))
+    return ""
+
+def _parse_diary(text):
+    """Z denníka 'Poznámky ADMINISTRATÍVA' → [(date_iso, raw_line)]. Follow-up 'DD.MM.' dedí rok."""
+    import re as _re
+    out = []
+    last_year = None
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        m = _re.match(r"^(\d{1,2})\.(\d{1,2})\.(\d{4})", line)
+        if m:
+            d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            last_year = y
+        else:
+            m2 = _re.match(r"^(\d{1,2})\.(\d{1,2})\.(?!\d)", line)
+            if m2 and last_year:
+                d, mo, y = int(m2.group(1)), int(m2.group(2)), last_year
+            else:
+                continue
+        try:
+            iso = f"{y:04d}-{mo:02d}-{d:02d}"
+            import datetime as _dt
+            _dt.date(y, mo, d)
+        except Exception:
+            continue
+        out.append((iso, line))
+    return out
+
+@app.route("/webhook/notion-sync-zakazky", methods=["GET", "POST"])
+def notion_sync_zakazky():
+    """Sync Dashboard zákaziek Notion→CRM. Default dry_run (nezapisuje).
+    Params: dry_run=0 (zapíše), delta_days=N (len zmenené za N dní; 0=full), key=WEBHOOK_SECRET (pre cron)."""
+    args = request.args
+    if WEBHOOK_SECRET and args.get("key") != WEBHOOK_SECRET and request.headers.get("X-Webhook-Secret") != WEBHOOK_SECRET:
+        # povolené aj bez kľúča pre manuálny dry_run? Nie — chránime zápis. Dry-run dovolíme.
+        if args.get("dry_run", "1") not in ("1", "true", "yes"):
+            return jsonify({"ok": False, "error": "unauthorized (key)"}), 401
+    dry_run = args.get("dry_run", "1") in ("1", "true", "yes")
+    delta_days = int(args.get("delta_days") or 0)
+    try:
+        pages = _notion_query_all(DASHBOARD_DB_ID, delta_days)
+    except Exception as e:
+        return jsonify({"ok": False, "error": "notion query: " + str(e)[:200]}), 500
+
+    # CRM projekty
+    pr = requests.get(f"{SUPABASE_URL}/rest/v1/projects?select=id,project_code,notion_page_id&limit=2000", headers=_supa_headers(), timeout=30)
+    projects = pr.json() if pr.ok else []
+    import re as _re
+    by_pageid = {}
+    by_code = {}
+    for p in projects:
+        npid = (p.get("notion_page_id") or "").replace("-", "")
+        if npid:
+            by_pageid[npid] = p
+        code = (p.get("project_code") or "").strip().upper()
+        if code:
+            by_code[code] = p
+
+    # existujúce notion denníkové events (dedup)
+    ev = requests.get(f"{SUPABASE_URL}/rest/v1/events?select=entity_id,payload&verb=eq.notion_dennik&limit=10000", headers=_supa_headers(), timeout=40)
+    existing = set()
+    for e in (ev.json() if ev.ok else []):
+        pl = e.get("payload") or {}
+        existing.add((e.get("entity_id"), pl.get("datum_raw"), (pl.get("text") or "")[:300]))
+
+    stats = {"pages": len(pages), "matched": 0, "unmatched": 0, "unmatched_titles": [], "new_events": 0, "todo_pages": 0}
+    new_rows = []
+    for pg in pages:
+        title = _page_title(pg)
+        pgid = (pg.get("id") or "").replace("-", "")
+        proj = by_pageid.get(pgid)
+        if not proj:
+            cm = _re.search(r"P-\d{2}-\d+", title.upper())
+            if cm:
+                proj = by_code.get(cm.group(0))
+        if not proj:
+            stats["unmatched"] += 1
+            if len(stats["unmatched_titles"]) < 25:
+                stats["unmatched_titles"].append(title[:50])
+            continue
+        stats["matched"] += 1
+        flat = notion_props_to_flat(pg)
+        # denník
+        diary_key = next((k for k in flat if ("poznámk" in k.lower() or "poznamk" in k.lower()) and "administrat" in k.lower()), None)
+        if not diary_key:
+            diary_key = next((k for k in flat if "administrat" in k.lower()), None)
+        if diary_key and flat.get(diary_key):
+            for iso, line in _parse_diary(flat[diary_key]):
+                key = (proj["id"], iso, line[:300])
+                if key in existing:
+                    continue
+                existing.add(key)
+                stats["new_events"] += 1
+                new_rows.append({
+                    "verb": "notion_dennik", "source": "notion_sync_auto",
+                    "entity_type": "project", "entity_id": proj["id"], "actor_type": "system",
+                    "occurred_at": iso + "T00:00:00+00:00",
+                    "payload": {"text": line[:1000], "datum_raw": iso, "notion_page_id": pg.get("id")},
+                })
+        # todo (zatiaľ len počítame — zápis do project_tasks je vo fáze 2)
+        todo_key = next((k for k in flat if "to do" in k.lower() or "čakáme" in k.lower() or "cakame" in k.lower()), None)
+        if todo_key and flat.get(todo_key):
+            stats["todo_pages"] += 1
+
+    if not dry_run and new_rows:
+        for i in range(0, len(new_rows), 200):
+            requests.post(f"{SUPABASE_URL}/rest/v1/events", headers=_supa_headers(), json=new_rows[i:i+200], timeout=40)
+
+    stats["mode"] = "DRY-RUN (nezapísané)" if dry_run else "ZAPÍSANÉ"
+    stats["delta_days"] = delta_days
+    return jsonify({"ok": True, **stats})
+
+
 @app.route("/webhook/notion-sync-diag", methods=["GET"])
 def notion_sync_diag():
     """Diagnostika: na ktoré Notion DB siaha serverový NOTION_TOKEN (počty + vzorky)."""
