@@ -14874,10 +14874,21 @@ def _eva_tool_najdi_projekt(args, ctx):
     q = (args.get("query") or "").strip()
     if not q:
         return {"error": "chyba dotaz"}
-    url = (f"{SUPABASE_URL}/rest/v1/projects?select=id,project_code,name,workspace"
+    import unicodedata as _ud, re as _re2
+    def _norm(t):
+        t = _ud.normalize("NFKD", str(t or "")).encode("ascii", "ignore").decode()
+        return _re2.sub(r"[^a-z0-9]", "", t.lower())
+    # 1) rýchly ilike
+    url = (f"{SUPABASE_URL}/rest/v1/projects?select=id,project_code,name"
            f"&or=(name.ilike.*{q}*,project_code.ilike.*{q}*)&limit=8")
     r = requests.get(url, headers=_supa_headers(), timeout=20)
     rows = r.json() if r.ok else []
+    # 2) fallback: normalizovaný full-scan (zhodí spojovník/medzeru/diakritiku)
+    if not rows:
+        qn = _norm(q)
+        ar = requests.get(f"{SUPABASE_URL}/rest/v1/projects?select=id,project_code,name&limit=2000", headers=_supa_headers(), timeout=30)
+        allp = ar.json() if ar.ok else []
+        rows = [x for x in allp if qn and (qn in _norm(x.get("name")) or qn in _norm(x.get("project_code")))][:8]
     return {"projekty": [{"id": x["id"], "kod": x.get("project_code"), "nazov": x.get("name")} for x in rows]}
 
 def _eva_tool_stav_projektu(args, ctx):
@@ -15079,9 +15090,11 @@ def _eva_tool_priprav_ponuku_b2b(args, ctx):
     except Exception as e:
         return {"error": "uloženie ponuky zlyhalo: " + str(e)[:160]}
     price = bundle.get("variant_a_price_with_vat") or bundle.get("variant_b_price_with_vat")
-    return {"ok": True, "cislo_ponuky": bundle.get("bundle_number"), "bundle_id": bundle.get("id"),
+    tok = bundle.get("public_token"); bid = bundle.get("id")
+    link = (f"https://app.energovision.sk/b/{tok}" if tok else (f"https://app.energovision.sk/ponuky/{bid}" if bid else None))
+    return {"ok": True, "cislo_ponuky": bundle.get("bundle_number"), "bundle_id": bid,
             "kwp": cfg.get("kwp"), "vendor": cfg.get("vendor_stack"), "strecha": cfg.get("typ_strechy"),
-            "cena_s_dph": price, "stav": "draft (na kontrolu v CRM)"}
+            "cena_s_dph": price, "link": link, "stav": "draft (na kontrolu v CRM)"}
 
 _EVA_EXEC = {
     "najdi_projekt": _eva_tool_najdi_projekt,
@@ -15172,7 +15185,7 @@ def _eva_whatsapp_agent(body, me, users, today, prior_messages=None, images=None
         "Keď kolega niečo zadáva ('priprav/sprav/zavolaj/vyrob… do…') alebo žiada akciu (založ/uzavri/priraď úlohu, "
         "posuň termín), vykonaj ju nástrojom (vytvor_ulohu a spol.) a stručne potvrď čo si spravila. "
         "Keď je požiadavka nejednoznačná alebo nájdeš viac zhôd, OPÝTAJ sa na upresnenie namiesto hádania. "
-        "Vieš čítať aj priložené OBRÁZKY (preposlané emaily, fotky faktúr/štítkov, screenshoty) — vytiahni z nich údaje a konaj. ""Keď príde nový zákaznícky DOPYT (meno/firma/email/telefón/predmet), založ ho nástrojom vytvor_lead. ""Keď kolega chce CENOVÚ PONUKU (napr. 'priprav ponuku 50 kWp trapéz Huawei'), použi priprav_ponuku_b2b — vznikne DRAFT na kontrolu v CRM; ak chýba kWp/strecha/značka, dopýtaj sa. ""Termíny 'do piatku/zajtra/o týždeň' prepočítaj na dátum. Akcie meň iba osobné/WhatsApp úlohy. "
+        "Vieš čítať aj priložené OBRÁZKY (preposlané emaily, fotky faktúr/štítkov, screenshoty) — vytiahni z nich údaje a konaj. ""Keď príde nový zákaznícky DOPYT (meno/firma/email/telefón/predmet), založ ho nástrojom vytvor_lead. ""Keď kolega chce CENOVÚ PONUKU (napr. 'priprav ponuku 50 kWp trapéz Huawei'), použi priprav_ponuku_b2b — vznikne DRAFT na kontrolu v CRM; ak chýba kWp/strecha/značka, dopýtaj sa. Po vytvorení ponuky pošli kolegovi aj odkaz (pole link) na jej kontrolu. ""DÔLEŽITÉ: pred ZALOŽENÍM LEADU (vytvor_lead) alebo CENOVEJ PONUKY (priprav_ponuku_b2b) to NEVYKONÁVAJ hneď — najprv zhrň čo spravíš (klient, parametre) a opýtaj sa na potvrdenie; vykonaj až keď kolega potvrdí (áno/ok/jj/sprav). Úlohy (vytvor_ulohu) a drobné zmeny rob priamo. ""Termíny 'do piatku/zajtra/o týždeň' prepočítaj na dátum. Akcie meň iba osobné/WhatsApp úlohy. "
         f"Kolegovia: {names}."
     )
     messages = list(prior_messages or [])
