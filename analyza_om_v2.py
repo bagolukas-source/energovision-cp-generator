@@ -448,7 +448,7 @@ Píš ako energetik radí klientovi pri káve, nie ako AI. Konkrétne čísla. E
         return {"error": str(e)[:200], "scenario_type": analyza.get("scenario_type")}
 
 
-def insert_variant_via_engine(sb, analyza_id: str, name: str, fve_kwp, bess_kwh, bess_kw=None, capex_per_kwp=None, capex_per_kwh_bess=None) -> dict:
+def insert_variant_via_engine(sb, analyza_id: str, name: str, fve_kwp, bess_kwh, bess_kw=None, capex_per_kwp=None, capex_per_kwh_bess=None, capex_source: str = "engine_v095_quick") -> dict:
     """Spočíta JEDEN variant cez REÁLNY engine (rovnaký pipeline ako matica) a uloží do analyza_om_variants.
     Nahrádza fallback ekonomiku z aom_ai_strategist → konzistentné CAPEX / dotácia / dispatch.
     capex_per_kwp: voliteľný override ceny diela €/kWp (napr. zadanie s/bez optimizérov)."""
@@ -486,7 +486,7 @@ def insert_variant_via_engine(sb, analyza_id: str, name: str, fve_kwp, bess_kwh,
         "fve_topology": (analyza.get("fve_topology") or "south"),
         "bess_kwh": v.get("bess_kwh", bess_kwh), "bess_kw": v.get("bess_kw", bess_kw or bess_kwh * 0.5),
         "bess_arbitrage_enabled": (v.get("bess_kwh", 0) or 0) > 0,
-        "capex_eur": v.get("capex_total_eur", 0), "capex_source": "engine_v095_quick",
+        "capex_eur": v.get("capex_total_eur", 0), "capex_source": capex_source,
         "result_samosp_pct": v.get("samospotreba_pct", 0), "result_samostat_pct": v.get("samostatnost_pct", 0),
         "result_export_mwh": (v.get("energy_flow", {}) or {}).get("grid_export_mwh", 0) or 0, "result_import_mwh": (v.get("grid_import_kwh", 0) or 0) / 1000, "result_vyroba_mwh": (v.get("pv_total_kwh", 0) or 0) / 1000,
         "result_npv_eur_base": v.get("npv_eur", 0), "result_irr_pct_base": v.get("irr_pct", 0),
@@ -542,6 +542,15 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
                     _old_sel_key = (float(_osr.data.get("fve_kwp") or 0), float(_osr.data.get("bess_kwh") or 0))
             except Exception:
                 _old_sel_key = None
+        # Zachovaj ručné varianty (capex_source='manual') — po prepočte ich znova spočítame cez engine,
+        # aby ich Re-run nezmazal a mali reálnu ekonomiku (predtým ostali ako "—").
+        _manual_keep = []
+        try:
+            _mk = sb.table("analyza_om_variants").select("name,fve_kwp,bess_kwh,bess_kw,capex_eur").eq("analyza_id", analyza_id).eq("capex_source", "manual").execute()
+            _manual_keep = _mk.data or []
+        except Exception:
+            _manual_keep = []
+
         # Clear existing variants
         sb.table("analyza_om_variants").delete().eq("analyza_id", analyza_id).execute()
 
@@ -571,6 +580,29 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
                 "result_dotacia_eur": v.get("dotacia_eur", 0),
             })
         _ins = sb.table("analyza_om_variants").insert(rows).execute()
+
+        # Prepočítaj a znovu vlož ručné varianty (zachovaj marker 'manual' + daj im reálnu ekonomiku).
+        for _mv in _manual_keep:
+            try:
+                _fk = float(_mv.get("fve_kwp") or 0)
+                if _fk <= 0:
+                    continue
+                _bk = float(_mv.get("bess_kwh") or 0)
+                _cap = float(_mv.get("capex_eur") or 0)
+                _cpk = None
+                _cpb = None
+                if _cap > 0:
+                    if _bk > 0:
+                        _cpb = 480.0
+                        _cpk = max(0.0, _cap - _bk * 480.0) / _fk
+                    else:
+                        _cpk = _cap / _fk
+                insert_variant_via_engine(sb, analyza_id, _mv.get("name") or "Vlastný variant",
+                                          _fk, _bk, _mv.get("bess_kw"),
+                                          capex_per_kwp=_cpk, capex_per_kwh_bess=_cpb,
+                                          capex_source="manual")
+            except Exception:
+                log.exception("[aom-v2] prepočet ručného variantu zlyhal")
         # selected_variant_id remap: delete+insert by nechal selection visieť na neexistujúcom UUID.
         # Premapuj podľa (kwp,bess) na nový riadok; ak sa rovnaký variant už negeneroval -> NULL (treba vybrať znova).
         if _old_sel:
