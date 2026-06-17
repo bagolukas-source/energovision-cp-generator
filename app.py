@@ -15087,18 +15087,79 @@ def _eva_tool_priprav_ponuku_b2b(args, ctx):
         return {"error": "z popisu sa nepodarilo zostaviť konfiguráciu — upresni kWp/strechu/značku"}
     if not cfg.get("kwp"):
         return {"chyba_param": "Chýba výkon (kWp). Opýtaj sa kolegu na kWp.", "config": {k: v for k, v in cfg.items() if k != "ok"}}
+    base = {k: v for k, v in cfg.items() if k != "ok"}
     try:
-        bundle = _b2b_calc.save_quote_as_bundle(_sb(), base_config={k: v for k, v in cfg.items() if k != "ok"},
-                                                customer_id=customer_id, lead_id=lead_id,
-                                                user_id=ctx["me"]["id"])
+        _m = float(str(args.get("marza_pct") or 0).replace(",", "."))
+        if _m > 0:
+            base["margin_pct"] = _m
+    except Exception:
+        pass
+    # BOM rovnakým enginom ako CRM B2B kalkulačka (V2)
+    try:
+        bom = _b2b_v2.calculate_bom_v2(_sb(), base)
     except Exception as e:
-        return {"error": "uloženie ponuky zlyhalo: " + str(e)[:160]}
-    price = bundle.get("variant_a_price_with_vat") or bundle.get("variant_b_price_with_vat")
-    tok = bundle.get("public_token"); bid = bundle.get("id")
-    link = (f"https://app.energovision.sk/b/{tok}" if tok else (f"https://app.energovision.sk/ponuky/{bid}" if bid else None))
-    return {"ok": True, "cislo_ponuky": bundle.get("bundle_number"), "bundle_id": bid,
-            "kwp": cfg.get("kwp"), "vendor": cfg.get("vendor_stack"), "strecha": cfg.get("typ_strechy"),
-            "cena_s_dph": price, "link": link, "stav": "draft (na kontrolu v CRM)"}
+        return {"error": "kalkulácia zlyhala: " + str(e)[:160]}
+    if not bom or not bom.get("ok"):
+        return {"error": "kalkulácia BOM zlyhala: " + str((bom or {}).get("error"))[:160]}
+    items = bom.get("items") or []
+    if not items:
+        return {"error": "BOM je prázdny — upresni parametre"}
+    sub = sum(float(it.get("price_per_unit") or 0) * float(it.get("qty") or 0) for it in items)
+    cost = sum(float(it.get("cost_per_unit") or 0) * float(it.get("qty") or 0) for it in items)
+    vat = sub * 0.23
+    sb = _sb()
+    import datetime as _dt
+    pre = f"B2B-{_dt.datetime.now().year}-"
+    def _next_qn():
+        try:
+            r = sb.rpc("next_doc_number", {"p_rad": "B2B"}).execute()
+            n = r.data
+            if isinstance(n, int) and n > 0:
+                return f"{pre}{n:04d}"
+        except Exception:
+            pass
+        try:
+            rws = sb.table("quotes").select("quote_number").ilike("quote_number", pre + "%").order("quote_number", desc=True).limit(1).execute().data or []
+            last = rws[0]["quote_number"] if rws else None
+            m = int(last[len(pre):]) if last else 0
+        except Exception:
+            m = 0
+        return f"{pre}{m + 1:04d}"
+    # insert ponuky do quotes (rovnako ako /api/quote/from-configurator), retry na kolíziu čísla
+    qid = None; qn = None
+    for _att in range(3):
+        qn = _next_qn()
+        row = {"quote_number": qn, "customer_id": customer_id, "lead_id": lead_id,
+               "status": "draft", "variant_label": "B2B (Eva WhatsApp)",
+               "subtotal_no_vat": round(sub, 2), "discount_pct": 0, "discount_amount": 0,
+               "vat_amount": round(vat, 2), "total_with_vat": round(sub + vat, 2),
+               "cost_total": round(cost, 2), "created_by": ctx["me"]["id"],
+               "config": base, "revision": 1}
+        try:
+            res = sb.table("quotes").insert(row).execute()
+            qid = (res.data or [{}])[0].get("id")
+            break
+        except Exception as e:
+            if "duplicate" in str(e).lower() or "23505" in str(e):
+                continue
+            return {"error": "uloženie ponuky zlyhalo: " + str(e)[:160]}
+    if not qid:
+        return {"error": "nepodarilo sa prideliť číslo ponuky"}
+    item_rows = [{"quote_id": qid, "product_id": None, "name": it.get("product_name"),
+                  "quantity": float(it.get("qty") or 0), "unit": it.get("unit") or "ks",
+                  "unit_price_no_vat": float(it.get("price_per_unit") or 0),
+                  "unit_cost_no_vat": float(it.get("cost_per_unit") or 0),
+                  "vat_rate": 23, "category": it.get("category") or "Materiál"} for it in items]
+    try:
+        if item_rows:
+            sb.table("quote_items").insert(item_rows).execute()
+    except Exception:
+        log.exception("eva quote_items insert failed")
+    return {"ok": True, "cislo_ponuky": qn, "quote_id": qid,
+            "kwp": (bom.get("totals") or {}).get("kwp") or cfg.get("kwp"),
+            "vendor": cfg.get("vendor_stack"), "strecha": cfg.get("typ_strechy"),
+            "cena_s_dph": round(sub + vat, 2), "polozky": len(item_rows),
+            "link": f"https://app.energovision.sk/ponuky/{qid}", "stav": "draft (na kontrolu v CRM)"}
 
 _EVA_EXEC = {
     "najdi_projekt": _eva_tool_najdi_projekt,
@@ -15138,7 +15199,7 @@ def _eva_tools_spec():
         {"name": "vytvor_lead", "description": "Založí nový lead + kontakt v CRM z dopytu (napr. z preposlaného emailu/obrázka). firma → B2B, inak B2C.",
          "input_schema": s(meno={"type": "string"}, firma={"type": "string"}, email={"type": "string"}, telefon={"type": "string"}, predmet={"type": "string"}, b2b={"type": "boolean"})},
         {"name": "priprav_ponuku_b2b", "description": "Vygeneruje DRAFT B2B cenovú ponuku cez kalkulačku z popisu (napr. '50 kWp trapéz Huawei'). Ponuka MUSÍ mať zákazníka — odovzdaj lead_id/customer_id (z vytvor_lead), alebo lead_ev_id (napr. EV-26-0146), alebo presný názov firmy v klient. Ak chýba kWp, dopýtaj sa.",
-         "input_schema": s(popis={"type": "string"}, lead_id={"type": "string"}, customer_id={"type": "string"}, lead_ev_id={"type": "string"}, klient={"type": "string"})},
+         "input_schema": s(popis={"type": "string"}, lead_id={"type": "string"}, customer_id={"type": "string"}, lead_ev_id={"type": "string"}, klient={"type": "string"}, marza_pct={"type": "number"})},
     ]
 
 def _eva_load_history(phone, limit=12, minutes=90):
