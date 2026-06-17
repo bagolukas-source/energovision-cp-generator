@@ -46,7 +46,7 @@ const sun=new THREE.DirectionalLight(0xfff4e0,1.2);sun.position.set(120,200,80);
 sun.shadow.mapSize.set(2048,2048);sun.shadow.camera.left=-300;sun.shadow.camera.right=300;sun.shadow.camera.top=300;sun.shadow.camera.bottom=-300;sun.shadow.camera.far=800;scene.add(sun);
 if(SAT){const tex=new THREE.TextureLoader().load('data:image/jpeg;base64,'+SAT);tex.colorSpace=THREE.SRGBColorSpace;
 const ground=new THREE.Mesh(new THREE.PlaneGeometry(661,411),new THREE.MeshStandardMaterial({map:tex,roughness:1}));
-ground.rotation.x=-Math.PI/2;ground.receiveShadow=true;scene.add(ground);}
+ground.rotation.x=-Math.PI/2;ground.rotation.z=Math.PI;ground.receiveShadow=true;scene.add(ground);}
 else{const gr=new THREE.Mesh(new THREE.PlaneGeometry(500,500),new THREE.MeshStandardMaterial({color:0x9ccd6e}));gr.rotation.x=-Math.PI/2;gr.receiveShadow=true;scene.add(gr);}
 const PTEX="__PANELTEX__";
 let baseTex=null;
@@ -56,12 +56,16 @@ const fallbackMat=new THREE.MeshStandardMaterial({color:0x16233f,metalness:.5,ro
 const MW=1.995, DEPTH=2.436, TILT=10*Math.PI/180, ANG=-ANGLE*Math.PI/180;
 const panels=new THREE.Group();
 ROWS.forEach(r=>{
-  const w=Math.max(1,r.w)*MW;
-  let mat=fallbackMat;
-  if(baseTex){const t=baseTex.clone();t.needsUpdate=true;t.repeat.set(Math.max(1,r.w),1);mat=new THREE.MeshStandardMaterial({map:t,metalness:.35,roughness:.4});}
-  const m=new THREE.Mesh(new THREE.BoxGeometry(w,0.05,DEPTH*0.9),mat);
-  m.castShadow=true;m.receiveShadow=true;m.rotation.x=-TILT;
-  const g=new THREE.Group();g.add(m);g.position.set(r.x,0.32,r.z);g.rotation.y=ANG;
+  const w=Math.max(1,r.w)*MW, sd=DEPTH*0.47;
+  const g=new THREE.Group();
+  [[1,-DEPTH/4],[-1,DEPTH/4]].forEach(sl=>{   // dva sklony: východ + západ (A-rám)
+    let mat=fallbackMat;
+    if(baseTex){const t=baseTex.clone();t.needsUpdate=true;t.repeat.set(Math.max(1,r.w),1);mat=new THREE.MeshStandardMaterial({map:t,metalness:.35,roughness:.4});}
+    const m=new THREE.Mesh(new THREE.BoxGeometry(w,0.05,sd),mat);
+    m.castShadow=true;m.receiveShadow=true;m.rotation.x=sl[0]*TILT;m.position.z=sl[1];m.position.y=sd/2*Math.sin(TILT);
+    g.add(m);
+  });
+  g.position.set(r.x,0.30,r.z);g.rotation.y=ANG;
   panels.add(g);
 });
 scene.add(panels);
@@ -133,7 +137,9 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
     for (px, py, anz, nf, nm) in rows:
         wx, wz = to_world(px + anz*MW/2.0, py + ROWD/2.0)  # PAB je roh -> posun na stred stola
         rw.append((wx, wz, anz, nm))
-    cx = sum(r[0] for r in rw)/len(rw); cz = sum(r[1] for r in rw)/len(rw)
+    mod_cx = sum(r[0] for r in rw)/len(rw); mod_cz = sum(r[1] for r in rw)/len(rw)
+    # recenter scény na BUDOVU (ak je), aby satelit vycentrovaný na budovu sadol pod moduly
+    cx, cz = (bld[0], bld[1]) if bld else (mod_cx, mod_cz)
     data = [{"x": round(r[0]-cx, 2), "z": round(r[1]-cz, 2), "w": r[2]} for r in rw]
     n_modules_real = sum(r[3] for r in rw)
     angle_deg = round(_m.degrees(theta), 2)
