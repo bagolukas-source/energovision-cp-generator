@@ -1946,6 +1946,33 @@ def spracuj_rozlozenie_supabase():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@app.route("/webhook/pvprj-3d-supabase", methods=["POST"])
+@require_secret
+def pvprj_3d_supabase():
+    """PV*SOL .pvprj -> interaktivny 3D HTML (satelit + modulove stoly + budova).
+    Vstup: { pvprj_url, title }. Vystup: { success, filename, data(base64 HTML), n_tables }.
+    CRM (fve-os) HTML ulozi do storage a ulozi public URL na lead."""
+    body = request.get_json(silent=True) or {}
+    pvprj_url = body.get("pvprj_url")
+    title = body.get("title") or "FVE projekt"
+    if not pvprj_url:
+        return jsonify({"success": False, "error": "missing pvprj_url"}), 400
+    try:
+        import base64 as _b64
+        import pvprj_3d
+        r = requests.get(pvprj_url, timeout=90)
+        if not r.ok:
+            return jsonify({"success": False, "error": f"download zlyhal: {r.status_code}"}), 400
+        res = pvprj_3d.build_pvprj_3d(r.content, title=title)
+        html_b64 = _b64.b64encode(res["html"].encode("utf-8")).decode("ascii")
+        log.info(f"[pvprj-3d] hotovo: {res['n_tables']} stolov, {len(res['html'])//1024} KB")
+        return jsonify({"success": True, "filename": "model_3d.html", "data": html_b64,
+                        "n_tables": res["n_tables"], "has_satellite": res["has_satellite"]})
+    except Exception as e:
+        log.exception("[pvprj-3d] zlyhalo")
+        return jsonify({"success": False, "error": str(e)[:300]}), 500
+
+
 @app.route("/webhook/generuj-dokumenty", methods=["POST"])
 @require_secret
 def generuj_dokumenty():
