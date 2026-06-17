@@ -15049,7 +15049,39 @@ def _eva_tools_spec():
          "input_schema": s(query={"type": "string"}, due_date={"type": "string"})},
     ]
 
-def _eva_whatsapp_agent(body, me, users, today):
+def _eva_load_history(phone, limit=12, minutes=90):
+    """Posledne spravy konverzacie (chronologicky) pre dane cislo."""
+    try:
+        import datetime as _dt
+        since = (_dt.datetime.utcnow() - _dt.timedelta(minutes=minutes)).isoformat()
+        url = (f"{SUPABASE_URL}/rest/v1/whatsapp_conversations?phone_e164=eq.{phone}"
+               f"&created_at=gte.{since}&select=role,content&order=created_at.desc&limit={limit}")
+        r = requests.get(url, headers=_supa_headers(), timeout=15)
+        rows = (r.json() if r.ok else [])[::-1]
+    except Exception:
+        rows = []
+    msgs = []
+    for x in rows:
+        role = "assistant" if x.get("role") == "assistant" else "user"
+        content = (x.get("content") or "").strip()
+        if not content:
+            continue
+        if msgs and msgs[-1]["role"] == role:
+            msgs[-1]["content"] += "\n" + content
+        else:
+            msgs.append({"role": role, "content": content})
+    while msgs and msgs[0]["role"] != "user":
+        msgs.pop(0)
+    return msgs
+
+def _eva_save_turn(phone, role, content):
+    try:
+        requests.post(f"{SUPABASE_URL}/rest/v1/whatsapp_conversations", headers=_supa_headers(),
+                      json={"phone_e164": phone, "role": role, "content": (content or "")[:4000]}, timeout=15)
+    except Exception:
+        pass
+
+def _eva_whatsapp_agent(body, me, users, today, prior_messages=None):
     """Tool-using Eva agent nad CRM (Anthropic). Vráti krátky text pre WhatsApp."""
     if not ANTHROPIC_API_KEY:
         return None
@@ -15058,13 +15090,20 @@ def _eva_whatsapp_agent(body, me, users, today):
     system = (
         "Si Eva, AI asistentka firmy Energovision v CRM. Komunikuješ cez WhatsApp s kolegom "
         f"{me.get('full_name') or ''}. Dnes je {today}. Odpovedaj PO SLOVENSKY, stručne a vecne, "
-        "vhodne pre WhatsApp (max ~6 riadkov). NEPOUŽÍVAJ markdown — žiadne ** ani #; tučné na WhatsApp je *jedna hviezdička*, ale radšej píš čistý text. Na otázky o projektoch, úlohách "
-        "a vyťaženosti použi nástroje (čítaj reálne dáta CRM, nehádaj). Keď kolega žiada akciu "
-        "(založ/uzavri/priraď úlohu, posuň termín), vykonaj ju príslušným nástrojom a stručne potvrď čo si spravila. "
-        "Termíny ako 'do piatku/zajtra/o týždeň' prepočítaj na dátum. Akcie meň iba osobné/WhatsApp úlohy. "
+        "vhodne pre WhatsApp (max ~7 riadkov). NEPOUŽÍVAJ markdown (žiadne ** ani #), píš čistý text. "
+        "TOTO JE PLYNULÁ KONVERZÁCIA — pamätáš si predošlé správy. Keď ti kolega odpovie krátko (napr. len názov "
+        "projektu po tom, čo si sa pýtala ktorý), POKRAČUJ v rozrobenej téme, NEzakladaj z toho úlohu. "
+        "Na otázky o projektoch, úlohách a vyťaženosti VŽDY použi nástroje (čítaj reálne dáta CRM, nikdy nehádaj). "
+        "Keď kolega niečo zadáva ('priprav/sprav/zavolaj/vyrob… do…') alebo žiada akciu (založ/uzavri/priraď úlohu, "
+        "posuň termín), vykonaj ju nástrojom (vytvor_ulohu a spol.) a stručne potvrď čo si spravila. "
+        "Keď je požiadavka nejednoznačná alebo nájdeš viac zhôd, OPÝTAJ sa na upresnenie namiesto hádania. "
+        "Termíny 'do piatku/zajtra/o týždeň' prepočítaj na dátum. Akcie meň iba osobné/WhatsApp úlohy. "
         f"Kolegovia: {names}."
     )
-    messages = [{"role": "user", "content": body}]
+    messages = list(prior_messages or [])
+    if messages and messages[-1].get("role") == "user":
+        messages.append({"role": "assistant", "content": "…"})
+    messages.append({"role": "user", "content": body})
     headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"}
     tools = _eva_tools_spec()
     final_text = ""
@@ -15162,17 +15201,20 @@ def webhook_whatsapp_uloha():
                 return twiml("Hlasovku sa nepodarilo prepísať — napíš úlohu textom, prosím. 🙏")
         if not body:
             return twiml("Napíš úlohu, napr.: Tinák vyrobiť rozvádzač pre AGROPO do piatku.")
-        # Konverzácia s Evou — otázky/príkazy o projektoch a úlohách (inak: bežné zadanie úlohy)
-        if _looks_like_eva_query(body):
-            try:
-                _ans = _eva_whatsapp_agent(body, me, users, __import__("datetime").date.today().isoformat())
-            except Exception:
-                log.exception("eva whatsapp agent failed"); _ans = None
-            if _ans:
-                return twiml(_xml_escape(_ans))
-        # AI parse
+        # Eva — plynulá konverzácia s pamäťou (default pre KAŽDÚ správu; zakladanie úlohy je jej nástroj)
+        today_iso = __import__("datetime").date.today().isoformat()
         try:
-            p = _parse_uloha_ai(body, users, __import__("datetime").date.today().isoformat())
+            _history = _eva_load_history(phone_e164)
+            _ans = _eva_whatsapp_agent(body, me, users, today_iso, prior_messages=_history)
+        except Exception:
+            log.exception("eva whatsapp agent failed"); _ans = None
+        _eva_save_turn(phone_e164, "user", body)
+        if _ans:
+            _eva_save_turn(phone_e164, "assistant", _ans)
+            return twiml(_xml_escape(_ans))
+        # Fallback (Eva zlyhala) — postaru založ úlohu z textu
+        try:
+            p = _parse_uloha_ai(body, users, today_iso)
         except Exception:
             p = {}
         assignee = p.get("assignee_id")
@@ -15198,6 +15240,7 @@ def webhook_whatsapp_uloha():
             pass
         an = next((u.get("full_name") for u in users if u.get("id") == assignee), p.get("assignee_name") or "nepriradené")
         due = f" · termín {p.get('due_date')}" if p.get("due_date") else ""
+        _eva_save_turn(phone_e164, "assistant", f"Úloha zadaná: {title} (pre {an})")
         return twiml(f"✅ Úloha zadaná: {title}\nPre: {an}{due}")
     except Exception as e:
         log.exception("whatsapp-uloha failed")
