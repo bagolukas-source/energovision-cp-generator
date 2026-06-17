@@ -14835,6 +14835,264 @@ def _supa_headers():
             "Content-Type": "application/json", "Prefer": "return=representation"}
 
 
+
+# ====================== Eva WhatsApp agent (konverzácia o projektoch/úlohách) ======================
+import re as _re_eva
+
+_EVA_QUERY_HINTS = (
+    "?", "aky", "aká", "ake", "akú", "ako", "kolko", "koľko", "kto", "kde", "co ", "čo ",
+    "preco", "prečo", "kedy", "stav", "prehlad", "prehľad", "zhrn", "zhŕn", "ukaz", "ukáž",
+    "vypis", "výpis", "daj mi", "mam ", "mám ", "na com", "na čom", "co treba", "čo treba",
+    "co je", "čo je", "kolko mam", "moje ulohy", "moje úlohy", "po termine", "po termíne",
+    "vytazen", "vyťažen", "hotovo", "uzavri", "uzavri ", "zatvor", "presun", "presuň",
+    "posun termin", "posuň termín", "prirad", "priraď", "delegu",
+)
+
+def _looks_like_eva_query(body):
+    b = (body or "").strip().lower()
+    if not b:
+        return False
+    if b.endswith("?") or b.startswith("eva"):
+        return True
+    return any(h in b for h in _EVA_QUERY_HINTS)
+
+def _xml_escape(t):
+    return (str(t or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+def _eva_user_name(users, uid):
+    return next((u.get("full_name") for u in users if u.get("id") == uid), None) or "?"
+
+def _eva_resolve_assignee(users, name):
+    if not name:
+        return None
+    nm = str(name).lower().strip().split(" ")[0]
+    hit = next((u for u in users if nm and nm in str(u.get("full_name") or "").lower()), None)
+    return hit.get("id") if hit else None
+
+# --- nástroje (čítanie + akcie nad personal_tasks) ---
+def _eva_tool_najdi_projekt(args, ctx):
+    q = (args.get("query") or "").strip()
+    if not q:
+        return {"error": "chyba dotaz"}
+    url = (f"{SUPABASE_URL}/rest/v1/projects?select=id,project_code,name,workspace"
+           f"&or=(name.ilike.*{q}*,project_code.ilike.*{q}*)&limit=8")
+    r = requests.get(url, headers=_supa_headers(), timeout=20)
+    rows = r.json() if r.ok else []
+    return {"projekty": [{"id": x["id"], "kod": x.get("project_code"), "nazov": x.get("name")} for x in rows]}
+
+def _eva_tool_stav_projektu(args, ctx):
+    pid = (args.get("project_id") or "").strip()
+    name = (args.get("name") or "").strip()
+    if not pid and name:
+        f = _eva_tool_najdi_projekt({"query": name}, ctx).get("projekty") or []
+        if len(f) == 1:
+            pid = f[0]["id"]
+        elif len(f) > 1:
+            return {"viacero": f}
+        else:
+            return {"error": "projekt nenájdený"}
+    if not pid:
+        return {"error": "chyba project_id alebo name"}
+    pr = requests.get(f"{SUPABASE_URL}/rest/v1/projects?id=eq.{pid}&select=project_code,name", headers=_supa_headers(), timeout=20)
+    pinfo = (pr.json() or [{}])[0] if pr.ok else {}
+    tr = requests.get(f"{SUPABASE_URL}/rest/v1/all_tasks?project_id=eq.{pid}"
+                      f"&select=title,status_canonical,due_date,assignee_user_id&order=due_date.asc&limit=200",
+                      headers=_supa_headers(), timeout=25)
+    tasks = tr.json() if tr.ok else []
+    total = len(tasks)
+    done = sum(1 for t in tasks if t.get("status_canonical") == "done")
+    open_t = [t for t in tasks if t.get("status_canonical") not in ("done", "cancelled")]
+    today = ctx["today"]
+    overdue = [t for t in open_t if t.get("due_date") and t["due_date"] < today]
+    nxt = [{"nazov": t["title"], "termin": t.get("due_date"), "kto": _eva_user_name(ctx["users"], t.get("assignee_user_id"))}
+           for t in open_t[:6]]
+    return {"projekt": pinfo.get("name"), "kod": pinfo.get("project_code"),
+            "uloh_spolu": total, "hotovych": done, "otvorenych": len(open_t),
+            "po_termine": len(overdue), "najblizsie": nxt}
+
+def _eva_tool_moje_ulohy(args, ctx):
+    uid = _eva_resolve_assignee(ctx["users"], args.get("kto")) if args.get("kto") else ctx["me"]["id"]
+    uid = uid or ctx["me"]["id"]
+    r = requests.get(f"{SUPABASE_URL}/rest/v1/all_tasks?assignee_user_id=eq.{uid}"
+                     f"&status_canonical=eq.new&select=title,due_date,task_kind,project_id&order=due_date.asc.nullslast&limit=25",
+                     headers=_supa_headers(), timeout=20)
+    rows = r.json() if r.ok else []
+    return {"kto": _eva_user_name(ctx["users"], uid), "pocet": len(rows),
+            "ulohy": [{"nazov": x["title"], "termin": x.get("due_date")} for x in rows]}
+
+def _eva_tool_po_termine(args, ctx):
+    today = ctx["today"]
+    flt = ""
+    if args.get("kto"):
+        uid = _eva_resolve_assignee(ctx["users"], args.get("kto"))
+        if uid:
+            flt = f"&assignee_user_id=eq.{uid}"
+    r = requests.get(f"{SUPABASE_URL}/rest/v1/all_tasks?status_canonical=eq.new&due_date=lt.{today}{flt}"
+                     f"&select=title,due_date,assignee_user_id&order=due_date.asc&limit=30",
+                     headers=_supa_headers(), timeout=20)
+    rows = r.json() if r.ok else []
+    return {"pocet": len(rows),
+            "ulohy": [{"nazov": x["title"], "termin": x.get("due_date"), "kto": _eva_user_name(ctx["users"], x.get("assignee_user_id"))} for x in rows[:15]]}
+
+def _eva_tool_vytazenost(args, ctx):
+    r = requests.get(f"{SUPABASE_URL}/rest/v1/team_workload?select=assignee_user_id,actionable_total,overdue,due_today&order=actionable_total.desc&limit=20",
+                     headers=_supa_headers(), timeout=20)
+    rows = r.json() if r.ok else []
+    return {"tim": [{"kto": _eva_user_name(ctx["users"], x.get("assignee_user_id")),
+                     "aktivnych": x.get("actionable_total"), "po_termine": x.get("overdue"), "dnes": x.get("due_today")}
+                    for x in rows if x.get("assignee_user_id")]}
+
+def _eva_tool_vytvor_ulohu(args, ctx):
+    title = (args.get("title") or "").strip()[:120]
+    if not title:
+        return {"error": "chyba nazov"}
+    assignee = _eva_resolve_assignee(ctx["users"], args.get("assignee_name")) or ctx["me"]["id"]
+    related_type = related_id = None
+    if args.get("project_name"):
+        f = _eva_tool_najdi_projekt({"query": args["project_name"]}, ctx).get("projekty") or []
+        if len(f) == 1:
+            related_type, related_id = "project", f[0]["id"]
+    prio = args.get("priority") if args.get("priority") in ("low", "normal", "high") else "normal"
+    row = {"title": title, "description": args.get("description"), "assignee_user_id": assignee,
+           "created_by": ctx["me"]["id"], "due_date": args.get("due_date"), "priority": prio, "source": "whatsapp"}
+    if related_id:
+        row["related_type"] = related_type; row["related_id"] = related_id
+    requests.post(f"{SUPABASE_URL}/rest/v1/personal_tasks", headers=_supa_headers(), json=row, timeout=20)
+    try:
+        requests.post(f"{SUPABASE_URL}/rest/v1/notifications", headers=_supa_headers(),
+                      json={"channel": "in_app", "icon": "✅", "recipient_user_id": assignee,
+                            "title": "Nová úloha: " + title, "body": f"Od {ctx['me'].get('full_name','')} (Eva/WhatsApp)",
+                            "link": "/moje-ulohy", "priority": "high" if prio == "high" else "normal"}, timeout=15)
+    except Exception:
+        pass
+    return {"ok": True, "nazov": title, "kto": _eva_user_name(ctx["users"], assignee), "termin": args.get("due_date")}
+
+def _eva_find_my_personal(query, ctx):
+    q = (query or "").strip()
+    if not q:
+        return None
+    uid = ctx["me"]["id"]
+    url = (f"{SUPABASE_URL}/rest/v1/personal_tasks?select=id,title,status,assignee_user_id,created_by"
+           f"&title=ilike.*{q}*&status=neq.done&or=(assignee_user_id.eq.{uid},created_by.eq.{uid})&limit=2")
+    r = requests.get(url, headers=_supa_headers(), timeout=20)
+    rows = r.json() if r.ok else []
+    return rows
+
+def _eva_tool_uzavri_ulohu(args, ctx):
+    rows = _eva_find_my_personal(args.get("query"), ctx)
+    if not rows:
+        return {"error": "úloha nenájdená (len osobné/WhatsApp úlohy)"}
+    if len(rows) > 1:
+        return {"viacero": [r["title"] for r in rows]}
+    tid = rows[0]["id"]
+    requests.patch(f"{SUPABASE_URL}/rest/v1/personal_tasks?id=eq.{tid}", headers=_supa_headers(),
+                   json={"status": "done", "done_at": __import__("datetime").datetime.utcnow().isoformat(), "done_by": ctx["me"]["id"]}, timeout=20)
+    return {"ok": True, "uzavreta": rows[0]["title"]}
+
+def _eva_tool_prirad_ulohu(args, ctx):
+    rows = _eva_find_my_personal(args.get("query"), ctx)
+    if not rows:
+        return {"error": "úloha nenájdená (len osobné/WhatsApp úlohy)"}
+    if len(rows) > 1:
+        return {"viacero": [r["title"] for r in rows]}
+    uid = _eva_resolve_assignee(ctx["users"], args.get("assignee_name"))
+    if not uid:
+        return {"error": "kolega nenájdený"}
+    tid = rows[0]["id"]
+    requests.patch(f"{SUPABASE_URL}/rest/v1/personal_tasks?id=eq.{tid}", headers=_supa_headers(),
+                   json={"assignee_user_id": uid}, timeout=20)
+    return {"ok": True, "uloha": rows[0]["title"], "kto": _eva_user_name(ctx["users"], uid)}
+
+def _eva_tool_posun_termin(args, ctx):
+    rows = _eva_find_my_personal(args.get("query"), ctx)
+    if not rows:
+        return {"error": "úloha nenájdená (len osobné/WhatsApp úlohy)"}
+    if len(rows) > 1:
+        return {"viacero": [r["title"] for r in rows]}
+    tid = rows[0]["id"]
+    requests.patch(f"{SUPABASE_URL}/rest/v1/personal_tasks?id=eq.{tid}", headers=_supa_headers(),
+                   json={"due_date": args.get("due_date")}, timeout=20)
+    return {"ok": True, "uloha": rows[0]["title"], "termin": args.get("due_date")}
+
+_EVA_EXEC = {
+    "najdi_projekt": _eva_tool_najdi_projekt,
+    "stav_projektu": _eva_tool_stav_projektu,
+    "moje_ulohy": _eva_tool_moje_ulohy,
+    "po_termine": _eva_tool_po_termine,
+    "vytazenost": _eva_tool_vytazenost,
+    "vytvor_ulohu": _eva_tool_vytvor_ulohu,
+    "uzavri_ulohu": _eva_tool_uzavri_ulohu,
+    "prirad_ulohu": _eva_tool_prirad_ulohu,
+    "posun_termin": _eva_tool_posun_termin,
+}
+
+def _eva_tools_spec():
+    s = lambda **p: {"type": "object", "properties": p}
+    return [
+        {"name": "najdi_projekt", "description": "Nájde projekty podľa názvu alebo kódu.",
+         "input_schema": s(query={"type": "string"})},
+        {"name": "stav_projektu", "description": "Stav projektu: počet úloh, hotové, otvorené, po termíne, najbližšie úlohy. Zadaj project_id alebo name.",
+         "input_schema": s(project_id={"type": "string"}, name={"type": "string"})},
+        {"name": "moje_ulohy", "description": "Otvorené úlohy odosielateľa (alebo kolegu cez parameter kto).",
+         "input_schema": s(kto={"type": "string"})},
+        {"name": "po_termine", "description": "Úlohy po termíne (voliteľne pre konkrétneho kolegu kto).",
+         "input_schema": s(kto={"type": "string"})},
+        {"name": "vytazenost", "description": "Vyťaženosť tímu — počet aktívnych a po termíne na kolegu.",
+         "input_schema": s()},
+        {"name": "vytvor_ulohu", "description": "Založí novú úlohu. assignee_name nepovinný (default odosielateľ), project_name nepovinný.",
+         "input_schema": s(title={"type": "string"}, assignee_name={"type": "string"}, due_date={"type": "string"}, priority={"type": "string"}, description={"type": "string"}, project_name={"type": "string"})},
+        {"name": "uzavri_ulohu", "description": "Označí osobnú/WhatsApp úlohu odosielateľa ako hotovú. query = časť názvu.",
+         "input_schema": s(query={"type": "string"})},
+        {"name": "prirad_ulohu", "description": "Priradí osobnú úlohu kolegovi. query = časť názvu, assignee_name = meno kolegu.",
+         "input_schema": s(query={"type": "string"}, assignee_name={"type": "string"})},
+        {"name": "posun_termin", "description": "Posunie termín osobnej úlohy. query = časť názvu, due_date = YYYY-MM-DD.",
+         "input_schema": s(query={"type": "string"}, due_date={"type": "string"})},
+    ]
+
+def _eva_whatsapp_agent(body, me, users, today):
+    """Tool-using Eva agent nad CRM (Anthropic). Vráti krátky text pre WhatsApp."""
+    if not ANTHROPIC_API_KEY:
+        return None
+    ctx = {"me": me, "users": users, "today": today}
+    names = ", ".join(f"{u.get('full_name')}" for u in users if u.get("full_name"))[:1500]
+    system = (
+        "Si Eva, AI asistentka firmy Energovision v CRM. Komunikuješ cez WhatsApp s kolegom "
+        f"{me.get('full_name') or ''}. Dnes je {today}. Odpovedaj PO SLOVENSKY, stručne a vecne, "
+        "vhodne pre WhatsApp (max ~6 riadkov, bez markdown nadpisov). Na otázky o projektoch, úlohách "
+        "a vyťaženosti použi nástroje (čítaj reálne dáta CRM, nehádaj). Keď kolega žiada akciu "
+        "(založ/uzavri/priraď úlohu, posuň termín), vykonaj ju príslušným nástrojom a stručne potvrď čo si spravila. "
+        "Termíny ako 'do piatku/zajtra/o týždeň' prepočítaj na dátum. Akcie meň iba osobné/WhatsApp úlohy. "
+        f"Kolegovia: {names}."
+    )
+    messages = [{"role": "user", "content": body}]
+    headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"}
+    tools = _eva_tools_spec()
+    final_text = ""
+    for _ in range(6):
+        payload = {"model": ANTHROPIC_MODEL, "max_tokens": 900, "system": system, "tools": tools, "messages": messages}
+        r = _retry_request(lambda: requests.post("https://api.anthropic.com/v1/messages", headers=headers, json=payload, timeout=70))
+        r.raise_for_status()
+        data = r.json()
+        blocks = data.get("content") or []
+        messages.append({"role": "assistant", "content": blocks})
+        tool_uses = [b for b in blocks if b.get("type") == "tool_use"]
+        txt = "".join(b.get("text", "") for b in blocks if b.get("type") == "text").strip()
+        if txt:
+            final_text = txt
+        if data.get("stop_reason") != "tool_use" or not tool_uses:
+            break
+        results = []
+        for tu in tool_uses:
+            fn = _EVA_EXEC.get(tu.get("name"))
+            try:
+                out = fn(tu.get("input") or {}, ctx) if fn else {"error": "neznámy nástroj"}
+            except Exception as e:
+                out = {"error": str(e)[:200]}
+            results.append({"type": "tool_result", "tool_use_id": tu.get("id"), "content": __import__("json").dumps(out, ensure_ascii=False)})
+        messages.append({"role": "user", "content": results})
+    return (final_text or "").strip()[:1400]
+
+
 @app.route("/webhook/whatsapp-uloha", methods=["POST"])
 def webhook_whatsapp_uloha():
     """Twilio WhatsApp inbound → zadanie úlohy. Gated: odosielateľ musí byť známe firemné číslo."""
@@ -14904,6 +15162,14 @@ def webhook_whatsapp_uloha():
                 return twiml("Hlasovku sa nepodarilo prepísať — napíš úlohu textom, prosím. 🙏")
         if not body:
             return twiml("Napíš úlohu, napr.: Tinák vyrobiť rozvádzač pre AGROPO do piatku.")
+        # Konverzácia s Evou — otázky/príkazy o projektoch a úlohách (inak: bežné zadanie úlohy)
+        if _looks_like_eva_query(body):
+            try:
+                _ans = _eva_whatsapp_agent(body, me, users, __import__("datetime").date.today().isoformat())
+            except Exception:
+                log.exception("eva whatsapp agent failed"); _ans = None
+            if _ans:
+                return twiml(_xml_escape(_ans))
         # AI parse
         try:
             p = _parse_uloha_ai(body, users, __import__("datetime").date.today().isoformat())
