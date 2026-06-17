@@ -1965,8 +1965,10 @@ def pvprj_3d_supabase():
             return jsonify({"success": False, "error": f"download zlyhal: {r.status_code}"}), 400
         res = pvprj_3d.build_pvprj_3d(r.content, title=title)
         html_b64 = _b64.b64encode(res["html"].encode("utf-8")).decode("ascii")
-        log.info(f"[pvprj-3d] hotovo: {res['n_tables']} stolov, {len(res['html'])//1024} KB")
+        render_b64 = _b64.b64encode(res["render"]).decode("ascii") if res.get("render") else ""
+        log.info(f"[pvprj-3d] hotovo: {res['n_tables']} stolov, {len(res['html'])//1024} KB, render={bool(res.get('render'))}")
         return jsonify({"success": True, "filename": "model_3d.html", "data": html_b64,
+                        "render_base64": render_b64,
                         "n_tables": res["n_tables"], "has_satellite": res["has_satellite"]})
     except Exception as e:
         log.exception("[pvprj-3d] zlyhalo")

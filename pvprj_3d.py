@@ -107,4 +107,15 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
             .replace("__SAT__", sat_b64)
             .replace("__TITLE__", title)
             .replace("__SUBT__", subt))
-    return {"html": html, "n_tables": len(tables), "has_satellite": bool(sat), "has_building": bool(bld)}
+    # najlepší PV*SOL render (pre PDF prezentáciu): preferuj prehľad/Juh, inak prvý Screenshot
+    render = read("Visu3D/ProjScreenShot.jpg")
+    if not render:
+        for n in sorted(names):
+            if "Screenshot" in n and ("Jih" in n or "Juh" in n):
+                render = read(n); break
+    if not render:
+        for n in sorted(names):
+            if n.lower().endswith(".jpg") and "Screenshot" in n:
+                render = read(n); break
+    return {"html": html, "render": render, "n_tables": len(tables),
+            "has_satellite": bool(sat), "has_building": bool(bld)}

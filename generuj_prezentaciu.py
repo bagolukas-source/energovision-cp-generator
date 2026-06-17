@@ -451,8 +451,31 @@ def generuj_prezentaciu_b2b(g: dict) -> bytes:
                f"<div class='cov-s'>{ai_zaver}</div>"
                f"<div class='cta'>Kontakt: <b>{kontakt}</b></div></div>"
                f"<div class='cov-pg'>ENERGOVISION · energovision.sk</div></div>")
+    # 3D vizualizácia (ak je nahraté .pvprj) — render na celú stranu + QR na živý 3D model
+    s_3d = ""
+    _render = g.get("pvprj_render"); _3durl = g.get("pvprj_3d_url")
+    if _render:
+        qr_html = ""
+        if _3durl:
+            try:
+                import segno, io as _io, base64 as _b64
+                _buf = _io.BytesIO(); segno.make(_3durl, error='m').save(_buf, kind='png', scale=5, border=2)
+                _qr = _b64.b64encode(_buf.getvalue()).decode()
+                qr_html = (f"<div style='position:absolute;right:18mm;bottom:16mm;background:#fff;padding:4mm;border-radius:3mm;text-align:center;box-shadow:0 4mm 12mm rgba(0,0,0,.3)'>"
+                           f"<img src='data:image/png;base64,{_qr}' style='width:30mm;height:30mm'/>"
+                           f"<div style='font-size:8pt;color:#14181F;margin-top:2mm;font-weight:700;max-width:34mm'>Naskenuj a otoč si<br>elektráreň v 3D</div></div>")
+            except Exception:
+                qr_html = ""
+        s_3d = (f"<div class='slide' style='padding:0;background:#0a140d'>"
+                f"<img src='{_render}' style='position:absolute;inset:0;width:100%;height:100%;object-fit:cover'/>"
+                f"<div style='position:absolute;left:0;right:0;top:0;padding:18mm 22mm 30mm;background:linear-gradient(180deg,rgba(10,20,13,.82),transparent)'>"
+                f"<div class='kicker' style='margin-top:0'>3D vizualizácia</div>"
+                f"<h2 style='color:#fff'>Vaša elektráreň v 3D</h2>"
+                f"<div class='lead' style='color:#e5e7eb'>Interaktívny model so satelitným podkladom — otočte si návrh z ľubovoľného uhla.</div></div>"
+                f"{qr_html}</div>")
+
     html = (f"<!DOCTYPE html><html lang='sk'><head><meta charset='utf-8'><style>{css}</style></head><body>"
-            f"{cover}{s_firma}{s_ref}{s_vych}{s_ries}{s_ekon}{s_var}{chart_slides}{s_pri}{s_close}</body></html>")
+            f"{cover}{s_firma}{s_ref}{s_vych}{s_ries}{s_ekon}{s_var}{chart_slides}{s_3d}{s_pri}{s_close}</body></html>")
     return HTML(string=html, base_url=BASE).write_pdf()
 
 
