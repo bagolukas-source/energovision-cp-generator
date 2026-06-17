@@ -772,6 +772,35 @@ def notion_update_page(page_id, properties):
     return r.json()
 
 
+@app.route("/webhook/notion-sync-diag", methods=["GET"])
+def notion_sync_diag():
+    """Diagnostika: na ktoré Notion DB siaha serverový NOTION_TOKEN (počty + vzorky)."""
+    targets = {
+        "b2c_ponuky (NOTION_DATABASE_ID)": NOTION_DATABASE_ID,
+        "dashboard_zakazky (2671...)": "2671b0e5-1aa3-814d-bded-000b8255ecb0",
+        "dashboard_zakazky_page (2671...130)": "2671b0e51aa3803b9ee2dde6da0fb130",
+    }
+    out = {}
+    for label, dbid in targets.items():
+        try:
+            r = requests.post(f"{NOTION_API}/databases/{dbid}/query", headers=NOTION_HEADERS,
+                              json={"page_size": 5}, timeout=25)
+            if r.ok:
+                j = r.json()
+                rows = j.get("results", [])
+                def _title(pg):
+                    for _n, pr in (pg.get("properties") or {}).items():
+                        if pr.get("type") == "title":
+                            return "".join(t.get("plain_text", "") for t in pr.get("title", []))[:40]
+                    return "?"
+                out[label] = {"ok": True, "has_more": j.get("has_more"), "vzorka": [_title(x) for x in rows]}
+            else:
+                out[label] = {"ok": False, "status": r.status_code, "err": r.text[:160]}
+        except Exception as e:
+            out[label] = {"ok": False, "err": str(e)[:160]}
+    return jsonify({"token_set": bool(NOTION_TOKEN), "vysledky": out})
+
+
 def notion_set_number(prop_name, value):
     return {prop_name: {"number": float(value) if value is not None else None}}
 
