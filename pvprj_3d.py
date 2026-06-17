@@ -48,15 +48,20 @@ if(SAT){const tex=new THREE.TextureLoader().load('data:image/jpeg;base64,'+SAT);
 const ground=new THREE.Mesh(new THREE.PlaneGeometry(661,411),new THREE.MeshStandardMaterial({map:tex,roughness:1}));
 ground.rotation.x=-Math.PI/2;ground.receiveShadow=true;scene.add(ground);}
 else{const gr=new THREE.Mesh(new THREE.PlaneGeometry(500,500),new THREE.MeshStandardMaterial({color:0x9ccd6e}));gr.rotation.x=-Math.PI/2;gr.receiveShadow=true;scene.add(gr);}
-const panelMat=new THREE.MeshStandardMaterial({color:0x16233f,metalness:.5,roughness:.28,emissive:0x0a1530,emissiveIntensity:.2});
+const PTEX="__PANELTEX__";
+let baseTex=null;
+if(PTEX){baseTex=new THREE.TextureLoader().load('data:image/jpeg;base64,'+PTEX);baseTex.colorSpace=THREE.SRGBColorSpace;baseTex.wrapS=baseTex.wrapT=THREE.RepeatWrapping;baseTex.anisotropy=4;}
+const fallbackMat=new THREE.MeshStandardMaterial({color:0x16233f,metalness:.5,roughness:.28,emissive:0x0a1530,emissiveIntensity:.2});
 // jeden rad = n modulov vedľa seba; tenké, mierny sklon; orientované podľa fitu (ANGLE)
-const MW=1.13, MD=1.18, TILT=8*Math.PI/180, ANG=-ANGLE*Math.PI/180;
+const MW=1.995, DEPTH=2.436, TILT=10*Math.PI/180, ANG=-ANGLE*Math.PI/180;
 const panels=new THREE.Group();
 ROWS.forEach(r=>{
-  const w=Math.max(1,r.w)*MW, d=Math.max(1,r.d)*MD;
-  const m=new THREE.Mesh(new THREE.BoxGeometry(w,0.06,d),panelMat);
+  const w=Math.max(1,r.w)*MW;
+  let mat=fallbackMat;
+  if(baseTex){const t=baseTex.clone();t.needsUpdate=true;t.repeat.set(Math.max(1,r.w),1);mat=new THREE.MeshStandardMaterial({map:t,metalness:.35,roughness:.4});}
+  const m=new THREE.Mesh(new THREE.BoxGeometry(w,0.05,DEPTH*0.9),mat);
   m.castShadow=true;m.receiveShadow=true;m.rotation.x=-TILT;
-  const g=new THREE.Group();g.add(m);g.position.set(r.x,0.25,r.z);g.rotation.y=ANG;
+  const g=new THREE.Group();g.add(m);g.position.set(r.x,0.32,r.z);g.rotation.y=ANG;
   panels.add(g);
 });
 scene.add(panels);
@@ -122,21 +127,29 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
     def to_world(px, py):
         return (ct*px - st*py + tx, st*px + ct*py + tz)
     # rady -> svet, recentruj na ťažisko modulov
-    rw = [(to_world(px, py), anz, nf, nm) for (px, py, anz, nf, nm) in rows]
-    cx = sum(w[0][0] for w in rw)/len(rw); cz = sum(w[0][1] for w in rw)/len(rw)
-    data = [{"x": round(w[0][0]-cx, 2), "z": round(w[0][1]-cz, 2), "w": w[1], "d": w[2]} for w in rw]
-    n_modules_real = sum(w[3] for w in rw)
+    MW = 1.995   # rozteč modulu naležato (1.99 + 0.005 medzera)
+    ROWD = 2.436  # ReihenAbst — rozteč/hĺbka radu z MoSys
+    rw = []
+    for (px, py, anz, nf, nm) in rows:
+        wx, wz = to_world(px + anz*MW/2.0, py + ROWD/2.0)  # PAB je roh -> posun na stred stola
+        rw.append((wx, wz, anz, nm))
+    cx = sum(r[0] for r in rw)/len(rw); cz = sum(r[1] for r in rw)/len(rw)
+    data = [{"x": round(r[0]-cx, 2), "z": round(r[1]-cz, 2), "w": r[2]} for r in rw]
+    n_modules_real = sum(r[3] for r in rw)
     angle_deg = round(_m.degrees(theta), 2)
     bldc = {"x": round(bld[0]-cx, 2), "z": round(bld[1]-cz, 2)} if bld else None
 
+    panel_tex = read("Visu3D/FrontTexturPvModul.jpg")
     sat = read("MapExtract.jpg")
     sat_b64 = base64.b64encode(sat).decode() if sat else ""
+    ptex_b64 = base64.b64encode(panel_tex).decode() if panel_tex else ""
     total_mod = n_modules_real
     subt = "Strešná/pozemná FVE · %d modulov v %d radoch · satelitný podklad" % (total_mod, len(data))
     html = (_TEMPLATE
             .replace("__ROWS__", json.dumps(data))
             .replace("__ANGLE__", str(angle_deg))
             .replace("__SAT__", sat_b64)
+            .replace("__PANELTEX__", ptex_b64)
             .replace("__TITLE__", title)
             .replace("__SUBT__", subt))
     # najlepší PV*SOL render (pre PDF prezentáciu): preferuj prehľad/Juh, inak prvý Screenshot
