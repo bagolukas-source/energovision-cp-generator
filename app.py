@@ -863,15 +863,21 @@ def notion_sync_zakazky():
             by_code[code] = p
 
     # existujúce notion denníkové events (dedup)
-    ev = requests.get(f"{SUPABASE_URL}/rest/v1/events?select=entity_id,payload&verb=eq.notion_dennik&limit=10000", headers=_supa_headers(), timeout=40)
     import re as _re0
     def _normtxt(t):
         t = _re0.sub(r"^\d{1,2}\.\d{1,2}\.(?:\d{4})?\s*[-–]?\s*", "", (t or "")).strip().lower()
         return _re0.sub(r"\s+", " ", t)[:120]
     existing = set()
-    for e in (ev.json() if ev.ok else []):
-        pl = e.get("payload") or {}
-        existing.add((e.get("entity_id"), pl.get("datum_raw"), _normtxt(pl.get("text"))))
+    _off = 0
+    while True:
+        ev = requests.get(f"{SUPABASE_URL}/rest/v1/events?select=entity_id,payload&verb=eq.notion_dennik&order=id.asc&limit=1000&offset={_off}", headers=_supa_headers(), timeout=40)
+        rows = ev.json() if ev.ok else []
+        for e in rows:
+            pl = e.get("payload") or {}
+            existing.add((e.get("entity_id"), pl.get("datum_raw"), _normtxt(pl.get("text"))))
+        if len(rows) < 1000:
+            break
+        _off += 1000
 
     stats = {"pages": len(pages), "matched": 0, "unmatched": 0, "unmatched_titles": [], "new_events": 0, "todo_pages": 0}
     new_rows = []
