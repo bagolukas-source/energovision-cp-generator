@@ -828,7 +828,8 @@ def _parse_diary(text):
             _dt.date(y, mo, d)
         except Exception:
             continue
-        out.append((iso, line))
+        stripped = _re.sub(r"^\d{1,2}\.\d{1,2}\.(?:\d{4})?\s*[-–]?\s*", "", line).strip()
+        out.append((iso, line, stripped))
     return out
 
 @app.route("/webhook/notion-sync-zakazky", methods=["GET", "POST"])
@@ -863,10 +864,14 @@ def notion_sync_zakazky():
 
     # existujúce notion denníkové events (dedup)
     ev = requests.get(f"{SUPABASE_URL}/rest/v1/events?select=entity_id,payload&verb=eq.notion_dennik&limit=10000", headers=_supa_headers(), timeout=40)
+    import re as _re0
+    def _normtxt(t):
+        t = _re0.sub(r"^\d{1,2}\.\d{1,2}\.(?:\d{4})?\s*[-–]?\s*", "", (t or "")).strip().lower()
+        return _re0.sub(r"\s+", " ", t)[:120]
     existing = set()
     for e in (ev.json() if ev.ok else []):
         pl = e.get("payload") or {}
-        existing.add((e.get("entity_id"), pl.get("datum_raw"), (pl.get("text") or "")[:300]))
+        existing.add((e.get("entity_id"), pl.get("datum_raw"), _normtxt(pl.get("text"))))
 
     stats = {"pages": len(pages), "matched": 0, "unmatched": 0, "unmatched_titles": [], "new_events": 0, "todo_pages": 0}
     new_rows = []
@@ -890,8 +895,8 @@ def notion_sync_zakazky():
         if not diary_key:
             diary_key = next((k for k in flat if "administrat" in k.lower()), None)
         if diary_key and flat.get(diary_key):
-            for iso, line in _parse_diary(flat[diary_key]):
-                key = (proj["id"], iso, line[:300])
+            for iso, line, stripped in _parse_diary(flat[diary_key]):
+                key = (proj["id"], iso, _normtxt(stripped))
                 if key in existing:
                     continue
                 existing.add(key)
@@ -900,7 +905,7 @@ def notion_sync_zakazky():
                     "verb": "notion_dennik", "source": "notion_sync_auto",
                     "entity_type": "project", "entity_id": proj["id"], "actor_type": "system",
                     "occurred_at": iso + "T00:00:00+00:00",
-                    "payload": {"text": line[:1000], "datum_raw": iso, "notion_page_id": pg.get("id")},
+                    "payload": {"text": (stripped or line)[:1000], "datum_raw": iso, "notion_page_id": pg.get("id")},
                 })
         # todo (zatiaľ len počítame — zápis do project_tasks je vo fáze 2)
         todo_key = next((k for k in flat if "to do" in k.lower() or "čakáme" in k.lower() or "cakame" in k.lower()), None)
