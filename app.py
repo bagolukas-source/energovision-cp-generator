@@ -15014,6 +15014,53 @@ def _eva_tool_posun_termin(args, ctx):
                    json={"due_date": args.get("due_date")}, timeout=20)
     return {"ok": True, "uloha": rows[0]["title"], "termin": args.get("due_date")}
 
+def _eva_tool_vytvor_lead(args, ctx):
+    meno = (args.get("meno") or "").strip()
+    firma = (args.get("firma") or "").strip()
+    b2b = bool(firma) or bool(args.get("b2b"))
+    parts = meno.split(" ", 1)
+    cust = {"type": "B2B" if b2b else "B2C",
+            "first_name": parts[0] if parts and parts[0] else None,
+            "last_name": parts[1] if len(parts) > 1 else None,
+            "company_name": firma or None,
+            "email": (args.get("email") or None), "phone": (args.get("telefon") or None)}
+    cr = requests.post(f"{SUPABASE_URL}/rest/v1/customers", headers=_supa_headers(), json=cust, timeout=20)
+    if not cr.ok or not cr.json():
+        return {"error": "nepodarilo sa založiť kontakt: " + (cr.text[:160] if hasattr(cr, "text") else "")}
+    customer = cr.json()[0]
+    lead = {"customer_id": customer["id"], "source": "ai_parser",
+            "source_detail": (args.get("predmet") or "WhatsApp dopyt")[:300],
+            "workspace": "b2b" if b2b else "b2c", "assigned_to": ctx["me"]["id"]}
+    lr = requests.post(f"{SUPABASE_URL}/rest/v1/leads", headers=_supa_headers(), json=lead, timeout=20)
+    if not lr.ok or not lr.json():
+        return {"error": "kontakt OK, ale lead zlyhal: " + (lr.text[:160] if hasattr(lr, "text") else ""), "customer_id": customer["id"]}
+    L = lr.json()[0]
+    return {"ok": True, "lead_id": L["id"], "ev_id": L.get("ev_id"), "customer_id": customer["id"],
+            "klient": (firma or meno or "kontakt"), "workspace": lead["workspace"]}
+
+def _eva_tool_priprav_ponuku_b2b(args, ctx):
+    popis = (args.get("popis") or "").strip()
+    if not popis:
+        return {"error": "chýba popis (napr. '50 kWp trapéz Huawei')"}
+    try:
+        cfg = _b2b_v2.ai_smart_configurator(_sb(), popis)
+    except Exception as e:
+        return {"error": "konfigurátor zlyhal: " + str(e)[:160]}
+    if not cfg or not cfg.get("ok"):
+        return {"error": "z popisu sa nepodarilo zostaviť konfiguráciu — upresni kWp/strechu/značku"}
+    if not cfg.get("kwp"):
+        return {"chyba_param": "Chýba výkon (kWp). Opýtaj sa kolegu na kWp.", "config": {k: v for k, v in cfg.items() if k != "ok"}}
+    try:
+        bundle = _b2b_calc.save_quote_as_bundle(_sb(), base_config={k: v for k, v in cfg.items() if k != "ok"},
+                                                customer_id=args.get("customer_id"), lead_id=args.get("lead_id"),
+                                                user_id=ctx["me"]["id"])
+    except Exception as e:
+        return {"error": "uloženie ponuky zlyhalo: " + str(e)[:160]}
+    price = bundle.get("variant_a_price_with_vat") or bundle.get("variant_b_price_with_vat")
+    return {"ok": True, "cislo_ponuky": bundle.get("bundle_number"), "bundle_id": bundle.get("id"),
+            "kwp": cfg.get("kwp"), "vendor": cfg.get("vendor_stack"), "strecha": cfg.get("typ_strechy"),
+            "cena_s_dph": price, "stav": "draft (na kontrolu v CRM)"}
+
 _EVA_EXEC = {
     "najdi_projekt": _eva_tool_najdi_projekt,
     "stav_projektu": _eva_tool_stav_projektu,
@@ -15024,6 +15071,8 @@ _EVA_EXEC = {
     "uzavri_ulohu": _eva_tool_uzavri_ulohu,
     "prirad_ulohu": _eva_tool_prirad_ulohu,
     "posun_termin": _eva_tool_posun_termin,
+    "vytvor_lead": _eva_tool_vytvor_lead,
+    "priprav_ponuku_b2b": _eva_tool_priprav_ponuku_b2b,
 }
 
 def _eva_tools_spec():
@@ -15047,6 +15096,10 @@ def _eva_tools_spec():
          "input_schema": s(query={"type": "string"}, assignee_name={"type": "string"})},
         {"name": "posun_termin", "description": "Posunie termín osobnej úlohy. query = časť názvu, due_date = YYYY-MM-DD.",
          "input_schema": s(query={"type": "string"}, due_date={"type": "string"})},
+        {"name": "vytvor_lead", "description": "Založí nový lead + kontakt v CRM z dopytu (napr. z preposlaného emailu/obrázka). firma → B2B, inak B2C.",
+         "input_schema": s(meno={"type": "string"}, firma={"type": "string"}, email={"type": "string"}, telefon={"type": "string"}, predmet={"type": "string"}, b2b={"type": "boolean"})},
+        {"name": "priprav_ponuku_b2b", "description": "Vygeneruje DRAFT B2B cenovú ponuku cez kalkulačku z popisu (napr. '50 kWp trapéz Huawei'). Ak poznáš lead_id/customer_id, pripoj ju. Ak chýba kWp, dopýtaj sa.",
+         "input_schema": s(popis={"type": "string"}, lead_id={"type": "string"}, customer_id={"type": "string"})},
     ]
 
 def _eva_load_history(phone, limit=12, minutes=90):
@@ -15081,7 +15134,7 @@ def _eva_save_turn(phone, role, content):
     except Exception:
         pass
 
-def _eva_whatsapp_agent(body, me, users, today, prior_messages=None):
+def _eva_whatsapp_agent(body, me, users, today, prior_messages=None, images=None):
     """Tool-using Eva agent nad CRM (Anthropic). Vráti krátky text pre WhatsApp."""
     if not ANTHROPIC_API_KEY:
         return None
@@ -15097,13 +15150,20 @@ def _eva_whatsapp_agent(body, me, users, today, prior_messages=None):
         "Keď kolega niečo zadáva ('priprav/sprav/zavolaj/vyrob… do…') alebo žiada akciu (založ/uzavri/priraď úlohu, "
         "posuň termín), vykonaj ju nástrojom (vytvor_ulohu a spol.) a stručne potvrď čo si spravila. "
         "Keď je požiadavka nejednoznačná alebo nájdeš viac zhôd, OPÝTAJ sa na upresnenie namiesto hádania. "
-        "Termíny 'do piatku/zajtra/o týždeň' prepočítaj na dátum. Akcie meň iba osobné/WhatsApp úlohy. "
+        "Vieš čítať aj priložené OBRÁZKY (preposlané emaily, fotky faktúr/štítkov, screenshoty) — vytiahni z nich údaje a konaj. ""Keď príde nový zákaznícky DOPYT (meno/firma/email/telefón/predmet), založ ho nástrojom vytvor_lead. ""Keď kolega chce CENOVÚ PONUKU (napr. 'priprav ponuku 50 kWp trapéz Huawei'), použi priprav_ponuku_b2b — vznikne DRAFT na kontrolu v CRM; ak chýba kWp/strecha/značka, dopýtaj sa. ""Termíny 'do piatku/zajtra/o týždeň' prepočítaj na dátum. Akcie meň iba osobné/WhatsApp úlohy. "
         f"Kolegovia: {names}."
     )
     messages = list(prior_messages or [])
     if messages and messages[-1].get("role") == "user":
         messages.append({"role": "assistant", "content": "…"})
-    messages.append({"role": "user", "content": body})
+    if images:
+        _uc = []
+        for im in images:
+            _uc.append({"type": "image", "source": {"type": "base64", "media_type": im.get("media_type", "image/jpeg"), "data": im.get("data", "")}})
+        _uc.append({"type": "text", "text": body or "(priložený obrázok — prečítaj a konaj)"})
+        messages.append({"role": "user", "content": _uc})
+    else:
+        messages.append({"role": "user", "content": body})
     headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"}
     tools = _eva_tools_spec()
     final_text = ""
@@ -15178,10 +15238,11 @@ def webhook_whatsapp_uloha():
             me = next((u for u in users if re.sub(r"\D", "", u.get("phone") or "")[-9:] == sender9 and sender9), None)
         if not me:
             return twiml("Tvoje číslo nie je spárované. V CRM otvor Nastavenia → WhatsApp, vygeneruj párovací kód (EV…) a pošli mi ho sem. 🔗")
-        if num_media > 0 and not body:
+        _m0type = (request.form.get("MediaContentType0") or "").lower()
+        if num_media > 0 and not body and "audio" in _m0type:
             # Hlasovka → stiahni z Twilia (basic auth) → Groq Whisper prepis → text úlohy
             media_url = request.form.get("MediaUrl0")
-            media_type = (request.form.get("MediaContentType0") or "audio/ogg").lower()
+            media_type = _m0type or "audio/ogg"
             groq = os.environ.get("GROQ_API_KEY", "")
             tw_sid = os.environ.get("TWILIO_ACCOUNT_SID", ""); tw_tok = os.environ.get("TWILIO_AUTH_TOKEN", "")
             if media_url and groq and tw_sid and tw_tok and "audio" in media_type:
@@ -15198,17 +15259,35 @@ def webhook_whatsapp_uloha():
                 except Exception:
                     log.exception("whatsapp voice transcribe failed")
             if not body:
-                return twiml("Hlasovku sa nepodarilo prepísať — napíš úlohu textom, prosím. 🙏")
-        if not body:
-            return twiml("Napíš úlohu, napr.: Tinák vyrobiť rozvádzač pre AGROPO do piatku.")
+                return twiml("Hlasovku sa nepodarilo prepísať — napíš to textom, prosím. 🙏")
+        # Obrázky (preposlané emaily, fotky faktúr/štítkov) → base64 pre Evu (vision)
+        _images = []
+        try:
+            if num_media > 0:
+                import base64 as _b64
+                tw_sid2 = os.environ.get("TWILIO_ACCOUNT_SID", ""); tw_tok2 = os.environ.get("TWILIO_AUTH_TOKEN", "")
+                for _i in range(min(num_media, 4)):
+                    mt = (request.form.get(f"MediaContentType{_i}") or "").lower()
+                    mu = request.form.get(f"MediaUrl{_i}")
+                    if mu and mt.startswith("image/"):
+                        try:
+                            ir = requests.get(mu, auth=(tw_sid2, tw_tok2) if tw_sid2 else None, timeout=30)
+                            if ir.ok and ir.content and len(ir.content) < 5_000_000:
+                                _images.append({"media_type": mt, "data": _b64.b64encode(ir.content).decode("ascii")})
+                        except Exception:
+                            log.exception("whatsapp image fetch failed")
+        except Exception:
+            _images = []
+        if not body and not _images:
+            return twiml("Napíš správu alebo pošli obrázok. 🙂")
         # Eva — plynulá konverzácia s pamäťou (default pre KAŽDÚ správu; zakladanie úlohy je jej nástroj)
         today_iso = __import__("datetime").date.today().isoformat()
         try:
             _history = _eva_load_history(phone_e164)
-            _ans = _eva_whatsapp_agent(body, me, users, today_iso, prior_messages=_history)
+            _ans = _eva_whatsapp_agent(body, me, users, today_iso, prior_messages=_history, images=_images)
         except Exception:
             log.exception("eva whatsapp agent failed"); _ans = None
-        _eva_save_turn(phone_e164, "user", body)
+        _eva_save_turn(phone_e164, "user", body or "(obrázok)")
         if _ans:
             _eva_save_turn(phone_e164, "assistant", _ans)
             return twiml(_xml_escape(_ans))
