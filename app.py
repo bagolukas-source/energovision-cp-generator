@@ -3898,6 +3898,27 @@ def build_subject(priezvisko, mesto, variants, typ_ponuky="Indikatívna"):
     return f"{prefix} FVE — {priezvisko}, {mesto} ({len(variants)} varianty)"
 
 
+def _fmt_bateria_kwh(v):
+    """Kapacita batérie pre SK trh: 10.24 -> '10,24 kWh', 5.0 -> '5 kWh', 0 -> 'batéria'."""
+    try:
+        v = float(v or 0)
+    except (TypeError, ValueError):
+        v = 0
+    if not v:
+        return "batéria"
+    s = f"{v:.2f}".rstrip("0").rstrip(".")
+    return s.replace(".", ",") + " kWh"
+
+
+def _eur(x):
+    """Cena s DPH: 18900 -> '18 900 €' (medzera ako oddeľovač tisícov, bez čiarky)."""
+    try:
+        x = float(x or 0)
+    except (TypeError, ValueError):
+        x = 0
+    return f"{x:,.0f}".replace(",", " ") + " €"
+
+
 def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchodnik, typ_ponuky="Indikatívna", ma_rozlozenie=False):
     """
     HTML email body s marketingovým textom (slovenský trh, 30y FVE expert tone).
@@ -3957,7 +3978,7 @@ def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchod
         — typicky pokryje 60-70 % Vašej dennej spotreby. Ideálne ak doma cez deň žije rodina, sušiete
         bielizeň, varíte alebo používate tepelné čerpadlo na ohrev TÚV.</p>
         <ul>
-          <li><strong>Investícia po dotácii Zelená domácnostiam:</strong> {cena_a:,.0f} € s DPH</li>
+          <li><strong>Investícia po dotácii Zelená domácnostiam:</strong> {_eur(cena_a)} s DPH</li>
           <li><strong>Návratnosť:</strong> 6–8 rokov pri dnešnej cene elektriny 0,16 €/kWh</li>
           <li><strong>Záruka:</strong> 30 rokov na panely, 10 rokov na menič</li>
           <li><strong>Inštalácia:</strong> 1–2 dni, bez stavebných úprav</li>
@@ -3966,18 +3987,18 @@ def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchod
           <strong>Pre slovenský trh:</strong> 60 % FVE inštalácií v rodinných domoch ide bez batérie.
           Distribučné spoločnosti odkupujú prebytky za 0,04–0,06 €/kWh, čo postačí na základnú nezávislosť.
         </p>
-        """.replace(",", " "))
+        """)
 
     # === BLOCK B — FVE + BESS ===
     if "B" in variants:
-        bat_str = f"{bateria_kwh:.0f} kWh" if bateria_kwh else "batéria"
+        bat_str = _fmt_bateria_kwh(bateria_kwh)
         blocks.append(f"""
         <h3 style="color:#1B5E3F;margin-top:24px;">Varianta B — fotovoltika {kwp} kWp + batéria {bat_str}</h3>
         <p>Energetická nezávislosť — slnko ukladáte do batérie a používate večer/v noci/keď je zamračené.
         Pri zlepšujúcich sa zľavách na komponenty je toto pre Slovákov dnes najatraktívnejšia voľba,
         najmä pre rodiny ktoré sú doma <strong>predovšetkým ráno a večer</strong>.</p>
         <ul>
-          <li><strong>Investícia po dotácii:</strong> {cena_b:,.0f} € s DPH</li>
+          <li><strong>Investícia po dotácii:</strong> {_eur(cena_b)} s DPH</li>
           <li><strong>Pokrytie spotreby:</strong> 85–95 % pri správnom dimenzovaní</li>
           <li><strong>Návratnosť:</strong> 8–11 rokov</li>
           <li><strong>Backup:</strong> pri výpadku siete batéria automaticky prepne dom na ostrov (voliteľne)</li>
@@ -3988,18 +4009,18 @@ def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchod
           Batéria vám teda chráni nielen pred volatilitou ceny silovej elektriny ale aj pred budúcim rastom
           poplatkov za distribúciu.
         </p>
-        """.replace(",", " "))
+        """)
 
     # === BLOCK C — FVE + BESS + Wallbox ===
     if "C" in variants:
-        bat_str = f"{bateria_kwh:.0f} kWh" if bateria_kwh else "batéria"
+        bat_str = _fmt_bateria_kwh(bateria_kwh)
         blocks.append(f"""
         <h3 style="color:#1B5E3F;margin-top:24px;">Varianta C — kompletné riešenie + wallbox pre elektromobil</h3>
         <p>FVE {kwp} kWp + batéria {bat_str} + smart wallbox. Vaše auto sa nabíja zo slnka — zadarmo —
         a wallbox automaticky reaguje na prebytky FVE. Riešenie pre rodiny s elektromobilom alebo plánom kúpiť
         EV v najbližších rokoch.</p>
         <ul>
-          <li><strong>Investícia:</strong> {cena_c:,.0f} € s DPH</li>
+          <li><strong>Investícia:</strong> {_eur(cena_c)} s DPH</li>
           <li><strong>Úspora paliva:</strong> ~ 1 200 € ročne pri 15 000 km/rok namiesto benzínu</li>
           <li><strong>Plná energetická nezávislosť:</strong> spotreba domu + auto z vlastnej elektriny</li>
           <li><strong>Smart logika:</strong> wallbox sa zapne keď FVE má nadbytok, nezasahuje do siete</li>
@@ -4009,7 +4030,7 @@ def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchod
           poplatkoch vo veľkých mestách (Bratislava, Košice) sa elektromobil vracia za 4-6 rokov samostatne.
           S vlastnou FVE ešte rýchlejšie.
         </p>
-        """.replace(",", " "))
+        """)
 
     # === BLOCK D — FVE + Wallbox (bez baterie) ===
     if "D" in variants:
@@ -4019,7 +4040,7 @@ def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchod
         Wallbox automaticky reaguje na prebytky FVE a využíva ich na nabíjanie EV. Optimálne riešenie ak doma cez deň
         bývate menej a hlavnou prioritou je nabíjanie auta zo slnka.</p>
         <ul>
-          <li><strong>Investícia po dotácii:</strong> {cena_d:,.0f} € s DPH</li>
+          <li><strong>Investícia po dotácii:</strong> {_eur(cena_d)} s DPH</li>
           <li><strong>Návratnosť:</strong> 7–9 rokov pri kombinácii FVE + EV nabíjanie</li>
           <li><strong>Výhoda:</strong> nižšia investícia ako varianta C, ale stále plné EV nabíjanie zo slnka</li>
           <li><strong>Hybridný menič:</strong> možnosť doplnenia batérie neskôr bez prerábania systému</li>
@@ -4028,18 +4049,18 @@ def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchod
           <strong>Dlhodobý plán:</strong> mnoho rodín začína s variant D a po 2-3 rokoch dopĺňa batériu, keď vidia
           svoj reálny profil spotreby. Týmto spôsobom investujú postupne a vyhnú sa pre/poddimenzovaniu batérie.
         </p>
-        """.replace(",", " "))
+        """)
 
     # === COMPARISON ak viac variant ===
     comparison = ""
     if len(variants) > 1:
         rows = []
         if "A" in variants:
-            rows.append(f"<tr><td>A — iba FVE</td><td style='text-align:right;'>{cena_a:,.0f} €</td><td>~7 rokov</td><td>Šetríš cez deň</td></tr>".replace(",", " "))
+            rows.append(f"<tr><td>A — iba FVE</td><td style='text-align:right;'>{_eur(cena_a)}</td><td>~7 rokov</td><td>Šetríš cez deň</td></tr>")
         if "B" in variants:
-            rows.append(f"<tr><td>B — FVE + batéria</td><td style='text-align:right;'>{cena_b:,.0f} €</td><td>~9 rokov</td><td>Plná denná + nočná nezávislosť</td></tr>".replace(",", " "))
+            rows.append(f"<tr><td>B — FVE + batéria</td><td style='text-align:right;'>{_eur(cena_b)}</td><td>~9 rokov</td><td>Plná denná + nočná nezávislosť</td></tr>")
         if "C" in variants:
-            rows.append(f"<tr><td>C — komplet + wallbox</td><td style='text-align:right;'>{cena_c:,.0f} €</td><td>~11 rokov</td><td>+ EV nabíjanie zadarmo</td></tr>".replace(",", " "))
+            rows.append(f"<tr><td>C — komplet + wallbox</td><td style='text-align:right;'>{_eur(cena_c)}</td><td>~11 rokov</td><td>+ EV nabíjanie zadarmo</td></tr>")
 
         comparison = f"""
         <h3 style="color:#1B5E3F;margin-top:24px;">Krátke porovnanie</h3>
@@ -4066,11 +4087,17 @@ def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchod
     pdf_note = f"<p>V <strong>prílohe e-mailu</strong> nájdete {('detailný PDF dokument' if n_pdf == 1 else f'{n_pdf} PDF dokumenty')} s technickou špecifikáciou, vizualizáciou rozloženia panelov, návratnostnou kalkuláciou na 25 rokov a podmienkami inštalácie.</p>"
 
     # === CTA + SIGNATURE ===
+    if typ_ponuky == "Exaktná":
+        dalsie_kroky_p = ("<p>Ponuka platí 30 dní. Údaje sú overené priamo z obhliadky, takže ide o finálny návrh. "
+            "Ak Vás niektorá varianta oslovila alebo máte otázky, stačí mi odpísať alebo zavolať — "
+            "dohodneme ďalší postup: zmluvu, harmonogram a žiadosť o pripojenie do distribučnej sústavy.</p>")
+    else:
+        dalsie_kroky_p = ("<p>Ponuka platí 30 dní. Ak Vás niektorá varianta zaujala alebo máte otázky, stačí mi odpísať alebo zavolať. "
+            "Dohodneme si <strong>bezplatnú obhliadku</strong> v termíne ktorý Vám vyhovuje — meriame strechu, navrhneme "
+            "optimálne rozloženie panelov a doladíme finálnu ponuku.</p>")
     cta = f"""
     <h3 style="color:#1B5E3F;margin-top:24px;">Ďalšie kroky</h3>
-    <p>Ponuka platí 30 dní. Ak Vás niektorá varianta zaujala alebo máte otázky, stačí mi odpísať alebo zavolať.
-    Dohodneme si <strong>bezplatnú obhliadku</strong> v termíne ktorý Vám vyhovuje — meriame strechu, navrhneme
-    optimálne rozloženie panelov a doladíme finálnu ponuku.</p>
+    {dalsie_kroky_p}
     <p style="margin-top:16px;">S úctou a pozdravom,</p>
     <table style="margin-top:8px;font-size:14px;">
       <tr>
@@ -4261,7 +4288,7 @@ def _email_template_supabase_impl():
     if not flat_props or not variants:
         return jsonify({"error": "missing flat_props or variants"}), 400
 
-    from generate_from_notion import lead_from_notion, OBCHODNICI, DEFAULT_OBCHODNIK, safe_filename
+    from generate_from_notion import lead_from_notion, OBCHODNICI, DEFAULT_OBCHODNIK, _resolve_obchodnik, safe_filename
 
     lead_a = lead_from_notion(flat_props, variants[0] if variants else "A")
     priezvisko = lead_a["meno"].split()[-1] if lead_a.get("meno") else "Zákazník"
@@ -4276,10 +4303,7 @@ def _email_template_supabase_impl():
             "to": "", "subject": "", "body_html": "",
         }), 200
 
-    obchodnik = OBCHODNICI.get(
-        flat_props.get("Obchodník") or flat_props.get("Obchodnik") or "",
-        DEFAULT_OBCHODNIK
-    )
+    obchodnik = _resolve_obchodnik(flat_props)
 
     vykon_kwp = lead_a.get("vykon_kwp", 0)
     bateria_kwh = float(flat_props.get("Batéria výkon") or 0)

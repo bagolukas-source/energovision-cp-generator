@@ -576,7 +576,7 @@ def _resolve_obchodnik(props: dict) -> dict:
     email = (props.get("Obchodník email") or "").strip()
     tel = (props.get("Obchodník telefón") or "").strip()
     funkcia = (props.get("Obchodník funkcia") or "").strip()
-    if meno and email and tel:
+    if meno and email:
         return {"meno": meno, "funkcia": funkcia or "Konzultant", "tel": tel, "email": email}
     return OBCHODNICI.get(meno_key, DEFAULT_OBCHODNIK)
 

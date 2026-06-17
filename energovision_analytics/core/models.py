@@ -112,9 +112,9 @@ class SiteInput(EnergoBase):
     )
     distribuutor: Distribuutor = Field(..., description="Distribútor podľa územia")
     sadzba: Sadzba = Field(..., description="Napäťová úroveň pripojenia")
-    rk_kw: float = Field(..., gt=0, le=20000,
+    rk_kw: float = Field(..., gt=0, le=80000,
                           description="Rezervovaná kapacita (max free import zo siete) v kW")
-    mrk_kw: float = Field(..., gt=0, le=20000,
+    mrk_kw: float = Field(..., gt=0, le=80000,
                            description="Maximálna rezervovaná kapacita (max free export do siete) v kW")
     typ_tarify: TypTarify = Field(..., description="Typ dodávateľského kontraktu")
     bilancna_skupina: str = Field("Energie2", max_length=100,

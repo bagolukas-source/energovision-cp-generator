@@ -267,11 +267,23 @@ def _build_request_from_analyza(analyza: dict, measured_block: dict = None) -> d
     # SK terminológia: om_mrk_kw / om_rk_kw oboje hovoria o IMPORTNEJ kapacite (rezervovanej).
     # max_export_kw je samostatný field z pripojovacej zmluvy distribútora.
     # Fallback: ak chýba export, default = rovnaké ako import (so safety max).
-    sk_import_kw = (
-        float(analyza["om_mrk_kw"]) if analyza.get("om_mrk_kw")
-        else float(analyza["om_rk_kw"]) if analyza.get("om_rk_kw")
-        else base_kwp  # last-resort fallback
-    )
+    # Rezervovaná (importná) kapacita. NEVYMÝŠĽAŤ — keď MRK/RK chýba a ide o veľké OM,
+    # radšej si vyžiadať údaj (MRK ovplyvňuje kapacitnú platbu aj peak shaving).
+    if analyza.get("om_mrk_kw"):
+        sk_import_kw = float(analyza["om_mrk_kw"])
+    elif analyza.get("om_rk_kw"):
+        sk_import_kw = float(analyza["om_rk_kw"])
+    elif base_kwp <= 20000:
+        # Malé/stredné OM bez MRK: pôvodné správanie (base_kwp ~ veľkosť FVE) — nemení nič, čo fungovalo.
+        sk_import_kw = base_kwp
+    else:
+        # Veľké OM bez MRK: nedá sa serióznejšie odhadnúť → dožiadať údaj namiesto hausnumera.
+        raise ValueError(
+            "Chýba MRK (rezervovaná kapacita) pre toto odberné miesto. "
+            "Pri takomto veľkom odbere ju treba zadať ručne — nájdeš ju na faktúre za distribúciu "
+            "alebo v pripojovacej zmluve. Doplň ju v záložke Nastavenia (expert) → pole MRK, "
+            "a potom spusti analýzu znova."
+        )
     sk_export_kw = float(analyza["max_export_kw"]) if analyza.get("max_export_kw") else sk_import_kw
     engine_rk_kw = sk_import_kw
     engine_mrk_kw = max(sk_export_kw, sk_import_kw)  # engine validates mrk >= rk
