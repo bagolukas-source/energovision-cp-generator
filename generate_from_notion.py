@@ -565,6 +565,12 @@ OBCHODNICI = {
         "tel": "+421 918 187 762",
         "email": "lukas.bago@energovision.sk",
     },
+    "Ľuboš Baláž": {
+        "meno": "Ľuboš Baláž",
+        "funkcia": "Obchodný manažér",
+        "tel": "+421 917 481 488",
+        "email": "lubos.balaz@energovision.sk",
+    },
 }
 DEFAULT_OBCHODNIK = OBCHODNICI["Dominik Galaba"]
 
