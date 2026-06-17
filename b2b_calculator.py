@@ -463,7 +463,7 @@ def save_quote_as_bundle(sb, base_config: dict, customer_id: str = None,
             })
         
         bundle_data[f"variant_{key}_active"] = True
-        bundle_data[f"variant_{key}_marza_pct"] = margin_pct
+        bundle_data[f"variant_{key}_marza_pct"] = int(round(margin_pct))
         bundle_data[f"variant_{key}_cost"] = totals.get("total_cost", 0)
         bundle_data[f"variant_{key}_price_no_vat"] = totals.get("total_price", 0)
         bundle_data[f"variant_{key}_price_with_vat"] = round(totals.get("total_price", 0) * 1.23, 2)
