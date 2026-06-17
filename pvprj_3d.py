@@ -34,7 +34,7 @@ _TEMPLATE = r'''<!DOCTYPE html><html lang="sk"><head><meta charset="utf-8"><meta
 <script type="module">
 import * as THREE from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
-const TABLES=__TABLES__, BLD=__BLD__, SAT="__SAT__";
+const ROWS=__ROWS__, ANGLE=__ANGLE__, SAT="__SAT__";
 const cv=document.getElementById('c');
 const renderer=new THREE.WebGLRenderer({canvas:cv,antialias:true,preserveDrawingBuffer:true});
 renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.setSize(innerWidth,innerHeight);renderer.shadowMap.enabled=true;
@@ -48,17 +48,18 @@ if(SAT){const tex=new THREE.TextureLoader().load('data:image/jpeg;base64,'+SAT);
 const ground=new THREE.Mesh(new THREE.PlaneGeometry(661,411),new THREE.MeshStandardMaterial({map:tex,roughness:1}));
 ground.rotation.x=-Math.PI/2;ground.receiveShadow=true;scene.add(ground);}
 else{const gr=new THREE.Mesh(new THREE.PlaneGeometry(500,500),new THREE.MeshStandardMaterial({color:0x9ccd6e}));gr.rotation.x=-Math.PI/2;gr.receiveShadow=true;scene.add(gr);}
-const panelMat=new THREE.MeshStandardMaterial({color:0x16233f,metalness:.45,roughness:.3,emissive:0x0a1330,emissiveIntensity:.22});
-const legMat=new THREE.MeshStandardMaterial({color:0x9aa3ad});
-const tilt=22*Math.PI/180;
-function table(x,z,azDeg){const g=new THREE.Group();const cols=18,rows=2,pw=1.0,ph=1.9,gap=.04;
-const W=cols*pw+(cols-1)*gap,H=rows*ph+(rows-1)*gap;
-const m=new THREE.Mesh(new THREE.BoxGeometry(W,0.08,H),panelMat);m.castShadow=true;m.receiveShadow=true;m.rotation.x=-tilt;m.position.y=H/2*Math.sin(tilt)+0.4;g.add(m);
-const leg=new THREE.Mesh(new THREE.BoxGeometry(W,0.6,0.1),legMat);leg.position.y=0.3;g.add(leg);
-g.position.set(x,0,z);g.rotation.y=-(azDeg-90)*Math.PI/180;return g;}
-TABLES.forEach(t=>scene.add(table(t.x,t.z,t.az)));
-if(BLD){const b=new THREE.Mesh(new THREE.BoxGeometry(60,9,30),new THREE.MeshStandardMaterial({color:0xeae4d8,roughness:.9}));
-b.position.set(BLD.x,4.5,BLD.z);b.rotation.y=-(BLD.az)*Math.PI/180;b.castShadow=b.receiveShadow=true;scene.add(b);}
+const panelMat=new THREE.MeshStandardMaterial({color:0x16233f,metalness:.5,roughness:.28,emissive:0x0a1530,emissiveIntensity:.2});
+// jeden rad = n modulov vedľa seba; tenké, mierny sklon; orientované podľa fitu (ANGLE)
+const MW=1.13, MD=1.18, TILT=8*Math.PI/180, ANG=-ANGLE*Math.PI/180;
+const panels=new THREE.Group();
+ROWS.forEach(r=>{
+  const w=Math.max(1,r.w)*MW, d=Math.max(1,r.d)*MD;
+  const m=new THREE.Mesh(new THREE.BoxGeometry(w,0.06,d),panelMat);
+  m.castShadow=true;m.receiveShadow=true;m.rotation.x=-TILT;
+  const g=new THREE.Group();g.add(m);g.position.set(r.x,0.25,r.z);g.rotation.y=ANG;
+  panels.add(g);
+});
+scene.add(panels);
 addEventListener('resize',()=>{cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
 document.getElementById('shot').onclick=()=>{renderer.render(scene,cam);const a=document.createElement('a');a.download='FVE_3D_'+Date.now()+'.png';a.href=cv.toDataURL('image/png');a.click();};
 (function loop(){ctrl.update();renderer.render(scene,cam);requestAnimationFrame(loop);})();
@@ -77,7 +78,9 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
     if not geo:
         raise ValueError("V .pvprj chýba Visu3D/GeometrischeDaten.xml — projekt nemá 3D vizualizáciu")
     root = ET.fromstring(geo)
-    tables = []
+    import math as _m
+    anchors = []   # (pab_x, pab_y, world_x, world_z) z polí typ 38
+    rows = []      # (pab_x, pab_y, anz) — jednotlivé rady modulov
     bld = None
     for o in root.findall(".//ZeichenObjekt"):
         sd = o.find("StandardDaten")
@@ -85,28 +88,54 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
             continue
         nm = sd.findtext("Bezeichnung", "")
         typ = sd.findtext("AnwObjTyp", "")
-        pos = sd.find("Position")
-        rot = sd.find("Rotation")
-        if pos is None:
+        pos = sd.find("Position"); pab = sd.find("PosAufBezugsFL")
+        if nm == "Budovy 01" and pos is not None:
+            bld = (float(_t(pos, "X")), float(_t(pos, "Z")))
+        if typ != "38" or pos is None or pab is None:
             continue
-        x = float(_t(pos, "X")); y = float(_t(pos, "Y")); zc = float(_t(pos, "Z"))
-        az = float(_t(rot, "AzimutWinkel")) if rot is not None else 0.0
-        if typ == "38":
-            tables.append((x, y, zc, az))
-        if nm == "Budovy 01":
-            bld = (x, zc, az)
-    if not tables:
-        raise ValueError("V projekte nie sú modulové plochy (typ 38)")
-    cx = sum(t[0] for t in tables) / len(tables)
-    cz = sum(t[2] for t in tables) / len(tables)
-    data = [{"x": round(t[0] - cx, 2), "z": round(t[2] - cz, 2), "az": round(t[3], 2)} for t in tables]
-    bldc = {"x": round(bld[0] - cx, 2), "z": round(bld[1] - cz, 2), "az": round(bld[2], 2)} if bld else None
+        anchors.append((float(_t(pab, "X")), float(_t(pab, "Y")), float(_t(pos, "X")), float(_t(pos, "Z"))))
+        for r in o.findall(".//ModulreiheSparVar"):
+            rp = r.find("PosAufBezugsFL")
+            if rp is None:
+                continue
+            anz = 0
+            try:
+                anz = int(float(r.findtext("AnzModuleHorz", "0") or 0))
+            except Exception:
+                anz = 0
+            nforms = len(r.findall("FormsMRF")) or 1
+            nmod = len(r.findall(".//Modul")) or anz
+            rows.append((float(_t(rp, "X")), float(_t(rp, "Y")), max(1, anz), nforms, nmod))
+    if not rows:
+        raise ValueError("V projekte nie sú rady modulov (ModulreiheSparVar)")
+
+    # rigidný fit (scale=1): world(X,Z) = R(theta)*PAB(x,y) + t  — z kotiev polí
+    n = len(anchors)
+    mpx = sum(a[0] for a in anchors)/n; mpy = sum(a[1] for a in anchors)/n
+    mwx = sum(a[2] for a in anchors)/n; mwz = sum(a[3] for a in anchors)/n
+    Sxx = sum((a[0]-mpx)*(a[2]-mwx) + (a[1]-mpy)*(a[3]-mwz) for a in anchors)
+    Sxy = sum((a[0]-mpx)*(a[3]-mwz) - (a[1]-mpy)*(a[2]-mwx) for a in anchors)
+    theta = _m.atan2(Sxy, Sxx)
+    ct, st = _m.cos(theta), _m.sin(theta)
+    tx = mwx - (ct*mpx - st*mpy)
+    tz = mwz - (st*mpx + ct*mpy)
+    def to_world(px, py):
+        return (ct*px - st*py + tx, st*px + ct*py + tz)
+    # rady -> svet, recentruj na ťažisko modulov
+    rw = [(to_world(px, py), anz, nf, nm) for (px, py, anz, nf, nm) in rows]
+    cx = sum(w[0][0] for w in rw)/len(rw); cz = sum(w[0][1] for w in rw)/len(rw)
+    data = [{"x": round(w[0][0]-cx, 2), "z": round(w[0][1]-cz, 2), "w": w[1], "d": w[2]} for w in rw]
+    n_modules_real = sum(w[3] for w in rw)
+    angle_deg = round(_m.degrees(theta), 2)
+    bldc = {"x": round(bld[0]-cx, 2), "z": round(bld[1]-cz, 2)} if bld else None
+
     sat = read("MapExtract.jpg")
     sat_b64 = base64.b64encode(sat).decode() if sat else ""
-    subt = "Pozemná/strešná FVE · %d modulových plôch · satelitný podklad" % len(tables)
+    total_mod = n_modules_real
+    subt = "Strešná/pozemná FVE · %d modulov v %d radoch · satelitný podklad" % (total_mod, len(data))
     html = (_TEMPLATE
-            .replace("__TABLES__", json.dumps(data))
-            .replace("__BLD__", json.dumps(bldc))
+            .replace("__ROWS__", json.dumps(data))
+            .replace("__ANGLE__", str(angle_deg))
             .replace("__SAT__", sat_b64)
             .replace("__TITLE__", title)
             .replace("__SUBT__", subt))
@@ -120,5 +149,5 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
         for n in sorted(names):
             if n.lower().endswith(".jpg") and "Screenshot" in n:
                 render = read(n); break
-    return {"html": html, "render": render, "n_tables": len(tables),
+    return {"html": html, "render": render, "n_tables": len(data), "n_modules": n_modules_real,
             "has_satellite": bool(sat), "has_building": bool(bld)}
