@@ -427,7 +427,7 @@ def save_quote_as_bundle(sb, base_config: dict, customer_id: str = None,
         "customer_id": customer_id,
         "created_by": user_id,
         "status": "draft",
-        "payment_terms": base_config.get("payment_terms", "30% pri objednávke / 30% pri dodávke / 40% pri odovzdaní"),
+        "payment_terms": (base_config.get("payment_terms") if base_config.get("payment_terms") in ("60_30_10", "60_40", "50_50", "30_70") else "60_30_10"),
         "workspace": "b2b",
     }
     
