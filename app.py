@@ -15073,8 +15073,12 @@ def _eva_tool_priprav_ponuku_b2b(args, ctx):
             lr = requests.get(f"{SUPABASE_URL}/rest/v1/leads?customer_id=eq.{customer_id}&select=id&order=created_at.desc&limit=1", headers=_supa_headers(), timeout=15)
             lrow = (lr.json() or [{}])[0] if lr.ok else {}
             lead_id = lead_id or lrow.get("id")
+    if (not lead_id or not customer_id) and args.get("klient"):
+        created = _eva_tool_vytvor_lead({"firma": args.get("klient"), "predmet": "FVE cenová ponuka (WhatsApp)", "b2b": True}, ctx)
+        if created.get("ok"):
+            lead_id = created.get("lead_id"); customer_id = created.get("customer_id")
     if not lead_id or not customer_id:
-        return {"chyba_klient": "Ponuka potrebuje zákazníka (lead). Najprv použi vytvor_lead, alebo zadaj EV-kód leadu (lead_ev_id) či presný názov firmy (klient)."}
+        return {"chyba_klient": "Ponuka potrebuje zákazníka. Zadaj názov firmy (klient) alebo EV-kód leadu (lead_ev_id)."}
     try:
         cfg = _b2b_v2.ai_smart_configurator(_sb(), popis)
     except Exception as e:
@@ -15169,6 +15173,24 @@ def _eva_save_turn(phone, role, content):
     except Exception:
         pass
 
+def _eva_vision_extract(images):
+    """Prepíše obsah obrázkov na text (firemný dopyt/email/faktúra) — aby ostal v pamäti konverzácie."""
+    if not images or not ANTHROPIC_API_KEY:
+        return ""
+    content = []
+    for im in images[:4]:
+        content.append({"type": "image", "source": {"type": "base64", "media_type": im.get("media_type", "image/jpeg"), "data": im.get("data", "")}})
+    content.append({"type": "text", "text": "Prepíš VŠETOK čitateľný text a údaje z obrázka po slovensky. Ak je to firemný/emailový dopyt alebo výpis firmy, jasne vypíš: Firma, IČO, DIČ, kontaktná osoba, email, telefón, predmet/služby. Buď stručná, len fakty."})
+    headers = {"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"}
+    payload = {"model": ANTHROPIC_MODEL, "max_tokens": 700, "messages": [{"role": "user", "content": content}]}
+    try:
+        r = _retry_request(lambda: requests.post("https://api.anthropic.com/v1/messages", headers=headers, json=payload, timeout=70))
+        r.raise_for_status()
+        return _safe_claude_text(r.json()).strip()
+    except Exception:
+        log.exception("eva vision extract failed")
+        return ""
+
 def _eva_whatsapp_agent(body, me, users, today, prior_messages=None, images=None):
     """Tool-using Eva agent nad CRM (Anthropic). Vráti krátky text pre WhatsApp."""
     if not ANTHROPIC_API_KEY:
@@ -15176,16 +15198,20 @@ def _eva_whatsapp_agent(body, me, users, today, prior_messages=None, images=None
     ctx = {"me": me, "users": users, "today": today}
     names = ", ".join(f"{u.get('full_name')}" for u in users if u.get("full_name"))[:1500]
     system = (
-        "Si Eva, AI asistentka firmy Energovision v CRM. Komunikuješ cez WhatsApp s kolegom "
-        f"{me.get('full_name') or ''}. Dnes je {today}. Odpovedaj PO SLOVENSKY, stručne a vecne, "
-        "vhodne pre WhatsApp (max ~7 riadkov). NEPOUŽÍVAJ markdown (žiadne ** ani #), píš čistý text. "
-        "TOTO JE PLYNULÁ KONVERZÁCIA — pamätáš si predošlé správy. Keď ti kolega odpovie krátko (napr. len názov "
-        "projektu po tom, čo si sa pýtala ktorý), POKRAČUJ v rozrobenej téme, NEzakladaj z toho úlohu. "
-        "Na otázky o projektoch, úlohách a vyťaženosti VŽDY použi nástroje (čítaj reálne dáta CRM, nikdy nehádaj). "
-        "Keď kolega niečo zadáva ('priprav/sprav/zavolaj/vyrob… do…') alebo žiada akciu (založ/uzavri/priraď úlohu, "
-        "posuň termín), vykonaj ju nástrojom (vytvor_ulohu a spol.) a stručne potvrď čo si spravila. "
-        "Keď je požiadavka nejednoznačná alebo nájdeš viac zhôd, OPÝTAJ sa na upresnenie namiesto hádania. "
-        "Vieš čítať aj priložené OBRÁZKY (preposlané emaily, fotky faktúr/štítkov, screenshoty) — vytiahni z nich údaje a konaj. ""Keď príde nový zákaznícky DOPYT (meno/firma/email/telefón/predmet), založ ho nástrojom vytvor_lead. ""Keď kolega chce CENOVÚ PONUKU (napr. 'priprav ponuku 50 kWp trapéz Huawei'), použi priprav_ponuku_b2b — vznikne DRAFT na kontrolu v CRM; ak chýba kWp/strecha/značka, dopýtaj sa. Po vytvorení ponuky pošli kolegovi aj odkaz (pole link) na jej kontrolu. ""DÔLEŽITÉ: pred ZALOŽENÍM LEADU (vytvor_lead) alebo CENOVEJ PONUKY (priprav_ponuku_b2b) to NEVYKONÁVAJ hneď — najprv zhrň čo spravíš (klient, parametre) a opýtaj sa na potvrdenie; vykonaj až keď kolega potvrdí (áno/ok/jj/sprav). Úlohy (vytvor_ulohu) a drobné zmeny rob priamo. ""Termíny 'do piatku/zajtra/o týždeň' prepočítaj na dátum. Akcie meň iba osobné/WhatsApp úlohy. "
+        f"Si Eva, AI asistentka firmy Energovision. Komunikuješ cez WhatsApp s kolegom {me.get('full_name') or ''}. "
+        f"Dnes je {today}. Odpovedaj PO SLOVENSKY, stručne, bez markdown (žiadne ** ani #), max ~7 riadkov. "
+        "Si PLYNULÁ konverzácia s PAMÄŤOU — VŽDY využi predošlé správy a NEPÝTAJ sa znova na to, čo už kolega povedal. "
+        "Buď ROZHODNÁ a akčná: keď kolega dá jasný pokyn s dostatočnými údajmi, rovno to VYKONAJ nástrojom a potom potvrď výsledok. "
+        "Pýtaj sa NANAJVÝŠ jednu vec a len ak naozaj chýba kľúčový údaj, ktorý sa nedá rozumne odvodiť. Nikdy sa nepýtaj viackrát dokola. "
+        "Na otázky o projektoch/úlohách/vyťaženosti VŽDY použi nástroje (čítaj reálne dáta, nehádaj). "
+        "OBRÁZKY: ich obsah ti príde prepísaný ako text v správe (časť '[Obsah priloženého obrázka: ...]') — ber ho ako plnohodnotný vstup (firma, IČO, kontakt, email, telefón, predmet). "
+        "NOVÝ DOPYT alebo 'založ lead'/'založ obchodný prípad' (meno/firma/email/telefón/IČO) → použi vytvor_lead. Firma s IČO = B2B. "
+        "CENOVÁ PONUKA ('priprav/vytvor ponuku …') → použi priprav_ponuku_b2b. Do parametra 'popis' daj VŠETKO čo kolega uviedol (kWp/MWp, orientácia/strecha, značka, optimizéry, marža) a do 'klient' názov firmy. "
+        "Pravidlá ponuky: 1 MW = 1000 kWp, 1,2 MWp = 1200 kWp (ak kolega uvedie dve čísla, vezmi väčšie alebo sa RAZ spýtaj ktoré). "
+        "'východ-západ'/'E-W'/'rovná strecha' JE platná orientácia/strecha — nepýtaj sa znova na strechu, ak to už povedal. "
+        "priprav_ponuku_b2b si zákazníka založí SÁM z názvu firmy (parameter klient) — NEpýtaj sa na lead_id ani na screenshot. "
+        "Ponuka vzniká ako DRAFT (to je poistka) — rovno ju sprav a pošli aj odkaz (pole link), netreba pýtať povolenie. "
+        "Úlohy (vytvor_ulohu) a drobné zmeny rob priamo. Termíny 'do piatku/zajtra/o týždeň' prepočítaj na dátum. Akcie meň iba osobné/WhatsApp úlohy. "
         f"Kolegovia: {names}."
     )
     messages = list(prior_messages or [])
@@ -15315,11 +15341,17 @@ def webhook_whatsapp_uloha():
             _images = []
         if not body and not _images:
             return twiml("Napíš správu alebo pošli obrázok. 🙂")
+        if _images:
+            _vis = _eva_vision_extract(_images)
+            if _vis:
+                body = (body + "\n\n[Obsah priloženého obrázka:\n" + _vis + "\n]").strip()
+            elif not body:
+                return twiml("Obrázok sa mi nepodarilo prečítať — napíš údaje textom, prosím. 🙏")
         # Eva — plynulá konverzácia s pamäťou (default pre KAŽDÚ správu; zakladanie úlohy je jej nástroj)
         today_iso = __import__("datetime").date.today().isoformat()
         try:
             _history = _eva_load_history(phone_e164)
-            _ans = _eva_whatsapp_agent(body, me, users, today_iso, prior_messages=_history, images=_images)
+            _ans = _eva_whatsapp_agent(body, me, users, today_iso, prior_messages=_history)
         except Exception:
             log.exception("eva whatsapp agent failed"); _ans = None
         _eva_save_turn(phone_e164, "user", body or "(obrázok)")
