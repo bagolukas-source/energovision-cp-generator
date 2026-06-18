@@ -101,6 +101,7 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
     root = ET.fromstring(geo)
 
     bldobj = None
+    mapobj = None
     rows = []
     for o in root.findall(".//ZeichenObjekt"):
         sd = o.find("StandardDaten")
@@ -110,6 +111,8 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
         typ = sd.findtext("AnwObjTyp", "")
         if nm == "Budovy 01" or (bldobj is None and typ == "67"):
             bldobj = o
+        if nm == "Otevřené prostranství (Výřez mapy)" or (mapobj is None and typ == "65"):
+            mapobj = o
         if typ == "38":
             for r in o.findall(".//ModulreiheSparVar"):
                 rp = r.find("PosAufBezugsFL")
@@ -175,21 +178,27 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
                 majT = np.array([ct, st]); minT = np.array([-st, ct])
                 sL = Lmaj / max(BW, BD); sS = Lmin / min(BW, BD)
                 fc = np.array([fcx, fcy]); cc = np.array([cxr, cyr])
-                best = None
-                for sm in (1, -1):
-                    for sn in (1, -1):
-                        cA = sm * sL * majorPx; cB = sn * sS * minorPx
-                        ins = 0
-                        for (cx, cy, a, nm) in tabs:
-                            off = np.array([cx, cy]) - fc
-                            pp = cc + (off @ majT) * cA + (off @ minT) * cB
-                            ix, iy = int(pp[0]), int(pp[1])
-                            if 0 <= ix < IW and 0 <= iy < IH and roofmask[iy, ix]:
-                                ins += 1
-                        if best is None or ins > best[0]:
-                            best = (ins, sm, sn)
-                _, sm, sn = best
-                M = np.column_stack([sm * sL * majorPx, sn * sS * minorPx])
+                # DETERMINISTICKY flip: zarovnaj PCA osi na smer odvodeny z azimutu mapy
+                # (mapa rotuje obraz o maz; teren smer d -> obraz R(maz)*d, skalovane IW/mW, IH/mH)
+                maz = 180.0; mW = 661.0; mH = 411.0
+                if mapobj is not None:
+                    msd = mapobj.find("StandardDaten")
+                    maz = _f(msd.find("Rotation"), "AzimutWinkel") or 180.0
+                    mW = max((float(e.text) for e in mapobj.iter() if e.tag == "BreiteR" and e.text), default=661.0)
+                    mH = max((float(e.text) for e in mapobj.iter() if e.tag == "TiefeR" and e.text), default=411.0)
+                ma = math.radians(maz); cma, sma = math.cos(ma), math.sin(ma)
+                exp_maj = np.array([(cma * majT[0] - sma * majT[1]) * IW / mW, (sma * majT[0] + cma * majT[1]) * IH / mH])
+                exp_min = np.array([(cma * minT[0] - sma * minT[1]) * IW / mW, (sma * minT[0] + cma * minT[1]) * IH / mH])
+                if np.dot(majorPx, exp_maj) < 0: majorPx = -majorPx
+                if np.dot(minorPx, exp_min) < 0: minorPx = -minorPx
+                ins = 0; cA0 = sL * majorPx; cB0 = sS * minorPx
+                for (cx, cy, a, nm) in tabs:
+                    off = np.array([cx, cy]) - fc
+                    pp = cc + (off @ majT) * cA0 + (off @ minT) * cB0
+                    ix, iy = int(pp[0]), int(pp[1])
+                    if 0 <= ix < IW and 0 <= iy < IH and roofmask[iy, ix]: ins += 1
+                best = (ins, 1, 1)
+                M = np.column_stack([sL * majorPx, sS * minorPx])
                 Minv = np.linalg.inv(M)
                 quad = []
                 for (px, py) in [(0, 0), (IW, 0), (IW, IH), (0, IH)]:
