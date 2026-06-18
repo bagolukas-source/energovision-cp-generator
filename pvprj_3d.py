@@ -249,10 +249,13 @@ if(BUILDINGS&&BUILDINGS.length){
   scene.add(new THREE.Mesh(bg,wallMat));
 }
 // ramuj na moduly
-g.computeBoundingBox();const bb=g.boundingBox;const ctr=new THREE.Vector3();bb.getCenter(ctr);
-const sz=new THREE.Vector3();bb.getSize(sz);const ext=Math.max(sz.x,sz.z,8);
-ctrl.target.copy(ctr);
-cam.position.set(ctr.x+ext*0.3,ctr.y+ext*1.1,ctr.z+ext*1.5);ctrl.update();
+// ramuj CELU scenu (budovy + panely) z vtacieho oblique pohladu
+let _xn=1e9,_xx=-1e9,_zn=1e9,_zx=-1e9,_yx=1;
+for(let i=0;i<VERTS.length;i+=3){_xn=Math.min(_xn,VERTS[i]);_xx=Math.max(_xx,VERTS[i]);_zn=Math.min(_zn,VERTS[i+2]);_zx=Math.max(_zx,VERTS[i+2]);_yx=Math.max(_yx,VERTS[i+1]);}
+(BUILDINGS||[]).forEach(B=>B.corners.forEach(c=>{_xn=Math.min(_xn,c[0]);_xx=Math.max(_xx,c[0]);_zn=Math.min(_zn,c[1]);_zx=Math.max(_zx,c[1]);_yx=Math.max(_yx,B.h);}));
+const _cx=(_xn+_xx)/2,_cz=(_zn+_zx)/2,_span=Math.max(_xx-_xn,_zx-_zn,12);
+ctrl.target.set(_cx,_yx*0.35,_cz);
+cam.position.set(_cx+_span*0.12,_yx+_span*1.05,_cz+_span*1.25);ctrl.update();
 addEventListener('resize',()=>{cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
 document.getElementById('shot').onclick=()=>{renderer.render(scene,cam);const a=document.createElement('a');a.download='FVE_3D_'+Date.now()+'.png';a.href=cv.toDataURL('image/png');a.click();};
 (function loop(){ctrl.update();renderer.render(scene,cam);requestAnimationFrame(loop);})();
