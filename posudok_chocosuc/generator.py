@@ -150,8 +150,11 @@ def render_chocosuc_html(ctx: dict) -> str:
     def _gcap(text):
         _gc[0]+=1
         return f"Graf {_gc[0]}: {text}"
-    _dir=num(ctx.get('direct_to_load_pct'),1); _exp=num(ctx.get('exported_pct'),1); _bat=num(ctx.get('charging_battery_pct'),1)
-    _pvm=float(ctx.get('fve_prod_mwh') or 0); _expm=num(ctx.get('export_mwh'),0)
+    def _f(x):
+        try: return float(x)
+        except (TypeError, ValueError): return 0.0
+    _dir=_f(ctx.get('direct_to_load_pct')); _exp=_f(ctx.get('exported_pct')); _bat=_f(ctx.get('charging_battery_pct'))
+    _pvm=_f(ctx.get('fve_prod_mwh')); _expm=_f(ctx.get('export_mwh'))
     _drows=[("Priamo do odberu","#92D050",_dir,_pvm*_dir/100.0)]
     if _bat>0.4: _drows.append(("Cez batériu","#5E8E2A",_bat,_pvm*_bat/100.0))
     _drows.append(("Export do siete","#9DB2C9",_exp,_expm))
