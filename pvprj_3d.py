@@ -1,367 +1,114 @@
-"""PV*SOL .pvprj -> interaktivny 3D HTML (univerzalny parser, vsetky schemy).
- - Budova: objekt s "udov" v nazve a najvacsim footprintom (typ 67/15/18/16/2...), fallback najvacsi footprint.
- - Moduly: MRSV (ModulreiheSparVar, aj vnoreny v ModulreihenFormation) ALEBO mriezka (ModulFormation + Module Zeile/Spalte).
- - Mapa: MapExtract.jpg ALEBO .png; mierka px/m = IW / map.BreiteR.
- - Registracia satelitu (deterministicka, bez svetlikov): orientacia z azimutu theta=baz+map_az,
-   width=(cos,sin), depth=(sin,-cos); stred = velka biela strecha blizko stredu obrazu, inak stred obrazu.
- - Panely: A-ram (V-Z sklon 10deg), sirka/hlbka radu v metroch z dat, realna textura.
+"""PV*SOL .pvprj -> branded HTML galeria PV*SOL vlastnych renderov.
+Spolahlive: zobrazi ProjScreenShot.jpg (hlavny render) + dostupne pohlady (Screenshot-*),
+bez rekonstrukcie geometrie. Funguje pre ~99 % .pvprj (tie co maju render).
 """
-import zipfile, io, base64, json, math
+import zipfile, io, base64, json, re
 import xml.etree.ElementTree as ET
 
 
-def _f(e, t):
-    if e is None:
-        return 0.0
-    x = e.findtext(t)
-    return float(x) if x else 0.0
+def _label(fname):
+    n = fname.rsplit("/", 1)[-1]
+    n = re.sub(r"\.(jpg|jpeg|png)$", "", n, flags=re.I)
+    if n.lower().startswith("projscreenshot"):
+        return "Celkovy pohlad"
+    parts = n.split("-")
+    if len(parts) >= 2:
+        return parts[-1].strip()
+    return n
+
+
+def _count_modules(z, names):
+    try:
+        real = names.get("Visu3D/Uebersichtsplan.xml")
+        if not real:
+            return 0
+        root = ET.fromstring(z.read(real))
+        lays = {l.findtext("Id"): l.findtext("Name") for l in root.findall("Layers")}
+        return sum(1 for el in root.findall("Elements") if lays.get(el.findtext("LayerId")) == "MODULES")
+    except Exception:
+        return 0
 
 
 _TEMPLATE = r'''<!DOCTYPE html><html lang="sk"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Energovision - 3D model FVE</title>
-<style>*{margin:0;box-sizing:border-box}html,body{height:100%;overflow:hidden;font-family:-apple-system,Segoe UI,Arial,sans-serif}
-#c{width:100%;height:100%;display:block;background:#cfe2f5}
-.ui{position:absolute;top:14px;left:14px;background:#fff;border-radius:12px;padding:12px 16px;box-shadow:0 8px 28px rgba(2,6,23,.16);max-width:300px}
-.ui .b{font-weight:800;font-size:15px}.ui .b span{color:#92D050}.ui .s{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#64748b;margin:2px 0 8px}
-.ui .m{font-size:13px;color:#334155;line-height:1.5}
-#shot{position:absolute;top:14px;right:14px;background:#92D050;color:#0F172A;font-weight:700;border:none;border-radius:10px;padding:11px 16px;cursor:pointer;box-shadow:0 6px 20px rgba(2,6,23,.18);font-size:14px}
-.hint{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);background:rgba(15,23,42,.82);color:#fff;font-size:12px;padding:8px 14px;border-radius:999px}
+<title>Energovision - vizualizacia FVE</title>
+<style>
+*{margin:0;box-sizing:border-box}
+html,body{height:100%;font-family:-apple-system,Segoe UI,Arial,sans-serif;background:#0f172a;color:#e2e8f0}
+.wrap{max-width:1100px;margin:0 auto;padding:18px}
+.hdr{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}
+.hdr .b{font-weight:800;font-size:18px}.hdr .b span{color:#92D050}
+.hdr .s{font-size:12px;color:#94a3b8;margin-top:2px}
+#dl{background:#92D050;color:#0F172A;font-weight:700;border:none;border-radius:10px;padding:11px 16px;cursor:pointer;font-size:14px;text-decoration:none}
+.stage{background:#020617;border-radius:14px;overflow:hidden;box-shadow:0 10px 40px rgba(0,0,0,.4);position:relative}
+.stage img{width:100%;display:block;max-height:74vh;object-fit:contain;background:#020617}
+.cap{position:absolute;left:14px;bottom:12px;background:rgba(2,6,23,.72);padding:7px 13px;border-radius:999px;font-size:13px}
+.thumbs{display:flex;gap:10px;overflow-x:auto;padding:14px 2px 4px}
+.thumbs button{flex:0 0 auto;border:2px solid transparent;border-radius:10px;overflow:hidden;cursor:pointer;background:none;padding:0;width:138px}
+.thumbs button.active{border-color:#92D050}
+.thumbs img{width:138px;height:84px;object-fit:cover;display:block}
+.thumbs .tl{font-size:11px;color:#cbd5e1;padding:5px 6px;text-align:center;background:#1e293b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.note{font-size:12px;color:#64748b;margin-top:12px;text-align:center}
 </style></head><body>
-<canvas id="c"></canvas>
-<div class="ui"><div class="b">Energovision <span>FVE</span></div><div class="s">3D model - __TITLE__</div><div class="m">__SUBT__</div></div>
-<button id="shot">📸 Stiahnut snimku</button>
-<div class="hint">🖱 tahaj = otoc · prave tlacidlo = posun · koliesko = zoom</div>
-<script type="importmap">
-{"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"}}
-</script>
-<script type="module">
-import * as THREE from 'three';
-import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
-const ROWS=__ROWS__, ANGLE=__ANGLE__, SAT=__SATMETA__, PTEX="__PANELTEX__", SATB64="__SATB64__",SATMIME="__SATMIME__";
-const cv=document.getElementById('c');
-const renderer=new THREE.WebGLRenderer({canvas:cv,antialias:true,preserveDrawingBuffer:true});
-renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.setSize(innerWidth,innerHeight);renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;
-const scene=new THREE.Scene();scene.background=new THREE.Color(0xcfe2f5);
-const cam=new THREE.PerspectiveCamera(45,innerWidth/innerHeight,0.5,6000);cam.position.set(60,80,150);
-const ctrl=new OrbitControls(cam,renderer.domElement);ctrl.enableDamping=true;ctrl.target.set(0,0,0);ctrl.maxPolarAngle=Math.PI/2.04;
-scene.add(new THREE.HemisphereLight(0xffffff,0x9ab07a,0.95));
-const sun=new THREE.DirectionalLight(0xfff4e0,1.15);sun.position.set(90,200,120);sun.castShadow=true;
-sun.shadow.mapSize.set(2048,2048);sun.shadow.camera.left=-300;sun.shadow.camera.right=300;sun.shadow.camera.top=300;sun.shadow.camera.bottom=-300;sun.shadow.camera.far=900;scene.add(sun);
-// satelit (samostatny global SATB64 string)
-if(SAT&&SAT.quad){
-  const q=SAT.quad;
-  const tex=new THREE.TextureLoader().load('data:image/'+SATMIME+';base64,'+SATB64);tex.colorSpace=THREE.SRGBColorSpace;tex.flipY=false;
-  const g=new THREE.BufferGeometry();
-  g.setAttribute('position',new THREE.BufferAttribute(new Float32Array([q[0][0],0,q[0][1],q[1][0],0,q[1][1],q[2][0],0,q[2][1],q[0][0],0,q[0][1],q[2][0],0,q[2][1],q[3][0],0,q[3][1]]),3));
-  g.setAttribute('uv',new THREE.BufferAttribute(new Float32Array([0,0,1,0,1,1,0,0,1,1,0,1]),2));
-  g.computeVertexNormals();
-  const gr=new THREE.Mesh(g,new THREE.MeshStandardMaterial({map:tex,roughness:1,side:THREE.DoubleSide}));
-  gr.receiveShadow=true;scene.add(gr);
-}else{
-  const gr=new THREE.Mesh(new THREE.PlaneGeometry(400,400),new THREE.MeshStandardMaterial({color:0x9ccd6e}));gr.rotation.x=-Math.PI/2;gr.receiveShadow=true;scene.add(gr);
+<div class="wrap">
+  <div class="hdr">
+    <div><div class="b">Energovision <span>FVE</span></div><div class="s">__SUBT__</div></div>
+    <a id="dl" download="FVE_vizualizacia.jpg">Stiahnut snimku</a>
+  </div>
+  <div class="stage"><img id="main" src=""><div class="cap" id="cap"></div></div>
+  <div class="thumbs" id="thumbs"></div>
+  <div class="note">Vizualizacia z PV*SOL - __TITLE__</div>
+</div>
+<script>
+const IMGS=__IMGS__;
+const main=document.getElementById('main'),cap=document.getElementById('cap'),dl=document.getElementById('dl'),tw=document.getElementById('thumbs');
+function show(i){
+  main.src=IMGS[i].src; cap.textContent=IMGS[i].label; dl.href=IMGS[i].src;
+  dl.download='FVE_'+(IMGS[i].label.replace(/[^A-Za-z0-9]+/g,'_')||'snimka')+'.jpg';
+  [...tw.children].forEach((b,k)=>b.classList.toggle('active',k===i));
 }
-// panely
-let baseTex=null;
-if(PTEX){baseTex=new THREE.TextureLoader().load('data:image/jpeg;base64,'+PTEX);baseTex.colorSpace=THREE.SRGBColorSpace;baseTex.wrapS=baseTex.wrapT=THREE.RepeatWrapping;baseTex.anisotropy=4;}
-const fallbackMat=new THREE.MeshStandardMaterial({color:0x16233f,metalness:.5,roughness:.3,emissive:0x0a1530,emissiveIntensity:.18});
-const panels=new THREE.Group();
-ROWS.forEach(r=>{
-  const w=r.wm||(Math.max(1,r.w)*1.995), dep=r.dm||2.436;
-  const tilt=(r.tilt!=null?r.tilt:10)*Math.PI/180;
-  const yaw=(r.yaw!=null?r.yaw:0)*Math.PI/180;
-  let mat=fallbackMat;
-  if(baseTex){const t=baseTex.clone();t.needsUpdate=true;t.repeat.set(Math.max(1,r.w),1);mat=new THREE.MeshStandardMaterial({map:t,metalness:.35,roughness:.4});}
-  const m=new THREE.Mesh(new THREE.BoxGeometry(w,0.04,dep),mat);
-  m.castShadow=true;m.receiveShadow=true;
-  m.rotation.x=-tilt;                      // sklon: +Z hrana dole = panel sa pozera v smere downslope (azimut)
-  m.position.y=Math.sin(tilt)*dep/2+0.02;  // zdvihni aby spodna hrana sedela na streche
-  const g=new THREE.Group();
-  g.add(m);
-  g.position.set(r.x,0.30,r.z);
-  g.rotation.y=yaw;
-  panels.add(g);
+IMGS.forEach((im,i)=>{
+  const b=document.createElement('button');
+  b.innerHTML='<img src="'+im.src+'"><div class="tl">'+im.label+'</div>';
+  b.onclick=()=>show(i); tw.appendChild(b);
 });
-scene.add(panels);
-// default pohlad: sikmy vtaci pohlad, adaptivny na velkost sceny (ramuje panely)
-let _ex=12; ROWS.forEach(r=>{if(isFinite(r.x)&&isFinite(r.z))_ex=Math.max(_ex,Math.abs(r.x),Math.abs(r.z));});
-const _D=_ex*2.5+60;
-cam.position.set(_D*0.34,_D*0.62,_D*0.70); cam.up.set(0,1,0); ctrl.target.set(0,0,0); ctrl.update();
-addEventListener('resize',()=>{cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
-document.getElementById('shot').onclick=()=>{renderer.render(scene,cam);const a=document.createElement('a');a.download='FVE_3D_'+Date.now()+'.png';a.href=cv.toDataURL('image/png');a.click();};
-(function loop(){ctrl.update();renderer.render(scene,cam);requestAnimationFrame(loop);})();
+show(0);
 </script>
 </body></html>'''
-
-
-def _ff(o, path):
-    if o is None:
-        return None
-    e = o.find(path)
-    try:
-        return float(e.text) if (e is not None and e.text) else None
-    except Exception:
-        return None
-
-
-def _footprint(o):
-    brs = [float(e.text) for e in o.iter("BreiteR") if e.text]
-    tfs = [float(e.text) for e in o.iter("TiefeR") if e.text]
-    return (max(brs) if brs else 0.0, max(tfs) if tfs else 0.0)
 
 
 def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
     z = zipfile.ZipFile(io.BytesIO(pvprj_bytes))
     names = {n.replace("\\", "/"): n for n in z.namelist()}
 
-    def read(name):
-        real = names.get(name)
-        return z.read(real) if real else None
-
-    geo = read("Visu3D/GeometrischeDaten.xml")
-    if not geo:
-        raise ValueError("V .pvprj chyba Visu3D/GeometrischeDaten.xml")
-    root = ET.fromstring(geo)
-    objs = [o for o in root.iter("ZeichenObjekt") if o.find("StandardDaten") is not None]
-
-    # AUTORITATIVNA geometria: Modul_Verschaltung.xml -> plochy strechy (Azimut+Neigung per plocha)
-    import re as _re
-    _mv = read("Visu3D/Modul_Verschaltung.xml")
-    _areas = []; _allneig = []
-    if _mv:
-        _t = _mv.decode("utf-8", "ignore")
-        for _m in _re.finditer(r"<AusrichtungStatisch>(.*?)</AusrichtungStatisch>", _t, _re.S):
-            _seg = _m.group(1)
-            _az = _re.search(r"<Azimut>([^<]+)</Azimut>", _seg); _ne = _re.search(r"<Neigung>([^<]+)</Neigung>", _seg)
-            if _az and _ne:
-                _areas.append((round(math.degrees(float(_az.group(1)))) % 360, math.degrees(float(_ne.group(1)))))
-        _allneig = [math.degrees(float(x)) for x in _re.findall(r"<Neigung>([^<]+)</Neigung>", _t)]
-    fallback_tilt = (sorted(_allneig)[len(_allneig) // 2] if _allneig else 10.0)
-    _area_az = {a for a, _t2 in _areas}
-    # mnozina azimutov realnych poli (na rozlisenie A-ramu vs samostatne pole)
-    _field_az = set()
-    for _o in objs:
-        _sd = _o.find("StandardDaten")
-        if _sd is not None and _sd.findtext("AnwObjTyp") in ("33", "38"):
-            _a = _ff(_sd, "Rotation/AzimutWinkel")
-            if _a is not None:
-                _field_az.add(round(_a) % 360)
-
-    def _ang_d(a, b):
-        return abs((a - b + 180) % 360 - 180)
-
-    def _tilt_for(A, zen):
-        # sklon = Neigung najblizsej plochy (podla azimutu, A alebo A+180); inak z field ZenitWinkel
-        if _areas:
-            best = min(_areas, key=lambda pr: min(_ang_d(pr[0], A), _ang_d(pr[0], A + 180)))
-            return max(0.0, min(60.0, best[1]))
-        if zen is not None:
-            if 3 < zen < 48: return round(zen, 1)
-            if zen >= 48: return round(90 - zen, 1)
-        return fallback_tilt
-
-    def _aframe_for(A):
-        op = round((A + 180) % 360)
-        return (op in _area_az) and (op not in _field_az)
-
-    def _yaw_for(az):
-        return round(math.degrees(math.atan2(math.cos(math.radians(2 * baz - az)), math.sin(math.radians(2 * baz - az)))), 1)
-
-    # --- budova: objekt s "udov" v nazve a najvacsim footprintom; fallback = najvacsi footprint ---
-    bld = None; bld_area = -1.0
-    for o in objs:
-        sd = o.find("StandardDaten")
-        if "udov" not in (sd.findtext("Bezeichnung") or ""):
+    shots = []
+    proj = None
+    for k in sorted(names):
+        base = k.rsplit("/", 1)[-1].lower()
+        if not base.endswith((".jpg", ".jpeg", ".png")):
             continue
-        bw, bd = _footprint(o)
-        if bw * bd > bld_area:
-            bld_area = bw * bd; bld = o
-    if bld is None:
-        for o in objs:
-            t = o.find("StandardDaten").findtext("AnwObjTyp")
-            if t in ("65", "4", "79"):
-                continue
-            bw, bd = _footprint(o)
-            if bw * bd > bld_area:
-                bld_area = bw * bd; bld = o
+        if base.startswith("projscreenshot"):
+            proj = k
+        elif base.startswith("screenshot"):
+            shots.append(k)
+    ordered = ([proj] if proj else []) + [s for s in shots if s != proj]
+    if not ordered:
+        raise ValueError("V .pvprj nie su PV*SOL vizualizacie (ProjScreenShot/Screenshot)")
 
-    bsd = bld.find("StandardDaten") if bld is not None else None
-    bx = _ff(bsd, "PosAufBezugsFL/X") or 0.0
-    by = _ff(bsd, "PosAufBezugsFL/Y") or 0.0
-    baz = _ff(bsd, "Rotation/AzimutWinkel") or 0.0
-    BW, BD = _footprint(bld) if bld is not None else (0.0, 0.0)
+    imgs = []
+    for k in ordered:
+        data = z.read(names[k])
+        mime = "png" if data[:4] == b"\x89PNG" else "jpeg"
+        imgs.append({"src": "data:image/%s;base64,%s" % (mime, base64.b64encode(data).decode()),
+                     "label": _label(k)})
 
-    # --- mapa (satelitny vyrez) ---
-    mapobj = None
-    for o in objs:
-        if o.find("StandardDaten").findtext("AnwObjTyp") == "65":
-            mapobj = o; break
-    mapBW, mapTF = _footprint(mapobj) if mapobj is not None else (0.0, 0.0)
-    maz = _ff(mapobj.find("StandardDaten"), "Rotation/AzimutWinkel") if mapobj is not None else None
-    if maz is None:
-        maz = 180.0
+    n_modules = _count_modules(z, names)
+    subt = ("Vizualizacia FVE - %d modulov" % n_modules) if n_modules else "Vizualizacia fotovoltickej elektrarne"
 
-    # --- rozmery modulu z typ 37 (Hoehe = strany modulu) ---
-    hoehe = sorted({round(float(e.text), 3) for o in objs
-                    if o.find("StandardDaten").findtext("AnwObjTyp") == "37"
-                    for e in o.iter("Hoehe") if e.text})
-    mod_short = hoehe[0] if hoehe else 1.134
-    mod_long = hoehe[-1] if len(hoehe) > 1 else 1.999
-
-    MW, ROWD = 1.995, 2.436  # MRSV rad: sirka modulu, roztec radu
-
-    # --- zber radov: (cx, cy) = STRED v roof-local, n, sirka_m, hlbka_m ---
-    rows = []
-    th = math.radians(baz); ct, st = math.cos(th), math.sin(th)
-    for o in objs:
-        sd = o.find("StandardDaten")
-        mrsv = o.findall(".//ModulreiheSparVar")
-        if mrsv:
-            f_az = _ff(sd, "Rotation/AzimutWinkel"); f_ze = _ff(sd, "Rotation/ZenitWinkel")
-            az0 = f_az if f_az is not None else baz
-            tilt = round(_tilt_for(az0, f_ze), 1)
-            aframe = _aframe_for(az0)
-            for ri, r in enumerate(mrsv):
-                rp = r.find("PosAufBezugsFL")
-                if rp is None:
-                    continue
-                ex = _ff(rp, "X"); ey = _ff(rp, "Y")
-                if ex is None or ey is None:
-                    continue
-                anz = max(1, int(_ff(r, "AnzModuleHorz") or 1))
-                az = az0 + 180 if (aframe and ri % 2) else az0
-                rows.append((ex + anz * MW / 2.0, ey + ROWD / 2.0, anz, anz * MW, ROWD, tilt, _yaw_for(az)))
-            continue
-        mf = o.find(".//ModulFormation")
-        if mf is not None:
-            fp = sd.find("PosAufBezugsFL")
-            fx = _ff(fp, "X"); fy = _ff(fp, "Y")
-            if fx is None or fy is None:
-                continue
-            faz = _ff(sd, "Rotation/AzimutWinkel")
-            f_ze = _ff(sd, "Rotation/ZenitWinkel")
-            g_az = faz if faz is not None else baz
-            g_tilt = round(_tilt_for(g_az, f_ze), 1)
-            g_yaw = _yaw_for(g_az)
-            ab = mf.find("AbstandModule")
-            gH = _ff(ab, "Horizontal") or 0.02
-            gV = _ff(ab, "Vertikal") or 0.02
-            stepH = mod_short + gH
-            stepV = mod_long + gV
-            dfa = math.radians((faz if faz is not None else baz) - baz)
-            cfa, sfa = math.cos(dfa), math.sin(dfa)
-            byrow = {}
-            for m in mf.findall("Module"):
-                ze = int(_ff(m, "Zeile") or 0); sp = int(_ff(m, "Spalte") or 0)
-                byrow.setdefault(ze, []).append(sp)
-            for ze, cols in byrow.items():
-                cols.sort()
-                seg = [cols[0]]
-                segs = []
-                for c in cols[1:]:
-                    if c == seg[-1] + 1:
-                        seg.append(c)
-                    else:
-                        segs.append(seg); seg = [c]
-                segs.append(seg)
-                for sgg in segs:
-                    nc = len(sgg)
-                    lx = (sgg[0] + sgg[-1]) / 2.0 * stepH + stepH / 2.0
-                    lz = ze * stepV + stepV / 2.0
-                    ex = fx + cfa * lx - sfa * lz
-                    ey = fy + sfa * lx + cfa * lz
-                    rows.append((ex, ey, nc, nc * stepH, stepV, round(g_tilt, 1), round(g_yaw, 1)))
-            continue
-    if not rows:
-        raise ValueError("V projekte sa nenasli moduly (mozno nekompletny/prazdny .pvprj projekt)")
-
-    # ground-mount fallback: ak nie je budova, odvod BW/BD z modulov
-    if BW <= 0 or BD <= 0:
-        xs = [r[0] for r in rows]; ys = [r[1] for r in rows]
-        BW = max(xs) - min(xs) + 4 if xs else 50.0
-        BD = max(ys) - min(ys) + 4 if ys else 30.0
-
-    def to_terr(px, py):
-        return (bx + ct * px - st * py, by + st * px + ct * py)
-
-    tabs = [(to_terr(cx, cy), n, wm, dm, tl, yw) for (cx, cy, n, wm, dm, tl, yw) in rows]
-    n_modules = sum(n for (_p, n, _w, _d, _t, _y) in tabs)
-    mcx = sum(p[0] for (p, _n, _w, _d, _t, _y) in tabs) / len(tabs)
-    mcy = sum(p[1] for (p, _n, _w, _d, _t, _y) in tabs) / len(tabs)
-
-    # --- satelit: deterministicka registracia z azimutu (vseobecna, bez svetlikov) ---
-    sat = read("MapExtract.jpg") or read("MapExtract.png")
-    sat_mime = "png" if (sat and sat[:4] == b"\x89PNG") else "jpeg"
-    sat_b64 = ""
-    sat_meta = None
-    if sat and mapBW > 0 and BW > 0 and BD > 0:
-        try:
-            import numpy as np
-            from PIL import Image
-            from scipy import ndimage
-            im = Image.open(io.BytesIO(sat)).convert("RGB")
-            arr = np.asarray(im).astype("int16")
-            IH, IW = arr.shape[:2]
-            scale = IW / mapBW
-            theta = math.radians(baz + maz)
-            wd = np.array([math.cos(theta), math.sin(theta)])
-            dd = np.array([math.sin(theta), -math.cos(theta)])
-            # stred budovy: detekuj velku svetlu strechu blizko stredu obrazu, inak stred obrazu
-            center = np.array([IW / 2.0, IH / 2.0])
-            try:
-                white = (arr.min(2) > 185) & ((arr.max(2) - arr.min(2)) < 35)
-                white = ndimage.binary_opening(white, iterations=2)
-                lbl, nlab = ndimage.label(white)
-                if nlab >= 1:
-                    szs = ndimage.sum(np.ones_like(lbl), lbl, range(1, nlab + 1))
-                    k = int(np.argmax(szs))
-                    rc = np.array([np.where(lbl == k + 1)[1].mean(), np.where(lbl == k + 1)[0].mean()])
-                    exp_px = scale * scale * 0 + (BW * BD) * (scale ** 2)  # ocakavana plocha strechy v px
-                    if szs[k] > 0.25 * exp_px and np.linalg.norm(rc - center) < 0.28 * IW:
-                        center = rc
-            except Exception:
-                pass
-            # roof-local (ex,ey) -> pixel
-            def px_of(ex, ey):
-                return center + (ex - BW / 2.0) * scale * wd + (ey - BD / 2.0) * scale * dd
-            # linearny map -> quad (image -> scene)
-            p00 = px_of(0.0, 0.0)
-            A2 = np.column_stack([px_of(1.0, 0.0) - p00, px_of(0.0, 1.0) - p00])
-            A2inv = np.linalg.inv(A2)
-            As = np.array([[ct, -st], [st, ct]])
-            bs = np.array([bx - mcx, by - mcy])
-            quad = []
-            for (cpx, cpy) in [(0, 0), (IW, 0), (IW, IH), (0, IH)]:
-                exy = A2inv @ (np.array([cpx, cpy], float) - p00)
-                sc = As @ exy + bs
-                quad.append([round(float(sc[0]), 2), round(float(sc[1]), 2)])
-            sat_b64 = base64.b64encode(sat).decode()
-            sat_meta = {"quad": quad, "total": len(rows)}
-        except Exception:
-            sat_meta = None
-    if not sat_b64 and sat:
-        sat_b64 = base64.b64encode(sat).decode()
-
-    data = [{"x": round(p[0] - mcx, 2), "z": round(p[1] - mcy, 2),
-             "w": n, "wm": round(wm, 2), "dm": round(dm, 2), "tilt": tl, "yaw": yw}
-            for (p, n, wm, dm, tl, yw) in tabs]
-    panel_tex = read("Visu3D/FrontTexturPvModul.jpg")
-    ptex_b64 = base64.b64encode(panel_tex).decode() if panel_tex else ""
-
-    subt = "FVE - %d modulov v %d radoch - satelitny podklad" % (n_modules, len(data))
     html = (_TEMPLATE
-            .replace("__ROWS__", json.dumps(data))
-            .replace("__ANGLE__", str(round(baz, 3)))
-            .replace("__SATMETA__", json.dumps(sat_meta) if sat_meta else "null")
-            .replace("__PANELTEX__", ptex_b64)
-            .replace("__SATB64__", sat_b64)
-            .replace("__SATMIME__", sat_mime if sat else "jpeg")
-            .replace("__TITLE__", title)
-            .replace("__SUBT__", subt))
+            .replace("__IMGS__", json.dumps(imgs))
+            .replace("__SUBT__", subt)
+            .replace("__TITLE__", (title or "").replace("<", "").replace(">", "")))
 
-    render = read("Visu3D/ProjScreenShot.jpg")
-    if not render:
-        for n in sorted(names):
-            if "Screenshot" in n and n.lower().endswith(".jpg"):
-                render = read(n); break
-    return {"html": html, "render": render, "n_tables": len(data), "n_modules": n_modules,
-            "has_satellite": bool(sat_b64), "calib": sat_meta}
+    render = z.read(names[proj]) if proj else z.read(names[ordered[0]])
+    return {"html": html, "render": render, "n_tables": len(imgs), "n_modules": n_modules,
+            "has_satellite": True, "calib": {"images": len(imgs)}}
