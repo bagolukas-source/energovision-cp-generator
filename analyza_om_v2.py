@@ -2528,11 +2528,10 @@ def render_posudok_web(sb, analyza_id: str) -> dict:
 
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     base = f"analyza_om/{analyza_id}/posudok_web_{ts}"
-    hdr = {"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}", "x-upsert": "true"}
+    st = sb.storage.from_("documents")
     # 1) HTML do public storage = zdielatelny link
-    _rq.post(f"{SUPABASE_URL}/storage/v1/object/documents/{base}.html",
-             headers={**hdr, "Content-Type": "text/html; charset=utf-8"}, data=html.encode("utf-8"), timeout=40)
-    html_url = f"{SUPABASE_URL}/storage/v1/object/public/documents/{base}.html"
+    st.upload(f"{base}.html", html.encode("utf-8"), {"content-type": "text/html; charset=utf-8", "upsert": "true"})
+    html_url = st.get_public_url(f"{base}.html")
     # 2) PDF cez Gotenberg Chromium (spusti JS/Chart.js)
     pdf_url = None
     GURL = os.environ.get("GOTENBERG_URL", "").rstrip("/")
@@ -2543,12 +2542,11 @@ def render_posudok_web(sb, analyza_id: str) -> dict:
             files = {"files": ("index.html", html, "text/html")}
             data = {"waitForExpression": "window.__ready === true", "waitDelay": "0.5s",
                     "paperWidth": "8.27", "paperHeight": "11.69", "marginTop": "0.3", "marginBottom": "0.3",
-                    "marginLeft": "0.3", "marginRight": "0.3", "printBackground": "true", "preferCssPageSize": "false"}
+                    "marginLeft": "0.3", "marginRight": "0.3", "printBackground": "true"}
             gr = _rq.post(f"{GURL}/forms/chromium/convert/html", files=files, data=data, auth=g_auth, timeout=90)
             if gr.ok and gr.content[:4] == b"%PDF":
-                _rq.post(f"{SUPABASE_URL}/storage/v1/object/documents/{base}.pdf",
-                         headers={**hdr, "Content-Type": "application/pdf"}, data=gr.content, timeout=40)
-                pdf_url = f"{SUPABASE_URL}/storage/v1/object/public/documents/{base}.pdf"
+                st.upload(f"{base}.pdf", gr.content, {"content-type": "application/pdf", "upsert": "true"})
+                pdf_url = st.get_public_url(f"{base}.pdf")
         except Exception:
             log.exception("render_posudok_web gotenberg failed")
     try:
