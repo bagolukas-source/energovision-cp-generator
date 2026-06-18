@@ -33,6 +33,51 @@ def trow(cells, head=False, em=None, align=None):
 _CHARTJS_CDN = '<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>'
 
 
+def _energy_flow_svg(ctx):
+    def n(k, d=0.0):
+        try:
+            return float(ctx.get(k) or 0)
+        except Exception:
+            return d
+    pv = n("fve_prod_mwh"); load = n("year_mwh") or n("load_total_mwh")
+    grid_imp = n("grid_import_mwh"); exp = n("export_mwh")
+    pv_load = n("pv_to_load_mwh") or max(0.0, pv - exp)
+    bat_out = n("bat_to_load_mwh")
+    def f(x):
+        return ("%0.0f" % round(x)).replace(",", " ")
+    def circ(cx, cy, r, fill, border, title, big, sub):
+        return (f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="{fill}" stroke="{border}" stroke-width="2.5"/>'
+                f'<text x="{cx}" y="{cy-r+24}" text-anchor="middle" font-size="13" font-weight="600" fill="#374151">{title}</text>'
+                f'<text x="{cx}" y="{cy+8}" text-anchor="middle" font-size="26" font-weight="700" fill="#1A1A1A">{big}</text>'
+                f'<text x="{cx}" y="{cy+28}" text-anchor="middle" font-size="10.5" fill="#9CA3AF">{sub}</text>')
+    def lbl(x, y, t, col):
+        w = 18 + len(t)*8
+        return (f'<rect x="{x-w/2}" y="{y-13}" width="{w}" height="26" rx="7" fill="#fff" stroke="#E5E7EB"/>'
+                f'<text x="{x}" y="{y+5}" text-anchor="middle" font-size="13" font-weight="700" fill="{col}">{t}</text>')
+    AMBER="#F59E0B"; BLUE="#60A5FA"
+    parts = []
+    parts.append('<defs>'
+        '<marker id="ah-a" markerWidth="9" markerHeight="9" refX="6" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="'+AMBER+'"/></marker>'
+        '<marker id="ah-b" markerWidth="9" markerHeight="9" refX="6" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="'+BLUE+'"/></marker>'
+        '</defs>')
+    # toky (kreslíme pred kruhmi)
+    parts.append(f'<path d="M720,78 L720,52 L230,52 L230,225" fill="none" stroke="{AMBER}" stroke-width="4" marker-end="url(#ah-a)" opacity="0.9"/>')
+    parts.append(f'<path d="M656,196 C600,250 560,270 540,286" fill="none" stroke="{AMBER}" stroke-width="5" marker-end="url(#ah-a)" opacity="0.9"/>')
+    parts.append(f'<path d="M304,300 L396,300" fill="none" stroke="{BLUE}" stroke-width="5" marker-end="url(#ah-b)" opacity="0.9"/>')
+    # kruhy
+    parts.append(circ(720,150,72,"#FEF3C7","#FCD34D","Solar PV",f(pv),"MWh generácia"))
+    parts.append(circ(230,300,72,"#DBEAFE","#93C5FD","Sieť",f(grid_imp),f"MWh · export {f(exp)}"))
+    parts.append(circ(470,300,72,"#F3E8FF","#D8B4FE","Spotreba",f(load),"MWh spotreba"))
+    parts.append(circ(720,352,56,"#DCFCE7","#86EFAC","Batéria",f(bat_out),"MWh výstup"))
+    # labely tokov
+    parts.append(lbl(475,52,f(exp),AMBER))
+    parts.append(lbl(600,243,f(pv_load),AMBER))
+    parts.append(lbl(350,300,f(grid_imp),BLUE))
+    return ('<div class="flowsvg"><svg viewBox="0 0 920 440" width="100%" style="max-height:380px" '
+            'xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI,Arial,sans-serif">'
+            + "".join(parts) + '</svg></div>')
+
+
 def _chartjs_init(ctx):
     import json as _j
     def n(k, d=0.0):
@@ -90,6 +135,9 @@ def render_chocosuc_html(ctx: dict) -> str:
     def gcanvas(cid,text,h=300):
         _gc[0]+=1
         return f'<div class="chartwrap" style="height:{h}px"><canvas id="{cid}"></canvas></div><div class="cap">Graf {_gc[0]}: {text}</div>'
+    def gsvg(svg,text):
+        _gc[0]+=1
+        return svg + f'<div class="cap">Graf {_gc[0]}: {text}</div>'
     S=ctx["scenarios3"]; bza=S[0]; full=next((x for x in S if x.get("recommended")), bza); opti=S[-1]
     pm=ctx.get("profile_metrics",{})
     recs=ctx.get("recommendations",[])
@@ -170,6 +218,7 @@ ul.green li {{ position:relative; padding-left:16px; margin-bottom:6px; font-siz
 ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }}
 .narr p {{ margin:0 0 8px; }}
 .chartwrap{{position:relative;width:100%;margin:6px 0}}
+.flowsvg{{width:100%;margin:6px 0;text-align:center}}
 </style></head><body>
 <div id="hdr"><b>energovision</b>  ·  Posudok · {ctx.get('client_name','')} · {ctx.get('posudok_number','')}</div>
 
@@ -254,7 +303,7 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
   </table>
   {gimg(g_bal, "Energetická bilancia.")}
   <div class="kick" style="margin-top:10px;">Tok energie a využitie výroby</div>
-  {gimg(g_flow, "Ročný tok energie — výroba FVE, priama samospotreba, batéria a sieť (MWh/rok).")}
+  {gsvg(_energy_flow_svg(ctx), "Ročný tok energie — výroba FVE, priama samospotreba, batéria a sieť (MWh/rok).")}
   {gcanvas("cDonut","Ako sa využije vyrobená FVE energia — priamo, cez batériu, export.")}
   <div class="kick" style="margin-top:12px;">Energetické metriky (ročný priemer)</div>
   {gimg(g_emet, "Energetická nezávislosť, využitie solárnej výroby a batérie — mesačné priemery roka 1.")}
