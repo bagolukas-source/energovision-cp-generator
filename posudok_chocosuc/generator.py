@@ -98,10 +98,19 @@ def _chartjs_init(ctx):
     S = ctx.get("scenarios3") or []
     scen_lbl = [s.get("short") or s.get("name", "") for s in S]
     scen_npv = [round(float(s.get("npv") or 0)/1000, 0) for s in S]
+    _dsegs = [("Priamo do odberu", n("direct_to_load_pct"), "#92D050"),
+              ("Cez bateriu", n("charging_battery_pct"), "#5E8E2A"),
+              ("Export do siete", n("exported_pct"), "#9DB2C9"),
+              ("Nevyuzite", n("curtailed_pct"), "#CBD5E1")]
+    _dsegs = [x for x in _dsegs if x[1] > 0.4]
+    _samosp = round(n("direct_to_load_pct") + n("charging_battery_pct"), 1)
+    _donut_d = {"l": ["%s  %s %%" % (nm, round(v, 1)) for nm, v, c in _dsegs],
+                "v": [round(v, 1) for nm, v, c in _dsegs],
+                "c": [c for nm, v, c in _dsegs],
+                "center": (str(_samosp).rstrip("0").rstrip(".") if "." in str(_samosp) else str(_samosp)) + " %",
+                "centerSub": "samospotreba"}
     D = {
-        "donut": {"l": ["Priamo do odberu", "Cez bateriu", "Export", "Nevyuzite"],
-                  "v": [n("direct_to_load_pct"), n("charging_battery_pct"), n("exported_pct"), n("curtailed_pct")],
-                  "c": ["#92D050", "#5E8E2A", "#9DB2C9", "#CBD5E1"]},
+        "donut": _donut_d,
         "month": {"l": ["Jan","Feb","Mar","Apr","Maj","Jun","Jul","Aug","Sep","Okt","Nov","Dec"], "v": monthly},
         "daily": {"x": ["%02d" % h for h in range(24)], "wd": wd, "we": we, "pv": pv, "kwp": n("fve_kwp")},
         "scen": {"l": scen_lbl, "v": scen_npv},
@@ -110,7 +119,7 @@ def _chartjs_init(ctx):
         "Chart.defaults.font.family='Segoe UI,Arial,sans-serif';Chart.defaults.font.size=11;Chart.defaults.color='#6B7280';"
         "var dn=0,need=0;function fin(){dn++;if(dn>=need)window.__ready=true;}"
         "function mk(id,cfg){var e=document.getElementById(id);if(!e)return;need++;cfg.options=cfg.options||{};cfg.options.animation={onComplete:fin};new Chart(e,cfg);}"
-        "mk('cDonut',{type:'doughnut',data:{labels:CD.donut.l,datasets:[{data:CD.donut.v,backgroundColor:CD.donut.c,borderWidth:2,borderColor:'#fff'}]},options:{cutout:'62%',plugins:{legend:{position:'right',labels:{boxWidth:10,padding:8,font:{size:10}}}}}});"
+        "(function(){var e=document.getElementById('cDonut');if(!e)return;need++;new Chart(e,{type:'doughnut',data:{labels:CD.donut.l,datasets:[{data:CD.donut.v,backgroundColor:CD.donut.c,borderWidth:2,borderColor:'#fff'}]},options:{cutout:'66%',plugins:{legend:{position:'right',labels:{boxWidth:10,padding:9,font:{size:10.5}}}},animation:{onComplete:fin}},plugins:[{id:'ct',afterDraw:function(c){var m=c.getDatasetMeta(0);if(!m.data[0])return;var x=m.data[0].x,y=m.data[0].y,a=c.ctx;a.save();a.textAlign='center';a.fillStyle='#1A1A1A';a.font='700 23px Segoe UI,Arial';a.fillText(CD.donut.center,x,y-2);a.fillStyle='#9CA3AF';a.font='400 11px Segoe UI,Arial';a.fillText(CD.donut.centerSub,x,y+17);a.restore();}}]});})();"
         "mk('cMonth',{type:'bar',data:{labels:CD.month.l,datasets:[{data:CD.month.v,backgroundColor:'#92D050',borderRadius:4}]},options:{plugins:{legend:{display:false}},scales:{y:{ticks:{callback:function(v){return v+' MWh'}},grid:{color:'#F0F1F3'}},x:{grid:{display:false}}}}});"
         "mk('cDaily',{type:'line',data:{labels:CD.daily.x,datasets:[{label:'Vyroba FVE '+CD.daily.kwp+' kWp',data:CD.daily.pv,borderColor:'#92D050',backgroundColor:'rgba(146,208,80,.18)',fill:true,tension:.4,pointRadius:0,borderWidth:1.5},{label:'Pracovny den',data:CD.daily.wd,borderColor:'#1E293B',tension:.4,pointRadius:0,borderWidth:2.4},{label:'Vikend',data:CD.daily.we,borderColor:'#94A3B8',borderDash:[5,4],tension:.4,pointRadius:0,borderWidth:2}]},options:{plugins:{legend:{position:'top',labels:{boxWidth:10,padding:10,font:{size:10}}}},scales:{y:{ticks:{callback:function(v){return v+' kW'}},grid:{color:'#F0F1F3'}},x:{grid:{display:false},ticks:{maxTicksLimit:12}}}}});"
         "mk('cScen',{type:'bar',data:{labels:CD.scen.l,datasets:[{data:CD.scen.v,backgroundColor:['#CBD5E1','#9DB2C9','#92D050'].slice(0,CD.scen.v.length),borderRadius:4}]},options:{plugins:{legend:{display:false}},scales:{y:{ticks:{callback:function(v){return v+' k EUR'}},grid:{color:'#F0F1F3'}},x:{grid:{display:false}}}}});"
@@ -138,6 +147,16 @@ def render_chocosuc_html(ctx: dict) -> str:
     def gsvg(svg,text):
         _gc[0]+=1
         return svg + f'<div class="cap">Graf {_gc[0]}: {text}</div>'
+    def _gcap(text):
+        _gc[0]+=1
+        return f"Graf {_gc[0]}: {text}"
+    _dir=num(ctx.get('direct_to_load_pct'),1); _exp=num(ctx.get('exported_pct'),1); _bat=num(ctx.get('charging_battery_pct'),1)
+    _pvm=float(ctx.get('fve_prod_mwh') or 0); _expm=num(ctx.get('export_mwh'),0)
+    _drows=[("Priamo do odberu","#92D050",_dir,_pvm*_dir/100.0)]
+    if _bat>0.4: _drows.append(("Cez batériu","#5E8E2A",_bat,_pvm*_bat/100.0))
+    _drows.append(("Export do siete","#9DB2C9",_exp,_expm))
+    donut_rows=("".join('<div style="margin:5px 0;font-size:11.5pt;color:#374151"><span style="display:inline-block;width:11px;height:11px;background:%s;border-radius:2px;margin-right:8px;vertical-align:middle"></span>%s — <b>%s %%</b> <span style="color:#9CA3AF">(%s MWh)</span></div>' % (c,nm,(("%g"%round(v,1))),(("%g"%round(m,0))) ) for nm,c,v,m in _drows)
+        + '<div style="margin-top:10px;font-size:10.5pt;color:#6B7280;line-height:1.5">Vďaka profilu odberu sa <b>%s %%</b> vyrobenej energie spotrebuje priamo na mieste; do siete odchádza len <b>%s %%</b>. Vysoká samospotreba je kľúčová pre rýchlu návratnosť.</div>' % (("%g"%round(_dir+_bat,1)),("%g"%round(_exp,1))))
     S=ctx["scenarios3"]; bza=S[0]; full=next((x for x in S if x.get("recommended")), bza); opti=S[-1]
     pm=ctx.get("profile_metrics",{})
     recs=ctx.get("recommendations",[])
@@ -219,6 +238,7 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
 .narr p {{ margin:0 0 8px; }}
 .chartwrap{{position:relative;width:100%;margin:6px 0}}
 .flowsvg{{width:100%;margin:6px 0;text-align:center}}
+.nobreak{{page-break-inside:avoid}}
 </style></head><body>
 <div id="hdr"><b>energovision</b>  ·  Posudok · {ctx.get('client_name','')} · {ctx.get('posudok_number','')}</div>
 
@@ -301,10 +321,14 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
     {trow(["Import zo siete",f"{num(ctx.get('grid_import_mwh'))} MWh","—"])}
     {trow(["Pokrytie spotreby OM",f"{num(ctx.get('coverage_pct'),1)} %","FVE vs spotreba"])}
   </table>
-  {gimg(g_bal, "Energetická bilancia.")}
   <div class="kick" style="margin-top:10px;">Tok energie a využitie výroby</div>
-  {gsvg(_energy_flow_svg(ctx), "Ročný tok energie — výroba FVE, priama samospotreba, batéria a sieť (MWh/rok).")}
-  {gcanvas("cDonut","Ako sa využije vyrobená FVE energia — priamo, cez batériu, export.")}
+  <div class="nobreak">{gsvg(_energy_flow_svg(ctx), "Ročný tok energie — výroba FVE, priama samospotreba, batéria a sieť (MWh/rok).")}</div>
+  <div class="kick" style="margin-top:12px;">Využitie vyrobenej energie</div>
+  <div class="nobreak two" style="align-items:center; margin-top:4px;">
+    <div class="chartwrap" style="height:230px"><canvas id="cDonut"></canvas></div>
+    <div>{donut_rows}</div>
+  </div>
+  <div class="cap">{_gcap("Ako sa využije vyrobená FVE energia — priamo, cez batériu, export.")}</div>
   <div class="kick" style="margin-top:12px;">Energetické metriky (ročný priemer)</div>
   {gimg(g_emet, "Energetická nezávislosť, využitie solárnej výroby a batérie — mesačné priemery roka 1.")}
   <div class="kick" style="margin-top:12px;">Environmentálny prínos (CO₂)</div>
