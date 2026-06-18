@@ -10,6 +10,13 @@ def _num(v, d=0):
         return 0
 
 
+def _eur(x):
+    try:
+        return ("{:,.0f}".format(round(float(x or 0)))).replace(",", " ") + " €"
+    except Exception:
+        return "0 €"
+
+
 def build_web_posudok_html(ctx, meta=None):
     meta = meta or {}
     g = lambda k, d=0: _num(ctx.get(k), d)
@@ -72,23 +79,23 @@ def build_web_posudok_html(ctx, meta=None):
                 return s.get(k)
         return 0
     scen_rows = "".join(
-        '<tr><td>%s</td><td class="num">%s EUR</td><td class="num">%s r</td><td class="num">%s EUR</td><td class="num">%s %%</td></tr>'
+        '<tr><td>%s</td><td class="num">%s</td><td class="num">%s r</td><td class="num">%s</td><td class="num">%s %%</td></tr>'
         % (s.get("name", ""),
-           ("%0.0f" % _num(sg(s, "annual_save_eur", "save_total"))).replace(",", " "),
+           _eur(sg(s, "annual_save_eur", "save_total")),
            _num(sg(s, "payback_years", "payback"), 1),
-           ("%0.0f" % _num(sg(s, "npv_eur", "npv"))).replace(",", " "),
+           _eur(sg(s, "npv_eur", "npv")),
            _num(sg(s, "irr_pct", "irr"), 1)) for s in scen)
     bess_txt = (" + BESS %s kWh" % _num(bess_kwh)) if bess_kwh else ""
     repl = {
         "@@CLIENT@@": client, "@@FVE@@": "%s kWp%s" % (_num(fve_kwp), bess_txt),
-        "@@NPV@@": ("%0.0f EUR" % _num(npv)).replace(",", " "),
-        "@@INVEST@@": ("%0.0f EUR" % _num(capex)).replace(",", " "),
-        "@@SAVING@@": ("%0.0f EUR" % _num(saving)).replace(",", " "),
+        "@@NPV@@": _eur(npv),
+        "@@INVEST@@": _eur(capex),
+        "@@SAVING@@": _eur(saving),
         "@@PAYBACK@@": "%s r" % _num(payback, 1), "@@IRR@@": "%s %%" % _num(irr, 1),
         "@@SAMOSP@@": "%s %%" % _num(samosp, 1), "@@SAMOSTAT@@": "%s %%" % _num(samostat, 1),
-        "@@TAXY@@": ("%0.0f EUR" % _num(tax_y)).replace(",", " "),
-        "@@TAXTOT@@": ("%0.0f EUR" % _num(tax_tot)).replace(",", " "),
-        "@@NETCAPEX@@": ("%0.0f EUR" % _num(net_capex)).replace(",", " "), "@@DPPO@@": "%s" % _num(dppo),
+        "@@TAXY@@": _eur(tax_y),
+        "@@TAXTOT@@": _eur(tax_tot),
+        "@@NETCAPEX@@": _eur(net_capex), "@@DPPO@@": "%s" % _num(dppo),
         "@@BARS@@": bars_html, "@@FLOW@@": flow_nodes, "@@SCEN@@": scen_rows, "@@DATA@@": data_json,
     }
     html = TEMPLATE
@@ -161,7 +168,7 @@ td.num,th.num{text-align:right}
 <div class="panel" style="margin-top:16px"><h2>Denny profil odberu</h2><div class="ps">Priemerny den - pred/po + vyroba FVE (kW)</div><div class="chartbox" style="height:260px"><canvas id="cDay"></canvas></div></div>
 <div class="panel" style="margin-top:16px"><h2>Rocny tok energie</h2><div class="ps">MWh za rok</div><div class="flow">@@FLOW@@</div></div>
 <div class="panel" style="margin-top:16px"><h2>Scenare a ekonomika</h2><div class="ps">Baza - optimisticky</div>
-  <table><thead><tr><th>Scenar</th><th class="num">Uspora EUR/r</th><th class="num">Navratnost</th><th class="num">NPV 20 r.</th><th class="num">IRR</th></tr></thead><tbody>@@SCEN@@</tbody></table>
+  <table><thead><tr><th>Scenar</th><th class="num">Uspora &euro;/r</th><th class="num">Navratnost</th><th class="num">NPV 20 r.</th><th class="num">IRR</th></tr></thead><tbody>@@SCEN@@</tbody></table>
   <div class="taxbox"><b>Danovy stit z odpisu (roky 1-6):</b> 6-rocny linearny odpis zo zakladu @@NETCAPEX@@ pri DPPO @@DPPO@@ % = <b>@@TAXY@@/rok</b>, spolu <b>@@TAXTOT@@</b> danovej uspory. Je zahrnuty v NPV, IRR aj navratnosti.</div>
 </div>
 <div class="foot">Energovision, s.r.o. - www.energovision.sk - technicko-ekonomicky posudok</div>
