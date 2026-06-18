@@ -95,7 +95,9 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
     if not (mcx is not None and mcy is not None and mBW > 0 and mTF > 0):
         return _gallery(z, names, title)
 
-    # budova: footprint (PosBF roh + BreiteR/TiefeR, orientacia = baz - maz) + vyska
+    # budova box: Etage extenty (BreiteL/R, TiefeL/R) + rotacia -(baz-maz) ALEBO 0;
+    # kresli LEN ak footprint pokryva >=90% modulov (per-subor validacia). Inak ziadny box.
+    maz_b = _ff(msd, "Rotation/AzimutWinkel") or 180.0
     bld = None; bba = -1.0
     for o in root.iter("ZeichenObjekt"):
         sd = o.find("StandardDaten")
@@ -107,24 +109,39 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
             bba = bw * bd; bld = o
     bldbox = None
     bH = 0.0
-    if bld is not None:
-        bsd = bld.find("StandardDaten")
-        bfx = _ff(bsd, "PosAufBezugsFL/X"); bfy = _ff(bsd, "PosAufBezugsFL/Y")
-        baz = _ff(bsd, "Rotation/AzimutWinkel") or 0.0
-        maz = _ff(msd, "Rotation/AzimutWinkel") or 180.0
-        BW = max((float(e.text) for e in bld.iter("BreiteR") if e.text), default=0.0)
-        BD = max((float(e.text) for e in bld.iter("TiefeR") if e.text), default=0.0)
-        hh = [float(e.text) for e in bld.iter("Hoehe") if e.text]
-        bH = max([h for h in hh if 2.0 <= h <= 40.0] or [6.0])
-        if bfx is not None and BW > 0 and BD > 0:
-            pa = math.radians(baz - maz)
-            wv = (math.cos(pa), math.sin(pa)); dv = (-math.sin(pa), math.cos(pa))
-            corn = []
-            for i, j in [(0, 0), (1, 0), (1, 1), (0, 1)]:
-                cx = bfx + i * BW * wv[0] + j * BD * dv[0] - mcx
-                cy = bfy + i * BW * wv[1] + j * BD * dv[1] - mcy
-                corn.append((cx, cy))
-            bldbox = {"corners": [[round(c[0], 2), round(c[1], 2)] for c in corn], "h": round(bH, 2)}
+    if bld is not None and mods:
+        et = bld.find(".//Etage")
+        eb = et.find(".//Ebene1") if et is not None else None
+        esd = et.find("StandardDaten") if et is not None else None
+        if esd is not None and eb is not None:
+            bfx = _ff(esd, "PosAufBezugsFL/X"); bfy = _ff(esd, "PosAufBezugsFL/Y")
+            baz = _ff(esd, "Rotation/AzimutWinkel") or 0.0
+            bl = _ff(eb, "BreiteL") or 0.0; tl = _ff(eb, "TiefeL") or 0.0
+            brr = _ff(eb, "BreiteR") or 0.0; tr = _ff(eb, "TiefeR") or 0.0
+            hh = [float(e.text) for e in bld.iter("Hoehe") if e.text]
+            H = max([h for h in hh if 2.0 <= h <= 40.0] or [6.0])
+            mc_plan = [(sum(pp[0] for pp in q[:4]) / 4.0, sum(pp[1] for pp in q[:4]) / 4.0) for q in mods]
+            if bfx is not None and brr > 0 and tr > 0:
+                best = None
+                for mode in (-(baz - maz_b), 0.0):
+                    pa = math.radians(mode); wv = (math.cos(pa), math.sin(pa)); dv = (-math.sin(pa), math.cos(pa))
+                    ok = 0
+                    for (mx, my) in mc_plan:
+                        rx = mx - bfx; ry = my - bfy
+                        u = rx * wv[0] + ry * wv[1]; v = rx * dv[0] + ry * dv[1]
+                        if -bl - 2 <= u <= brr + 2 and -tl - 2 <= v <= tr + 2:
+                            ok += 1
+                    if best is None or ok > best[0]:
+                        best = (ok, wv, dv)
+                if best[0] >= 0.9 * len(mc_plan):
+                    wv, dv = best[1], best[2]
+                    corn = []
+                    for (ui, vj) in [(-bl, -tl), (brr, -tl), (brr, tr), (-bl, tr)]:
+                        cx = bfx + ui * wv[0] + vj * dv[0] - mcx
+                        cy = bfy + ui * wv[1] + vj * dv[1] - mcy
+                        corn.append((cx, cy))
+                    bH = H
+                    bldbox = {"corners": [[round(c[0], 2), round(c[1], 2)] for c in corn], "h": round(H, 2)}
 
     # sklon (median Neigung z Modul_Verschaltung)
     tilt = 12.0
