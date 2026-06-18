@@ -95,53 +95,58 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
     if not (mcx is not None and mcy is not None and mBW > 0 and mTF > 0):
         return _gallery(z, names, title)
 
-    # budova box: Etage extenty (BreiteL/R, TiefeL/R) + rotacia -(baz-maz) ALEBO 0;
-    # kresli LEN ak footprint pokryva >=90% modulov (per-subor validacia). Inak ziadny box.
+    # budovy: VSETKY budovy, kazda box (Etage extenty + rotacia) nad svoje panely
     maz_b = _ff(msd, "Rotation/AzimutWinkel") or 180.0
-    bld = None; bba = -1.0
+    buildings = []
+    panel_h = [0.0] * len(mods)
+    mc_plan = [(sum(pp[0] for pp in q[:4]) / 4.0, sum(pp[1] for pp in q[:4]) / 4.0) for q in mods]
+    blds = []
     for o in root.iter("ZeichenObjekt"):
         sd = o.find("StandardDaten")
         if sd is None or "udov" not in (sd.findtext("Bezeichnung") or ""):
             continue
         bw = max((float(e.text) for e in o.iter("BreiteR") if e.text), default=0.0)
         bd = max((float(e.text) for e in o.iter("TiefeR") if e.text), default=0.0)
-        if bw * bd > bba:
-            bba = bw * bd; bld = o
-    bldbox = None
-    bH = 0.0
-    if bld is not None and mods:
-        et = bld.find(".//Etage")
+        blds.append((bw * bd, o))
+    blds.sort(reverse=True, key=lambda x: x[0])
+    for _area, o in blds:
+        et = o.find(".//Etage")
         eb = et.find(".//Ebene1") if et is not None else None
         esd = et.find("StandardDaten") if et is not None else None
-        if esd is not None and eb is not None:
-            bfx = _ff(esd, "PosAufBezugsFL/X"); bfy = _ff(esd, "PosAufBezugsFL/Y")
-            baz = _ff(esd, "Rotation/AzimutWinkel") or 0.0
-            bl = _ff(eb, "BreiteL") or 0.0; tl = _ff(eb, "TiefeL") or 0.0
-            brr = _ff(eb, "BreiteR") or 0.0; tr = _ff(eb, "TiefeR") or 0.0
-            hh = [float(e.text) for e in bld.iter("Hoehe") if e.text]
-            H = max([h for h in hh if 2.0 <= h <= 40.0] or [6.0])
-            mc_plan = [(sum(pp[0] for pp in q[:4]) / 4.0, sum(pp[1] for pp in q[:4]) / 4.0) for q in mods]
-            if bfx is not None and brr > 0 and tr > 0:
-                best = None
-                for mode in (-(baz - maz_b), 0.0):
-                    pa = math.radians(mode); wv = (math.cos(pa), math.sin(pa)); dv = (-math.sin(pa), math.cos(pa))
-                    ok = 0
-                    for (mx, my) in mc_plan:
-                        rx = mx - bfx; ry = my - bfy
-                        u = rx * wv[0] + ry * wv[1]; v = rx * dv[0] + ry * dv[1]
-                        if -bl - 2 <= u <= brr + 2 and -tl - 2 <= v <= tr + 2:
-                            ok += 1
-                    if best is None or ok > best[0]:
-                        best = (ok, wv, dv)
-                if best[0] >= 0.9 * len(mc_plan):
-                    wv, dv = best[1], best[2]
-                    corn = []
-                    for (ui, vj) in [(-bl, -tl), (brr, -tl), (brr, tr), (-bl, tr)]:
-                        cx = bfx + ui * wv[0] + vj * dv[0] - mcx
-                        cy = bfy + ui * wv[1] + vj * dv[1] - mcy
-                        corn.append((cx, cy))
-                    bH = H
-                    bldbox = {"corners": [[round(c[0], 2), round(c[1], 2)] for c in corn], "h": round(H, 2)}
+        if esd is None or eb is None:
+            continue
+        bfx = _ff(esd, "PosAufBezugsFL/X"); bfy = _ff(esd, "PosAufBezugsFL/Y")
+        baz = _ff(esd, "Rotation/AzimutWinkel") or 0.0
+        bl = _ff(eb, "BreiteL") or 0.0; tl = _ff(eb, "TiefeL") or 0.0
+        brr = _ff(eb, "BreiteR") or 0.0; tr2 = _ff(eb, "TiefeR") or 0.0
+        hh = [float(e.text) for e in o.iter("Hoehe") if e.text]
+        H = max([h for h in hh if 2.0 <= h <= 40.0] or [6.0])
+        if bfx is None or brr <= 0 or tr2 <= 0:
+            continue
+        best = None
+        for mode in (-(baz - maz_b), 0.0, (baz - maz_b)):
+            pa = math.radians(mode); wv = (math.cos(pa), math.sin(pa)); dv = (-math.sin(pa), math.cos(pa))
+            inside = []
+            for idx, (mx, my) in enumerate(mc_plan):
+                if panel_h[idx] > 0:
+                    continue
+                rx = mx - bfx; ry = my - bfy
+                u = rx * wv[0] + ry * wv[1]; v = rx * dv[0] + ry * dv[1]
+                if -bl - 2 <= u <= brr + 2 and -tl - 2 <= v <= tr2 + 2:
+                    inside.append(idx)
+            if best is None or len(inside) > len(best[0]):
+                best = (inside, wv, dv)
+        inside, wv, dv = best
+        if not inside:
+            continue
+        for idx in inside:
+            panel_h[idx] = H
+        corn = []
+        for (ui, vj) in [(-bl, -tl), (brr, -tl), (brr, tr2), (-bl, tr2)]:
+            cx = bfx + ui * wv[0] + vj * dv[0] - mcx
+            cy = bfy + ui * wv[1] + vj * dv[1] - mcy
+            corn.append((cx, cy))
+        buildings.append({"corners": [[round(c[0], 2), round(c[1], 2)] for c in corn], "h": round(H, 2)})
 
     # sklon (median Neigung z Modul_Verschaltung)
     tilt = 12.0
@@ -154,7 +159,7 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
     # 3D vrcholy modulov: scene (X = plan_x - mcx, Z = plan_y - mcy), sklon okolo dlhsej hrany
     tr = math.radians(tilt)
     verts = []
-    for q in mods:
+    for _qi, q in enumerate(mods):
         P = [(x - mcx, y - mcy) for (x, y) in q]  # scene XZ
         ea = (P[1][0] - P[0][0], P[1][1] - P[0][1])
         eb = (P[3][0] - P[0][0], P[3][1] - P[0][1])
@@ -166,7 +171,8 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
             ys = [0.0, 0.0, h, h]  # P0,P1 dole; P2,P3 hore (P3 = P0+eb)
         else:
             ys = [0.0, h, h, 0.0]  # P1,P2 hore
-        c = [(P[i][0], ys[i] + bH + 0.25, P[i][1]) for i in range(4)]
+        ph = panel_h[_qi]
+        c = [(P[i][0], ys[i] + ph + 0.25, P[i][1]) for i in range(4)]
         # 2 trojuholniky: 0,1,2 a 0,2,3
         for i in (0, 1, 2, 0, 2, 3):
             verts.extend(c[i])
@@ -177,7 +183,7 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
     subt = "Interaktivny 3D - %d modulov" % n_modules
 
     html = (_TEMPLATE
-            .replace("__BLDBOX__", json.dumps(bldbox) if bldbox else "null")
+            .replace("__BUILDINGS__", json.dumps(buildings))
             .replace("__VERTS__", json.dumps([round(v, 2) for v in verts]))
             .replace("__MBW__", str(round(mBW, 2)))
             .replace("__MTF__", str(round(mTF, 2)))
@@ -207,7 +213,7 @@ _TEMPLATE = r'''<!DOCTYPE html><html lang="sk"><head><meta charset="utf-8"><meta
 <script type="module">
 import * as THREE from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
-const VERTS=__VERTS__, MBW=__MBW__, MTF=__MTF__, BLDBOX=__BLDBOX__;
+const VERTS=__VERTS__, MBW=__MBW__, MTF=__MTF__, BUILDINGS=__BUILDINGS__;
 const cv=document.getElementById('c');
 const renderer=new THREE.WebGLRenderer({canvas:cv,antialias:true,preserveDrawingBuffer:true});
 renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.setSize(innerWidth,innerHeight);
@@ -230,12 +236,14 @@ g.computeVertexNormals();
 const pmat=new THREE.MeshStandardMaterial({color:0x16243f,metalness:.5,roughness:.32,emissive:0x0a1430,emissiveIntensity:.16,side:THREE.DoubleSide});
 const panels=new THREE.Mesh(g,pmat);panels.renderOrder=2;scene.add(panels);
 // budova: kvader (steny + strecha) z footprintu
-if(BLDBOX){
-  const C=BLDBOX.corners, H=BLDBOX.h;
+if(BUILDINGS&&BUILDINGS.length){
   const bv=[];
   function quad(a,b,c,d){bv.push(a[0],a[1],a[2], b[0],b[1],b[2], c[0],c[1],c[2], a[0],a[1],a[2], c[0],c[1],c[2], d[0],d[1],d[2]);}
-  for(let i=0;i<4;i++){const p=C[i],q=C[(i+1)%4];quad([p[0],0,p[1]],[q[0],0,q[1]],[q[0],H,q[1]],[p[0],H,p[1]]);}        // steny
-  quad([C[0][0],H,C[0][1]],[C[1][0],H,C[1][1]],[C[2][0],H,C[2][1]],[C[3][0],H,C[3][1]]);                                 // strecha
+  BUILDINGS.forEach(B=>{
+    const C=B.corners, H=B.h;
+    for(let i=0;i<4;i++){const p=C[i],q=C[(i+1)%4];quad([p[0],0,p[1]],[q[0],0,q[1]],[q[0],H,q[1]],[p[0],H,p[1]]);}
+    quad([C[0][0],H,C[0][1]],[C[1][0],H,C[1][1]],[C[2][0],H,C[2][1]],[C[3][0],H,C[3][1]]);
+  });
   const bg=new THREE.BufferGeometry();bg.setAttribute('position',new THREE.BufferAttribute(new Float32Array(bv),3));bg.computeVertexNormals();
   const wallMat=new THREE.MeshStandardMaterial({color:0xeef0f2,roughness:.85,metalness:0,side:THREE.DoubleSide});
   scene.add(new THREE.Mesh(bg,wallMat));
