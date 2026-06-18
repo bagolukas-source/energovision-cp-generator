@@ -72,6 +72,10 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
     z = zipfile.ZipFile(io.BytesIO(pvprj_bytes))
     names = {n.replace("\\", "/"): n for n in z.namelist()}
 
+    # SPOLAHLIVE: vzdy zobraz PV*SOL vlastny render (ProjScreenShot + pohlady).
+    # Vlastny 3D rekonstrukt (budova/strecha) nie je z dat spolahlivo dosiahnutelny -> vypnuty.
+    return _gallery(z, names, title)
+
     geo = names.get("Visu3D/GeometrischeDaten.xml")
     mapk = names.get("MapExtract.png") or names.get("MapExtract.jpg")
     mods = _plan_modules(z, names)
@@ -203,25 +207,12 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
             else:
                 tri(P3(C[0], H), P3(C[1], H), P3(C[2], H)); tri(P3(C[0], H), P3(C[2], H), P3(C[3], H))
 
-    # 3D vrcholy panelov: flush na sikmej streche, alebo rack na plochej
-    tr = math.radians(tilt)
+    # panely: ploche plne obdlzniky (presny layout z planu), mierne nad satelitom - CISTE, bez zubkovania
     verts = []
-    for _qi, q in enumerate(mods):
-        P = [(x - mcx, y - mcy) for (x, y) in q]
-        pr = panel_roof[_qi]
-        if pr is not None and pr[0]:
-            # sikma strecha: kazdy roh na vysku strechy (flush)
-            pitched, H, c0, bhat, Lb, rise = pr
-            def rfh(p): return H + (Lb / 2.0 - abs(_dot(_sub(p, c0), bhat) - Lb / 2.0)) * tan_p
-            c = [(P[i][0], rfh(P[i]) + 0.2, P[i][1]) for i in range(4)]
-        else:
-            base = pr[1] if pr is not None else 0.0
-            ea = (P[1][0] - P[0][0], P[1][1] - P[0][1]); eb2 = (P[3][0] - P[0][0], P[3][1] - P[0][1])
-            la = math.hypot(*ea); lb = math.hypot(*eb2); depth = min(la, lb); h = depth * math.sin(tr)
-            ys = [0.0, 0.0, h, h] if lb <= la else [0.0, h, h, 0.0]
-            c = [(P[i][0], ys[i] + base + 0.25, P[i][1]) for i in range(4)]
+    for q in mods:
+        P = [(x - mcx, 0.35, y - mcy) for (x, y) in q]
         for i in (0, 1, 2, 0, 2, 3):
-            verts.extend(c[i])
+            verts.extend(P[i])
 
     n_modules = len(mods)
     sat_b64 = base64.b64encode(z.read(mapk)).decode()
@@ -229,7 +220,7 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
     subt = "Interaktivny 3D - %d modulov" % n_modules
 
     html = (_TEMPLATE
-            .replace("__BLDVERTS__", json.dumps([round(v, 2) for v in bld_tris]))
+            .replace("__BLDVERTS__", "[]")
             .replace("__VERTS__", json.dumps([round(v, 2) for v in verts]))
             .replace("__MBW__", str(round(mBW, 2)))
             .replace("__MTF__", str(round(mTF, 2)))
