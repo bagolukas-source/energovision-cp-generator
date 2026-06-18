@@ -6789,6 +6789,22 @@ def webhook_aom_render_chocosuc():
     return jsonify({"ok": True, "pending": True, "message": "Posudok sa generuje na pozadí (~1-2 min)."})
 
 
+@app.route("/webhook/analyza-om-render-web", methods=["POST"])
+def analyza_om_render_web():
+    """Pekny HTML posudok (Chart.js) -> verejny link + Chromium PDF."""
+    if not _aom_v2:
+        return jsonify({"ok": False, "error": "analyza_om_v2 not loaded"}), 500
+    body = request.get_json(silent=True) or {}
+    aid = body.get("analyza_id")
+    if not aid:
+        return jsonify({"ok": False, "error": "analyza_id required"}), 400
+    try:
+        return jsonify(_aom_v2.render_posudok_web(_sb(), aid))
+    except Exception as e:
+        log.exception("[analyza-om-render-web] failed")
+        return jsonify({"ok": False, "error": str(e)[:400]}), 500
+
+
 @app.route("/webhook/analyza-om-render-orkestra", methods=["POST"])
 def webhook_aom_render_orkestra():
     """NOVÝ posudok — Orkestra HTML šablóna → PDF (WeasyPrint) + DOCX (LibreOffice).

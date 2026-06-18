@@ -2498,3 +2498,62 @@ def export_intervals(sb, analyza_id: str, pv_kwp: float = None, bess_kwh: float 
         "max_soc_kwh": round(max(soc), 1) if soc else 0,
         "bytes": len(payload),
     }
+
+
+def render_posudok_web(sb, analyza_id: str) -> dict:
+    """Pekny HTML posudok (Chart.js) -> verejny link (storage HTML) + PDF cez Gotenberg Chromium."""
+    import os, base64, datetime, requests as _rq
+    import posudok_web as _pw
+    a = sb.table("analyza_om").select("*, customers(first_name,last_name,company_name)").eq("id", analyza_id).single().execute().data
+    if not a:
+        raise ValueError("Analyza nenajdena")
+    econ = a.get("econ_results") or {}
+    variants = (econ.get("full_response") or {}).get("variants") or []
+    if not variants:
+        v_res = sb.table("analyza_om_variants").select("*").eq("analyza_id", analyza_id).order("position").execute()
+        for v in (v_res.data or []):
+            variants.append({"id": v.get("id"), "label": v.get("name"), "pv_kwp": float(v.get("fve_kwp") or 0),
+                "bess_kwh": float(v.get("bess_kwh") or 0), "capex_total_eur": float(v.get("capex_eur") or 0),
+                "dotacia_eur": float(v.get("result_dotacia_eur") or 0), "npv_eur": float(v.get("result_npv_eur_base") or 0),
+                "irr_pct": float(v.get("result_irr_pct_base") or 0), "payback_simple_y": float(v.get("result_payback_y_base") or 0),
+                "samospotreba_pct": float(v.get("result_samosp_pct") or 0), "samostatnost_pct": float(v.get("result_samostat_pct") or 0),
+                "import_mwh": float(v.get("result_import_mwh") or 0), "export_mwh": float(v.get("result_export_mwh") or 0),
+                "saving_y1_eur": float(v.get("result_saving_y1_eur") or 0)})
+    if not variants:
+        raise ValueError("Ziadne varianty — spusti simulaciu")
+    ctx = build_orkestra_context(a, variants, analyza_id)
+    cust = a.get("customers") or {}
+    client = cust.get("company_name") or (((cust.get("first_name") or "") + " " + (cust.get("last_name") or "")).strip()) or a.get("name") or "Klient"
+    html = _pw.build_web_posudok_html(ctx, {"client_name": client})
+
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    base = f"analyza_om/{analyza_id}/posudok_web_{ts}"
+    hdr = {"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}", "x-upsert": "true"}
+    # 1) HTML do public storage = zdielatelny link
+    _rq.post(f"{SUPABASE_URL}/storage/v1/object/documents/{base}.html",
+             headers={**hdr, "Content-Type": "text/html; charset=utf-8"}, data=html.encode("utf-8"), timeout=40)
+    html_url = f"{SUPABASE_URL}/storage/v1/object/public/documents/{base}.html"
+    # 2) PDF cez Gotenberg Chromium (spusti JS/Chart.js)
+    pdf_url = None
+    GURL = os.environ.get("GOTENBERG_URL", "").rstrip("/")
+    if GURL:
+        g_user = os.environ.get("GOTENBERG_USER", ""); g_pass = os.environ.get("GOTENBERG_PASS", "")
+        g_auth = (g_user, g_pass) if g_user else None
+        try:
+            files = {"files": ("index.html", html, "text/html")}
+            data = {"waitForExpression": "window.__ready === true", "waitDelay": "0.5s",
+                    "paperWidth": "8.27", "paperHeight": "11.69", "marginTop": "0.3", "marginBottom": "0.3",
+                    "marginLeft": "0.3", "marginRight": "0.3", "printBackground": "true", "preferCssPageSize": "false"}
+            gr = _rq.post(f"{GURL}/forms/chromium/convert/html", files=files, data=data, auth=g_auth, timeout=90)
+            if gr.ok and gr.content[:4] == b"%PDF":
+                _rq.post(f"{SUPABASE_URL}/storage/v1/object/documents/{base}.pdf",
+                         headers={**hdr, "Content-Type": "application/pdf"}, data=gr.content, timeout=40)
+                pdf_url = f"{SUPABASE_URL}/storage/v1/object/public/documents/{base}.pdf"
+        except Exception:
+            log.exception("render_posudok_web gotenberg failed")
+    try:
+        sb.table("analyza_om").update({"posudok_orkestra_pdf_url": pdf_url or html_url,
+            "posudok_orkestra_generated_at": datetime.datetime.utcnow().isoformat()}).eq("id", analyza_id).execute()
+    except Exception:
+        pass
+    return {"ok": True, "html_url": html_url, "pdf_url": pdf_url, "verejny_link": html_url}
