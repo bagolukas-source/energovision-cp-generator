@@ -80,10 +80,10 @@ ROWS.forEach(r=>{
   panels.add(g);
 });
 scene.add(panels);
-// default pohlad: takmer zhora, sever hore (ako satelitna mapa) - bez "zrkadla" z naklonu
-let _ex=1; ROWS.forEach(r=>{_ex=Math.max(_ex,Math.abs(r.x),Math.abs(r.z));});
-const _D=_ex*2.3+40;
-cam.position.set(0,_D*0.96,_D*0.30); cam.up.set(0,1,0); ctrl.target.set(0,0,0); ctrl.update();
+// default pohlad: sikmy vtaci pohlad, adaptivny na velkost sceny (ramuje panely)
+let _ex=12; ROWS.forEach(r=>{if(isFinite(r.x)&&isFinite(r.z))_ex=Math.max(_ex,Math.abs(r.x),Math.abs(r.z));});
+const _D=_ex*2.5+60;
+cam.position.set(_D*0.34,_D*0.62,_D*0.70); cam.up.set(0,1,0); ctrl.target.set(0,0,0); ctrl.update();
 addEventListener('resize',()=>{cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
 document.getElementById('shot').onclick=()=>{renderer.render(scene,cam);const a=document.createElement('a');a.download='FVE_3D_'+Date.now()+'.png';a.href=cv.toDataURL('image/png');a.click();};
 (function loop(){ctrl.update();renderer.render(scene,cam);requestAnimationFrame(loop);})();
