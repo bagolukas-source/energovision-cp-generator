@@ -48,10 +48,15 @@ scene.add(new THREE.HemisphereLight(0xffffff,0x9ab07a,0.95));
 const sun=new THREE.DirectionalLight(0xfff4e0,1.15);sun.position.set(90,200,120);sun.castShadow=true;
 sun.shadow.mapSize.set(2048,2048);sun.shadow.camera.left=-300;sun.shadow.camera.right=300;sun.shadow.camera.top=300;sun.shadow.camera.bottom=-300;sun.shadow.camera.far=900;scene.add(sun);
 // satelit (samostatny global SATB64 string)
-if(SAT){
-  const tex=new THREE.TextureLoader().load('data:image/jpeg;base64,'+SATB64);tex.colorSpace=THREE.SRGBColorSpace;
-  const gr=new THREE.Mesh(new THREE.PlaneGeometry(SAT.w,SAT.h),new THREE.MeshStandardMaterial({map:tex,roughness:1}));
-  gr.rotation.x=-Math.PI/2;gr.position.set(SAT.cx,0,SAT.cz);gr.receiveShadow=true;scene.add(gr);
+if(SAT&&SAT.quad){
+  const q=SAT.quad;
+  const tex=new THREE.TextureLoader().load('data:image/jpeg;base64,'+SATB64);tex.colorSpace=THREE.SRGBColorSpace;tex.flipY=false;
+  const g=new THREE.BufferGeometry();
+  g.setAttribute('position',new THREE.BufferAttribute(new Float32Array([q[0][0],0,q[0][1],q[1][0],0,q[1][1],q[2][0],0,q[2][1],q[0][0],0,q[0][1],q[2][0],0,q[2][1],q[3][0],0,q[3][1]]),3));
+  g.setAttribute('uv',new THREE.BufferAttribute(new Float32Array([0,0,1,0,1,1,0,0,1,1,0,1]),2));
+  g.computeVertexNormals();
+  const gr=new THREE.Mesh(g,new THREE.MeshStandardMaterial({map:tex,roughness:1,side:THREE.DoubleSide}));
+  gr.receiveShadow=true;scene.add(gr);
 }else{
   const gr=new THREE.Mesh(new THREE.PlaneGeometry(400,400),new THREE.MeshStandardMaterial({color:0x9ccd6e}));gr.rotation.x=-Math.PI/2;gr.receiveShadow=true;scene.add(gr);
 }
@@ -140,7 +145,7 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
     mcy = sum(t[1] for t in tabs) / len(tabs)
     n_modules = sum(t[3] for t in tabs)
 
-    # --- satelit: self-kalibracia na strechu ---
+    # --- satelit: self-kalibracia (orientovany obdlznik strechy <-> podorys budovy, 4-rohove mapovanie) ---
     sat = read("MapExtract.jpg")
     sat_b64 = ""
     sat_meta = None
@@ -148,51 +153,51 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
         try:
             import numpy as np
             from PIL import Image
+            from scipy import ndimage
             im = Image.open(io.BytesIO(sat)).convert("RGB")
             arr = np.asarray(im).astype("int16")
             IH, IW = arr.shape[:2]
-            bright = (arr.min(2) > 165) & ((arr.max(2) - arr.min(2)) < 40)
-            ys, xs = np.where(bright)
-            rx0, rx1 = np.percentile(xs, 4), np.percentile(xs, 96)
-            ry0, ry1 = np.percentile(ys, 4), np.percentile(ys, 96)
-            rcx, rcy = (rx0 + rx1) / 2, (ry0 + ry1) / 2
-            rW, rH = rx1 - rx0, ry1 - ry0
-            corn = [(bx + ct * a - st * b, by + st * a + ct * b) for a, b in [(0, 0), (BW, 0), (BW, BD), (0, BD)]]
-            fcx = sum(c[0] for c in corn) / 4
-            fcy = sum(c[1] for c in corn) / 4
-            fW = max(c[0] for c in corn) - min(c[0] for c in corn)
-            fH = max(c[1] for c in corn) - min(c[1] for c in corn)
-            sx, sy = rW / fW, rH / fH  # px/m
-            # flip: vyber kombinaciu kde najviac stolov padne do strechy
-            best = None
-            for fxs in (1, -1):
-                for fys in (1, -1):
-                    ins = 0
-                    for (cx, cy, a, nm) in tabs:
-                        px2 = rcx + fxs * sx * (cx - fcx)
-                        py2 = rcy + fys * sy * (cy - fcy)
-                        if rx0 <= px2 <= rx1 and ry0 <= py2 <= ry1:
-                            ins += 1
-                    if best is None or ins > best[0]:
-                        best = (ins, fxs, fys)
-            _, fxs, fys = best
-            # prevrat obrazok aby mapovanie bolo priame (positivne)
-            if fxs < 0:
-                im = im.transpose(Image.FLIP_LEFT_RIGHT); rcx = IW - rcx
-            if fys < 0:
-                im = im.transpose(Image.FLIP_TOP_BOTTOM); rcy = IH - rcy
-            buf = io.BytesIO(); im.save(buf, "JPEG", quality=85)
-            sat_b64 = base64.b64encode(buf.getvalue()).decode()
-            # plane v terene: image (px,py) -> terrain (fcx+(px-rcx)/sx, fcy+(py-rcy)/sy)
-            sat_cx_terr = fcx + (IW / 2 - rcx) / sx
-            sat_cy_terr = fcy + (IH / 2 - rcy) / sy
-            sat_meta = {
-                "cx": round(float(sat_cx_terr - mcx), 2),
-                "cz": round(float(sat_cy_terr - mcy), 2),
-                "w": round(float(IW / sx), 1),
-                "h": round(float(IH / sy), 1),
-                "inside": int(best[0]), "total": len(tabs),
-            }
+            bright = (arr.min(2) > 185) & ((arr.max(2) - arr.min(2)) < 28)
+            bright = ndimage.binary_closing(bright, iterations=3)
+            lbl, nlab = ndimage.label(bright)
+            if nlab >= 1:
+                szs = ndimage.sum(np.ones_like(lbl), lbl, range(1, nlab + 1))
+                roofmask = (lbl == int(np.argmax(szs)) + 1)
+                ys, xs = np.where(roofmask)
+                cxr, cyr = xs.mean(), ys.mean()
+                Pm = np.stack([xs - cxr, ys - cyr])
+                _, evec = np.linalg.eigh(np.cov(Pm))
+                majorPx = evec[:, 1]; minorPx = evec[:, 0]
+                Lmaj = np.percentile(Pm.T @ majorPx, 98) - np.percentile(Pm.T @ majorPx, 2)
+                Lmin = np.percentile(Pm.T @ minorPx, 98) - np.percentile(Pm.T @ minorPx, 2)
+                fcx = bx + ct * BW / 2 - st * BD / 2
+                fcy = by + st * BW / 2 + ct * BD / 2
+                majT = np.array([ct, st]); minT = np.array([-st, ct])
+                sL = Lmaj / max(BW, BD); sS = Lmin / min(BW, BD)
+                fc = np.array([fcx, fcy]); cc = np.array([cxr, cyr])
+                best = None
+                for sm in (1, -1):
+                    for sn in (1, -1):
+                        cA = sm * sL * majorPx; cB = sn * sS * minorPx
+                        ins = 0
+                        for (cx, cy, a, nm) in tabs:
+                            off = np.array([cx, cy]) - fc
+                            pp = cc + (off @ majT) * cA + (off @ minT) * cB
+                            ix, iy = int(pp[0]), int(pp[1])
+                            if 0 <= ix < IW and 0 <= iy < IH and roofmask[iy, ix]:
+                                ins += 1
+                        if best is None or ins > best[0]:
+                            best = (ins, sm, sn)
+                _, sm, sn = best
+                M = np.column_stack([sm * sL * majorPx, sn * sS * minorPx])
+                Minv = np.linalg.inv(M)
+                quad = []
+                for (px, py) in [(0, 0), (IW, 0), (IW, IH), (0, IH)]:
+                    ab = Minv @ (np.array([px, py], dtype=float) - cc)
+                    t = fc + ab[0] * majT + ab[1] * minT
+                    quad.append([round(float(t[0] - mcx), 2), round(float(t[1] - mcy), 2)])
+                sat_b64 = base64.b64encode(sat).decode()
+                sat_meta = {"quad": quad, "inside": int(best[0]), "total": len(tabs)}
         except Exception:
             sat_meta = None
     if not sat_b64 and sat:
