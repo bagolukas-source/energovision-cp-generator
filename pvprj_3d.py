@@ -103,6 +103,7 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
     bldobj = None
     mapobj = None
     rows = []
+    skylights = []
     for o in root.findall(".//ZeichenObjekt"):
         sd = o.find("StandardDaten")
         if sd is None:
@@ -113,6 +114,12 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
             bldobj = o
         if nm == "Otevřené prostranství (Výřez mapy)" or (mapobj is None and typ == "65"):
             mapobj = o
+        if typ == "85":
+            sp = sd.find("PosAufBezugsFL")
+            if sp is not None:
+                sx, sy = _f(sp, "X"), _f(sp, "Y")
+                if sx is not None and sy is not None:
+                    skylights.append((sx, sy))
         if typ == "38":
             for r in o.findall(".//ModulreiheSparVar"):
                 rp = r.find("PosAufBezugsFL")
@@ -160,53 +167,77 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
             im = Image.open(io.BytesIO(sat)).convert("RGB")
             arr = np.asarray(im).astype("int16")
             IH, IW = arr.shape[:2]
-            bright = (arr.min(2) > 185) & ((arr.max(2) - arr.min(2)) < 28)
-            bright = ndimage.binary_closing(bright, iterations=3)
-            lbl, nlab = ndimage.label(bright)
+            mn = arr.min(2); rng = arr.max(2) - arr.min(2)
+            white = (mn > 185) & (rng < 35)
+            white = ndimage.binary_opening(white, iterations=2)
+            lbl, nlab = ndimage.label(white)
             if nlab >= 1:
                 szs = ndimage.sum(np.ones_like(lbl), lbl, range(1, nlab + 1))
                 roofmask = (lbl == int(np.argmax(szs)) + 1)
                 ys, xs = np.where(roofmask)
-                cxr, cyr = xs.mean(), ys.mean()
-                Pm = np.stack([xs - cxr, ys - cyr])
+                cc = np.array([xs.mean(), ys.mean()])
+                Pm = np.stack([xs - cc[0], ys - cc[1]])
                 _, evec = np.linalg.eigh(np.cov(Pm))
                 majorPx = evec[:, 1]; minorPx = evec[:, 0]
-                Lmaj = np.percentile(Pm.T @ majorPx, 98) - np.percentile(Pm.T @ majorPx, 2)
-                Lmin = np.percentile(Pm.T @ minorPx, 98) - np.percentile(Pm.T @ minorPx, 2)
-                fcx = bx + ct * BW / 2 - st * BD / 2
-                fcy = by + st * BW / 2 + ct * BD / 2
-                majT = np.array([ct, st]); minT = np.array([-st, ct])
-                sL = Lmaj / max(BW, BD); sS = Lmin / min(BW, BD)
-                fc = np.array([fcx, fcy]); cc = np.array([cxr, cyr])
-                # DETERMINISTICKY flip: zarovnaj PCA osi na smer odvodeny z azimutu mapy
-                # (mapa rotuje obraz o maz; teren smer d -> obraz R(maz)*d, skalovane IW/mW, IH/mH)
-                maz = 180.0; mW = 661.0; mH = 411.0
-                if mapobj is not None:
-                    msd = mapobj.find("StandardDaten")
-                    maz = _f(msd.find("Rotation"), "AzimutWinkel") or 180.0
-                    mW = max((float(e.text) for e in mapobj.iter() if e.tag == "BreiteR" and e.text), default=661.0)
-                    mH = max((float(e.text) for e in mapobj.iter() if e.tag == "TiefeR" and e.text), default=411.0)
-                ma = math.radians(maz); cma, sma = math.cos(ma), math.sin(ma)
-                exp_maj = np.array([(cma * majT[0] - sma * majT[1]) * IW / mW, (sma * majT[0] + cma * majT[1]) * IH / mH])
-                exp_min = np.array([(cma * minT[0] - sma * minT[1]) * IW / mW, (sma * minT[0] + cma * minT[1]) * IH / mH])
-                if np.dot(majorPx, exp_maj) < 0: majorPx = -majorPx
-                if np.dot(minorPx, exp_min) < 0: minorPx = -minorPx
-                ins = 0; cA0 = sL * majorPx; cB0 = sS * minorPx
-                for (cx, cy, a, nm) in tabs:
-                    off = np.array([cx, cy]) - fc
-                    pp = cc + (off @ majT) * cA0 + (off @ minT) * cB0
-                    ix, iy = int(pp[0]), int(pp[1])
-                    if 0 <= ix < IW and 0 <= iy < IH and roofmask[iy, ix]: ins += 1
-                best = (ins, 1, 1)
-                M = np.column_stack([sL * majorPx, sS * minorPx])
-                Minv = np.linalg.inv(M)
+                pjm = Pm.T @ majorPx; pjn = Pm.T @ minorPx
+                Lmaj = np.percentile(pjm, 99.5) - np.percentile(pjm, 0.5)
+                Lmin = np.percentile(pjn, 99.5) - np.percentile(pjn, 0.5)
+                notwhite = (mn < 175)
+
+                def px_of(ex, ey, swap, sM, sm):
+                    fW = ex / BW - 0.5; fD = ey / BD - 0.5
+                    if swap: fW, fD = fD, fW
+                    return cc + sM * fW * Lmaj * majorPx + sm * fD * Lmin * minorPx
+
+                def sky_hits(swap, sM, sm):
+                    hit = 0
+                    for (ex, ey) in skylights:
+                        p = px_of(ex, ey, swap, sM, sm)
+                        x, y = int(p[0]), int(p[1])
+                        if 0 <= x < IW and 0 <= y < IH:
+                            x0, x1 = max(0, x - 3), min(IW, x + 4)
+                            y0, y1 = max(0, y - 3), min(IH, y + 4)
+                            if notwhite[y0:y1, x0:x1].any():
+                                hit += 1
+                    return hit
+
+                def mod_in_roof(swap, sM, sm):
+                    ins = 0
+                    for (px0, py0, anz, nmod) in rows:
+                        p = px_of(px0 + anz * MW / 2.0, py0 + ROWD / 2.0, swap, sM, sm)
+                        ix, iy = int(p[0]), int(p[1])
+                        if 0 <= ix < IW and 0 <= iy < IH and roofmask[iy, ix]:
+                            ins += 1
+                    return ins
+
+                # disambiguacia orientacie: svetliky musia sadnut na sive znacky strechy
+                # (asymetricky vzor -> jednoznacne); fallback = max panelov v maske
+                use_sky = len(skylights) >= 5
+                best = None
+                for swap in (0, 1):
+                    for sM in (1, -1):
+                        for sm in (1, -1):
+                            sc = sky_hits(swap, sM, sm) if use_sky else mod_in_roof(swap, sM, sm)
+                            if best is None or sc > best[0]:
+                                best = (sc, swap, sM, sm)
+                _, swap, sM, sm = best
+
+                # linearny map (ex,ey)->pixel a (ex,ey)->scene -> 4-rohovy satelit quad
+                p00 = px_of(0.0, 0.0, swap, sM, sm)
+                A2 = np.column_stack([px_of(1.0, 0.0, swap, sM, sm) - p00,
+                                      px_of(0.0, 1.0, swap, sM, sm) - p00])
+                A2inv = np.linalg.inv(A2)
+                As = np.array([[ct, -st], [st, ct]])
+                bs = np.array([bx - mcx, by - mcy])
                 quad = []
-                for (px, py) in [(0, 0), (IW, 0), (IW, IH), (0, IH)]:
-                    ab = Minv @ (np.array([px, py], dtype=float) - cc)
-                    t = fc + ab[0] * majT + ab[1] * minT
-                    quad.append([round(float(t[0] - mcx), 2), round(float(t[1] - mcy), 2)])
+                for (cpx, cpy) in [(0, 0), (IW, 0), (IW, IH), (0, IH)]:
+                    exy = A2inv @ (np.array([cpx, cpy], dtype=float) - p00)
+                    sc = As @ exy + bs
+                    quad.append([round(float(sc[0]), 2), round(float(sc[1]), 2)])
+                ins = mod_in_roof(swap, sM, sm)
                 sat_b64 = base64.b64encode(sat).decode()
-                sat_meta = {"quad": quad, "inside": int(best[0]), "total": len(tabs)}
+                sat_meta = {"quad": quad, "inside": int(ins), "total": len(rows),
+                            "skyhit": int(best[0]), "nsky": len(skylights)}
         except Exception:
             sat_meta = None
     if not sat_b64 and sat:
