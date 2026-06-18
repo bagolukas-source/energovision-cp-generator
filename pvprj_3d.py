@@ -69,6 +69,7 @@ const panels=new THREE.Group();
 ROWS.forEach(r=>{
   const w=r.wm||(Math.max(1,r.w)*1.995), sd=(r.dm||2.436)*0.48;
   const g=new THREE.Group();
+  const DEPTH=r.dm||2.436;
   [[-1,-DEPTH/4],[1,DEPTH/4]].forEach(sl=>{   // A-ram: vrchol v strede, sklony k vonkajsim hranam (V/Z)
     let mat=fallbackMat;
     if(baseTex){const t=baseTex.clone();t.needsUpdate=true;t.repeat.set(Math.max(1,r.w),1);mat=new THREE.MeshStandardMaterial({map:t,metalness:.35,roughness:.4});}
