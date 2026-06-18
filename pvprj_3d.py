@@ -123,15 +123,48 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
     root = ET.fromstring(geo)
     objs = [o for o in root.iter("ZeichenObjekt") if o.find("StandardDaten") is not None]
 
-    # autoritativny sklon/azimut: Modul_Verschaltung.xml (Neigung=sklon, Azimut=smer)
+    # AUTORITATIVNA geometria: Modul_Verschaltung.xml -> plochy strechy (Azimut+Neigung per plocha)
     import re as _re
     _mv = read("Visu3D/Modul_Verschaltung.xml")
-    _neig = []; _azis = set()
+    _areas = []; _allneig = []
     if _mv:
         _t = _mv.decode("utf-8", "ignore")
-        _neig = [math.degrees(float(x)) for x in _re.findall(r"<Neigung>([^<]+)</Neigung>", _t)]
-        _azis = {round(math.degrees(float(x))) % 360 for x in _re.findall(r"<Azimut>([^<]+)</Azimut>", _t)}
-    fallback_tilt = (sorted(_neig)[len(_neig) // 2] if _neig else 10.0)
+        for _m in _re.finditer(r"<AusrichtungStatisch>(.*?)</AusrichtungStatisch>", _t, _re.S):
+            _seg = _m.group(1)
+            _az = _re.search(r"<Azimut>([^<]+)</Azimut>", _seg); _ne = _re.search(r"<Neigung>([^<]+)</Neigung>", _seg)
+            if _az and _ne:
+                _areas.append((round(math.degrees(float(_az.group(1)))) % 360, math.degrees(float(_ne.group(1)))))
+        _allneig = [math.degrees(float(x)) for x in _re.findall(r"<Neigung>([^<]+)</Neigung>", _t)]
+    fallback_tilt = (sorted(_allneig)[len(_allneig) // 2] if _allneig else 10.0)
+    _area_az = {a for a, _t2 in _areas}
+    # mnozina azimutov realnych poli (na rozlisenie A-ramu vs samostatne pole)
+    _field_az = set()
+    for _o in objs:
+        _sd = _o.find("StandardDaten")
+        if _sd is not None and _sd.findtext("AnwObjTyp") in ("33", "38"):
+            _a = _ff(_sd, "Rotation/AzimutWinkel")
+            if _a is not None:
+                _field_az.add(round(_a) % 360)
+
+    def _ang_d(a, b):
+        return abs((a - b + 180) % 360 - 180)
+
+    def _tilt_for(A, zen):
+        # sklon = Neigung najblizsej plochy (podla azimutu, A alebo A+180); inak z field ZenitWinkel
+        if _areas:
+            best = min(_areas, key=lambda pr: min(_ang_d(pr[0], A), _ang_d(pr[0], A + 180)))
+            return max(0.0, min(60.0, best[1]))
+        if zen is not None:
+            if 3 < zen < 48: return round(zen, 1)
+            if zen >= 48: return round(90 - zen, 1)
+        return fallback_tilt
+
+    def _aframe_for(A):
+        op = round((A + 180) % 360)
+        return (op in _area_az) and (op not in _field_az)
+
+    def _yaw_for(az):
+        return round(math.degrees(math.atan2(math.cos(math.radians(2 * baz - az)), math.sin(math.radians(2 * baz - az)))), 1)
 
     # --- budova: objekt s "udov" v nazve a najvacsim footprintom; fallback = najvacsi footprint ---
     bld = None; bld_area = -1.0
@@ -184,10 +217,9 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
         mrsv = o.findall(".//ModulreiheSparVar")
         if mrsv:
             f_az = _ff(sd, "Rotation/AzimutWinkel"); f_ze = _ff(sd, "Rotation/ZenitWinkel")
-            tilt = (90.0 - f_ze) if (f_ze is not None and f_ze > 5) else fallback_tilt
-            tilt = max(0.0, min(60.0, tilt))
             az0 = f_az if f_az is not None else baz
-            aframe = (f_ze is None or f_ze < 5) and (round((az0 + 180) % 360) in _azis)
+            tilt = round(_tilt_for(az0, f_ze), 1)
+            aframe = _aframe_for(az0)
             for ri, r in enumerate(mrsv):
                 rp = r.find("PosAufBezugsFL")
                 if rp is None:
@@ -197,8 +229,7 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
                     continue
                 anz = max(1, int(_ff(r, "AnzModuleHorz") or 1))
                 az = az0 + 180 if (aframe and ri % 2) else az0
-                yaw = math.degrees(math.atan2(math.cos(math.radians(2 * baz - az)), math.sin(math.radians(2 * baz - az))))
-                rows.append((ex + anz * MW / 2.0, ey + ROWD / 2.0, anz, anz * MW, ROWD, round(tilt, 1), round(yaw, 1)))
+                rows.append((ex + anz * MW / 2.0, ey + ROWD / 2.0, anz, anz * MW, ROWD, tilt, _yaw_for(az)))
             continue
         mf = o.find(".//ModulFormation")
         if mf is not None:
@@ -208,9 +239,9 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
                 continue
             faz = _ff(sd, "Rotation/AzimutWinkel")
             f_ze = _ff(sd, "Rotation/ZenitWinkel")
-            g_tilt = max(0.0, min(60.0, (90.0 - f_ze) if (f_ze is not None and f_ze > 5) else fallback_tilt))
             g_az = faz if faz is not None else baz
-            g_yaw = math.degrees(math.atan2(math.cos(math.radians(2 * baz - g_az)), math.sin(math.radians(2 * baz - g_az))))
+            g_tilt = round(_tilt_for(g_az, f_ze), 1)
+            g_yaw = _yaw_for(g_az)
             ab = mf.find("AbstandModule")
             gH = _ff(ab, "Horizontal") or 0.02
             gV = _ff(ab, "Vertikal") or 0.02
