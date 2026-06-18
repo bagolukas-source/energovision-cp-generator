@@ -356,6 +356,10 @@
     <p class="info-line">⚠ <strong>Daňový odpis</strong> sa pri prijatí dotácie počíta lineárne 6 r. <strong>iba z Net CAPEX</strong> ({{ net_capex_eur|format_currency }}), nie z plnej investície.</p>
   </div>
 
+  <div class="dotacia-formula" style="margin-top:10px; border-left:4px solid #10ac41;">
+    <p><strong>💶 Daňový štít (odpis):</strong> 6-ročný lineárny odpis zo základu {{ net_capex_eur|format_currency }} pri DPPO {{ dppo_pct|default(21) }} % = <strong>{{ tax_shield_annual_eur|format_currency }}/rok</strong> (roky 1–6), spolu <strong>{{ tax_shield_total_eur|format_currency }}</strong> daňovej úspory. Táto úspora je už zahrnutá v NPV, IRR aj návratnosti.</p>
+  </div>
+
   <table class="dotacia-table">
     <thead>
       <tr>
@@ -603,7 +607,7 @@
     <p><strong>Spot ceny</strong> — OKTE DAM 2025 hodinové (priemer {{ spot_avg_eur_mwh|round|int }} €/MWh).</p>
     <p><strong>Tarify</strong> — ÚRSO 2026 (distribúcia + TPS + nájomné + straty).</p>
     <p><strong>Ekonomika</strong> — NPV {{ analysis_years }} r., diskont 6 %, OPEX 1.5–2.0 % CAPEX/rok, degradácia FVE 0.5 %/rok, BESS 2 %/rok.</p>
-    <p><strong>Daňový odpis</strong> — lineárny 6 r. pri DPPO 22 % (novela 2025 pre MSP).</p>
+    <p><strong>Daňový odpis</strong> — lineárny 6 r. pri DPPO 21 % (štandard do 5 mil. € obratu).</p>
   </div>
 
   <table class="assumptions-table" style="width:100%; border-collapse:collapse; margin:14px 0 8px; font-size:12px;">
@@ -620,7 +624,8 @@
       <tr><td style="padding:5px 8px;">Degradácia FVE</td><td style="padding:5px 8px; text-align:right;">0,5 %/rok</td><td style="padding:5px 8px;">Výrobca panelov</td></tr>
       <tr><td style="padding:5px 8px;">Priemerná spotová cena</td><td style="padding:5px 8px; text-align:right;">{{ spot_avg_eur_mwh|round|int }} €/MWh</td><td style="padding:5px 8px;">OKTE DAM 2025</td></tr>
       <tr><td style="padding:5px 8px;">Distribučné tarify</td><td style="padding:5px 8px; text-align:right;">ÚRSO 2026</td><td style="padding:5px 8px;">Cenové rozhodnutie ÚRSO</td></tr>
-      <tr><td style="padding:5px 8px;">Daňový odpis</td><td style="padding:5px 8px; text-align:right;">6 r. lineárny</td><td style="padding:5px 8px;">Zákon o dani z príjmov</td></tr>
+      <tr><td style="padding:5px 8px;">Daňový odpis (štít)</td><td style="padding:5px 8px; text-align:right;">6 r. · {{ tax_shield_annual_eur|format_currency }}/rok</td><td style="padding:5px 8px;">Zákon o dani z príjmov</td></tr>
+      <tr><td style="padding:5px 8px;">DPPO sadzba</td><td style="padding:5px 8px; text-align:right;">{{ dppo_pct|default(21) }} %</td><td style="padding:5px 8px;">do 5 mil. € obratu</td></tr>
       <tr><td style="padding:5px 8px;">Ročná spotreba OM</td><td style="padding:5px 8px; text-align:right;">{{ (annual_kwh/1000)|round|int }} MWh</td><td style="padding:5px 8px;">15-min dáta / faktúra klienta</td></tr>
       <tr><td style="padding:5px 8px;">MRK odberného miesta</td><td style="padding:5px 8px; text-align:right;">{{ mrk_kw|round|int }} kW</td><td style="padding:5px 8px;">Zmluva s distribútorom</td></tr>
     </tbody>
