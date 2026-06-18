@@ -64,20 +64,21 @@ if(SAT&&SAT.quad){
 let baseTex=null;
 if(PTEX){baseTex=new THREE.TextureLoader().load('data:image/jpeg;base64,'+PTEX);baseTex.colorSpace=THREE.SRGBColorSpace;baseTex.wrapS=baseTex.wrapT=THREE.RepeatWrapping;baseTex.anisotropy=4;}
 const fallbackMat=new THREE.MeshStandardMaterial({color:0x16233f,metalness:.5,roughness:.3,emissive:0x0a1530,emissiveIntensity:.18});
-const TILT=10*Math.PI/180, ANG=-ANGLE*Math.PI/180;
 const panels=new THREE.Group();
 ROWS.forEach(r=>{
-  const w=r.wm||(Math.max(1,r.w)*1.995), sd=(r.dm||2.436)*0.48;
+  const w=r.wm||(Math.max(1,r.w)*1.995), dep=r.dm||2.436;
+  const tilt=(r.tilt!=null?r.tilt:10)*Math.PI/180;
+  const yaw=(r.yaw!=null?r.yaw:0)*Math.PI/180;
+  let mat=fallbackMat;
+  if(baseTex){const t=baseTex.clone();t.needsUpdate=true;t.repeat.set(Math.max(1,r.w),1);mat=new THREE.MeshStandardMaterial({map:t,metalness:.35,roughness:.4});}
+  const m=new THREE.Mesh(new THREE.BoxGeometry(w,0.04,dep),mat);
+  m.castShadow=true;m.receiveShadow=true;
+  m.rotation.x=-tilt;                      // sklon: +Z hrana dole = panel sa pozera v smere downslope (azimut)
+  m.position.y=Math.sin(tilt)*dep/2+0.02;  // zdvihni aby spodna hrana sedela na streche
   const g=new THREE.Group();
-  const DEPTH=r.dm||2.436;
-  [[-1,-DEPTH/4],[1,DEPTH/4]].forEach(sl=>{   // A-ram: vrchol v strede, sklony k vonkajsim hranam (V/Z)
-    let mat=fallbackMat;
-    if(baseTex){const t=baseTex.clone();t.needsUpdate=true;t.repeat.set(Math.max(1,r.w),1);mat=new THREE.MeshStandardMaterial({map:t,metalness:.35,roughness:.4});}
-    const m=new THREE.Mesh(new THREE.BoxGeometry(w,0.05,sd),mat);
-    m.castShadow=true;m.receiveShadow=true;m.rotation.x=sl[0]*TILT;m.position.z=sl[1];m.position.y=sd/2*Math.sin(TILT);
-    g.add(m);
-  });
-  g.position.set(r.x,0.30,r.z);g.rotation.y=ANG;
+  g.add(m);
+  g.position.set(r.x,0.30,r.z);
+  g.rotation.y=yaw;
   panels.add(g);
 });
 scene.add(panels);
@@ -121,6 +122,16 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
         raise ValueError("V .pvprj chyba Visu3D/GeometrischeDaten.xml")
     root = ET.fromstring(geo)
     objs = [o for o in root.iter("ZeichenObjekt") if o.find("StandardDaten") is not None]
+
+    # autoritativny sklon/azimut: Modul_Verschaltung.xml (Neigung=sklon, Azimut=smer)
+    import re as _re
+    _mv = read("Visu3D/Modul_Verschaltung.xml")
+    _neig = []; _azis = set()
+    if _mv:
+        _t = _mv.decode("utf-8", "ignore")
+        _neig = [math.degrees(float(x)) for x in _re.findall(r"<Neigung>([^<]+)</Neigung>", _t)]
+        _azis = {round(math.degrees(float(x))) % 360 for x in _re.findall(r"<Azimut>([^<]+)</Azimut>", _t)}
+    fallback_tilt = (sorted(_neig)[len(_neig) // 2] if _neig else 10.0)
 
     # --- budova: objekt s "udov" v nazve a najvacsim footprintom; fallback = najvacsi footprint ---
     bld = None; bld_area = -1.0
@@ -172,7 +183,12 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
         sd = o.find("StandardDaten")
         mrsv = o.findall(".//ModulreiheSparVar")
         if mrsv:
-            for r in mrsv:
+            f_az = _ff(sd, "Rotation/AzimutWinkel"); f_ze = _ff(sd, "Rotation/ZenitWinkel")
+            tilt = (90.0 - f_ze) if (f_ze is not None and f_ze > 5) else fallback_tilt
+            tilt = max(0.0, min(60.0, tilt))
+            az0 = f_az if f_az is not None else baz
+            aframe = (f_ze is None or f_ze < 5) and (round((az0 + 180) % 360) in _azis)
+            for ri, r in enumerate(mrsv):
                 rp = r.find("PosAufBezugsFL")
                 if rp is None:
                     continue
@@ -180,7 +196,9 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
                 if ex is None or ey is None:
                     continue
                 anz = max(1, int(_ff(r, "AnzModuleHorz") or 1))
-                rows.append((ex + anz * MW / 2.0, ey + ROWD / 2.0, anz, anz * MW, ROWD))
+                az = az0 + 180 if (aframe and ri % 2) else az0
+                yaw = math.degrees(math.atan2(math.cos(math.radians(2 * baz - az)), math.sin(math.radians(2 * baz - az))))
+                rows.append((ex + anz * MW / 2.0, ey + ROWD / 2.0, anz, anz * MW, ROWD, round(tilt, 1), round(yaw, 1)))
             continue
         mf = o.find(".//ModulFormation")
         if mf is not None:
@@ -189,6 +207,10 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
             if fx is None or fy is None:
                 continue
             faz = _ff(sd, "Rotation/AzimutWinkel")
+            f_ze = _ff(sd, "Rotation/ZenitWinkel")
+            g_tilt = max(0.0, min(60.0, (90.0 - f_ze) if (f_ze is not None and f_ze > 5) else fallback_tilt))
+            g_az = faz if faz is not None else baz
+            g_yaw = math.degrees(math.atan2(math.cos(math.radians(2 * baz - g_az)), math.sin(math.radians(2 * baz - g_az))))
             ab = mf.find("AbstandModule")
             gH = _ff(ab, "Horizontal") or 0.02
             gV = _ff(ab, "Vertikal") or 0.02
@@ -216,7 +238,7 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
                     lz = ze * stepV + stepV / 2.0
                     ex = fx + cfa * lx - sfa * lz
                     ey = fy + sfa * lx + cfa * lz
-                    rows.append((ex, ey, nc, nc * stepH, stepV))
+                    rows.append((ex, ey, nc, nc * stepH, stepV, round(g_tilt, 1), round(g_yaw, 1)))
             continue
     if not rows:
         raise ValueError("V projekte sa nenasli moduly (mozno nekompletny/prazdny .pvprj projekt)")
@@ -230,10 +252,10 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
     def to_terr(px, py):
         return (bx + ct * px - st * py, by + st * px + ct * py)
 
-    tabs = [(to_terr(cx, cy), n, wm, dm) for (cx, cy, n, wm, dm) in rows]
-    n_modules = sum(n for (_p, n, _w, _d) in tabs)
-    mcx = sum(p[0] for (p, _n, _w, _d) in tabs) / len(tabs)
-    mcy = sum(p[1] for (p, _n, _w, _d) in tabs) / len(tabs)
+    tabs = [(to_terr(cx, cy), n, wm, dm, tl, yw) for (cx, cy, n, wm, dm, tl, yw) in rows]
+    n_modules = sum(n for (_p, n, _w, _d, _t, _y) in tabs)
+    mcx = sum(p[0] for (p, _n, _w, _d, _t, _y) in tabs) / len(tabs)
+    mcy = sum(p[1] for (p, _n, _w, _d, _t, _y) in tabs) / len(tabs)
 
     # --- satelit: deterministicka registracia z azimutu (vseobecna, bez svetlikov) ---
     sat = read("MapExtract.jpg") or read("MapExtract.png")
@@ -289,8 +311,8 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
         sat_b64 = base64.b64encode(sat).decode()
 
     data = [{"x": round(p[0] - mcx, 2), "z": round(p[1] - mcy, 2),
-             "w": n, "wm": round(wm, 2), "dm": round(dm, 2)}
-            for (p, n, wm, dm) in tabs]
+             "w": n, "wm": round(wm, 2), "dm": round(dm, 2), "tilt": tl, "yaw": yw}
+            for (p, n, wm, dm, tl, yw) in tabs]
     panel_tex = read("Visu3D/FrontTexturPvModul.jpg")
     ptex_b64 = base64.b64encode(panel_tex).decode() if panel_tex else ""
 
