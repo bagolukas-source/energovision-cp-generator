@@ -55,6 +55,7 @@ def chart_monthly(ctx):
     return _b64(fig)
 
 def chart_energy_balance(ctx):
+    SOLAR="#92D050"; GRID="#9DB2C9"; SITE="#1F3A5F"  # tlmená paleta (override krikľavých globálov)
     pv=ctx.get("fve_prod_mwh",0); self_=ctx.get("self_use_mwh",0); exp=ctx.get("export_mwh",0)
     gi=ctx.get("grid_import_mwh",0); load=ctx.get("year_mwh",1) or 1
     from matplotlib.path import Path; from matplotlib.patches import PathPatch,FancyBboxPatch
@@ -173,36 +174,47 @@ def chart_solar_donut(ctx):
 
 
 def chart_energy_flow(ctx):
-    """Orkestra-style energy flow: 4 uzly (Výroba/Batéria/Spotreba/Sieť) so šípkami a MWh."""
-    from matplotlib.patches import FancyArrowPatch, Circle
+    """Čistý tok energie — malé uzly, tlmená paleta, bez prázdnej batérie."""
+    from matplotlib.patches import FancyArrowPatch, FancyBboxPatch
     g=lambda k: float(ctx.get(k) or 0)
+    FVE_C="#92D050"; GRID_C="#9DB2C9"; LOAD_C="#1F3A5F"; BAT_C="#5E8E2A"; TXT="#374151"
     pv=g("fve_prod_mwh"); load=g("year_mwh") or g("load_total_mwh")
     pv_load=g("pv_to_load_mwh"); pv_bat=g("pv_to_bat_mwh"); exp=g("export_mwh")
     bat_load=g("bat_to_load_mwh"); grid_load=g("grid_to_load_mwh"); grid_bat=g("grid_to_bat_mwh")
-    fig,ax=plt.subplots(figsize=(7.4,3.8)); ax.set_xlim(0,10); ax.set_ylim(0,6.4); ax.axis("off")
-    # uzly: (x,y,r,farba,nazov,hodnota)
-    N={"solar":(1.6,4.7,SOLAR,"Výroba FVE",pv),"bat":(8.4,4.7,GREEN,"Batéria",pv_bat+grid_bat),
-       "site":(5.0,1.3,"#102D4C","Spotreba",load),"grid":(1.6,1.3,GRID,"Sieť",g("grid_import_mwh"))}
-    for k,(x,y,c,nm,val) in N.items():
-        ax.add_patch(Circle((x,y),0.62,facecolor=c,edgecolor="white",lw=2,zorder=3))
-        ax.text(x,y+0.04,f"{val:.0f}",ha="center",va="center",color="white",fontsize=12,weight="bold",zorder=4)
-        ax.text(x,y-0.20,"MWh",ha="center",va="center",color="white",fontsize=7,zorder=4)
-        ax.text(x,y-0.95,nm,ha="center",va="center",color="#374151",fontsize=9.5,weight="bold")
-    def arrow(a,b,val,col,off=0.0):
+    grid_imp=g("grid_import_mwh")
+    has_bat=(pv_bat+grid_bat+bat_load)>0.05
+    fig,ax=plt.subplots(figsize=(7.6,3.6)); ax.set_xlim(0,10); ax.set_ylim(0,6.2); ax.axis("off")
+    # uzly ako malé zaoblené obdĺžniky (x,y,farba,názov,hodnota)
+    N={"solar":(1.7,4.6,FVE_C,"Výroba FVE",pv),
+       "load":(5.0,1.5,LOAD_C,"Spotreba",load),
+       "grid":(1.7,1.5,GRID_C,"Sieť",grid_imp)}
+    if has_bat: N["bat"]=(8.3,4.6,BAT_C,"Batéria",pv_bat+grid_bat)
+    NW,NH=1.5,0.62
+    def node(x,y,c,nm,val):
+        ax.add_patch(FancyBboxPatch((x-NW/2,y-NH/2),NW,NH,boxstyle="round,pad=0.02,rounding_size=0.10",
+            facecolor=c,edgecolor="none",zorder=3))
+        ax.text(x,y+0.02,f"{val:,.0f}".replace(","," "),ha="center",va="center",color="white",fontsize=12,weight="bold",zorder=4)
+        ax.text(x,y-0.34,f"{nm}",ha="center",va="top",color=TXT,fontsize=9,zorder=4)
+        ax.text(x+NW/2-0.08,y-0.16,"MWh",ha="right",va="center",color="white",fontsize=6.5,alpha=0.85,zorder=4)
+    def flow(a,b,val,col,rad=0.0):
         if val<=0.05: return
         (x1,y1,*_),(x2,y2,*_)=N[a],N[b]
-        ax.add_patch(FancyArrowPatch((x1,y1),(x2,y2),connectionstyle=f"arc3,rad={off}",
-            arrowstyle="-|>",mutation_scale=14,lw=1.0+min(5.0,val/40.0),color=col,alpha=0.55,
-            shrinkA=24,shrinkB=24,zorder=2))
+        ax.add_patch(FancyArrowPatch((x1,y1),(x2,y2),connectionstyle=f"arc3,rad={rad}",
+            arrowstyle="-|>",mutation_scale=11,lw=0.8+min(4.2,val/45.0),color=col,alpha=0.5,
+            shrinkA=30,shrinkB=30,zorder=2))
         mx,my=(x1+x2)/2,(y1+y2)/2
-        ax.text(mx+0.15,my+0.15,f"{val:.0f}",fontsize=8.5,color=col,weight="bold",
-                bbox=dict(boxstyle="round,pad=0.12",fc="white",ec="none",alpha=0.9),zorder=5)
-    arrow("solar","site",pv_load,SOLAR,-0.18)
-    arrow("solar","bat",pv_bat,SOLAR,-0.15)
-    arrow("solar","grid",exp,GRID,0.25)        # export
-    arrow("bat","site",bat_load,GREEN,0.18)
-    arrow("grid","site",grid_load,GRID,-0.12)
-    arrow("grid","bat",grid_bat,GRID,0.30)
+        ax.text(mx,my,f"{val:,.0f}".replace(","," "),fontsize=8,color=col,weight="bold",ha="center",va="center",
+                bbox=dict(boxstyle="round,pad=0.14",fc="white",ec="none",alpha=0.95),zorder=5)
+    flow("solar","load",pv_load,FVE_C,-0.16)
+    flow("grid","load",grid_load,GRID_C,0.10)
+    if exp>0.05:
+        ax.annotate(f"Export {exp:,.0f} MWh".replace(","," "),(N["solar"][0]+NW/2,N["solar"][1]+0.45),
+            fontsize=8,color=TXT,ha="left",va="bottom")
+    if has_bat:
+        flow("solar","bat",pv_bat,FVE_C,-0.12)
+        flow("bat","load",bat_load,BAT_C,0.16)
+        flow("grid","bat",grid_bat,GRID_C,0.28)
+    fig.subplots_adjust(left=0.02,right=0.98,top=0.96,bottom=0.04)
     return _b64(fig)
 
 
