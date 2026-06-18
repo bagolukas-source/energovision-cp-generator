@@ -30,6 +30,48 @@ def trow(cells, head=False, em=None, align=None):
     tag="th" if head else "td"
     return f'<tr class="{em or ""}">'+ "".join(f'<{tag} class="c{(a[i] if i<len(a) else "l")}">{c}</{tag}>' for i,c in enumerate(cells)) + '</tr>'
 
+_CHARTJS_CDN = '<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>'
+
+
+def _chartjs_init(ctx):
+    import json as _j
+    def n(k, d=0.0):
+        try:
+            return round(float(ctx.get(k) or 0), 4)
+        except Exception:
+            return d
+    pv_total = n("pv_total_mwh"); load = n("load_total_mwh") or n("annual_kwh") / 1000.0
+    mse = ctx.get("monthly_solar_export") or []; msl = ctx.get("monthly_solar_to_load") or []
+    mm = min(len(msl), len(mse), 12)
+    msum = [float(msl[i] or 0) + float(mse[i] or 0) for i in range(mm)]
+    tot = sum(msum) or 1
+    monthly = [round(pv_total * x / tot, 1) for x in msum] if msum else [round(pv_total * c, 1) for c in [.04,.06,.09,.11,.12,.12,.12,.11,.09,.07,.04,.03]]
+    before = [round(float(x or 0), 1) for x in (ctx.get("hourly_load_kw_before") or [0]*24)][:24]
+    after = [round(float(x or 0), 1) for x in (ctx.get("hourly_load_kw_after") or [0]*24)][:24]
+    pv_kw = [round(max(0.0, before[i]-after[i]), 1) for i in range(min(len(before), len(after)))]
+    S = ctx.get("scenarios3") or []
+    scen_lbl = [s.get("short") or s.get("name", "") for s in S]
+    scen_npv = [round(float(s.get("npv") or 0)/1000, 0) for s in S]
+    D = {
+        "donut": {"l": ["Priamo do odberu", "Cez bateriu", "Export", "Nevyuzite"],
+                  "v": [n("direct_to_load_pct"), n("charging_battery_pct"), n("exported_pct"), n("curtailed_pct")],
+                  "c": ["#92D050", "#5E8E2A", "#9DB2C9", "#CBD5E1"]},
+        "month": {"l": ["Jan","Feb","Mar","Apr","Maj","Jun","Jul","Aug","Sep","Okt","Nov","Dec"], "v": monthly},
+        "daily": {"x": ["%02d" % h for h in range(24)], "before": before, "after": after, "pv": pv_kw},
+        "scen": {"l": scen_lbl, "v": scen_npv},
+    }
+    js = ("window.__ready=false;var CD=" + _j.dumps(D, ensure_ascii=False) + ";"
+        "Chart.defaults.font.family='Segoe UI,Arial,sans-serif';Chart.defaults.font.size=11;Chart.defaults.color='#6B7280';"
+        "var dn=0,need=0;function fin(){dn++;if(dn>=need)window.__ready=true;}"
+        "function mk(id,cfg){var e=document.getElementById(id);if(!e)return;need++;cfg.options=cfg.options||{};cfg.options.animation={onComplete:fin};new Chart(e,cfg);}"
+        "mk('cDonut',{type:'doughnut',data:{labels:CD.donut.l,datasets:[{data:CD.donut.v,backgroundColor:CD.donut.c,borderWidth:2,borderColor:'#fff'}]},options:{cutout:'62%',plugins:{legend:{position:'right',labels:{boxWidth:10,padding:8,font:{size:10}}}}}});"
+        "mk('cMonth',{type:'bar',data:{labels:CD.month.l,datasets:[{data:CD.month.v,backgroundColor:'#92D050',borderRadius:4}]},options:{plugins:{legend:{display:false}},scales:{y:{ticks:{callback:function(v){return v+' MWh'}},grid:{color:'#F0F1F3'}},x:{grid:{display:false}}}}});"
+        "mk('cDaily',{type:'line',data:{labels:CD.daily.x,datasets:[{label:'Pred (odber)',data:CD.daily.before,borderColor:'#9CA3AF',tension:.4,pointRadius:0,borderWidth:2},{label:'Po (siet)',data:CD.daily.after,borderColor:'#4C7DF0',backgroundColor:'rgba(76,125,240,.06)',fill:true,tension:.4,pointRadius:0,borderWidth:2},{label:'Vyroba FVE',data:CD.daily.pv,borderColor:'#92D050',backgroundColor:'rgba(146,208,80,.10)',fill:true,tension:.4,pointRadius:0,borderWidth:2}]},options:{plugins:{legend:{position:'top',labels:{boxWidth:10,padding:10,font:{size:10}}}},scales:{y:{ticks:{callback:function(v){return v+' kW'}},grid:{color:'#F0F1F3'}},x:{grid:{display:false},ticks:{maxTicksLimit:12}}}}});"
+        "mk('cScen',{type:'bar',data:{labels:CD.scen.l,datasets:[{data:CD.scen.v,backgroundColor:['#CBD5E1','#9DB2C9','#92D050'].slice(0,CD.scen.v.length),borderRadius:4}]},options:{plugins:{legend:{display:false}},scales:{y:{ticks:{callback:function(v){return v+' k EUR'}},grid:{color:'#F0F1F3'}},x:{grid:{display:false}}}}});"
+        "if(need===0)window.__ready=true;setTimeout(function(){window.__ready=true;},5000);")
+    return "<script>" + js + "</script>"
+
+
 def render_chocosuc_html(ctx: dict) -> str:
     g_daily=C.chart_daily(ctx); g_month=C.chart_monthly(ctx); g_bal=C.chart_energy_balance(ctx)
     g_scen=C.chart_scenarios(ctx); g_cum=C.chart_cumcf(ctx); g_ben=C.chart_benefit(ctx)
@@ -44,6 +86,9 @@ def render_chocosuc_html(ctx: dict) -> str:
         if not src: return ''
         _gc[0]+=1
         return f'<img class="img" src="{src}"><div class="cap">Graf {_gc[0]}: {text}</div>'
+    def gcanvas(cid,text,h=300):
+        _gc[0]+=1
+        return f'<div class="chartwrap" style="height:{h}px"><canvas id="{cid}"></canvas></div><div class="cap">Graf {_gc[0]}: {text}</div>'
     S=ctx["scenarios3"]; bza=S[0]; full=next((x for x in S if x.get("recommended")), bza); opti=S[-1]
     pm=ctx.get("profile_metrics",{})
     recs=ctx.get("recommendations",[])
@@ -82,7 +127,7 @@ def render_chocosuc_html(ctx: dict) -> str:
     if _missing:
         id_table+=f'<p class="note">Údaje na doplnenie z faktúry/zmluvy: {", ".join(_missing)}.</p>'
 
-    return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+    html = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><style>
 @page {{ size:A4; margin:18mm 16mm 16mm 16mm;
   @top-left {{ content: element(hdr); }}
   @bottom-center {{ content: "Energovision, s.r.o.  ·  IČO 53 036 280  ·  www.energovision.sk  ·  strana " counter(page) " / " counter(pages); font-family:Arial; font-size:7pt; color:#9CA3AF; }} }}
@@ -123,6 +168,7 @@ ul.green {{ list-style:none; padding:0; margin:6px 0; }}
 ul.green li {{ position:relative; padding-left:16px; margin-bottom:6px; font-size:8.9pt; }}
 ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }}
 .narr p {{ margin:0 0 8px; }}
+.chartwrap{position:relative;width:100%;margin:6px 0}
 </style></head><body>
 <div id="hdr"><b>energovision</b>  ·  Posudok · {ctx.get('client_name','')} · {ctx.get('posudok_number','')}</div>
 
@@ -181,8 +227,8 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
 <section class="newpage">
   <div class="kick">2 — Profil odberu</div><h2>Charakteristika spotreby</h2>
   <div class="narr">{ctx.get('profile_narrative','')}</div>
-  {gimg(g_daily, "Denný profil odberu — pracovný deň vs víkend, s PV produkciou. "+ctx.get('daily_cap',''))}
-  {gimg(g_month, "Mesačná spotreba. "+ctx.get('monthly_cap',''))}
+  {gcanvas("cDaily","Denný profil odberu — pred/po inštalácii + výroba FVE (kW).",320)}
+  {gcanvas("cMonth","Mesačná výroba FVE (MWh).")}
 </section>
 
 <section class="newpage">
@@ -208,7 +254,7 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
   {gimg(g_bal, "Energetická bilancia.")}
   <div class="kick" style="margin-top:10px;">Tok energie a využitie výroby</div>
   {gimg(g_flow, "Ročný tok energie — výroba FVE, priama samospotreba, batéria a sieť (MWh/rok).")}
-  {gimg(g_donut, "Ako sa využije vyrobená FVE energia — priamo, cez batériu, export.")}
+  {gcanvas("cDonut","Ako sa využije vyrobená FVE energia — priamo, cez batériu, export.")}
   <div class="kick" style="margin-top:12px;">Energetické metriky (ročný priemer)</div>
   {gimg(g_emet, "Energetická nezávislosť, využitie solárnej výroby a batérie — mesačné priemery roka 1.")}
   <div class="kick" style="margin-top:12px;">Environmentálny prínos (CO₂)</div>
@@ -254,7 +300,7 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
   <div class="scenexpl">{"".join(f'<div class="rec"><b>{nm}</b><span>{tx}</span></div>' for nm,tx in ctx.get('scenarios_bullets',[]))}</div>
   <div class="kick">Štruktúra investície</div>
   {gimg(g_capex, "Rozpad investície — FVE, batéria a ostatné náklady; dotácia znižuje na čistú investíciu.")}
-  {gimg(g_scen, "Porovnanie 3 scenárov.")}
+  {gcanvas("cScen","Porovnanie scenárov — NPV 20 r.")}
   {gimg(g_cum, "Kumulatívny cashflow 20 rokov.")}
   {gimg(g_wf, "NPV most — od investície cez diskontované úspory, daňový štít a zostatkovú hodnotu po čisté NPV.")}
 </section>
@@ -328,6 +374,26 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
     <div style="font-size:8.6pt; color:#374151;">{ctx.get('prepared_by_email','')} · {ctx.get('prepared_by_phone','')}</div></div>
 </section>
 </body></html>"""
+    html = html.replace("</head>", _CHARTJS_CDN + "</head>", 1)
+    html = html.replace("</body></html>", _chartjs_init(ctx) + "</body></html>", 1)
+    return html
 
 def generate_chocosuc_pdf(ctx: dict) -> bytes:
-    return HTML(string=render_chocosuc_html(ctx)).write_pdf()
+    html = render_chocosuc_html(ctx)
+    import os, requests as _rq
+    GURL = os.environ.get("GOTENBERG_URL", "").rstrip("/")
+    if GURL:
+        try:
+            g_user = os.environ.get("GOTENBERG_USER", ""); g_pass = os.environ.get("GOTENBERG_PASS", "")
+            g_auth = (g_user, g_pass) if g_user else None
+            files = {"files": ("index.html", html, "text/html")}
+            data = {"waitForExpression": "window.__ready === true", "waitDelay": "0.5s",
+                    "paperWidth": "8.27", "paperHeight": "11.69",
+                    "marginTop": "0.3", "marginBottom": "0.3", "marginLeft": "0.3", "marginRight": "0.3",
+                    "printBackground": "true"}
+            gr = _rq.post(f"{GURL}/forms/chromium/convert/html", files=files, data=data, auth=g_auth, timeout=120)
+            if gr.ok and gr.content[:4] == b"%PDF":
+                return gr.content
+        except Exception:
+            pass
+    return HTML(string=html).write_pdf()
