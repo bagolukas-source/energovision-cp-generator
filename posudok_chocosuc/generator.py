@@ -40,15 +40,16 @@ def _chartjs_init(ctx):
             return round(float(ctx.get(k) or 0), 4)
         except Exception:
             return d
-    pv_total = n("pv_total_mwh"); load = n("load_total_mwh") or n("annual_kwh") / 1000.0
-    mse = ctx.get("monthly_solar_export") or []; msl = ctx.get("monthly_solar_to_load") or []
-    mm = min(len(msl), len(mse), 12)
-    msum = [float(msl[i] or 0) + float(mse[i] or 0) for i in range(mm)]
-    tot = sum(msum) or 1
-    monthly = [round(pv_total * x / tot, 1) for x in msum] if msum else [round(pv_total * c, 1) for c in [.04,.06,.09,.11,.12,.12,.12,.11,.09,.07,.04,.03]]
-    before = [round(float(x or 0), 1) for x in (ctx.get("hourly_load_kw_before") or [0]*24)][:24]
-    after = [round(float(x or 0), 1) for x in (ctx.get("hourly_load_kw_after") or [0]*24)][:24]
-    pv_kw = [round(max(0.0, before[i]-after[i]), 1) for i in range(min(len(before), len(after)))]
+    monthly = ctx.get("monthly_mwh") or [round(n("year_mwh")/12, 1)]*12
+    monthly = [round(float(x or 0), 1) for x in monthly][:12]
+    avg = n("avg_kw") or (n("year_mwh")*1000/8760) or 150
+    wd = ctx.get("hourly_wd") or [round(avg, 1)]*24
+    we = ctx.get("hourly_we") or [round(avg*0.85, 1)]*24
+    wd = [round(float(x or 0), 1) for x in wd][:24]
+    we = [round(float(x or 0), 1) for x in we][:24]
+    pvpeak = n("fve_kwp")*0.62
+    pvshape = [0,0,0,0,0,0.02,0.06,0.13,0.22,0.34,0.46,0.55,0.59,0.57,0.50,0.40,0.28,0.16,0.07,0.02,0,0,0,0]
+    pv = [round(pvpeak*c, 1) for c in pvshape]
     S = ctx.get("scenarios3") or []
     scen_lbl = [s.get("short") or s.get("name", "") for s in S]
     scen_npv = [round(float(s.get("npv") or 0)/1000, 0) for s in S]
@@ -57,7 +58,7 @@ def _chartjs_init(ctx):
                   "v": [n("direct_to_load_pct"), n("charging_battery_pct"), n("exported_pct"), n("curtailed_pct")],
                   "c": ["#92D050", "#5E8E2A", "#9DB2C9", "#CBD5E1"]},
         "month": {"l": ["Jan","Feb","Mar","Apr","Maj","Jun","Jul","Aug","Sep","Okt","Nov","Dec"], "v": monthly},
-        "daily": {"x": ["%02d" % h for h in range(24)], "before": before, "after": after, "pv": pv_kw},
+        "daily": {"x": ["%02d" % h for h in range(24)], "wd": wd, "we": we, "pv": pv, "kwp": n("fve_kwp")},
         "scen": {"l": scen_lbl, "v": scen_npv},
     }
     js = ("window.__ready=false;var CD=" + _j.dumps(D, ensure_ascii=False) + ";"
@@ -66,7 +67,7 @@ def _chartjs_init(ctx):
         "function mk(id,cfg){var e=document.getElementById(id);if(!e)return;need++;cfg.options=cfg.options||{};cfg.options.animation={onComplete:fin};new Chart(e,cfg);}"
         "mk('cDonut',{type:'doughnut',data:{labels:CD.donut.l,datasets:[{data:CD.donut.v,backgroundColor:CD.donut.c,borderWidth:2,borderColor:'#fff'}]},options:{cutout:'62%',plugins:{legend:{position:'right',labels:{boxWidth:10,padding:8,font:{size:10}}}}}});"
         "mk('cMonth',{type:'bar',data:{labels:CD.month.l,datasets:[{data:CD.month.v,backgroundColor:'#92D050',borderRadius:4}]},options:{plugins:{legend:{display:false}},scales:{y:{ticks:{callback:function(v){return v+' MWh'}},grid:{color:'#F0F1F3'}},x:{grid:{display:false}}}}});"
-        "mk('cDaily',{type:'line',data:{labels:CD.daily.x,datasets:[{label:'Pred (odber)',data:CD.daily.before,borderColor:'#9CA3AF',tension:.4,pointRadius:0,borderWidth:2},{label:'Po (siet)',data:CD.daily.after,borderColor:'#4C7DF0',backgroundColor:'rgba(76,125,240,.06)',fill:true,tension:.4,pointRadius:0,borderWidth:2},{label:'Vyroba FVE',data:CD.daily.pv,borderColor:'#92D050',backgroundColor:'rgba(146,208,80,.10)',fill:true,tension:.4,pointRadius:0,borderWidth:2}]},options:{plugins:{legend:{position:'top',labels:{boxWidth:10,padding:10,font:{size:10}}}},scales:{y:{ticks:{callback:function(v){return v+' kW'}},grid:{color:'#F0F1F3'}},x:{grid:{display:false},ticks:{maxTicksLimit:12}}}}});"
+        "mk('cDaily',{type:'line',data:{labels:CD.daily.x,datasets:[{label:'Vyroba FVE '+CD.daily.kwp+' kWp',data:CD.daily.pv,borderColor:'#92D050',backgroundColor:'rgba(146,208,80,.18)',fill:true,tension:.4,pointRadius:0,borderWidth:1.5},{label:'Pracovny den',data:CD.daily.wd,borderColor:'#1E293B',tension:.4,pointRadius:0,borderWidth:2.4},{label:'Vikend',data:CD.daily.we,borderColor:'#94A3B8',borderDash:[5,4],tension:.4,pointRadius:0,borderWidth:2}]},options:{plugins:{legend:{position:'top',labels:{boxWidth:10,padding:10,font:{size:10}}}},scales:{y:{ticks:{callback:function(v){return v+' kW'}},grid:{color:'#F0F1F3'}},x:{grid:{display:false},ticks:{maxTicksLimit:12}}}}});"
         "mk('cScen',{type:'bar',data:{labels:CD.scen.l,datasets:[{data:CD.scen.v,backgroundColor:['#CBD5E1','#9DB2C9','#92D050'].slice(0,CD.scen.v.length),borderRadius:4}]},options:{plugins:{legend:{display:false}},scales:{y:{ticks:{callback:function(v){return v+' k EUR'}},grid:{color:'#F0F1F3'}},x:{grid:{display:false}}}}});"
         "if(need===0)window.__ready=true;setTimeout(function(){window.__ready=true;},5000);")
     return "<script>" + js + "</script>"
@@ -227,8 +228,8 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
 <section class="newpage">
   <div class="kick">2 — Profil odberu</div><h2>Charakteristika spotreby</h2>
   <div class="narr">{ctx.get('profile_narrative','')}</div>
-  {gcanvas("cDaily","Denný profil odberu — pred/po inštalácii + výroba FVE (kW).",320)}
-  {gcanvas("cMonth","Mesačná výroba FVE (MWh).")}
+  {gcanvas("cDaily","Denný profil odberu — pracovný deň vs víkend + výroba FVE (kW).",320)}
+  {gcanvas("cMonth","Mesačná spotreba (MWh).")}
 </section>
 
 <section class="newpage">
