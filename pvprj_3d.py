@@ -95,10 +95,24 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
     if not (mcx is not None and mcy is not None and mBW > 0 and mTF > 0):
         return _gallery(z, names, title)
 
-    # budovy: VSETKY budovy, kazda box (Etage extenty + rotacia) nad svoje panely
+    # sklon panelov (median Neigung) - potrebny aj na tvar sikmej strechy
+    tilt = 12.0
+    mv = names.get("Visu3D/Modul_Verschaltung.xml")
+    if mv:
+        neig = [math.degrees(float(x)) for x in re.findall(r"<Neigung>([^<]+)</Neigung>", z.read(mv).decode("utf-8", "ignore"))]
+        if neig:
+            tilt = max(0.0, min(55.0, sorted(neig)[len(neig) // 2]))
+    tan_p = math.tan(math.radians(tilt))
+
+    def _sub(a, b): return (a[0] - b[0], a[1] - b[1])
+    def _dot(a, b): return a[0] * b[0] + a[1] * b[1]
+    def _ln(a): return math.hypot(a[0], a[1])
+
+    # budovy: typ -> tvar strechy (sikma sedlova vs plocha); kazda nad svoje panely
+    PITCHED = {"14", "15", "16", "17", "18", "77"}
     maz_b = _ff(msd, "Rotation/AzimutWinkel") or 180.0
-    buildings = []
-    panel_h = [0.0] * len(mods)
+    bld_tris = []           # trojuholniky budov (steny + strecha), [x,y,z,...]
+    panel_roof = [None] * len(mods)   # per modul: (pitched, H, c0, bhat, Lb)
     mc_plan = [(sum(pp[0] for pp in q[:4]) / 4.0, sum(pp[1] for pp in q[:4]) / 4.0) for q in mods]
     blds = []
     for o in root.iter("ZeichenObjekt"):
@@ -109,12 +123,18 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
         bd = max((float(e.text) for e in o.iter("TiefeR") if e.text), default=0.0)
         blds.append((bw * bd, o))
     blds.sort(reverse=True, key=lambda x: x[0])
+
+    def tri(a, b, c):
+        bld_tris.extend([a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]])
+
     for _area, o in blds:
         et = o.find(".//Etage")
         eb = et.find(".//Ebene1") if et is not None else None
         esd = et.find("StandardDaten") if et is not None else None
         if esd is None or eb is None:
             continue
+        roof_typ = o.find("StandardDaten").findtext("AnwObjTyp")
+        pitched = roof_typ in PITCHED
         bfx = _ff(esd, "PosAufBezugsFL/X"); bfy = _ff(esd, "PosAufBezugsFL/Y")
         baz = _ff(esd, "Rotation/AzimutWinkel") or 0.0
         bl = _ff(eb, "BreiteL") or 0.0; tl = _ff(eb, "TiefeL") or 0.0
@@ -128,7 +148,7 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
             pa = math.radians(mode); wv = (math.cos(pa), math.sin(pa)); dv = (-math.sin(pa), math.cos(pa))
             inside = []
             for idx, (mx, my) in enumerate(mc_plan):
-                if panel_h[idx] > 0:
+                if panel_roof[idx] is not None:
                     continue
                 rx = mx - bfx; ry = my - bfy
                 u = rx * wv[0] + ry * wv[1]; v = rx * dv[0] + ry * dv[1]
@@ -139,41 +159,67 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
         inside, wv, dv = best
         if not inside:
             continue
-        for idx in inside:
-            panel_h[idx] = H
-        corn = []
+        # rohy podorysu v scene
+        C = []
         for (ui, vj) in [(-bl, -tl), (brr, -tl), (brr, tr2), (-bl, tr2)]:
-            cx = bfx + ui * wv[0] + vj * dv[0] - mcx
-            cy = bfy + ui * wv[1] + vj * dv[1] - mcy
-            corn.append((cx, cy))
-        buildings.append({"corners": [[round(c[0], 2), round(c[1], 2)] for c in corn], "h": round(H, 2)})
+            C.append((bfx + ui * wv[0] + vj * dv[0] - mcx, bfy + ui * wv[1] + vj * dv[1] - mcy))
+        # kratsia os (b) -> hrebenovanie sedlovej strechy
+        e1 = _sub(C[1], C[0]); e2 = _sub(C[2], C[1])
+        L1 = _ln(e1); L2 = _ln(e2)
+        if L1 <= L2:
+            bvec = e1; Lb = L1
+        else:
+            bvec = e2; Lb = L2
+        bhat = (bvec[0] / (Lb or 1), bvec[1] / (Lb or 1))
+        rise = (Lb / 2.0) * tan_p if pitched else 0.0
+        for idx in inside:
+            panel_roof[idx] = (pitched, H, C[0], bhat, Lb, rise)
+        # geometria budovy
+        def P3(c, y): return (c[0], y, c[1])
+        # steny po eave (H)
+        for i in range(4):
+            a = C[i]; b = C[(i + 1) % 4]
+            tri(P3(a, 0), P3(b, 0), P3(b, H)); tri(P3(a, 0), P3(b, H), P3(a, H))
+        if not pitched:
+            tri(P3(C[0], H), P3(C[1], H), P3(C[2], H)); tri(P3(C[0], H), P3(C[2], H), P3(C[3], H))
+        else:
+            # hrebenove body = stredy kratsich hran, zdvihnute
+            def rh(p): return H + (Lb / 2.0 - abs(_dot(_sub(p, C[0]), bhat) - Lb / 2.0)) * tan_p
+            # kratsie hrany su tie kolme na long; najdi 2 hrany s dlzkou Lb
+            edges = [(C[0], C[1]), (C[1], C[2]), (C[2], C[3]), (C[3], C[0])]
+            sh = [eg for eg in edges if abs(_ln(_sub(eg[1], eg[0])) - Lb) < 0.5]
+            longs = [eg for eg in edges if abs(_ln(_sub(eg[1], eg[0])) - Lb) >= 0.5]
+            if len(sh) >= 2 and len(longs) >= 2:
+                rA = (((sh[0][0][0] + sh[0][1][0]) / 2.0, (sh[0][0][1] + sh[0][1][1]) / 2.0))
+                rB = (((sh[1][0][0] + sh[1][1][0]) / 2.0, (sh[1][0][1] + sh[1][1][1]) / 2.0))
+                top = H + rise
+                # dve sklonene roviny (od kazdej dlhej hrany k hrebenu)
+                for (ea, eb2) in longs:
+                    tri(P3(ea, H), P3(eb2, H), P3(rB, top)); tri(P3(ea, H), P3(rB, top), P3(rA, top))
+                # stitove trojuholniky na kratsich hranach
+                for (ea, eb2) in sh:
+                    mid = ((ea[0] + eb2[0]) / 2.0, (ea[1] + eb2[1]) / 2.0)
+                    tri(P3(ea, H), P3(eb2, H), P3(mid, top))
+            else:
+                tri(P3(C[0], H), P3(C[1], H), P3(C[2], H)); tri(P3(C[0], H), P3(C[2], H), P3(C[3], H))
 
-    # sklon (median Neigung z Modul_Verschaltung)
-    tilt = 12.0
-    mv = names.get("Visu3D/Modul_Verschaltung.xml")
-    if mv:
-        neig = [math.degrees(float(x)) for x in re.findall(r"<Neigung>([^<]+)</Neigung>", z.read(mv).decode("utf-8", "ignore"))]
-        if neig:
-            tilt = max(0.0, min(55.0, sorted(neig)[len(neig) // 2]))
-
-    # 3D vrcholy modulov: scene (X = plan_x - mcx, Z = plan_y - mcy), sklon okolo dlhsej hrany
+    # 3D vrcholy panelov: flush na sikmej streche, alebo rack na plochej
     tr = math.radians(tilt)
     verts = []
     for _qi, q in enumerate(mods):
-        P = [(x - mcx, y - mcy) for (x, y) in q]  # scene XZ
-        ea = (P[1][0] - P[0][0], P[1][1] - P[0][1])
-        eb = (P[3][0] - P[0][0], P[3][1] - P[0][1])
-        la = math.hypot(*ea); lb = math.hypot(*eb)
-        depth = min(la, lb)
-        h = depth * math.sin(tr)
-        # vyssia strana = tie 2 rohy, ktore su na konci kratsej hrany
-        if lb <= la:
-            ys = [0.0, 0.0, h, h]  # P0,P1 dole; P2,P3 hore (P3 = P0+eb)
+        P = [(x - mcx, y - mcy) for (x, y) in q]
+        pr = panel_roof[_qi]
+        if pr is not None and pr[0]:
+            # sikma strecha: kazdy roh na vysku strechy (flush)
+            pitched, H, c0, bhat, Lb, rise = pr
+            def rfh(p): return H + (Lb / 2.0 - abs(_dot(_sub(p, c0), bhat) - Lb / 2.0)) * tan_p
+            c = [(P[i][0], rfh(P[i]) + 0.2, P[i][1]) for i in range(4)]
         else:
-            ys = [0.0, h, h, 0.0]  # P1,P2 hore
-        ph = panel_h[_qi]
-        c = [(P[i][0], ys[i] + ph + 0.25, P[i][1]) for i in range(4)]
-        # 2 trojuholniky: 0,1,2 a 0,2,3
+            base = pr[1] if pr is not None else 0.0
+            ea = (P[1][0] - P[0][0], P[1][1] - P[0][1]); eb2 = (P[3][0] - P[0][0], P[3][1] - P[0][1])
+            la = math.hypot(*ea); lb = math.hypot(*eb2); depth = min(la, lb); h = depth * math.sin(tr)
+            ys = [0.0, 0.0, h, h] if lb <= la else [0.0, h, h, 0.0]
+            c = [(P[i][0], ys[i] + base + 0.25, P[i][1]) for i in range(4)]
         for i in (0, 1, 2, 0, 2, 3):
             verts.extend(c[i])
 
@@ -183,7 +229,7 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
     subt = "Interaktivny 3D - %d modulov" % n_modules
 
     html = (_TEMPLATE
-            .replace("__BUILDINGS__", json.dumps(buildings))
+            .replace("__BLDVERTS__", json.dumps([round(v, 2) for v in bld_tris]))
             .replace("__VERTS__", json.dumps([round(v, 2) for v in verts]))
             .replace("__MBW__", str(round(mBW, 2)))
             .replace("__MTF__", str(round(mTF, 2)))
@@ -213,7 +259,7 @@ _TEMPLATE = r'''<!DOCTYPE html><html lang="sk"><head><meta charset="utf-8"><meta
 <script type="module">
 import * as THREE from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
-const VERTS=__VERTS__, MBW=__MBW__, MTF=__MTF__, BUILDINGS=__BUILDINGS__;
+const VERTS=__VERTS__, MBW=__MBW__, MTF=__MTF__, BLDVERTS=__BLDVERTS__;
 const cv=document.getElementById('c');
 const renderer=new THREE.WebGLRenderer({canvas:cv,antialias:true,preserveDrawingBuffer:true});
 renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.setSize(innerWidth,innerHeight);
@@ -236,23 +282,16 @@ g.computeVertexNormals();
 const pmat=new THREE.MeshStandardMaterial({color:0x16243f,metalness:.5,roughness:.32,emissive:0x0a1430,emissiveIntensity:.16,side:THREE.DoubleSide});
 const panels=new THREE.Mesh(g,pmat);panels.renderOrder=2;scene.add(panels);
 // budova: kvader (steny + strecha) z footprintu
-if(BUILDINGS&&BUILDINGS.length){
-  const bv=[];
-  function quad(a,b,c,d){bv.push(a[0],a[1],a[2], b[0],b[1],b[2], c[0],c[1],c[2], a[0],a[1],a[2], c[0],c[1],c[2], d[0],d[1],d[2]);}
-  BUILDINGS.forEach(B=>{
-    const C=B.corners, H=B.h;
-    for(let i=0;i<4;i++){const p=C[i],q=C[(i+1)%4];quad([p[0],0,p[1]],[q[0],0,q[1]],[q[0],H,q[1]],[p[0],H,p[1]]);}
-    quad([C[0][0],H,C[0][1]],[C[1][0],H,C[1][1]],[C[2][0],H,C[2][1]],[C[3][0],H,C[3][1]]);
-  });
-  const bg=new THREE.BufferGeometry();bg.setAttribute('position',new THREE.BufferAttribute(new Float32Array(bv),3));bg.computeVertexNormals();
-  const wallMat=new THREE.MeshStandardMaterial({color:0xeef0f2,roughness:.85,metalness:0,side:THREE.DoubleSide});
+if(BLDVERTS&&BLDVERTS.length){
+  const bg=new THREE.BufferGeometry();bg.setAttribute('position',new THREE.BufferAttribute(new Float32Array(BLDVERTS),3));bg.computeVertexNormals();
+  const wallMat=new THREE.MeshStandardMaterial({color:0xeef0f2,roughness:.82,metalness:0,side:THREE.DoubleSide});
   scene.add(new THREE.Mesh(bg,wallMat));
 }
 // ramuj na moduly
 // ramuj CELU scenu (budovy + panely) z vtacieho oblique pohladu
 let _xn=1e9,_xx=-1e9,_zn=1e9,_zx=-1e9,_yx=1;
 for(let i=0;i<VERTS.length;i+=3){_xn=Math.min(_xn,VERTS[i]);_xx=Math.max(_xx,VERTS[i]);_zn=Math.min(_zn,VERTS[i+2]);_zx=Math.max(_zx,VERTS[i+2]);_yx=Math.max(_yx,VERTS[i+1]);}
-(BUILDINGS||[]).forEach(B=>B.corners.forEach(c=>{_xn=Math.min(_xn,c[0]);_xx=Math.max(_xx,c[0]);_zn=Math.min(_zn,c[1]);_zx=Math.max(_zx,c[1]);_yx=Math.max(_yx,B.h);}));
+for(let i=0;i<BLDVERTS.length;i+=3){_xn=Math.min(_xn,BLDVERTS[i]);_xx=Math.max(_xx,BLDVERTS[i]);_zn=Math.min(_zn,BLDVERTS[i+2]);_zx=Math.max(_zx,BLDVERTS[i+2]);_yx=Math.max(_yx,BLDVERTS[i+1]);}
 const _cx=(_xn+_xx)/2,_cz=(_zn+_zx)/2,_span=Math.max(_xx-_xn,_zx-_zn,12);
 ctrl.target.set(_cx,_yx*0.35,_cz);
 cam.position.set(_cx+_span*0.12,_yx+_span*1.05,_cz+_span*1.25);ctrl.update();
