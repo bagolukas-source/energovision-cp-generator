@@ -95,6 +95,37 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
     if not (mcx is not None and mcy is not None and mBW > 0 and mTF > 0):
         return _gallery(z, names, title)
 
+    # budova: footprint (PosBF roh + BreiteR/TiefeR, orientacia = baz - maz) + vyska
+    bld = None; bba = -1.0
+    for o in root.iter("ZeichenObjekt"):
+        sd = o.find("StandardDaten")
+        if sd is None or "udov" not in (sd.findtext("Bezeichnung") or ""):
+            continue
+        bw = max((float(e.text) for e in o.iter("BreiteR") if e.text), default=0.0)
+        bd = max((float(e.text) for e in o.iter("TiefeR") if e.text), default=0.0)
+        if bw * bd > bba:
+            bba = bw * bd; bld = o
+    bldbox = None
+    bH = 0.0
+    if bld is not None:
+        bsd = bld.find("StandardDaten")
+        bfx = _ff(bsd, "PosAufBezugsFL/X"); bfy = _ff(bsd, "PosAufBezugsFL/Y")
+        baz = _ff(bsd, "Rotation/AzimutWinkel") or 0.0
+        maz = _ff(msd, "Rotation/AzimutWinkel") or 180.0
+        BW = max((float(e.text) for e in bld.iter("BreiteR") if e.text), default=0.0)
+        BD = max((float(e.text) for e in bld.iter("TiefeR") if e.text), default=0.0)
+        hh = [float(e.text) for e in bld.iter("Hoehe") if e.text]
+        bH = max([h for h in hh if 2.0 <= h <= 40.0] or [6.0])
+        if bfx is not None and BW > 0 and BD > 0:
+            pa = math.radians(baz - maz)
+            wv = (math.cos(pa), math.sin(pa)); dv = (-math.sin(pa), math.cos(pa))
+            corn = []
+            for i, j in [(0, 0), (1, 0), (1, 1), (0, 1)]:
+                cx = bfx + i * BW * wv[0] + j * BD * dv[0] - mcx
+                cy = bfy + i * BW * wv[1] + j * BD * dv[1] - mcy
+                corn.append((cx, cy))
+            bldbox = {"corners": [[round(c[0], 2), round(c[1], 2)] for c in corn], "h": round(bH, 2)}
+
     # sklon (median Neigung z Modul_Verschaltung)
     tilt = 12.0
     mv = names.get("Visu3D/Modul_Verschaltung.xml")
@@ -118,7 +149,7 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
             ys = [0.0, 0.0, h, h]  # P0,P1 dole; P2,P3 hore (P3 = P0+eb)
         else:
             ys = [0.0, h, h, 0.0]  # P1,P2 hore
-        c = [(P[i][0], ys[i] + 0.2, P[i][1]) for i in range(4)]
+        c = [(P[i][0], ys[i] + bH + 0.25, P[i][1]) for i in range(4)]
         # 2 trojuholniky: 0,1,2 a 0,2,3
         for i in (0, 1, 2, 0, 2, 3):
             verts.extend(c[i])
@@ -129,6 +160,7 @@ def build_pvprj_3d(pvprj_bytes, title="FVE projekt"):
     subt = "Interaktivny 3D - %d modulov" % n_modules
 
     html = (_TEMPLATE
+            .replace("__BLDBOX__", json.dumps(bldbox) if bldbox else "null")
             .replace("__VERTS__", json.dumps([round(v, 2) for v in verts]))
             .replace("__MBW__", str(round(mBW, 2)))
             .replace("__MTF__", str(round(mTF, 2)))
@@ -158,7 +190,7 @@ _TEMPLATE = r'''<!DOCTYPE html><html lang="sk"><head><meta charset="utf-8"><meta
 <script type="module">
 import * as THREE from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
-const VERTS=__VERTS__, MBW=__MBW__, MTF=__MTF__;
+const VERTS=__VERTS__, MBW=__MBW__, MTF=__MTF__, BLDBOX=__BLDBOX__;
 const cv=document.getElementById('c');
 const renderer=new THREE.WebGLRenderer({canvas:cv,antialias:true,preserveDrawingBuffer:true});
 renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.setSize(innerWidth,innerHeight);
@@ -180,6 +212,17 @@ g.setAttribute('position',new THREE.BufferAttribute(new Float32Array(VERTS),3));
 g.computeVertexNormals();
 const pmat=new THREE.MeshStandardMaterial({color:0x16243f,metalness:.5,roughness:.32,emissive:0x0a1430,emissiveIntensity:.16,side:THREE.DoubleSide});
 const panels=new THREE.Mesh(g,pmat);panels.renderOrder=2;scene.add(panels);
+// budova: kvader (steny + strecha) z footprintu
+if(BLDBOX){
+  const C=BLDBOX.corners, H=BLDBOX.h;
+  const bv=[];
+  function quad(a,b,c,d){bv.push(a[0],a[1],a[2], b[0],b[1],b[2], c[0],c[1],c[2], a[0],a[1],a[2], c[0],c[1],c[2], d[0],d[1],d[2]);}
+  for(let i=0;i<4;i++){const p=C[i],q=C[(i+1)%4];quad([p[0],0,p[1]],[q[0],0,q[1]],[q[0],H,q[1]],[p[0],H,p[1]]);}        // steny
+  quad([C[0][0],H,C[0][1]],[C[1][0],H,C[1][1]],[C[2][0],H,C[2][1]],[C[3][0],H,C[3][1]]);                                 // strecha
+  const bg=new THREE.BufferGeometry();bg.setAttribute('position',new THREE.BufferAttribute(new Float32Array(bv),3));bg.computeVertexNormals();
+  const wallMat=new THREE.MeshStandardMaterial({color:0xeef0f2,roughness:.85,metalness:0,side:THREE.DoubleSide});
+  scene.add(new THREE.Mesh(bg,wallMat));
+}
 // ramuj na moduly
 g.computeBoundingBox();const bb=g.boundingBox;const ctr=new THREE.Vector3();bb.getCenter(ctr);
 const sz=new THREE.Vector3();bb.getSize(sz);const ext=Math.max(sz.x,sz.z,8);
