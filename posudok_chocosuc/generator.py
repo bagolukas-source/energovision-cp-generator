@@ -168,7 +168,7 @@ ul.green {{ list-style:none; padding:0; margin:6px 0; }}
 ul.green li {{ position:relative; padding-left:16px; margin-bottom:6px; font-size:8.9pt; }}
 ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }}
 .narr p {{ margin:0 0 8px; }}
-.chartwrap{position:relative;width:100%;margin:6px 0}
+.chartwrap{{position:relative;width:100%;margin:6px 0}}
 </style></head><body>
 <div id="hdr"><b>energovision</b>  ·  Posudok · {ctx.get('client_name','')} · {ctx.get('posudok_number','')}</div>
 
