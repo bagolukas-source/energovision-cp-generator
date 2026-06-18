@@ -155,7 +155,8 @@ def chart_montecarlo(ctx):
 
 
 def chart_solar_donut(ctx):
-    """Orkestra-style donut: ako sa využije vyrobená FVE energia."""
+    """Donut: ako sa využije vyrobená FVE energia (tlmená paleta)."""
+    SOLAR="#92D050"; GREEN="#5E8E2A"; GRID="#9DB2C9"
     direct=float(ctx.get("direct_to_load_pct") or 0); batt=float(ctx.get("charging_battery_pct") or 0)
     exp=float(ctx.get("exported_pct") or 0); curt=float(ctx.get("curtailed_pct") or 0)
     prod=float(ctx.get("fve_prod_mwh") or 0)
@@ -205,6 +206,8 @@ def chart_energy_flow(ctx):
         mx,my=(x1+x2)/2,(y1+y2)/2
         ax.text(mx,my,f"{val:,.0f}".replace(","," "),fontsize=8,color=col,weight="bold",ha="center",va="center",
                 bbox=dict(boxstyle="round,pad=0.14",fc="white",ec="none",alpha=0.95),zorder=5)
+    for _k,(_x,_y,_c,_nm,_v) in N.items():
+        node(_x,_y,_c,_nm,_v)
     flow("solar","load",pv_load,FVE_C,-0.16)
     flow("grid","load",grid_load,GRID_C,0.10)
     if exp>0.05:
