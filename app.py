@@ -927,6 +927,44 @@ def notion_sync_zakazky():
     return jsonify({"ok": True, **stats})
 
 
+@app.route("/webhook/gotenberg-chromium-test", methods=["GET"])
+def gotenberg_chromium_test():
+    """Overenie: Gotenberg Chromium vyrenderuje Chart.js donut do PDF (spúšťa JS)."""
+    GURL = os.environ.get("GOTENBERG_URL", "").rstrip("/")
+    if not GURL:
+        return jsonify({"ok": False, "error": "GOTENBERG_URL nie je nastavený"}), 500
+    g_user = os.environ.get("GOTENBERG_USER", ""); g_pass = os.environ.get("GOTENBERG_PASS", "")
+    g_auth = (g_user, g_pass) if g_user else None
+    html = """<!doctype html><html><head><meta charset='utf-8'>
+<script src='https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js'></script>
+<style>body{font-family:Arial;margin:40px}h1{color:#5E8E2A}</style></head>
+<body><h1>Gotenberg Chromium + Chart.js test</h1>
+<div style='width:420px'><canvas id='c'></canvas></div>
+<script>
+window.chartDone=false;
+new Chart(document.getElementById('c'),{type:'doughnut',
+ data:{labels:['Samospotreba 90%','Export 10%'],datasets:[{data:[90,10],backgroundColor:['#92D050','#9DB2C9'],borderWidth:2,borderColor:'#fff'}]},
+ options:{responsive:true,animation:{onComplete:function(){window.chartDone=true;}},plugins:{legend:{position:'right'}},cutout:'62%'}});
+setTimeout(function(){window.chartDone=true;},2500);
+</script></body></html>"""
+    try:
+        files = {"files": ("index.html", html, "text/html")}
+        data = {"waitForExpression": "window.chartDone === true", "waitDelay": "0.5s"}
+        gr = requests.post(f"{GURL}/forms/chromium/convert/html", files=files, data=data, auth=g_auth, timeout=60)
+        if gr.ok and gr.content[:4] == b"%PDF":
+            import base64 as _b
+            # ulož do storage pre náhľad
+            path = "tmp/gotenberg_chromium_test.pdf"
+            requests.post(f"{SUPABASE_URL}/storage/v1/object/documents/{path}",
+                          headers={"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}", "Content-Type": "application/pdf", "x-upsert": "true"},
+                          data=gr.content, timeout=30)
+            return jsonify({"ok": True, "size": len(gr.content),
+                            "url": f"{SUPABASE_URL}/storage/v1/object/public/documents/{path}"})
+        return jsonify({"ok": False, "status": gr.status_code, "body": gr.text[:200]}), 500
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)[:200]}), 500
+
+
 @app.route("/webhook/notion-sync-diag", methods=["GET"])
 def notion_sync_diag():
     """Diagnostika: na ktoré Notion DB siaha serverový NOTION_TOKEN (počty + vzorky)."""
