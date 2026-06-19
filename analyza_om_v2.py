@@ -318,6 +318,8 @@ def _build_request_from_analyza(analyza: dict, measured_block: dict = None) -> d
             "discount_rate": 0.06,
             "horizon_years": 20,
             "depr_years": 6,
+            "price_escalation_pct": 0.0,   # AOM páčka: ročný rast cien energií %
+            "savings_coefficient": 1.0,    # AOM páčka: korekčný koeficient úspory
             # Výmena batérie počas horizontu — OPCIA, default OFF (batéria predpokladaná na celý horizont)
             "count_battery_replacement": bool(analyza.get("pocitat_vymenu_baterie", False)),
         },
@@ -360,6 +362,10 @@ def _build_request_from_analyza(analyza: dict, measured_block: dict = None) -> d
                 req["dotacia"]["enabled"] = bool(co["dotacia_enabled"])
             if co.get("arb_min_spread_eur_mwh"):
                 req["ems_config"]["arb_min_spread_eur_mwh"] = float(co["arb_min_spread_eur_mwh"])
+            if co.get("price_escalation_pct") not in (None, ""):
+                req["financial"]["price_escalation_pct"] = float(co["price_escalation_pct"])
+            if co.get("savings_coefficient") not in (None, ""):
+                req["financial"]["savings_coefficient"] = float(co["savings_coefficient"])
         except Exception as _e:
             logging.warning("chat_overrides merge failed: %s", _e)
     return req

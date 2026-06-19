@@ -125,6 +125,8 @@ class CashflowBuilder:
         horizon_years: int = 25,
         is_b2b_vat_refund: bool = False,
         vat_rate: float = 0.20,
+        price_escalation_pct: float = 0.0,
+        savings_coefficient: float = 1.0,
     ) -> None:
         self.capex_solar = capex_solar_eur
         self.capex_bess = capex_bess_eur
@@ -142,6 +144,9 @@ class CashflowBuilder:
         self.horizon_years = horizon_years
         self.is_b2b_vat_refund = is_b2b_vat_refund
         self.vat_rate = vat_rate
+        # Manuálne páčky (AOM): ročný rast cien energií % + korekčný koeficient úspory
+        self.price_escalation_pct = price_escalation_pct or 0.0
+        self.savings_coefficient = savings_coefficient if (savings_coefficient and savings_coefficient > 0) else 1.0
 
     def build(
         self,
@@ -184,14 +189,17 @@ class CashflowBuilder:
         total_revenue = 0.0
         for y in range(1, self.horizon_years + 1):
             deg = (1 - annual_degradation_pct / 100) ** (y - 1)
+            # AOM páčky: rast cien energií rastie hodnotu ušetrenej/predanej kWh; korekčný koeficient škáluje výsledok
+            esc = (1.0 + self.price_escalation_pct / 100.0) ** (y - 1)
+            kf = deg * esc * self.savings_coefficient
             cy = CashflowYear(year=y, bess_soh=deg, pv_capacity_factor=deg)
-            # Revenue (degraded)
-            cy.rev_solar_self_cons = saving_decomp_y1.get("sav_solar_self_cons_eur", 0) * deg
-            cy.rev_solar_export = saving_decomp_y1.get("sav_solar_export_eur", 0) * deg
-            cy.rev_bess_self_cons = saving_decomp_y1.get("sav_bess_self_cons_eur", 0) * deg
-            cy.rev_arbitrage = saving_decomp_y1.get("sav_arbitrage_eur", 0) * deg
-            cy.rev_peak_shaving = saving_decomp_y1.get("sav_peak_shaving_eur", 0) * deg
-            cy.rev_mrk_penalty_avoided = saving_decomp_y1.get("sav_mrk_penalty_avoided_eur", 0) * deg
+            # Revenue (degraded × rast cien × koeficient)
+            cy.rev_solar_self_cons = saving_decomp_y1.get("sav_solar_self_cons_eur", 0) * kf
+            cy.rev_solar_export = saving_decomp_y1.get("sav_solar_export_eur", 0) * kf
+            cy.rev_bess_self_cons = saving_decomp_y1.get("sav_bess_self_cons_eur", 0) * kf
+            cy.rev_arbitrage = saving_decomp_y1.get("sav_arbitrage_eur", 0) * kf
+            cy.rev_peak_shaving = saving_decomp_y1.get("sav_peak_shaving_eur", 0) * kf
+            cy.rev_mrk_penalty_avoided = saving_decomp_y1.get("sav_mrk_penalty_avoided_eur", 0) * kf
 
             # OPEX
             cy.cost_solar_opex = self.capex_solar * self.opex_solar_pct

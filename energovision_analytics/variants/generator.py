@@ -116,6 +116,8 @@ class VariantGenerator:
         horizon_years: int | None = None,
         dppo_pct: float | None = None,
         depr_years: int | None = None,
+        price_escalation_pct: float = 0.0,
+        savings_coefficient: float = 1.0,
     ) -> None:
         # Lazy import aby sa rieš cyklický import
         from energovision_analytics.core.defaults import ECON
@@ -160,6 +162,8 @@ class VariantGenerator:
         self.horizon_years = horizon_years
         self.dppo_pct = dppo_pct
         self.depr_years = depr_years
+        self.price_escalation_pct = price_escalation_pct or 0.0
+        self.savings_coefficient = savings_coefficient if (savings_coefficient and savings_coefficient > 0) else 1.0
 
     # ------------------------------------------------------------------ Build inputs
     def _make_pv(self, kwp: float) -> PVInput:
@@ -285,6 +289,8 @@ class VariantGenerator:
             depr_years=self.depr_years,
             discount_rate=self.discount_rate,
             horizon_years=self.horizon_years,
+            price_escalation_pct=self.price_escalation_pct,
+            savings_coefficient=self.savings_coefficient,
         )
         # B1 fix: BÁZOVÝ cashflow je BEZ dotácie → IRR, payback aj cashflow_array sú konzistentné.
         # Správnu dotáciu aplikuje pipeline (engine_service) plným rebuildom cez tieto kwargs.

@@ -256,7 +256,9 @@ def generate_smart_variants(sb, analyza: dict, profile: dict, capex_overrides: d
                 "ems_strategies": ["rule_based"],
             },
             "capex": {"mode": "quick", "capex_pv_eur_per_kwp": 800, "capex_bess_eur_per_kwh": 480},
-            "financial": {"dppo_pct": 0.22, "discount_rate": 0.06, "horizon_years": 20, "depr_years": 6},
+            "financial": {"dppo_pct": 0.22, "discount_rate": 0.06, "horizon_years": 20, "depr_years": 6,
+                          "price_escalation_pct": float((capex_overrides or {}).get("price_escalation_pct") or 0.0),
+                          "savings_coefficient": float((capex_overrides or {}).get("savings_coefficient") or 1.0)},
             "dotacia": {"enabled": True, "scheme_id": "zelena_podnikom"},
             "async_mode": False,
         }
@@ -306,6 +308,10 @@ def _apply_economic_fallback(arch: dict, annual_kwh: float, estimated: bool, cap
     capex_per_kwh = float(overrides.get("capex_per_kwh_bess") or 430.0)
     cena_nakup = float(overrides.get("cena_nakup_eur_kwh") or 0.15)
     cena_predaj = float(overrides.get("cena_predaj_eur_kwh") or 0.02)
+    esc_pct = float(overrides.get("price_escalation_pct") or 0.0)
+    coef = float(overrides.get("savings_coefficient") or 1.0)
+    if coef <= 0:
+        coef = 1.0
 
     kwp = float(arch.get("fve_kwp") or 0)
     bess = float(arch.get("bess_kwh") or 0)
@@ -338,13 +344,17 @@ def _apply_economic_fallback(arch: dict, annual_kwh: float, estimated: bool, cap
     annual_production = kwp * 1050
     self_consumed = annual_production * samospotreba
     exported = max(0.0, annual_production - self_consumed)
-    saving_y1 = self_consumed * cena_nakup + exported * cena_predaj
+    saving_y1 = (self_consumed * cena_nakup + exported * cena_predaj) * coef
 
     dotacia = min(capex_total * 0.30, 200000) if kwp <= 500 else 0
     net_capex = max(1.0, capex_total - dotacia)
 
     payback_simple = net_capex / saving_y1 if saving_y1 > 0 else 99.0
-    annuity_factor = 11.47  # (1-(1+0.06)^-20)/0.06 @ 6 %
+    # rastúca anuita @ 6 % diskont, rast cien energií esc_pct, 20 r
+    _g = esc_pct / 100.0
+    _d = 0.06
+    _n = 20
+    annuity_factor = (_n / (1 + _d)) if abs(_d - _g) < 1e-9 else (1 - ((1 + _g) / (1 + _d)) ** _n) / (_d - _g)
     npv = saving_y1 * 0.79 * annuity_factor - net_capex  # 79 % po DPPO 21 %
 
     arch["npv_eur"] = round(npv, 0)
@@ -363,6 +373,8 @@ def _apply_economic_fallback(arch: dict, annual_kwh: float, estimated: bool, cap
         "cena_predaj_eur_kwh": cena_predaj,
         "samospotreba_pct": round(samospotreba * 100, 0),
         "dotacia_eur": dotacia,
+        "price_escalation_pct": esc_pct,
+        "savings_coefficient": coef,
     }
 
 
@@ -735,6 +747,8 @@ def run_full_analysis(sb, analyza_id: str, capex_overrides: dict = None) -> dict
         "capex_per_kwh_bess": float(overrides.get("capex_per_kwh_bess") or 430.0),
         "cena_nakup_eur_kwh": float(overrides.get("cena_nakup_eur_kwh") or 0.15),
         "cena_predaj_eur_kwh": float(overrides.get("cena_predaj_eur_kwh") or 0.02),
+        "price_escalation_pct": float(overrides.get("price_escalation_pct") or 0.0),
+        "savings_coefficient": float(overrides.get("savings_coefficient") or 1.0),
         "profile_source": profile.get("engine_profile_source", "synthetic"),
     }
     
