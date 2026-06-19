@@ -72,7 +72,7 @@ def _eval_qty_formula(formula, kwp, pocet_panelov) -> int:
         return 1
 
 
-def _pick_inverters(inverters: list[dict], required_ac_kw: float) -> list[dict]:
+def _pick_inverters(inverters: list[dict], required_ac_kw: float, require_hybrid: bool = False) -> list[dict]:
     """Vyber kombináciu meničov (1–MAX_INVERTER_UNITS kusov), ktorá uvezie panely (kwp_actual).
     Pravidlá:
       • celkový oversizing kwp/AC v okne 0.6–MAX_OVERSIZE, cieľ ~TARGET_OVERSIZE
@@ -86,6 +86,12 @@ def _pick_inverters(inverters: list[dict], required_ac_kw: float) -> list[dict]:
     invs = [i for i in inverters if (i.get("ac_kw") or 0) > 0]
     if not invs:
         return []
+    # BESS → len hybridné (battery-ready). Bez BESS → len stringové (lacnejšie, neplytvať hybridom).
+    if require_hybrid:
+        pool = [i for i in invs if i.get("hybrid")]
+    else:
+        pool = [i for i in invs if not i.get("hybrid")]
+    invs = pool or invs  # fallback ak by jedna skupina chýbala (napr. vendor bez hybridu)
     cands = []
     for r in range(1, MAX_INVERTER_UNITS + 1):
         for combo in itertools.combinations_with_replacement(invs, r):
@@ -205,7 +211,7 @@ def calculate_bom_v2(sb, config: dict) -> dict:
     # ===== 2. MENIČE =====
     required_ac_kw = kwp_actual / DC_AC_RATIO
     inverters = stack.get("inverters") or []
-    picked_inv = _pick_inverters(inverters, required_ac_kw)
+    picked_inv = _pick_inverters(inverters, required_ac_kw, require_hybrid=has_bess)
     
     for p in picked_inv:
         items.append({
@@ -465,6 +471,9 @@ def calculate_bom_v2(sb, config: dict) -> dict:
         })
     
     # Totals
+    inverter_warnings = []
+    if has_bess and picked_inv and not all(p["inverter"].get("hybrid") for p in picked_inv):
+        inverter_warnings.append("Pri batérii nebol nájdený vhodný hybridný menič pre tento výkon — vybraný stringový. Skontroluj zostavu/doplň hybrid model.")
     total_cost = sum(it["total_cost"] for it in items)
     total_price = sum(it["total_price"] for it in items)
     
@@ -479,6 +488,7 @@ def calculate_bom_v2(sb, config: dict) -> dict:
             "kwp_actual": kwp_actual,
         },
         "items": items,
+        "warnings": inverter_warnings,
         "totals": {
             "pocet_panelov": pocet_panelov,
             "pocet_menicov": sum(p["qty"] for p in picked_inv),
