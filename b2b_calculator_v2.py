@@ -127,19 +127,25 @@ def _pick_inverters(inverters: list[dict], required_ac_kw: float) -> list[dict]:
     return picked
 
 
-def _pick_bess(batteries: list[dict], target_kwh: float) -> list[dict]:
-    """Vyber jednu alebo viac batérií."""
-    if target_kwh <= 0 or not batteries:
+def _pick_bess(batteries: list[dict], target_kwh: float, count: int = 0) -> list[dict]:
+    """Vyber batérie. Ak count>0 → počet KUSOV modulov (zadáva user priamo).
+    Inak fallback na cieľovú kapacitu v kWh."""
+    if not batteries:
         return []
-    # Najprv skús single match
+    # Režim POČET KUSOV — vyber primárny modulárny modul a vynásob počtom
+    if count and int(count) > 0:
+        modular = [b for b in batteries if b.get("modular")]
+        base = min(modular, key=lambda x: x["capacity_kwh"]) if modular else batteries[0]
+        return [{"battery": base, "qty": int(count)}]
+    # Režim KAPACITA kWh (legacy)
+    if target_kwh <= 0:
+        return []
     sorted_batt = sorted(batteries, key=lambda x: abs(x["capacity_kwh"] - target_kwh))
     best = sorted_batt[0]
     if best.get("modular"):
-        # Modular — qty môže byť > 1
-        qty = max(1, round(target_kwh / best["capacity_kwh"]))
+        qty = max(1, math.ceil(target_kwh / best["capacity_kwh"]))
         return [{"battery": best, "qty": qty}]
     else:
-        # Non-modular — 1 ks
         return [{"battery": best, "qty": 1}]
 
 
@@ -152,6 +158,7 @@ def calculate_bom_v2(sb, config: dict) -> dict:
     
     has_bess = bool(config.get("has_bess"))
     bess_kwh = float(config.get("bess_kwh", 0) or 0)
+    bess_count = int(config.get("bess_count", 0) or 0)
     has_wallbox = bool(config.get("has_wallbox"))
     wallbox_pocet = int(config.get("wallbox_pocet", 0) or 0)
     has_optimizery = bool(config.get("has_optimizery"))
@@ -356,9 +363,12 @@ def calculate_bom_v2(sb, config: dict) -> dict:
                 pos += 1
     
     # ===== 11. BESS (vendor-specific!) =====
-    if has_bess and bess_kwh > 0:
+    if has_bess and (bess_kwh > 0 or bess_count > 0):
         batteries = stack.get("batteries") or []
-        picked_batt = _pick_bess(batteries, bess_kwh)
+        picked_batt = _pick_bess(batteries, bess_kwh, bess_count)
+        # efektívna kapacita (kWh) z reálne vybraných modulov — pre downstream/ekonomiku
+        if picked_batt:
+            bess_kwh = sum(float(p["battery"]["capacity_kwh"]) * p["qty"] for p in picked_batt) or bess_kwh
         for b in picked_batt:
             items.append({
                 "position": pos, "category": "Batéria",
