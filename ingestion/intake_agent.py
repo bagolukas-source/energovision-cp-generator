@@ -45,15 +45,24 @@ def _combine(series_list: list[pd.Series]) -> pd.Series:
     for s in series_list[1:]:
         # Rozhodni: ten istý odber v dvoch súboroch (duplicita) vs reálne podružné merače.
         common = combined.index.intersection(s.index)
-        if len(common) > 0:
-            a = combined.reindex(common); b = s.reindex(common)
+        ov = len(common) / max(1, min(len(combined), len(s)))
+        is_dup = False
+        if len(common) >= 50 and ov > 0.5:
+            a = combined.reindex(common).astype(float); b = s.reindex(common).astype(float)
             denom = float(a.abs().sum())
             rel_diff = float((a - b).abs().sum() / denom) if denom > 0 else 1.0
-            if rel_diff < 0.05:
-                # hodnoty sa zhodujú do 5 % → ten istý odber dvakrát → NEZDVOJUJ, len doplň chýbajúce
-                combined = combined.combine_first(s).sort_index()
-                continue
-        combined = combined.add(s, fill_value=0)
+            try:
+                corr = float(a.corr(b))
+            except Exception:
+                corr = 0.0
+            # ten istý odber (zhodné hodnoty ALEBO zhodný tvar pri časovom prekryve) → duplicita, NEZDVOJUJ.
+            # Rôzne profily pri prekryve = reálne podružné merače → sčítaj.
+            if rel_diff < 0.05 or (corr == corr and corr > 0.9):
+                is_dup = True
+        if is_dup:
+            combined = combined.combine_first(s).sort_index()
+        else:
+            combined = combined.add(s, fill_value=0)
     return combined.sort_index()
 
 

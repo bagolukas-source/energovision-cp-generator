@@ -322,7 +322,7 @@ def _build_deterministic_narratives(ctx, S, full, prof, pm):
         args.append(("Peak shaving cez batériu",
                      f"Batéria {n(bess)} kWh znižuje 15-min špičky zo siete (modelovaná úspora {n(_save_peak)} €/r) — podklad pre zníženie rezervovanej kapacity (RK {n(rk)} kW)."))
     args.append(("ESG profil a CSRD reporting",
-                 f"Ročná úspora ~{n(co2)} t CO₂ (pri SK emisnej intenzite ~0,33 kg/kWh) — doložiteľný podklad pre EU Taxonómiu a CSRD disclosures."))
+                 f"Ročná úspora ~{n(co2)} t CO₂ (pri SK emisnej intenzite ~0,25 kg/kWh) — doložiteľný podklad pre EU Taxonómiu a CSRD disclosures."))
     args.append(("Reziduálna hodnota po 20 rokoch",
                  f"Po 20 rokoch má FVE ešte ~90 % výkonu (degradácia 0,5 %/r); konzervatívne 10 % CAPEX = {n(capex*0.10)} € reziduálnej hodnoty."))
     ctx["zaver_arguments"] = args

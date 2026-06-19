@@ -1165,7 +1165,9 @@ def build_orkestra_context(analyza: dict, variants: list, analyza_id: str = "") 
     clean_mwh = pv_to_load_mwh + bat_to_load_mwh + pv_to_grid_mwh
     carbon = selected.get("carbon") or {}
     co2_avoided_tonnes = float(carbon.get("co2_avoided_t_per_year") or (clean_mwh * 0.25))
-    co2_reduction_pct = (clean_mwh / load_total_mwh * 100) if load_total_mwh > 0 else 0
+    # zníženie uhlíkovej stopy ODBERNÉHO MIESTA = krytie vlastnej spotreby (bez exportu)
+    _self_clean_mwh = pv_to_load_mwh + bat_to_load_mwh
+    co2_reduction_pct = (_self_clean_mwh / load_total_mwh * 100) if load_total_mwh > 0 else 0
     trees_equivalent = int(carbon.get("trees_equivalent") or (co2_avoided_tonnes * 1000 / 21))
     barrels_oil = int(carbon.get("barrels_oil_avoided") or (co2_avoided_tonnes * 2.32))
 

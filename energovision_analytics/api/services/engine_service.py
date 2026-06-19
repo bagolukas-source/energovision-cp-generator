@@ -347,7 +347,8 @@ def build_run_variants_response(
                 "direct_to_load": (float(s.pv_to_load_kwh) / annual_pv) * 100,
                 "charging_battery": (float(s.pv_to_bat_kwh) / annual_pv) * 100,
                 "exported": (float(s.pv_to_grid_kwh) / annual_pv) * 100,
-                "curtailed": (float(s.pv_clipped_kwh) / annual_pv) * 100,
+                # curtailed cez mass-balance rezíduum (rovnako ako energy_flow) — donut sa sčíta na 100 %
+                "curtailed": (_pv_curtailed / annual_pv) * 100,
             }
         else:
             solar_consumption_pct = {"direct_to_load": 0, "charging_battery": 0, "exported": 0, "curtailed": 0}
