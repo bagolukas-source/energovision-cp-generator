@@ -714,6 +714,13 @@ def run_full_analysis(sb, analyza_id: str, capex_overrides: dict = None) -> dict
     analyza = a_res.data
     if not analyza:
         return {"ok": False, "error": "Analyza not found"}
+
+    # AOM páčky z DB (expert nastavenia) — zlúč do capex_overrides ak nie sú zadané ad-hoc
+    capex_overrides = dict(capex_overrides or {})
+    if "price_escalation_pct" not in capex_overrides and analyza.get("price_escalation_pct") is not None:
+        capex_overrides["price_escalation_pct"] = analyza.get("price_escalation_pct")
+    if "savings_coefficient" not in capex_overrides and analyza.get("savings_coefficient") is not None:
+        capex_overrides["savings_coefficient"] = analyza.get("savings_coefficient")
     
     # Vrstva A: classify
     profile = classify_client_profile(analyza)

@@ -318,8 +318,8 @@ def _build_request_from_analyza(analyza: dict, measured_block: dict = None) -> d
             "discount_rate": 0.06,
             "horizon_years": 20,
             "depr_years": 6,
-            "price_escalation_pct": 0.0,   # AOM páčka: ročný rast cien energií %
-            "savings_coefficient": 1.0,    # AOM páčka: korekčný koeficient úspory
+            "price_escalation_pct": float(analyza.get("price_escalation_pct") or 0.0),   # AOM páčka: ročný rast cien energií %
+            "savings_coefficient": float(analyza.get("savings_coefficient") or 1.0),    # AOM páčka: korekčný koeficient úspory
             # Výmena batérie počas horizontu — OPCIA, default OFF (batéria predpokladaná na celý horizont)
             "count_battery_replacement": bool(analyza.get("pocitat_vymenu_baterie", False)),
         },
