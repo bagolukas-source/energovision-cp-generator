@@ -43,6 +43,16 @@ def _combine(series_list: list[pd.Series]) -> pd.Series:
         return cat[~cat.index.duplicated(keep="first")].sort_index()
     combined = series_list[0].copy()
     for s in series_list[1:]:
+        # Rozhodni: ten istý odber v dvoch súboroch (duplicita) vs reálne podružné merače.
+        common = combined.index.intersection(s.index)
+        if len(common) > 0:
+            a = combined.reindex(common); b = s.reindex(common)
+            denom = float(a.abs().sum())
+            rel_diff = float((a - b).abs().sum() / denom) if denom > 0 else 1.0
+            if rel_diff < 0.05:
+                # hodnoty sa zhodujú do 5 % → ten istý odber dvakrát → NEZDVOJUJ, len doplň chýbajúce
+                combined = combined.combine_first(s).sort_index()
+                continue
         combined = combined.add(s, fill_value=0)
     return combined.sort_index()
 
@@ -132,6 +142,11 @@ def _cross_check(annual_kwh, peak_kw, avg_kw, coverage_frac, invoice_annual_kwh,
         checks.append({"name": "peak vs MRK", "ok": ok, "detail": f"peak {round(peak_kw)} kW vs MRK {round(mrk_kw)} kW ({ratio*100:.0f} %)"})
         if not ok:
             conf -= 0.3; warnings.append("Peak prekračuje MRK × 1.2 — možná zámena jednotky alebo zlé MRK.")
+        if avg_kw and avg_kw > mrk_kw:
+            checks.append({"name": "priemer vs MRK", "ok": False,
+                           "detail": f"priemer {round(avg_kw)} kW > MRK {round(mrk_kw)} kW — fyzikálne nemožné"})
+            conf -= 0.5
+            warnings.append("Priemerný výkon prekračuje MRK — spotreba je takmer iste nadhodnotená (zámena jednotky alebo duplicitné súbory).")
     else:
         warnings.append("Bez MRK — peak nemá voči čomu overiť.")
     pa = peak_kw / avg_kw if avg_kw else 0
