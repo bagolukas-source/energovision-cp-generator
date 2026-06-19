@@ -307,7 +307,7 @@ def _apply_economic_fallback(arch: dict, annual_kwh: float, estimated: bool, cap
     capex_per_kwp = float(overrides.get("capex_per_kwp") or 760.0)
     capex_per_kwh = float(overrides.get("capex_per_kwh_bess") or 430.0)
     cena_nakup = float(overrides.get("cena_nakup_eur_kwh") or 0.15)
-    cena_predaj = float(overrides.get("cena_predaj_eur_kwh") or 0.02)
+    cena_predaj = float(overrides.get("cena_predaj_eur_kwh") or 0.06)
     esc_pct = float(overrides.get("price_escalation_pct") or 0.0)
     coef = float(overrides.get("savings_coefficient") or 1.0)
     if coef <= 0:
@@ -756,7 +756,7 @@ def run_full_analysis(sb, analyza_id: str, capex_overrides: dict = None) -> dict
         "capex_per_kwp": float(overrides.get("capex_per_kwp") or 760.0),  # tier mid
         "capex_per_kwh_bess": float(overrides.get("capex_per_kwh_bess") or 430.0),
         "cena_nakup_eur_kwh": float(overrides.get("cena_nakup_eur_kwh") or 0.15),
-        "cena_predaj_eur_kwh": float(overrides.get("cena_predaj_eur_kwh") or 0.02),
+        "cena_predaj_eur_kwh": float(overrides.get("cena_predaj_eur_kwh") or 0.06),
         "price_escalation_pct": float(overrides.get("price_escalation_pct") or 0.0),
         "savings_coefficient": float(overrides.get("savings_coefficient") or 1.0),
         "profile_source": profile.get("engine_profile_source", "synthetic"),

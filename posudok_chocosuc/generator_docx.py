@@ -78,9 +78,9 @@ def generate_chocosuc_docx(ctx: dict) -> bytes:
         ["NPV 20 r. / IRR",f"{eur(full['npv'])} / {num(full['irr'],1)} %"],
         ["Pokrytie spotreby / samospotreba",f"{num(ctx.get('coverage_pct'),1)} % / {num(ctx.get('samosp_pct'),1)} %"],
     ],aligns=["l","r"])
-    nar=_strip(ctx.get("ai_commentary_html"))
-    if nar:
-        for chunk in re.split(r"</p>|\n\n", ctx.get("ai_commentary_html","")):
+    _summary_html = ctx.get("ai_summary_html") or ctx.get("ai_commentary_html") or ""
+    if _strip(_summary_html):
+        for chunk in re.split(r"</p>|\n\n", _summary_html):
             txt=_strip(chunk)
             if txt: _para(doc,txt,size=10)
 
@@ -155,7 +155,13 @@ def generate_chocosuc_docx(ctx: dict) -> bytes:
     ],aligns=["l","r","r"])
 
     # 7 ODPORÚČANIA
-    _kick(doc,"7 — Expert posúdenie a odporúčania"); _h(doc,"Odporúčané kroky")
+    _kick(doc,"7 — Expert posúdenie a odporúčania")
+    _expert_html = ctx.get("ai_expert_html") or ""
+    if _strip(_expert_html):
+        for chunk in re.split(r"</p>|\n\n", _expert_html):
+            txt=_strip(chunk)
+            if txt: _para(doc,txt,size=10)
+    _h(doc,"Odporúčané kroky")
     for i,(t,d) in enumerate(ctx.get("recommendations",[])):
         p=doc.add_paragraph(); r=p.add_run(f"{i+1:02d}  {t}"); r.bold=True; r.font.size=Pt(10); r.font.name="Arial"
         _para(doc,d,size=9,color=GREY)

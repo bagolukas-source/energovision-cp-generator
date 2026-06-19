@@ -117,6 +117,8 @@ class CashflowBuilder:
         monitoring_eur_per_year: float = 300,
         bess_inverter_replacement_year: Optional[int] = 12,
         bess_inverter_replacement_pct: float = 0.10,
+        pv_inverter_replacement_year: Optional[int] = 13,
+        pv_inverter_replacement_pct: float = 0.06,
         bess_cells_replacement_year: Optional[int] = None,
         bess_cells_replacement_interval_years: Optional[int] = None,
         dppo_pct: float = 0.21,
@@ -136,6 +138,8 @@ class CashflowBuilder:
         self.monitoring_eur_per_year = monitoring_eur_per_year
         self.bess_inverter_replacement_year = bess_inverter_replacement_year
         self.bess_inverter_replacement_pct = bess_inverter_replacement_pct
+        self.pv_inverter_replacement_year = pv_inverter_replacement_year
+        self.pv_inverter_replacement_pct = pv_inverter_replacement_pct
         self.bess_cells_replacement_year = bess_cells_replacement_year
         self.bess_cells_replacement_interval_years = bess_cells_replacement_interval_years
         self.dppo_pct = dppo_pct
@@ -153,7 +157,8 @@ class CashflowBuilder:
         annual_saving_y1_eur: float,
         saving_decomp_y1: dict,
         dotacia_eur: float = 0.0,
-        annual_degradation_pct: float = 1.5,  # cumulative kombi PV+BESS
+        annual_degradation_pct: float = 0.5,  # degradácia FVE panelov %/rok
+        bess_degradation_pct: float = 2.0,    # degradácia batérie %/rok (LiFePO4, reset po výmene článkov)
         annual_pv_kwh: float = 0.0,
         annual_bess_discharge_kwh: float = 0.0,
         annual_bess_charge_cost_eur: float = 0.0,
@@ -185,21 +190,35 @@ class CashflowBuilder:
         )
         result.yearly_cashflows.append(y0)
 
+        # roky obnovy kapacity batérie (výmena článkov) — po nich degradácia batérie reštartuje
+        _restore_years = set()
+        if self.bess_cells_replacement_year:
+            _restore_years.add(int(self.bess_cells_replacement_year))
+        if self.bess_cells_replacement_interval_years:
+            _ry = int(self.bess_cells_replacement_interval_years)
+            while _ry < self.horizon_years:
+                _restore_years.add(_ry); _ry += int(self.bess_cells_replacement_interval_years)
+
         # Year 1..horizon
         total_revenue = 0.0
         for y in range(1, self.horizon_years + 1):
-            deg = (1 - annual_degradation_pct / 100) ** (y - 1)
+            deg_pv = (1 - annual_degradation_pct / 100) ** (y - 1)
+            _last_restore = max([ry for ry in _restore_years if ry <= y], default=0)
+            _bess_age = (y - _last_restore) if _last_restore > 0 else (y - 1)
+            deg_bess = (1 - bess_degradation_pct / 100) ** _bess_age
+            deg = deg_pv  # spätná kompatibilita
             # AOM páčky: rast cien energií rastie hodnotu ušetrenej/predanej kWh; korekčný koeficient škáluje výsledok
             esc = (1.0 + self.price_escalation_pct / 100.0) ** (y - 1)
-            kf = deg * esc * self.savings_coefficient
-            cy = CashflowYear(year=y, bess_soh=deg, pv_capacity_factor=deg)
-            # Revenue (degraded × rast cien × koeficient)
-            cy.rev_solar_self_cons = saving_decomp_y1.get("sav_solar_self_cons_eur", 0) * kf
-            cy.rev_solar_export = saving_decomp_y1.get("sav_solar_export_eur", 0) * kf
-            cy.rev_bess_self_cons = saving_decomp_y1.get("sav_bess_self_cons_eur", 0) * kf
-            cy.rev_arbitrage = saving_decomp_y1.get("sav_arbitrage_eur", 0) * kf
-            cy.rev_peak_shaving = saving_decomp_y1.get("sav_peak_shaving_eur", 0) * kf
-            cy.rev_mrk_penalty_avoided = saving_decomp_y1.get("sav_mrk_penalty_avoided_eur", 0) * kf
+            kf_pv = deg_pv * esc * self.savings_coefficient
+            kf_bess = deg_bess * esc * self.savings_coefficient
+            cy = CashflowYear(year=y, bess_soh=deg_bess, pv_capacity_factor=deg_pv)
+            # Revenue — FVE streamy degradujú pomaly (panely), batériové rýchlejšie (články)
+            cy.rev_solar_self_cons = saving_decomp_y1.get("sav_solar_self_cons_eur", 0) * kf_pv
+            cy.rev_solar_export = saving_decomp_y1.get("sav_solar_export_eur", 0) * kf_pv
+            cy.rev_bess_self_cons = saving_decomp_y1.get("sav_bess_self_cons_eur", 0) * kf_bess
+            cy.rev_arbitrage = saving_decomp_y1.get("sav_arbitrage_eur", 0) * kf_bess
+            cy.rev_peak_shaving = saving_decomp_y1.get("sav_peak_shaving_eur", 0) * kf_bess
+            cy.rev_mrk_penalty_avoided = saving_decomp_y1.get("sav_mrk_penalty_avoided_eur", 0) * kf_bess
 
             # OPEX
             cy.cost_solar_opex = self.capex_solar * self.opex_solar_pct
@@ -210,6 +229,8 @@ class CashflowBuilder:
             # Replacement events
             if y == self.bess_inverter_replacement_year:
                 cy.cost_inverter_replacement = self.capex_bess * self.bess_inverter_replacement_pct
+            if y == self.pv_inverter_replacement_year:
+                cy.cost_inverter_replacement += self.capex_solar * self.pv_inverter_replacement_pct  # výmena meniča FVE ~6 % FVE CAPEXu
             if y == self.bess_cells_replacement_year:
                 cy.cost_bess_cells_replacement = self.capex_bess * 0.40
             elif (self.bess_cells_replacement_interval_years

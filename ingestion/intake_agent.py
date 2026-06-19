@@ -201,6 +201,9 @@ def run_agent(files: list[dict], context: dict | None = None, year: int = 2025, 
 
     measured = _combine(series_list) if series_list else pd.Series(dtype=float)
     coverage = _covered_fraction(measured) if len(measured) else 0.0
+    # úplnosť roka: všetkých 12 kalendárnych mesiacov musí byť prítomných, inak doplniť extrapoláciou
+    _months_present = set(int(m) for m in pd.Series(measured.index).dt.month.unique()) if len(measured) else set()
+    _full_year = len(_months_present) >= 12
 
     # ---- ROZCESTNÍK ----
     strat_meta = {}
@@ -212,7 +215,7 @@ def run_agent(files: list[dict], context: dict | None = None, year: int = 2025, 
         else:
             return {"ok": False, "strategy": "needs_input", "reason": "Žiadne čitateľné dáta ani faktúra.",
                     "per_file": per_file, "warnings": warnings}
-    elif coverage >= 0.90:
+    elif coverage >= 0.90 and _full_year:
         strategy = "measured"
         final = measured
     else:

@@ -256,6 +256,7 @@ def _kw_to_15min_mwh(kw: pd.Series) -> pd.Series:
     """Regrid power (kW) na pravidelnú 15-min mriežku → MWh per 15-min interval.
     Upsampling (hodinové→15min) drží energiu (ffill konšt. výkon). Downsampling = priemer."""
     kw = kw.sort_index()
+    kw = kw[~kw.index.duplicated(keep="first")]   # DST/duplicitné timestampy → inak reindex padne
     gran = _infer_gran(kw.index)
     grid = pd.date_range(kw.index.min().floor("15min"), kw.index.max().ceil("15min"), freq="15min")
     if gran > 15:
