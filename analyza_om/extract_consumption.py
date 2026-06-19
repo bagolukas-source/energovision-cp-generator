@@ -15,6 +15,15 @@ from pathlib import Path
 import pandas as pd
 
 
+def _detect_gran_min(idx, default: int = 15) -> int:
+    """Granularita (min) z mediánu rozdielov timestampov — 15/30/60."""
+    try:
+        d = pd.Series(idx).diff().dropna().dt.total_seconds().median()
+        return max(1, int(round(d / 60.0))) if d and d > 0 else default
+    except Exception:
+        return default
+
+
 def parse_sse_csv(fn: Path) -> pd.Series:
     """SSE-D / ZSDIS CSV format: skiprows=5, sep=';', kWh v MWh za 15 min."""
     try:
@@ -177,15 +186,14 @@ def parse_sse_obis_xls(fn: Path) -> pd.Series:
             kw = float(str(v_val).replace(",", "."))
         except Exception:
             continue
-        # kW (priemer 15 min) × multiplier (CT/PT) × 0.25 h = kWh per 15-min interval
-        # aggregate_to_hourly očakáva MWh per 15-min ak interval < 3000s → / 1000
-        kwh_per_15min = kw * multiplier * 0.25
-        mwh_per_15min = kwh_per_15min / 1000.0
-        rows.append((ts, mwh_per_15min))
+        # surový priemerný výkon kW × multiplier (CT/PT); prevod na energiu podľa SKUTOČNEJ granularity nižšie
+        rows.append((ts, kw * multiplier))
 
     if not rows:
         raise ValueError("SSE OBIS: žiadne dátové riadky")
     s = pd.Series(dict(rows)).sort_index()
+    _gm = _detect_gran_min(s.index)
+    s = s * (_gm / 60.0) / 1000.0   # kW × hodiny → kWh, /1000 → MWh per interval (15/30/60 min)
     s.index.name = "ts"
     s.attrs["koef_u"] = koef_u
     s.attrs["koef_i"] = koef_i
@@ -235,10 +243,12 @@ def parse_obis_datetime_xls(fn: Path) -> pd.Series:
             kw = float(str(vv).replace(",", "."))
         except Exception:
             continue
-        rows.append((ts, kw * 0.25 / 1000.0))  # kW × 0.25h = kWh/15min, /1000 = MWh/15min
+        rows.append((ts, kw))  # surový priemerný výkon kW; prevod podľa skutočnej granularity nižšie
     if not rows:
         raise ValueError("OBIS-dt: žiadne dátové riadky")
     s = pd.Series(dict(rows)).sort_index()
+    _gm = _detect_gran_min(s.index)
+    s = s * (_gm / 60.0) / 1000.0   # kW × hodiny → MWh per interval (15/30/60 min)
     s.index.name = "ts"
     return s
 

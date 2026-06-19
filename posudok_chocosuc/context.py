@@ -111,11 +111,10 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None) -> dict:
         stot = base_saving * save_mult
         d_save = stot - base_saving
         npv = eng_npv + d_save * _annuity          # posun NPV o delta úspory (diskontovaná)
-        pb  = (net_capex/(stot+annual_tax-opex)) if (stot+annual_tax-opex)>0 else 99
-        # IRR škálovaná hrubo s payback (Báza = engine IRR)
-        irr = eng_irr * (eng_pb/pb) if (pb>0 and eng_pb>0) else eng_irr
-        if save_mult == 1.0:
-            npv, pb, irr = (eng_npv or npv), (eng_pb or pb), (eng_irr or irr)
+        # Payback aj IRR ODVODENÉ od engine bázy proporcionálne k úspore — JEDNA metodika pre všetky 3 scenáre.
+        # Garantuje monotónnosť: viac úspor → kratšia návratnosť + vyššia IRR (žiadny paradox).
+        pb  = (eng_pb / save_mult) if (eng_pb > 0 and save_mult > 0) else 99
+        irr = (eng_irr * save_mult) if eng_irr > 0 else 0
         return {"name":name,"short":short,"save_total":stot,"opex":opex,"annual_tax":annual_tax,
                 "payback":pb,"npv":npv,"irr":irr,"save_self":save_self,"save_export":save_export}
     # 3 scenáre = cenová citlivosť na engine bázu (NIE pripočítavanie pák — tie sú už v báze)

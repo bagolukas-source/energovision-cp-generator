@@ -256,7 +256,7 @@ def generate_smart_variants(sb, analyza: dict, profile: dict, capex_overrides: d
                 "ems_strategies": ["rule_based"],
             },
             "capex": {"mode": "quick", "capex_pv_eur_per_kwp": 800, "capex_bess_eur_per_kwh": 480},
-            "financial": {"dppo_pct": 0.22, "discount_rate": 0.06, "horizon_years": 20, "depr_years": 6,
+            "financial": {"dppo_pct": 0.21, "discount_rate": 0.06, "horizon_years": 20, "depr_years": 6,
                           "price_escalation_pct": float((capex_overrides or {}).get("price_escalation_pct") or 0.0),
                           "savings_coefficient": float((capex_overrides or {}).get("savings_coefficient") or 1.0)},
             "dotacia": {"enabled": True, "scheme_id": "zelena_podnikom"},
@@ -346,7 +346,9 @@ def _apply_economic_fallback(arch: dict, annual_kwh: float, estimated: bool, cap
     exported = max(0.0, annual_production - self_consumed)
     saving_y1 = (self_consumed * cena_nakup + exported * cena_predaj) * coef
 
-    dotacia = min(capex_total * 0.30, 200000) if kwp <= 500 else 0
+    # Zelená podnikom 2026 (sk_2026.yaml): do 250 kWp, min 50 % samospotreba, 40 % (45 % ak >80 %), strop 50 000 €
+    _dot_int = 0.45 if samospotreba >= 0.80 else 0.40
+    dotacia = min(capex_total * _dot_int, 50000) if (kwp <= 250 and samospotreba >= 0.50) else 0
     net_capex = max(1.0, capex_total - dotacia)
 
     payback_simple = net_capex / saving_y1 if saving_y1 > 0 else 99.0
@@ -534,16 +536,17 @@ def match_dotacie(variants: list[dict]) -> dict:
     """Overí ktoré varianty spĺňajú Zelená podnikom 2026."""
     # Zelená podnikom 2026 parametre (z aom_data/dotacie/sk_2026.yaml)
     SCHEME = "Zelená podnikom 2026"
-    MAX_AMOUNT = 200000
-    INTENSITY = 0.30
-    MIN_SAMOSP = 0.80
+    MAX_AMOUNT = 50000          # sk_2026.yaml: strop Zelená podnikom
+    INTENSITY = 0.40            # základ 40 %, 45 % ak samospotreba > 80 %
+    MIN_SAMOSP = 0.50           # SIEA min 50 % samospotreba
     DEADLINE = "2026-06-30"
     
     eligible = []
     for v in variants:
         samosp = v.get("self_consumption_pct", 0) / 100 if v.get("self_consumption_pct", 0) > 1 else v.get("self_consumption_pct", 0)
         capex = v.get("capex_total_eur", 0)
-        dotacia_amount = min(capex * INTENSITY, MAX_AMOUNT)
+        _intensity = 0.45 if samosp >= 0.80 else INTENSITY
+        dotacia_amount = min(capex * _intensity, MAX_AMOUNT)
         
         ok = samosp >= MIN_SAMOSP and capex > 0
         eligible.append({

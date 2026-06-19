@@ -104,6 +104,7 @@ class RuleBasedEMS:
         _grid_cost = 0.0
         _bess_self_acc = 0.0
         _arbitrage_acc = 0.0
+        _pv_via_bat_acc = 0.0   # kWh PV reálne dodané z batérie do loadu (po RTE)
         _mon_max_load = {}   # mesiac -> max load kW
         _mon_max_net = {}    # mesiac -> max (load - peak_shave) kW
         for i in range(n):
@@ -231,6 +232,7 @@ class RuleBasedEMS:
                     _gcpk = (_grid_cost / _grid_bucket) if _grid_bucket > 1e-9 else 0.0
                     _bess_self_acc += _e_pv * tarif_buy
                     _arbitrage_acc += _e_grid * tarif_buy - _e_grid * _gcpk
+                    _pv_via_bat_acc += _e_pv
                     _pv_bucket = max(0.0, _pv_bucket - _e_pv)
                     _grid_bucket = max(0.0, _grid_bucket - _e_grid)
                     _grid_cost = max(0.0, _grid_cost - _e_grid * _gcpk)
@@ -350,10 +352,13 @@ class RuleBasedEMS:
         summary.bat_soh_end = self.bat.soh
         summary.n_replacements = self.bat.degradation.n_replacements
 
+        summary.pv_to_load_via_bat_kwh = _pv_via_bat_acc
         if summary.pv_total_kwh > 0:
-            summary.samospotreba_pct = (summary.pv_to_load_kwh + summary.pv_to_bat_kwh) / summary.pv_total_kwh * 100
+            # samospotreba = PV reálne spotrebovaná (priamo + cez batériu po RTE), NIE AC vstup do batérie
+            summary.samospotreba_pct = (summary.pv_to_load_kwh + _pv_via_bat_acc) / summary.pv_total_kwh * 100
         if summary.load_total_kwh > 0:
-            summary.samostatnost_pct = (summary.pv_to_load_kwh + summary.bat_discharge_total_kwh) / summary.load_total_kwh * 100
+            # nezávislosť = krytie spotreby z VLASTNEJ FVE (priamo + PV cez batériu), bez grid-nabitej arbitráže
+            summary.samostatnost_pct = (summary.pv_to_load_kwh + _pv_via_bat_acc) / summary.load_total_kwh * 100
 
         # CO2 (SK grid mix)
         summary.co2_avoided_t = (
