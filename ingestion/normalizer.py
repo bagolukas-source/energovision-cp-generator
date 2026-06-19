@@ -41,18 +41,18 @@ def _sniff(raw: bytes) -> str:
 
 
 def _read_table(raw: bytes, filename: str, header=None, nrows=None, skiprows=0,
-                sep=None, encoding=None) -> pd.DataFrame:
+                sep=None, encoding=None, sheet=0) -> pd.DataFrame:
     """Tolerantné načítanie xls/xlsx/csv/html do DataFrame (header=None default)."""
     kind = _sniff(raw)
     suffix = Path(filename).suffix.lower()
     if kind in ("xls", "xlsx") or suffix in (".xls", ".xlsx"):
         engine = "xlrd" if (kind == "xls" or suffix == ".xls") else "openpyxl"
         try:
-            return pd.read_excel(io.BytesIO(raw), sheet_name=0, header=header,
+            return pd.read_excel(io.BytesIO(raw), sheet_name=sheet, header=header,
                                  nrows=nrows, skiprows=skiprows, engine=engine)
         except Exception:
             other = "openpyxl" if engine == "xlrd" else "xlrd"
-            return pd.read_excel(io.BytesIO(raw), sheet_name=0, header=header,
+            return pd.read_excel(io.BytesIO(raw), sheet_name=sheet, header=header,
                                  nrows=nrows, skiprows=skiprows, engine=other)
     if kind == "html":
         tbls = pd.read_html(io.BytesIO(raw))
@@ -75,7 +75,29 @@ def _read_table(raw: bytes, filename: str, header=None, nrows=None, skiprows=0,
     raise ValueError(f"CSV sa nedalo načítať: {last}")
 
 
+def _excel_sheet_names(raw: bytes, filename: str) -> list:
+    kind = _sniff(raw); suffix = Path(filename).suffix.lower()
+    if not (kind in ("xls", "xlsx") or suffix in (".xls", ".xlsx")):
+        return []
+    for eng in ("openpyxl", "xlrd"):
+        try:
+            return list(pd.ExcelFile(io.BytesIO(raw), engine=eng).sheet_names)
+        except Exception:
+            continue
+    return []
+
+
 def _sample_text(raw: bytes, filename: str, max_rows: int = 35) -> str:
+    sheets = _excel_sheet_names(raw, filename)
+    if sheets and len(sheets) > 1:
+        parts = []
+        for sh in sheets[:8]:
+            try:
+                df = _read_table(raw, filename, header=None, nrows=18, sheet=sh)
+                parts.append(f"### HÁROK: {sh}\n" + df.to_csv(index=False, header=False))
+            except Exception:
+                parts.append(f"### HÁROK: {sh}\n(nečitateľný)")
+        return "\n\n".join(parts)
     df = _read_table(raw, filename, header=None, nrows=max_rows)
     return df.to_csv(index=False, header=False)
 
@@ -99,6 +121,7 @@ Dostal si VZORKU súboru (prvé riadky). Vráť IBA JSON predpis ako ho prečít
 
 Schéma JSON:
 {{
+  "sheet_name": <názov hárka so spotrebou pre Excel s viac hárkami; null pre prvý hárok/CSV>,
   "header_row": <číslo riadku s hlavičkou, 0-indexované, alebo null ak bez hlavičky>,
   "skip_rows": <koľko riadkov preskočiť pred dátami>,
   "timestamp_col": <názov ALEBO 0-index stĺpca s časom; ak sú dátum a čas zvlášť, daj [datum_col, cas_col]>,
@@ -117,6 +140,8 @@ Pravidlá:
 - 15-min meranie býva priemerný výkon v kW → value_unit "kW".
 - Excel serial = číslo ako 45658.5 (dni od 1900) → date_format "excel_serial".
 - Ak je hodnota energia za interval, daj kWh/MWh; ak priemerný výkon, daj kW/MW.
+- Súbor môže mať viac hárkov (oddelené "### HÁROK: <názov>"). Vyber hárok s 15-min/hodinovým ČINNÝM ODBEROM a jeho názov daj do sheet_name.
+- V jednom hárku môže byť viac datasetov vedľa seba (napr. odber aj výroba PV). Vyber LEN stĺpce odberu, nie výroby.
 
 VZORKA súboru "{filename}":
 ```
@@ -163,7 +188,8 @@ def _col(df: pd.DataFrame, ref):
 def _apply_spec_to_kw(raw: bytes, filename: str, spec: dict) -> pd.Series:
     hdr = spec.get("header_row")
     skip = int(spec.get("skip_rows") or 0)
-    df = _read_table(raw, filename, header=hdr, skiprows=skip)
+    _sheet = spec.get("sheet_name")
+    df = _read_table(raw, filename, header=hdr, skiprows=skip, sheet=(_sheet if _sheet not in (None, "") else 0))
     df = df.dropna(how="all")
 
     # timestamp
