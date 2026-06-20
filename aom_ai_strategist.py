@@ -254,6 +254,8 @@ def generate_smart_variants(sb, analyza: dict, profile: dict, capex_overrides: d
                 "pv_kwp_options": pv_options,
                 "bess_kwh_options": bess_options,
                 "ems_strategies": ["rule_based"],
+                "merchant_mode": bool(analyza.get("merchant_mode", False)),
+                "merchant_organizer_fee_pct": float(analyza.get("merchant_organizer_fee_pct") or 15.0),
             },
             "capex": {"mode": "quick", "capex_pv_eur_per_kwp": 800, "capex_bess_eur_per_kwh": 480},
             "export_price_eur_kwh": float((capex_overrides or {}).get("cena_predaj_eur_kwh") or analyza.get("tarif_sell") or 0.06),

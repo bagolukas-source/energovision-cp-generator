@@ -311,6 +311,10 @@ def _build_request_from_analyza(analyza: dict, measured_block: dict = None) -> d
             "pv_sklon": _topology_params(analyza)[0],
             "pv_azimut": _topology_params(analyza)[1],
             "pv_konfiguracia": _topology_params(analyza)[2],
+            # Merchant režim — batéria ako podpora bilančnej skupiny (grid-to-grid arbitráž
+            # plnou paľbou, nie samospotreba). Default OFF.
+            "merchant_mode": bool(analyza.get("merchant_mode", False)),
+            "merchant_organizer_fee_pct": float(analyza.get("merchant_organizer_fee_pct") or 15.0),
         },
         "capex": _cp_capex(analyza),
         "financial": {
