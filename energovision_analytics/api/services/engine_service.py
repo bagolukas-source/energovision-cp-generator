@@ -183,6 +183,8 @@ def run_variants_pipeline(request_dict: dict, progress_cb=None) -> dict:
         count_battery_replacement=bool(fin.get("count_battery_replacement", False)),
         price_escalation_pct=fin.get("price_escalation_pct", 0.0),
         savings_coefficient=fin.get("savings_coefficient", 1.0),
+        has_sufficient_profit=fin.get("has_sufficient_profit", True),
+        export_price_eur_kwh=float(request_dict.get("export_price_eur_kwh") or 0.06),
     )
     log.info("Running %d variants", len(v["pv_kwp_options"]) * len(v["bess_kwh_options"]))
     results = gen.run_all(parallel=True)
@@ -472,6 +474,8 @@ def export_variant_intervals(request_dict: dict, pv_kwp: float, bess_kwh: float,
         dppo_pct=fin.get("dppo_pct", 0.21), discount_rate=fin.get("discount_rate", 0.06),
         horizon_years=fin.get("horizon_years", 20), depr_years=fin.get("depr_years", 6),
         price_escalation_pct=fin.get("price_escalation_pct", 0.0), savings_coefficient=fin.get("savings_coefficient", 1.0),
+        has_sufficient_profit=fin.get("has_sufficient_profit", True),
+        export_price_eur_kwh=float(request_dict.get("export_price_eur_kwh") or 0.06),
     )
     r = gen.run_single(pv_kwp, bess_kwh, ems_strategy, keep_intervals=True)
 

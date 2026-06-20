@@ -256,9 +256,11 @@ def generate_smart_variants(sb, analyza: dict, profile: dict, capex_overrides: d
                 "ems_strategies": ["rule_based"],
             },
             "capex": {"mode": "quick", "capex_pv_eur_per_kwp": 800, "capex_bess_eur_per_kwh": 480},
+            "export_price_eur_kwh": float((capex_overrides or {}).get("cena_predaj_eur_kwh") or analyza.get("tarif_sell") or 0.06),
             "financial": {"dppo_pct": 0.21, "discount_rate": 0.06, "horizon_years": 20, "depr_years": 6,
                           "price_escalation_pct": float((capex_overrides or {}).get("price_escalation_pct") or 0.0),
-                          "savings_coefficient": float((capex_overrides or {}).get("savings_coefficient") or 1.0)},
+                          "savings_coefficient": float((capex_overrides or {}).get("savings_coefficient") or 1.0),
+                          "has_sufficient_profit": bool(analyza.get("ma_danovy_zaklad", True))},
             "dotacia": {"enabled": True, "scheme_id": "zelena_podnikom"},
             "async_mode": False,
         }
@@ -297,6 +299,26 @@ def generate_smart_variants(sb, analyza: dict, profile: dict, capex_overrides: d
             arch["estimated_from_mrk"] = True
     
     return archetypes
+
+
+def _irr_level_annuity(net_capex: float, annual: float, n: int = 20) -> float:
+    """IRR rovnomernej anuity (bisekcia) — pre fallback odhad, namiesto účtovného výnosu."""
+    if annual <= 0 or net_capex <= 0:
+        return 0.0
+    def _npv(r):
+        if abs(r) < 1e-9:
+            return annual * n - net_capex
+        return annual * (1 - (1 + r) ** -n) / r - net_capex
+    lo, hi = 0.0, 1.0
+    if _npv(hi) > 0:
+        return 100.0
+    for _ in range(60):
+        mid = (lo + hi) / 2.0
+        if _npv(mid) > 0:
+            lo = mid
+        else:
+            hi = mid
+    return round((lo + hi) / 2.0 * 100.0, 1)
 
 
 def _apply_economic_fallback(arch: dict, annual_kwh: float, estimated: bool, capex_overrides: dict = None):
@@ -365,7 +387,7 @@ def _apply_economic_fallback(arch: dict, annual_kwh: float, estimated: bool, cap
     arch["self_sufficiency_pct"] = round((self_consumed / annual_kwh * 100) if annual_kwh > 0 else 0, 0)
     arch["capex_total_eur"] = round(capex_total, 0)
     arch["dotacia_eur"] = round(dotacia, 0)
-    arch["irr_pct"] = round((saving_y1 * 0.79 / net_capex * 100) if net_capex > 0 else 0, 1)
+    arch["irr_pct"] = _irr_level_annuity(net_capex, saving_y1 * 0.79, _n)
     arch["saving_y1_eur"] = round(saving_y1, 0)
     arch["fallback_estimate"] = True
     arch["assumptions"] = {

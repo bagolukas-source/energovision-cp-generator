@@ -320,6 +320,7 @@ def _build_request_from_analyza(analyza: dict, measured_block: dict = None) -> d
             "depr_years": 6,
             "price_escalation_pct": float(analyza.get("price_escalation_pct") or 0.0),   # AOM páčka: ročný rast cien energií %
             "savings_coefficient": float(analyza.get("savings_coefficient") or 1.0),    # AOM páčka: korekčný koeficient úspory
+            "has_sufficient_profit": bool(analyza.get("ma_danovy_zaklad", True)),   # firma má daňový základ → daňový štít
             # Výmena batérie počas horizontu — OPCIA, default OFF (batéria predpokladaná na celý horizont)
             "count_battery_replacement": bool(analyza.get("pocitat_vymenu_baterie", False)),
         },
@@ -333,6 +334,7 @@ def _build_request_from_analyza(analyza: dict, measured_block: dict = None) -> d
             "negative_spot_curtail": bool(analyza.get("negative_spot_curtail", True)),
             "mrk_export_penalty_eur_kwh": float(analyza.get("mrk_export_penalty_eur_kwh") or 0.03),
         },
+        "export_price_eur_kwh": float(analyza.get("tarif_sell") or 0.06),
         "tariff_overrides": {
             "silova_eur_mwh": analyza.get("tarif_silova_eur_mwh"),
             "distribucia_eur_mwh": analyza.get("tarif_distribucia_eur_mwh"),

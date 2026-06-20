@@ -118,6 +118,8 @@ class VariantGenerator:
         depr_years: int | None = None,
         price_escalation_pct: float = 0.0,
         savings_coefficient: float = 1.0,
+        has_sufficient_profit: bool = True,
+        export_price_eur_kwh: float = 0.06,
     ) -> None:
         # Lazy import aby sa rieš cyklický import
         from energovision_analytics.core.defaults import ECON
@@ -164,6 +166,8 @@ class VariantGenerator:
         self.depr_years = depr_years
         self.price_escalation_pct = price_escalation_pct or 0.0
         self.savings_coefficient = savings_coefficient if (savings_coefficient and savings_coefficient > 0) else 1.0
+        self.has_sufficient_profit = bool(has_sufficient_profit)
+        self.export_price = float(export_price_eur_kwh) if export_price_eur_kwh else 0.06
 
     # ------------------------------------------------------------------ Build inputs
     def _make_pv(self, kwp: float) -> PVInput:
@@ -241,6 +245,7 @@ class VariantGenerator:
                     max_efc_per_year=int(bess.warranty_cycles / self.horizon_years),
                     peak_shave_enabled=(self.site.sadzba.value == "VN"),
                 ),
+                export_price_eur_kwh=self.export_price,
             )
             intervals, summary = ems.run_year(load_kw, pv_kw, self.spot, self.timestamps, 60)
         else:
@@ -291,6 +296,7 @@ class VariantGenerator:
             horizon_years=self.horizon_years,
             price_escalation_pct=self.price_escalation_pct,
             savings_coefficient=self.savings_coefficient,
+            has_sufficient_profit=self.has_sufficient_profit,
         )
         # B1 fix: BÁZOVÝ cashflow je BEZ dotácie → IRR, payback aj cashflow_array sú konzistentné.
         # Správnu dotáciu aplikuje pipeline (engine_service) plným rebuildom cez tieto kwargs.
@@ -353,7 +359,7 @@ class VariantGenerator:
             # fallback: priemerný tarif z retail (FIX) ak spot nedostupný
             _avg = retail.retail_buy_eur_kwh(None) if retail.typ_tarify.value == "fix" else 0.146
             s.sav_solar_self_cons_eur = s.pv_to_load_kwh * _avg
-        s.sav_solar_export_eur = s.pv_to_grid_kwh * 0.06
+        s.sav_solar_export_eur = s.pv_to_grid_kwh * self.export_price
         s.sav_total_eur = s.sav_solar_self_cons_eur + s.sav_solar_export_eur
         s.co2_avoided_t = (s.pv_to_load_kwh + s.pv_to_grid_kwh) * 0.25 / 1000
         s.n_state_normal = n

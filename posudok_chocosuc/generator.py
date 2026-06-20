@@ -3,6 +3,8 @@
 import base64, os
 from pathlib import Path
 from weasyprint import HTML
+import logging
+_log = logging.getLogger("evo")
 from . import charts as C
 
 _HERE = Path(__file__).parent
@@ -471,6 +473,11 @@ def generate_chocosuc_pdf(ctx: dict) -> bytes:
             gr = _rq.post(f"{GURL}/forms/chromium/convert/html", files=files, data=data, auth=g_auth, timeout=120)
             if gr.ok and gr.content[:4] == b"%PDF":
                 return gr.content
-        except Exception:
-            pass
+            raise RuntimeError(f"Gotenberg vrátil neplatné PDF (HTTP {gr.status_code})")
+        except Exception as e:
+            # FAIL-LOUD: WeasyPrint nevykoná JS → Chart.js grafy by boli PRÁZDNE. Radšej zlyhaj viditeľne.
+            _log.error("[chocosuc] Gotenberg zlyhal, posudok by mal prázdne grafy: %s", e)
+            raise RuntimeError(f"Posudok sa nepodarilo vyrenderovať (Gotenberg nedostupný): {e}") from e
+    # GOTENBERG_URL nenastavený → legacy WeasyPrint (POZOR: Chart.js grafy budú prázdne)
+    _log.warning("[chocosuc] GOTENBERG_URL nenastavený — WeasyPrint fallback, Chart.js grafy budú prázdne")
     return HTML(string=html).write_pdf()

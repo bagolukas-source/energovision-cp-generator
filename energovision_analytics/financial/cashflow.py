@@ -129,6 +129,7 @@ class CashflowBuilder:
         vat_rate: float = 0.20,
         price_escalation_pct: float = 0.0,
         savings_coefficient: float = 1.0,
+        has_sufficient_profit: bool = True,
     ) -> None:
         self.capex_solar = capex_solar_eur
         self.capex_bess = capex_bess_eur
@@ -151,6 +152,7 @@ class CashflowBuilder:
         # Manuálne páčky (AOM): ročný rast cien energií % + korekčný koeficient úspory
         self.price_escalation_pct = price_escalation_pct or 0.0
         self.savings_coefficient = savings_coefficient if (savings_coefficient and savings_coefficient > 0) else 1.0
+        self.has_sufficient_profit = bool(has_sufficient_profit)
 
     def build(
         self,
@@ -178,7 +180,7 @@ class CashflowBuilder:
             annual_saving_y1_eur=annual_saving_y1_eur,
         )
 
-        tax_shield_schedule = sk_tax_shield_schedule(net_capex, self.dppo_pct, self.depr_years)
+        tax_shield_schedule = sk_tax_shield_schedule(net_capex, self.dppo_pct, self.depr_years, self.has_sufficient_profit)
 
         # Year 0 — investícia
         y0 = CashflowYear(
@@ -262,7 +264,7 @@ class CashflowBuilder:
         if annual_pv_kwh > 0:
             result.lcoe_eur_mwh = compute_lcoe(
                 self.capex_solar, self.capex_solar * self.opex_solar_pct,
-                annual_pv_kwh, self.horizon_years, self.discount_rate, 0.4,
+                annual_pv_kwh, self.horizon_years, self.discount_rate, annual_degradation_pct,
             )
         if annual_bess_discharge_kwh > 0:
             result.lcos_eur_mwh = compute_lcos(
