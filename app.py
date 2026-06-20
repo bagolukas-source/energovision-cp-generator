@@ -15821,3 +15821,36 @@ def webhook_financovanie_report():
     except Exception as e:
         log.exception("financovanie-report failed")
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/webhook/render-html-pdf", methods=["POST"])
+@require_secret
+def webhook_render_html_pdf():
+    """Generický HTML -> PDF cez Gotenberg Chromium. Vráti pdf_base64.
+    Body: { html: str, landscape?: bool }. Pre EnergoShare (zmluva/splnomocnenie/GDPR)."""
+    import base64 as _b
+    body = request.get_json(force=True, silent=True) or {}
+    html = body.get("html")
+    if not html:
+        return jsonify({"ok": False, "error": "missing html"}), 400
+    GURL = os.environ.get("GOTENBERG_URL", "").rstrip("/")
+    if not GURL:
+        return jsonify({"ok": False, "error": "GOTENBERG_URL not set"}), 500
+    g_user = os.environ.get("GOTENBERG_USER", "")
+    g_pass = os.environ.get("GOTENBERG_PASS", "")
+    g_auth = (g_user, g_pass) if g_user else None
+    landscape = "true" if body.get("landscape") else "false"
+    try:
+        files = {"files": ("index.html", html, "text/html")}
+        data = {
+            "waitDelay": "0.3s", "paperWidth": "8.27", "paperHeight": "11.69",
+            "marginTop": "0.5", "marginBottom": "0.5", "marginLeft": "0.6", "marginRight": "0.6",
+            "printBackground": "true", "landscape": landscape,
+        }
+        gr = requests.post(f"{GURL}/forms/chromium/convert/html", files=files, data=data, auth=g_auth, timeout=90)
+        if not (gr.ok and gr.content[:4] == b"%PDF"):
+            return jsonify({"ok": False, "error": f"gotenberg HTTP {gr.status_code}"}), 502
+        return jsonify({"ok": True, "pdf_base64": _b.b64encode(gr.content).decode("ascii")})
+    except Exception as e:
+        log.exception("render-html-pdf failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
