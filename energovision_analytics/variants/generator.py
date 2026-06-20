@@ -40,6 +40,7 @@ class VariantResult:
     capex_bess_eur_per_kwh: float
     capex_total_eur: float
     dotacia_eur: float
+    merchant_eur: float   # ročný merchant zisk (podpora bilančnej skupiny), 0 ak režim vypnutý
 
     # Engine outputs
     summary: DispatchSummary
@@ -120,6 +121,8 @@ class VariantGenerator:
         savings_coefficient: float = 1.0,
         has_sufficient_profit: bool = True,
         export_price_eur_kwh: float = 0.06,
+        merchant_mode: bool = False,
+        merchant_organizer_fee_pct: float = 15.0,
     ) -> None:
         # Lazy import aby sa rieš cyklický import
         from energovision_analytics.core.defaults import ECON
@@ -168,6 +171,10 @@ class VariantGenerator:
         self.savings_coefficient = savings_coefficient if (savings_coefficient and savings_coefficient > 0) else 1.0
         self.has_sufficient_profit = bool(has_sufficient_profit)
         self.export_price = float(export_price_eur_kwh) if export_price_eur_kwh else 0.06
+        # Merchant mód: batéria slúži ako podpora bilančnej skupiny (grid-to-grid arbitráž
+        # plnou paľbou, nie samospotreba). Default OFF → normálne varianty bez zmeny.
+        self.merchant_mode = bool(merchant_mode)
+        self.merchant_organizer_fee_pct = float(merchant_organizer_fee_pct)
 
     # ------------------------------------------------------------------ Build inputs
     def _make_pv(self, kwp: float) -> PVInput:
@@ -268,13 +275,50 @@ class VariantGenerator:
             "sav_mrk_penalty_avoided_eur": summary.sav_mrk_penalty_avoided_eur,
         }
 
+        # Throughput batérie pre kalkuláciu výmeny článkov (default = EMS výboj)
+        _bess_throughput_kwh = summary.bat_discharge_total_kwh
+
+        # ── MERCHANT MÓD (podpora bilančnej skupiny) ─────────────────────────────
+        # Batéria nerobí samospotrebu/peak — ide grid-to-grid arbitráž PLNOU PAĽBOU
+        # (rozdiel nad spotrebu pokryje bilančná skupina). Hodnota batérie =
+        # merchant spread × (1 − marža organizátora). Limit = RK import + export (MRK)
+        # + výkon/SoC batérie, NIE spotreba. PV samospotreba/export zostávajú.
+        if self.merchant_mode and bess:
+            from energovision_analytics.financial.merchant_arbitrage import compute_merchant_arbitrage
+            _power_kw = bess_kwh * self.bess_c_rate
+            _rk_kw = float(self.site.rk_kw or 0.0)
+            _export_kw = float(self.site.mrk_kw or self.site.rk_kw or 0.0)
+            _dt_h = 1.0
+            try:
+                _dt_h = float((self.timestamps[1] - self.timestamps[0]).total_seconds()) / 3600.0
+            except Exception:
+                _dt_h = 1.0
+            _window = max(4, int(round(24.0 / _dt_h)))
+            _m = compute_merchant_arbitrage(
+                spot_eur_mwh=self.spot,
+                dt_h=_dt_h,
+                bess_kwh=bess_kwh,
+                power_kw_ac=_power_kw,
+                rk_kw=_rk_kw,
+                export_kw=_export_kw,
+                organizer_fee_pct=self.merchant_organizer_fee_pct,
+                window=_window,
+            )
+            # Batéria neslúži záťaži → vynuluj jej samospotrebné/arbitráž/peak streamy
+            saving_decomp["sav_bess_self_cons_eur"] = 0.0
+            saving_decomp["sav_arbitrage_eur"] = 0.0
+            saving_decomp["sav_peak_shaving_eur"] = 0.0
+            saving_decomp["sav_merchant_eur"] = float(_m["annual_profit_eur"])
+            # Throughput z merchantu (plná paľba → rýchlejšia degradácia/výmena)
+            _bess_throughput_kwh = float(_m["throughput_mwh"]) * 1000.0
+
         # Výmena článkov batérie — OPCIA (default OFF). Default = bez výmeny (batéria
         # predpokladaná na celý horizont). Ak ZAPNUTÉ → výmena pri dosiahnutí warranty cyklov
         # (reálny ročný throughput, nie podhodnotené EFC), náklad 40 % BESS capexu, periodicky.
         _cells_repl_interval = None
         if bess and getattr(self, "count_battery_replacement", False):
             _usable = (bess.usable_kwh or (bess_kwh * 0.9))
-            _ann_cycles = (summary.bat_discharge_total_kwh / _usable) if _usable > 0 else 0.0
+            _ann_cycles = (_bess_throughput_kwh / _usable) if _usable > 0 else 0.0
             if _ann_cycles > 0:
                 _life = bess.warranty_cycles / _ann_cycles
                 if _life < self.horizon_years:
@@ -301,10 +345,10 @@ class VariantGenerator:
         # B1 fix: BÁZOVÝ cashflow je BEZ dotácie → IRR, payback aj cashflow_array sú konzistentné.
         # Správnu dotáciu aplikuje pipeline (engine_service) plným rebuildom cez tieto kwargs.
         _cf_kwargs = dict(
-            annual_saving_y1_eur=summary.sav_total_eur,
+            annual_saving_y1_eur=sum(saving_decomp.values()),  # = sav_total (non-merchant) / konzistentné (merchant)
             saving_decomp_y1=saving_decomp,
             annual_degradation_pct=0.5,
-            annual_bess_discharge_kwh=summary.bat_discharge_total_kwh,
+            annual_bess_discharge_kwh=_bess_throughput_kwh,
         )
         financial = builder.build(dotacia_eur=0.0, **_cf_kwargs)
 
@@ -318,6 +362,7 @@ class VariantGenerator:
             capex_bess_eur_per_kwh=self.capex_bess,
             capex_total_eur=total_capex,
             dotacia_eur=0.0,  # finálnu dotáciu nastaví pipeline (rebuild)
+            merchant_eur=float(saving_decomp.get("sav_merchant_eur", 0.0)),
             summary=summary,
             financial=financial,
             intervals=intervals if keep_intervals else None,

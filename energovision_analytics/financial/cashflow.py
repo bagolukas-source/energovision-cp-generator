@@ -28,6 +28,7 @@ class CashflowYear:
     rev_arbitrage: float = 0.0
     rev_peak_shaving: float = 0.0
     rev_mrk_penalty_avoided: float = 0.0
+    rev_merchant: float = 0.0          # merchant arbitráž (podpora bilančnej skupiny, grid-to-grid)
 
     # Costs
     cost_solar_capex: float = 0.0
@@ -52,7 +53,8 @@ class CashflowYear:
     def revenue_total(self) -> float:
         return (self.rev_solar_self_cons + self.rev_solar_export
                 + self.rev_bess_self_cons + self.rev_arbitrage
-                + self.rev_peak_shaving + self.rev_mrk_penalty_avoided)
+                + self.rev_peak_shaving + self.rev_mrk_penalty_avoided
+                + self.rev_merchant)
 
     @property
     def opex_total(self) -> float:
@@ -221,6 +223,7 @@ class CashflowBuilder:
             cy.rev_arbitrage = saving_decomp_y1.get("sav_arbitrage_eur", 0) * kf_bess
             cy.rev_peak_shaving = saving_decomp_y1.get("sav_peak_shaving_eur", 0) * kf_bess
             cy.rev_mrk_penalty_avoided = saving_decomp_y1.get("sav_mrk_penalty_avoided_eur", 0) * kf_bess
+            cy.rev_merchant = saving_decomp_y1.get("sav_merchant_eur", 0) * kf_bess
 
             # OPEX
             cy.cost_solar_opex = self.capex_solar * self.opex_solar_pct

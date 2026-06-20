@@ -185,6 +185,8 @@ def run_variants_pipeline(request_dict: dict, progress_cb=None) -> dict:
         savings_coefficient=fin.get("savings_coefficient", 1.0),
         has_sufficient_profit=fin.get("has_sufficient_profit", True),
         export_price_eur_kwh=float(request_dict.get("export_price_eur_kwh") or 0.06),
+        merchant_mode=bool(v.get("merchant_mode", False)),
+        merchant_organizer_fee_pct=float(v.get("merchant_organizer_fee_pct", 15.0)),
     )
     log.info("Running %d variants", len(v["pv_kwp_options"]) * len(v["bess_kwh_options"]))
     results = gen.run_all(parallel=True)
@@ -283,15 +285,25 @@ def build_run_variants_response(
         # profile/batérii neoplatí (úprimne). Pre report sa bess_self + arbitráž zobrazí ako
         # jeden "batériový prínos" (commingled energia), total je korektný súčet.
         s = r.summary
+        _merch = float(getattr(r, "merchant_eur", 0.0) or 0.0)
+        # Merchant mód (podpora bilančnej skupiny): batéria NEslúži samospotrebe → EMS bess
+        # streamy zahodíme (cashflow ich nahradil merchantom). Konzistentné s NPV.
+        _is_merch = _merch != 0.0
+        _bess_self = 0.0 if _is_merch else float(s.sav_bess_self_cons_eur)
+        _arb = 0.0 if _is_merch else float(s.sav_arbitrage_eur)
+        _peak = 0.0 if _is_merch else float(s.sav_peak_shaving_eur)
+        _solar_streams = float(s.sav_solar_self_cons_eur) + float(s.sav_solar_export_eur)
         value_streams = {
             "solar_self_consumption_eur": float(s.sav_solar_self_cons_eur),
             "solar_export_eur": float(s.sav_solar_export_eur),
-            "bess_self_consumption_eur": float(s.sav_bess_self_cons_eur),
-            "arbitrage_eur": float(s.sav_arbitrage_eur),
-            "peak_shaving_eur": float(s.sav_peak_shaving_eur),
+            "bess_self_consumption_eur": _bess_self,
+            "arbitrage_eur": _arb,
+            "peak_shaving_eur": _peak,
             "mrk_penalty_avoided_eur": float(s.sav_mrk_penalty_avoided_eur),
-            "bess_total_eur": float(s.sav_bess_self_cons_eur) + float(s.sav_arbitrage_eur),
-            "total_eur": float(s.sav_total_eur),
+            "merchant_eur": _merch,
+            "bess_total_eur": _bess_self + _arb + _merch,
+            "total_eur": (_solar_streams + _bess_self + _arb + _peak
+                          + float(s.sav_mrk_penalty_avoided_eur) + _merch),
         }
 
         # === MONTHLY SUMMARY (12) — odhad z PVGIS SK distribúcie ===
