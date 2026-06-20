@@ -302,22 +302,36 @@ def build_run_variants_response(
         annual_export = float(s.pv_to_grid_kwh)
         annual_import = float(s.grid_import_kwh)
         annual_savings = float(s.sav_total_eur)
+        _mf = getattr(s, "monthly_flows", None)   # reálne mesačné toky z EMS behu
+        _ann_ptl = float(s.pv_to_load_kwh) or 1.0
         monthly_summary = []
         for m in range(12):
-            pv_w = PVGIS_SK_MONTHLY_WEIGHTS[m]
-            load_w = SK_LOAD_MONTHLY_WEIGHTS[m]
-            monthly_summary.append({
-                "month": m + 1,
-                "pv_kwh": annual_pv * pv_w,
-                "load_kwh": annual_load * load_w,
-                "export_kwh": annual_export * pv_w,
-                "import_kwh": annual_import * load_w,
-                "solar_to_load_eur": value_streams["solar_self_consumption_eur"] * pv_w,
-                "solar_export_eur": value_streams["solar_export_eur"] * pv_w,
-                "arbitrage_eur": value_streams["arbitrage_eur"] / 12.0,
-                "peak_shaving_eur": value_streams["peak_shaving_eur"] * load_w,
-                "total_eur": annual_savings * ((pv_w + load_w) / 2),
-            })
+            if _mf:
+                mm = _mf[m + 1]
+                _ptl = mm["pv_to_load"]
+                s2l = value_streams["solar_self_consumption_eur"] * (_ptl / _ann_ptl) if _ann_ptl else 0.0
+                sexp = value_streams["solar_export_eur"] * (mm["export"] / annual_export) if annual_export > 0 else 0.0
+                ps = value_streams["peak_shaving_eur"] * (mm["load"] / annual_load) if annual_load > 0 else 0.0
+                arb = value_streams["arbitrage_eur"] / 12.0
+                monthly_summary.append({
+                    "month": m + 1, "pv_kwh": mm["pv"], "load_kwh": mm["load"],
+                    "export_kwh": mm["export"], "import_kwh": mm["import"],
+                    "solar_to_load_eur": s2l, "solar_export_eur": sexp,
+                    "arbitrage_eur": arb, "peak_shaving_eur": ps,
+                    "total_eur": s2l + sexp + arb + ps,
+                })
+            else:
+                # PVGIS odhad — len pri PV-only ceste (bez EMS behu)
+                pv_w = PVGIS_SK_MONTHLY_WEIGHTS[m]; load_w = SK_LOAD_MONTHLY_WEIGHTS[m]
+                monthly_summary.append({
+                    "month": m + 1, "pv_kwh": annual_pv * pv_w, "load_kwh": annual_load * load_w,
+                    "export_kwh": annual_export * pv_w, "import_kwh": annual_import * load_w,
+                    "solar_to_load_eur": value_streams["solar_self_consumption_eur"] * pv_w,
+                    "solar_export_eur": value_streams["solar_export_eur"] * pv_w,
+                    "arbitrage_eur": value_streams["arbitrage_eur"] / 12.0,
+                    "peak_shaving_eur": value_streams["peak_shaving_eur"] * load_w,
+                    "total_eur": annual_savings * ((pv_w + load_w) / 2),
+                })
 
         # === ENERGY FLOW (Sankey-style — pre 4-circle diagram) ===
         # MASS-BALANCE uzáverou: grid_to_load = load − pv_to_load − bat_to_load (strana odberu

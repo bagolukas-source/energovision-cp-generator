@@ -105,6 +105,7 @@ class RuleBasedEMS:
         _bess_self_acc = 0.0
         _arbitrage_acc = 0.0
         _pv_via_bat_acc = 0.0   # kWh PV reálne dodané z batérie do loadu (po RTE)
+        _monthly = {m: {"pv": 0.0, "pv_to_load": 0.0, "export": 0.0, "import": 0.0, "load": 0.0} for m in range(1, 13)}
         _mon_max_load = {}   # mesiac -> max load kW
         _mon_max_net = {}    # mesiac -> max (load - peak_shave) kW
         for i in range(n):
@@ -308,6 +309,9 @@ class RuleBasedEMS:
             _disch_retail += bat_to_load_kwh * tarif_buy
             _grid_charge_kwh += grid_to_bat_kwh
             _mon = ts.month if hasattr(ts,'month') else 1
+            _mm = _monthly[_mon]
+            _mm["pv"] += pv * dt_h; _mm["pv_to_load"] += pv_to_load_kwh
+            _mm["export"] += pv_to_grid_clipped; _mm["import"] += grid_import_kwh; _mm["load"] += load * dt_h
             _net_kw = load - (bat_to_load_peak / dt_h if dt_h > 0 else 0)
             _mon_max_load[_mon] = max(_mon_max_load.get(_mon, 0.0), load)
             _mon_max_net[_mon] = max(_mon_max_net.get(_mon, 0.0), _net_kw)
@@ -330,6 +334,7 @@ class RuleBasedEMS:
         # grid-zdrojove vybitie je BS-arbitraz ocenena spot spreadom (BS vyrovnava komoditu
         # za spot, ziadna distribucia). grid_frac = podiel grid nabijania na celkovom.
         # PRESNÝ rozklad (per-interval cost-basis) — nahrádza priemerujúcu grid_frac aproximáciu.
+        summary.monthly_flows = _monthly   # reálne mesačné toky (MWh po /1000) pre posudok
         summary.sav_bess_self_cons_eur = _bess_self_acc
         summary.sav_arbitrage_eur = _arbitrage_acc
 
