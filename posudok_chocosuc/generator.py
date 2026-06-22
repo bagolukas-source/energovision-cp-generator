@@ -393,6 +393,7 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
     {trow(["Ročná úspora SPOLU","",eur(full['save_total'])],em="em")}
     {trow(["Daňový štít z odpisu (r. 1–6)","6-r lineárny odpis × DPPO 21 %",eur(full.get('annual_tax',0))])}
   </table>
+  {f'<p class="note">⚡ Arbitráž batérie: <b>{eur(ctx.get("arbitrage_eur"))}</b> — {ctx.get("arbitrage_reason")}</p>' if ctx.get("arbitrage_shown") else ""}
   {gimg(g_ben, "Skladba ročného prínosu.")}
   {gimg(g_vs, "Ročný prínos podľa zdroja (value stream) — samospotreba, export, batéria, arbitráž, daňový štít.")}
   <h2 style="margin-top:8px;">Citlivosť a riziko</h2>

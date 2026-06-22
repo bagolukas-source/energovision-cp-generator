@@ -99,6 +99,19 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None) -> dict:
     save_bess   = float(vs.get("bess_self_consumption_eur") or 0)
     save_arb    = float(vs.get("arbitrage_eur") or 0)
     save_peak   = float(vs.get("peak_shaving_eur") or 0)
+    # --- Arbitráž: VŽDY viditeľný stav + dôvod (nikdy tichá 0) ---
+    _is_spot = (str(analyza.get("om_tarif_typ") or analyza.get("tarif_typ") or "spot").lower() == "spot")
+    _has_ems = bool(base.get("value_streams"))
+    if bess_kwh <= 0:
+        arbitrage_reason = "bez batérie — arbitráž sa neuplatňuje"
+    elif abs(save_arb) > 1:
+        arbitrage_reason = "spotová arbitráž z hodinového EMS (nabíjanie v lacných hodinách, vybíjanie v drahých)"
+    elif not _is_spot:
+        arbitrage_reason = "klient nie je na spotovej tarife — arbitráž sa nepočíta (0 €)"
+    elif not _has_ems:
+        arbitrage_reason = "chýba hodinový spotový výpočet (EMS) — arbitráž nevyčíslená (0 €)"
+    else:
+        arbitrage_reason = "spread nedosiahol prah rentability (≥ 30 €/MWh) — arbitráž 0 €"
     base_saving = float(base.get("saving_y1_eur") or vs.get("total_eur") or (save_self+save_export+save_bess+save_arb+save_peak))
     annual_tax  = net_capex/ODPIS*DPPO
 
@@ -184,6 +197,7 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None) -> dict:
         "loss_mwh":max(0.0,float(base.get("pv_total_mwh") or 0)-pv_self_mwh-export_mwh),
         "loss_pct":(max(0.0,float(base.get("pv_total_mwh") or 0)-pv_self_mwh-export_mwh)/float(base.get("pv_total_mwh") or 1)*100),
         "grid_import_mwh":base.get("grid_import_mwh"),"samosp_pct":(pv_self_mwh/float(base.get("pv_total_mwh") or 1)*100),"coverage_pct":base.get("samostatnost_pct"),
+        "arbitrage_eur":save_arb,"arbitrage_reason":arbitrage_reason,"arbitrage_shown":(bess_kwh>0),
         "year_mwh":base.get("load_total_mwh"),"max15_kw":peak_kw,"peak_estimated":peak_estimated,"capex_total_eur":capex,"net_capex_eur":net_capex,"save_peak_eur":save_peak,
         "capex_pv_eur":float(base.get("capex_pv_eur") or 0),"capex_bess_eur":float(base.get("capex_bess_eur") or 0),
         "co2_avoided_tonnes":base.get("co2_avoided_tonnes"),
