@@ -369,7 +369,7 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
     {trow(["Silová zložka",f"{num(ctx['p_silova']*1000,2)} €/MWh",ctx.get('tarif_source','')])}
     {trow(["Variabilná distribúcia",f"{num(ctx['p_dist_var']*1000,2)} €/MWh","VSD tarif"])}
     {trow(["TPS + systémové služby",f"{num((ctx['p_tps']+ctx['p_so'])*1000,2)} €/MWh","pásmo 2"])}
-    {trow(["Avoided cost samospotreby",f"{num(ctx['p_avoided']*1000,1)} €/MWh","kompozit"],em="em")}
+    {trow(["Avoided cost samospotreby",f"{num((ctx.get('p_avoided_eff') or ctx['p_avoided'])*1000,1)} €/MWh","plný retail (engine)"],em="em")}
     {trow(["Pevná zložka distribúcie",f"{num(ctx['p_dist_pevna'],2)} €/kW/mes",f"× RK {num(ctx.get('om_rk_kw'))} kW"])}
     {trow(["Výkupná cena prebytkov",f"{num(ctx['p_sell']*1000,0)} €/MWh","export"])}
   </table>

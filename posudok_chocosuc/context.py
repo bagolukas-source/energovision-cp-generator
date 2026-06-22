@@ -98,6 +98,11 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None) -> dict:
     save_export = float(vs.get("solar_export_eur") or (export_mwh*1000*p_sell))
     save_bess   = float(vs.get("bess_self_consumption_eur") or 0)
     save_arb    = float(vs.get("arbitrage_eur") or 0)
+    # BUG 3 FIX: efektívna avoided sadzba = engine hodnota samospotreby / priama kWh
+    # (engine oceňuje plným retailom; p_avoided=silová+distrib bola len časť → nesedelo s úsporou)
+    _pv_direct_mwh = float(base.get("pv_to_load_mwh") or 0)
+    p_avoided_eff = (save_self / (_pv_direct_mwh*1000)) if _pv_direct_mwh > 0 else p_avoided
+    if p_avoided_eff < p_avoided: p_avoided_eff = p_avoided
     save_peak   = float(vs.get("peak_shaving_eur") or 0)
     # --- Arbitráž: VŽDY viditeľný stav + dôvod (nikdy tichá 0) ---
     _is_spot = (str(analyza.get("om_tarif_typ") or analyza.get("tarif_typ") or "spot").lower() == "spot")
@@ -162,7 +167,7 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None) -> dict:
     res.sort(); P=lambda q:res[int(q*len(res))]
 
     # --- cena nečinnosti ---
-    ina_y1=self_mwh*1000*p_avoided
+    ina_y1=self_mwh*1000*p_avoided_eff   # BUG 3 FIX: plný retail (konzistentne s engine úsporou)
     ina_flat=sum(ina_y1*((1-DEG)**y) for y in range(LIFE))
     ina_infl=sum(ina_y1*((1-DEG)**y)*((1+INFL)**y) for y in range(LIFE))
 
@@ -174,9 +179,12 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None) -> dict:
                 "konstrukcia":base.get("fve_topology","E-W / Juh")}
 
     # benefit_rows = REÁLNE engine zložky (z dispatchu), žiadny paušál
-    benefit_rows=[("FVE samospotreba",f"{pv_self_mwh:.0f} MWh do odberu (priamo + cez batériu)",save_self),
+    _pv_via_bat_mwh = float(base.get("pv_to_bat_mwh") or 0)
+    # BUG 2 FIX: prvý riadok = PRIAMA samospotreba (save_self je z engine priama, 381 MWh);
+    # batéria je samostatný riadok (žiadne dvojité počítanie 418 vs 381).
+    benefit_rows=[("FVE priama samospotreba",f"{_pv_direct_mwh:.0f} MWh priamo do odberu",save_self),
                   ("FVE export prebytkov",f"{export_mwh:.0f} MWh do siete",save_export)]
-    if save_bess>0: benefit_rows.append(("Batéria — posun PV do odberu","PV uskladnené a využité neskôr",save_bess))
+    if save_bess>0: benefit_rows.append(("Batéria — posun PV do odberu",f"{_pv_via_bat_mwh:.0f} MWh PV uskladnené a využité neskôr",save_bess))
     if abs(save_arb)>1: benefit_rows.append(("BESS arbitráž (spot v BS)","nabíjanie lacno / vybíjanie draho",save_arb))
     if save_peak>0: benefit_rows.append(("Peak shaving (zníženie RK)","redukcia mesačného 15-min maxima",save_peak))
     benefit_parts=[("Samospotreba",save_self,"#16A34A"),("Export",save_export,"#A7D08C"),
@@ -210,7 +218,7 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None) -> dict:
         "co2_reduction_pct":base.get("co2_reduction_pct"),"trees_equivalent":base.get("trees_equivalent"),
         "barrels_oil":base.get("barrels_oil"),
         "monthly_mwh":monthly_mwh,"months_filled":_months_filled,"hourly_wd":hourly_wd,"hourly_we":hourly_we,"profile_metrics":pm,"profile_sentence":profile_sentence,"profile":prof,
-        "p_silova":p_silova,"p_dist_var":p_dist_var,"p_tps":p_tps,"p_so":p_so,"p_dist_pevna":p_dist_pevna,"p_sell":p_sell,"p_avoided":p_avoided,
+        "p_silova":p_silova,"p_dist_var":p_dist_var,"p_tps":p_tps,"p_so":p_so,"p_dist_pevna":p_dist_pevna,"p_sell":p_sell,"p_avoided":p_avoided,"p_avoided_eff":p_avoided_eff,
         "tarif_real":tarif_real,"tarif_source":(analyza.get("tarif_source") or "faktúra") if tarif_real else "orientačné (ÚRSO 2026)",
         "components":components,"components_real":comp_real,
         "scenarios3":S,"tornado_base":base_npv,"tornado_drivers":drv,

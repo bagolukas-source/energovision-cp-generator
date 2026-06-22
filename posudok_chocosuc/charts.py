@@ -313,7 +313,7 @@ def chart_capex_split(ctx):
     if dot>1:
         ax.barh(0,dot/1000,left=net/1000,color=LIME,height=0.5,zorder=3,alpha=0.85,hatch="///",edgecolor="white")
         ax.text((net+dot/2)/1000,0,f"dotácia −{dot/1000:.0f}k",ha="center",va="center",color="#1A1A1A",fontsize=8.2,weight="bold")
-    ax.set_yticks([0,1]); ax.set_yticklabels(["Po dotácii","Hrubá investícia"],fontsize=10)
+    ax.set_yticks([0,1]); ax.set_yticklabels(["Čistá investícia","Hrubá investícia"],fontsize=10)  # BUG 4 FIX: "Po dotácii" mätúce keď dotácia=0
     ax.set_xlabel("tis. € (bez DPH)"); ax.set_xlim(0,total/1000*1.08); _clean(ax,yg=False); ax.grid(False)
     import matplotlib.patches as mp
     hs=[mp.Patch(color=c) for _,v,c in segs]; ls=[f"{n} ({v/1000:.0f}k)" for n,v,c in segs]
