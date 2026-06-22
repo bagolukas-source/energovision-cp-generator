@@ -268,6 +268,13 @@ def generate_financovanie_pdf(context: dict) -> bytes:
         "sih": "#3b82f6", "dot": "#8b5cf6", "vl": "#92D050",
     }
     for v in variants:
+        # Bug 9 guard: nedôveryhodné IRR (bez reálneho vstupu / extrémne) → N/A
+        try:
+            _irr = v.get("irr_pct")
+            if _irr is not None and (float(_irr) > 100 or float(v.get("initial_investment") or 0) <= 1):
+                v["irr_pct"] = None
+        except (TypeError, ValueError):
+            v["irr_pct"] = None
         breakdown = v.get("cf_breakdown", [])
         init_inv = float(v.get("init_inv", 0) or 0)
         color = color_map.get(v.get("key", ""), v.get("color", "#94a3b8"))
@@ -304,21 +311,30 @@ def generate_financovanie_pdf(context: dict) -> bytes:
         ctx["best_label"] = recommended.get("label")
         ctx["best_npv"] = recommended.get("npv")
         ctx["best_payback"] = recommended.get("payback")
+        _wkey = npv_winner.get("key")
+        _winit = float(npv_winner.get("initial_investment") or 0)
         lines = []
+        # 1) Najvyššia NPV — formulácia podľa toho, či víťaz vyžaduje vstupný kapitál
+        if _wkey in ("ppa10", "ppa15", "sih") or _winit <= 1:
+            lines.append(
+                f"Najvyššiu čistú súčasnú hodnotu za 20 rokov dosahuje {npv_winner.get('label')} "
+                f"({_fmt_eur(npv_winner.get('npv'))}) — bez vstupného kapitálu, s kladným tokom od začiatku."
+            )
+        else:
+            lines.append(
+                f"Najvyššiu čistú súčasnú hodnotu za 20 rokov dosahuje {npv_winner.get('label')} "
+                f"({_fmt_eur(npv_winner.get('npv'))}); vyžaduje však jednorazový vstupný kapitál {_fmt_eur(_winit)}."
+            )
+        # 2) Najnižší vstupný náklad — modely bez vkladu
         lines.append(
-            f"Najvyššiu čistú súčasnú hodnotu za 20 rokov dosahuje {npv_winner.get('label')} "
-            f"({_fmt_eur(npv_winner.get('npv'))}). Je to dôsledok nulového vstupného kapitálu — "
-            f"celý tok je kladný a nič neviažete vopred."
+            f"Najnižší vstupný náklad ({_fmt_eur(low_up.get('initial_investment') or 0)}) a kladný tok od "
+            f"začiatku majú modely bez vstupného vkladu (PPA, SIH) — pozitívny cashflow od prvého mesiaca."
         )
-        lines.append(
-            f"Najnižší vstupný náklad ({_fmt_eur(low_up.get('initial_investment') or 0)}) a kladný tok "
-            f"od začiatku znamenajú okamžitú návratnosť kapitálu pri možnostiach bez vstupného vkladu (PPA, SIH)."
-        )
+        # 3) Vyvážené odporúčanie
         lines.append(
             f"Ako vyváženú voľbu odporúčame {recommended.get('label')}: nulový vstup, vlastníctvo elektrárne "
             f"od prvého dňa, fixná sadzba a kladný mesačný tok už počas splácania. Vlastná kúpa dáva najvyšší "
-            f"absolútny zisk za 20 rokov, ak má firma voľný kapitál; PPA má najvyššiu NPV, no 10 rokov bez vlastníctva "
-            f"a so závislosťou na poskytovateľovi."
+            f"absolútny zisk za 20 rokov, ak má firma voľný kapitál."
         )
         ctx["conclusion_lines"] = lines
 

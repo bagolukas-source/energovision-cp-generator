@@ -57,7 +57,7 @@
     Elektráreň postaví financujúci partner a vy ju splácate z úspory, ktorú sama vyrobí — od prvého mesiaca ste v pluse.
     Vlastníctvo máte od začiatku a váš kapitál medzitým ostáva pracovať vo firme.
     {% if best_npv %}Čistá súčasná hodnota dosahuje <strong>{{ best_npv|eur }}</strong>.{% endif %}
-    {% if npv_winner and npv_winner.key != best_key %}<br/><span style="color:#475569;">Najvyššiu NPV ({{ npv_winner.npv|eur }}) síce dosahuje {{ npv_winner.label }}, no viaže na 10-ročnú zmluvu bez vlastníctva — preto odporúčame vyváženejší model vyššie.</span>{% endif %}
+    {% if npv_winner and npv_winner.key != best_key %}<br/><span style="color:#475569;">Najvyššiu NPV ({{ npv_winner.npv|eur }}) síce dosahuje {{ npv_winner.label }}{% if npv_winner.key in ['ppa10','ppa15'] %}, no viaže na dlhoročnú PPA zmluvu bez vlastníctva{% elif npv_winner.key == 'vl' %}, no vyžaduje plný vstupný kapitál naraz{% elif npv_winner.key == 'dot' %}, no s 2-ročným čakaním a administratívou{% endif %} — preto odporúčame vyváženejší model vyššie.</span>{% endif %}
   </div>
 
   <div class="guide">
@@ -85,7 +85,7 @@
         <th>IRR</th>
         <th>NPV (20 r)</th>
         <th>Návratnosť</th>
-        <th>Kumulatív 25r</th>
+        <th>Kumulatív 20r</th>
         <th>Počiatočný výdaj</th>
       </tr>
     </thead>
@@ -105,7 +105,7 @@
         </td>
         <td><strong style="color:{% if v.npv and v.npv > 0 %}#15803d{% else %}#dc2626{% endif %}">{{ v.npv|eur }}</strong></td>
         <td>{% if v.payback and v.payback > 0 %}{{ v.payback|num(1) }} r{% else %}<strong style="color:#15803d;">okamžite</strong>{% endif %}</td>
-        <td><strong>{{ v.total_cum_25|eur }}</strong></td>
+        <td><strong>{{ v.cum_milestones[3]|eur }}</strong></td>
         <td>{{ v.initial_investment|eur }}</td>
       </tr>
       {% endfor %}
@@ -152,16 +152,16 @@
     <div class="kpi4-card {% if v.npv and v.npv > 0 %}kpi-good{% else %}kpi-bad{% endif %}">
       <div class="kpi4-label">Čistá súčasná hodnota (NPV)</div>
       <div class="kpi4-value">{{ v.npv|eur }}</div>
-      <div class="kpi4-sub">diskontovaný prínos 25r</div>
+      <div class="kpi4-sub">diskontovaný prínos 20r</div>
     </div>
     <div class="kpi4-card {% if v.total_cum_25 and v.total_cum_25 > 0 %}kpi-good{% else %}kpi-bad{% endif %}">
       <div class="kpi4-label">Celkový zisk 20 rokov</div>
-      <div class="kpi4-value">{{ v.total_cum_25|eur }}</div>
+      <div class="kpi4-value">{{ v.cum_milestones[3]|eur }}</div>
       <div class="kpi4-sub">kumulatívny cashflow</div>
     </div>
     <div class="kpi4-card kpi-good">
       <div class="kpi4-label">{% if v.key == "ppa10" or v.key == "ppa15" %}Prevod FVE (zadarmo){% else %}Bod zvratu{% endif %}</div>
-      <div class="kpi4-value">{% if v.payback and v.payback > 0 %}rok {{ v.payback|int + 2026 }}{% else %}okamžite{% endif %}</div>
+      <div class="kpi4-value">{% if v.key == "ppa10" %}po 10 rokoch{% elif v.key == "ppa15" %}po 15 rokoch{% elif v.payback and v.payback > 0 %}rok {{ v.payback|int + 2026 }}{% else %}okamžite{% endif %}</div>
       <div class="kpi4-sub">{% if v.key == "ppa10" or v.key == "ppa15" %}bezplatný prevod po zmluve{% else %}investícia splatená{% endif %}</div>
     </div>
     <div class="kpi4-card {% if v.irr_pct is none or v.irr_pct == none or v.irr_pct > 8 %}kpi-good{% else %}kpi-neutral{% endif %}">
