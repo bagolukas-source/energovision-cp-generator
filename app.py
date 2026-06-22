@@ -15076,7 +15076,8 @@ def webhook_vyroba_ai_fat():
 def webhook_urgent_watchdog():
     """Sledovanie urgentných úloh: pripomienky riešiteľovi (2h, max 3×) -> eskalácia na zadávateľa -> notifikácia o dokončení."""
     from datetime import datetime as _dt, timedelta as _td, timezone as _tz
-    now = _dt.now(_tz.utc); nowiso = now.isoformat()
+    import urllib.parse as _up
+    now = _dt.now(_tz.utc); nowiso = now.isoformat(); niso = _up.quote(nowiso)
     ur = requests.get(f"{SUPABASE_URL}/rest/v1/users?select=id,full_name,phone", headers=_supa_headers(), timeout=20)
     users = ur.json() if ur.ok else []
     uname = lambda i: next((u.get("full_name") for u in users if u.get("id") == i), "")
@@ -15096,8 +15097,9 @@ def webhook_urgent_watchdog():
     # A) pripomienky
     q = (f"{SUPABASE_URL}/rest/v1/personal_tasks?select={sel}"
          f"&is_urgent=eq.true&status=in.(new,open)&escalated_at=is.null"
-         f"&escalation_count=lt.3&escalation_next_at=lte.{nowiso}")
-    for t in (requests.get(q, headers=_supa_headers(), timeout=20).json() or []):
+         f"&escalation_count=lt.3&escalation_next_at=lte.{niso}")
+    _r = requests.get(q, headers=_supa_headers(), timeout=20); _rows = _r.json() if _r.ok else []
+    for t in (_rows if isinstance(_rows, list) else []):
         notify(t["assignee_user_id"], "🔴", f"⏰ Urgent pripomienka: {t['title']}",
                f"Zadal {uname(t['created_by'])}. Otvor Moje úlohy a rozrob/uzavri.")
         requests.patch(f"{SUPABASE_URL}/rest/v1/personal_tasks?id=eq.{t['id']}", headers=_supa_headers(),
@@ -15107,8 +15109,9 @@ def webhook_urgent_watchdog():
     # B) eskalácia na zadávateľa
     q = (f"{SUPABASE_URL}/rest/v1/personal_tasks?select={sel}"
          f"&is_urgent=eq.true&status=in.(new,open)&escalated_at=is.null"
-         f"&escalation_count=gte.3&escalation_next_at=lte.{nowiso}")
-    for t in (requests.get(q, headers=_supa_headers(), timeout=20).json() or []):
+         f"&escalation_count=gte.3&escalation_next_at=lte.{niso}")
+    _r = requests.get(q, headers=_supa_headers(), timeout=20); _rows = _r.json() if _r.ok else []
+    for t in (_rows if isinstance(_rows, list) else []):
         notify(t["created_by"], "⚠️", f"⚠️ Bez reakcie na urgent: {t['title']}",
                f"{uname(t['assignee_user_id'])} nereaguje ani po 3 pripomienkach. Treba zasiahnuť.")
         requests.patch(f"{SUPABASE_URL}/rest/v1/personal_tasks?id=eq.{t['id']}", headers=_supa_headers(),
@@ -15117,7 +15120,8 @@ def webhook_urgent_watchdog():
     # C) dokončené -> notifikácia zadávateľovi
     q = (f"{SUPABASE_URL}/rest/v1/personal_tasks?select={sel}"
          f"&is_urgent=eq.true&status=eq.done&done_notified_at=is.null")
-    for t in (requests.get(q, headers=_supa_headers(), timeout=20).json() or []):
+    _r = requests.get(q, headers=_supa_headers(), timeout=20); _rows = _r.json() if _r.ok else []
+    for t in (_rows if isinstance(_rows, list) else []):
         notify(t["created_by"], "✅", f"✅ Hotovo: {t['title']}",
                f"Vyriešil/a {uname(t['assignee_user_id'])}.", "normal")
         requests.patch(f"{SUPABASE_URL}/rest/v1/personal_tasks?id=eq.{t['id']}", headers=_supa_headers(),
