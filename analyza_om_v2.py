@@ -1153,8 +1153,10 @@ def build_orkestra_context(analyza: dict, variants: list, analyza_id: str = "") 
     else:
         monthly_solar_to_load = [pv_to_load_mwh * 1000 * c * (TARIF_BUY_EUR_MWH / 1000) for c in PV_MONTHLY]
         monthly_solar_export = [pv_to_grid_mwh * 1000 * c * (TARIF_SELL_EUR_MWH / 1000) for c in PV_MONTHLY]
-        arb_total_eur = bat_to_load_mwh * 110 if bess_kwh > 0 else 0
-        monthly_arbitrage = [arb_total_eur / 12.0] * 12
+        # BEZPEČNOSŤ: bez reálneho spotového EMS (monthly_summary) NEVYČÍSĽUJEME arbitráž.
+        # Paušál ×110 €/MWh fabrikoval neobhájiteľnú úsporu (najmä pri grid-nabíjaní) → 0.
+        arb_total_eur = 0.0
+        monthly_arbitrage = [0.0] * 12
 
     # === Hourly load profile 24h (pred/po) ===
     HOURLY_LOAD = [0.025, 0.024, 0.024, 0.024, 0.025, 0.028, 0.033, 0.045,
