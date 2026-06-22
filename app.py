@@ -15071,6 +15071,61 @@ def webhook_vyroba_ai_fat():
         log.exception("vyroba-ai-fat failed"); return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/webhook/urgent-watchdog", methods=["POST", "GET"])
+@require_secret
+def webhook_urgent_watchdog():
+    """Sledovanie urgentných úloh: pripomienky riešiteľovi (2h, max 3×) -> eskalácia na zadávateľa -> notifikácia o dokončení."""
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    now = _dt.now(_tz.utc); nowiso = now.isoformat()
+    ur = requests.get(f"{SUPABASE_URL}/rest/v1/users?select=id,full_name,phone", headers=_supa_headers(), timeout=20)
+    users = ur.json() if ur.ok else []
+    uname = lambda i: next((u.get("full_name") for u in users if u.get("id") == i), "")
+    uphone = lambda i: next((u.get("phone") for u in users if u.get("id") == i), None)
+    def notify(uid, icon, title, body, prio="high"):
+        ph = uphone(uid)
+        if ph:
+            try: _send_sms(ph, f"{title} {body}".strip()[:300])
+            except Exception: pass
+        try:
+            requests.post(f"{SUPABASE_URL}/rest/v1/notifications", headers=_supa_headers(),
+                json={"channel": "in_app", "icon": icon, "recipient_user_id": uid, "title": title,
+                      "body": body, "link": "/moje-ulohy", "priority": prio}, timeout=15)
+        except Exception: pass
+    sel = "id,title,assignee_user_id,created_by,escalation_count,status"
+    reminders = escalations = dones = 0
+    # A) pripomienky
+    q = (f"{SUPABASE_URL}/rest/v1/personal_tasks?select={sel}"
+         f"&is_urgent=eq.true&status=in.(new,not_started)&escalated_at=is.null"
+         f"&escalation_count=lt.3&escalation_next_at=lte.{nowiso}")
+    for t in (requests.get(q, headers=_supa_headers(), timeout=20).json() or []):
+        notify(t["assignee_user_id"], "🔴", f"⏰ Urgent pripomienka: {t['title']}",
+               f"Zadal {uname(t['created_by'])}. Otvor Moje úlohy a rozrob/uzavri.")
+        requests.patch(f"{SUPABASE_URL}/rest/v1/personal_tasks?id=eq.{t['id']}", headers=_supa_headers(),
+            json={"escalation_count": (t.get("escalation_count") or 0) + 1,
+                  "escalation_next_at": (now + _td(hours=2)).isoformat()}, timeout=15)
+        reminders += 1
+    # B) eskalácia na zadávateľa
+    q = (f"{SUPABASE_URL}/rest/v1/personal_tasks?select={sel}"
+         f"&is_urgent=eq.true&status=in.(new,not_started)&escalated_at=is.null"
+         f"&escalation_count=gte.3&escalation_next_at=lte.{nowiso}")
+    for t in (requests.get(q, headers=_supa_headers(), timeout=20).json() or []):
+        notify(t["created_by"], "⚠️", f"⚠️ Bez reakcie na urgent: {t['title']}",
+               f"{uname(t['assignee_user_id'])} nereaguje ani po 3 pripomienkach. Treba zasiahnuť.")
+        requests.patch(f"{SUPABASE_URL}/rest/v1/personal_tasks?id=eq.{t['id']}", headers=_supa_headers(),
+            json={"escalated_at": nowiso}, timeout=15)
+        escalations += 1
+    # C) dokončené -> notifikácia zadávateľovi
+    q = (f"{SUPABASE_URL}/rest/v1/personal_tasks?select={sel}"
+         f"&is_urgent=eq.true&status=eq.done&done_notified_at=is.null")
+    for t in (requests.get(q, headers=_supa_headers(), timeout=20).json() or []):
+        notify(t["created_by"], "✅", f"✅ Hotovo: {t['title']}",
+               f"Vyriešil/a {uname(t['assignee_user_id'])}.", "normal")
+        requests.patch(f"{SUPABASE_URL}/rest/v1/personal_tasks?id=eq.{t['id']}", headers=_supa_headers(),
+            json={"done_notified_at": nowiso}, timeout=15)
+        dones += 1
+    return jsonify({"ok": True, "pripomienky": reminders, "eskalacie": escalations, "dokoncene": dones})
+
+
 @app.route("/webhook/parse-uloha", methods=["POST"])
 @require_secret
 def webhook_parse_uloha():
@@ -15254,20 +15309,35 @@ def _eva_tool_vytvor_ulohu(args, ctx):
         f = _eva_tool_najdi_projekt({"query": args["project_name"]}, ctx).get("projekty") or []
         if len(f) == 1:
             related_type, related_id = "project", f[0]["id"]
-    prio = args.get("priority") if args.get("priority") in ("low", "normal", "high") else "normal"
+    _praw = (args.get("priority") or "").lower()
+    is_urgent = bool(args.get("urgent")) or _praw == "urgent"
+    prio = _praw if _praw in ("low", "normal", "high") else ("high" if is_urgent else "normal")
     row = {"title": title, "description": args.get("description"), "assignee_user_id": assignee,
            "created_by": ctx["me"]["id"], "due_date": args.get("due_date"), "priority": prio, "source": "whatsapp"}
+    if is_urgent:
+        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+        row["is_urgent"] = True
+        row["escalation_next_at"] = (_dt.now(_tz.utc) + _td(hours=2)).isoformat()
+        row["escalation_count"] = 0
     if related_id:
         row["related_type"] = related_type; row["related_id"] = related_id
     requests.post(f"{SUPABASE_URL}/rest/v1/personal_tasks", headers=_supa_headers(), json=row, timeout=20)
     try:
         requests.post(f"{SUPABASE_URL}/rest/v1/notifications", headers=_supa_headers(),
-                      json={"channel": "in_app", "icon": "✅", "recipient_user_id": assignee,
-                            "title": "Nová úloha: " + title, "body": f"Od {ctx['me'].get('full_name','')} (Eva/WhatsApp)",
-                            "link": "/moje-ulohy", "priority": "high" if prio == "high" else "normal"}, timeout=15)
+                      json={"channel": "in_app", "icon": ("🔴" if is_urgent else "✅"), "recipient_user_id": assignee,
+                            "title": ("🔴 URGENT úloha: " if is_urgent else "Nová úloha: ") + title,
+                            "body": f"Od {ctx['me'].get('full_name','')} (Eva/WhatsApp)",
+                            "link": "/moje-ulohy", "priority": "high" if (prio == "high" or is_urgent) else "normal"}, timeout=15)
     except Exception:
         pass
-    return {"ok": True, "nazov": title, "kto": _eva_user_name(ctx["users"], assignee), "termin": args.get("due_date")}
+    if is_urgent:
+        try:
+            _aphone = next((u.get("phone") for u in ctx["users"] if u.get("id") == assignee), None)
+            if _aphone:
+                _send_sms(_aphone, f"🔴 URGENT od {ctx['me'].get('full_name','')}: {title}. Otvor CRM -> Moje úlohy a daj vediet/vyriesi.")
+        except Exception:
+            pass
+    return {"ok": True, "nazov": title, "kto": _eva_user_name(ctx["users"], assignee), "urgent": is_urgent, "termin": args.get("due_date")}
 
 def _eva_find_my_personal(query, ctx):
     q = (query or "").strip()
@@ -15479,7 +15549,7 @@ def _eva_tools_spec():
          "input_schema": s(kto={"type": "string"})},
         {"name": "vytazenost", "description": "Vyťaženosť tímu — počet aktívnych a po termíne na kolegu.",
          "input_schema": s()},
-        {"name": "vytvor_ulohu", "description": "Založí novú úlohu. assignee_name nepovinný (default odosielateľ), project_name nepovinný.",
+        {"name": "vytvor_ulohu", "description": "Založí novú úlohu. assignee_name nepovinný (default odosielateľ). priority: low|normal|high|urgent. Ak používateľ povie urgentnú/súrne/ASAP/hneď, daj priority='urgent' — spustí sledovanie: riešiteľ dostane SMS+notifikáciu, po 2h bez pohybu pripomienka (max 3×), potom eskalácia na zadávateľa a po dokončení sa zadávateľ upozorní.",
          "input_schema": s(title={"type": "string"}, assignee_name={"type": "string"}, due_date={"type": "string"}, priority={"type": "string"}, description={"type": "string"}, project_name={"type": "string"})},
         {"name": "uzavri_ulohu", "description": "Označí osobnú/WhatsApp úlohu odosielateľa ako hotovú. query = časť názvu.",
          "input_schema": s(query={"type": "string"})},
