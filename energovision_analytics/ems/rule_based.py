@@ -85,7 +85,10 @@ class RuleBasedEMS:
         max_efc = self.config.max_efc_per_year
 
         # MRK target (kW)
-        mrk_target = self.site.mrk_kw * self.config.peak_shave_target_pct
+        # BOD 10 FIX: peak shaving znižuje IMPORTNÚ špičku → prah z RK (import),
+        # nie z MRK (export). Export penalty/clip ostáva na mrk_kw.
+        peak_cap_kw = self.site.rk_kw or self.site.mrk_kw
+        mrk_target = peak_cap_kw * self.config.peak_shave_target_pct
 
         intervals: list[DispatchInterval] = []
         summary = DispatchSummary(rok=timestamps[0].year, n_intervals=n)
@@ -227,16 +230,23 @@ class RuleBasedEMS:
             if bat_to_load_kwh > 0:
                 _tot_b = _pv_bucket + _grid_bucket
                 if _tot_b > 1e-9:
+                    # BOD 8 FIX: vedrá sú v AC-IN báze (nabíjanie). Na dodanie bat_to_load (AC-OUT)
+                    # sa z nich spotrebuje bat_to_load/rte AC-IN — tým sa RTE strata na nabíjaní
+                    # reálne oceníní (predtým zostala "visieť" vo vedre → arbitráž nadhodnotená).
+                    _rte = float(getattr(self.bat.bess, "rte_ac_ac", 0.88)) or 0.88
+                    _need_in = bat_to_load_kwh / _rte
                     _pv_share = _pv_bucket / _tot_b
-                    _e_pv = bat_to_load_kwh * _pv_share
-                    _e_grid = bat_to_load_kwh - _e_pv
+                    _in_pv = _need_in * _pv_share
+                    _in_grid = _need_in - _in_pv
+                    _out_pv = bat_to_load_kwh * _pv_share
+                    _out_grid = bat_to_load_kwh - _out_pv
                     _gcpk = (_grid_cost / _grid_bucket) if _grid_bucket > 1e-9 else 0.0
-                    _bess_self_acc += _e_pv * tarif_buy
-                    _arbitrage_acc += _e_grid * tarif_buy - _e_grid * _gcpk
-                    _pv_via_bat_acc += _e_pv
-                    _pv_bucket = max(0.0, _pv_bucket - _e_pv)
-                    _grid_bucket = max(0.0, _grid_bucket - _e_grid)
-                    _grid_cost = max(0.0, _grid_cost - _e_grid * _gcpk)
+                    _bess_self_acc += _out_pv * tarif_buy
+                    _arbitrage_acc += _out_grid * tarif_buy - _in_grid * _gcpk
+                    _pv_via_bat_acc += _out_pv
+                    _pv_bucket = max(0.0, _pv_bucket - _in_pv)
+                    _grid_bucket = max(0.0, _grid_bucket - _in_grid)
+                    _grid_cost = max(0.0, _grid_cost - _in_grid * _gcpk)
                 else:
                     _bess_self_acc += bat_to_load_kwh * tarif_buy
 
@@ -257,7 +267,9 @@ class RuleBasedEMS:
             soc_after = self.bat.soc_kwh
 
             # EFC tracking
-            efc_this = (pv_to_bat_kwh + grid_to_bat_kwh) / (2 * self.bat.usable_capacity_kwh) \
+            # BOD 9 FIX: 1 plné nabitie usable = 1 EFC (čitateľ=nabíjanie). Predtým /2×usable
+            # podhodnocovalo cykly ~2× → cyklový rozpočet bol príliš voľný.
+            efc_this = (pv_to_bat_kwh + grid_to_bat_kwh) / self.bat.usable_capacity_kwh \
                 if self.bat.usable_capacity_kwh > 0 else 0.0
             self.efc_used_this_year += efc_this
 

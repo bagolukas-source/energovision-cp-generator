@@ -29,6 +29,8 @@ def compute_merchant_arbitrage(
     export_kw: float,        # max export do gridu kW
     rte: float = 0.88,       # round-trip účinnosť
     organizer_fee_pct: float = 15.0,   # marža organizátora bilančnej skupiny
+    imbalance_cost_eur_mwh: float = 0.0,    # BOD 3: odchýlková (imbalance) cena na obchodovaný objem; 0=nastaviť per kontrakt
+    degradation_cost_eur_mwh: float = 0.0,  # BOD 3: cyklová degradačná rezerva na DC throughput; 0=nastaviť per projekt
     soc_min_frac: float = 0.05,
     soc_max_frac: float = 0.95,
     window: int = 96,        # dĺžka denného bloku (intervalov); 96=15-min, 24=hodinové
@@ -36,7 +38,8 @@ def compute_merchant_arbitrage(
     spot = np.asarray(spot_eur_mwh, dtype=float)
     n = len(spot)
     empty = {"annual_profit_eur": 0.0, "throughput_mwh": 0.0, "equiv_cycles": 0.0,
-             "sell_eur": 0.0, "buy_eur": 0.0, "fee_pct": organizer_fee_pct, "gross_eur": 0.0}
+             "sell_eur": 0.0, "buy_eur": 0.0, "fee_pct": organizer_fee_pct, "gross_eur": 0.0,
+             "imbalance_eur": 0.0, "degradation_eur": 0.0}
     if n == 0 or bess_kwh <= 0 or power_kw_ac <= 0:
         return empty
 
@@ -91,10 +94,16 @@ def compute_merchant_arbitrage(
                 if di < len(discharge_cand): dis_left = discharge_cand[di][1]
 
     gross = sell_eur - buy_eur
-    net = gross * (1.0 - organizer_fee_pct / 100.0)              # (100−fee)% zákazníkovi
+    after_fee = gross * (1.0 - organizer_fee_pct / 100.0)        # organizátor si vezme maržu z obchodu
+    # BOD 3 FIX: klientove náklady na aktívum — odchýlka (imbalance) na obchodovaný objem (AC export)
+    # + degradačná rezerva na DC throughput. Default 0 → nastaviť per kontrakt/projekt.
+    imbalance = (ac_export_total / 1000.0) * float(imbalance_cost_eur_mwh)
+    degradation = (dc_throughput / 1000.0) * float(degradation_cost_eur_mwh)
+    net = after_fee - imbalance - degradation                   # (100−fee)% obchodu − náklady aktíva
     equiv_cycles = (dc_throughput / bess_kwh) if bess_kwh > 0 else 0.0
     return {"annual_profit_eur": round(net, 0),
             "throughput_mwh": round(ac_export_total / 1000.0, 1),
             "equiv_cycles": round(equiv_cycles, 0),
             "sell_eur": round(sell_eur, 0), "buy_eur": round(buy_eur, 0),
-            "fee_pct": organizer_fee_pct, "gross_eur": round(gross, 0)}
+            "fee_pct": organizer_fee_pct, "gross_eur": round(gross, 0),
+            "imbalance_eur": round(imbalance, 0), "degradation_eur": round(degradation, 0)}

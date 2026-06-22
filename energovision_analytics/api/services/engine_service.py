@@ -187,6 +187,9 @@ def run_variants_pipeline(request_dict: dict, progress_cb=None) -> dict:
         export_price_eur_kwh=float(request_dict.get("export_price_eur_kwh") or 0.06),
         merchant_mode=bool(v.get("merchant_mode", False)),
         merchant_organizer_fee_pct=float(v.get("merchant_organizer_fee_pct", 15.0)),
+        merchant_imbalance_eur_mwh=float(v.get("merchant_imbalance_eur_mwh", 0.0)),
+        merchant_degradation_eur_mwh=float(v.get("merchant_degradation_eur_mwh", 0.0)),
+        bess_mode=str(v.get("bess_mode", "SITE_SUPPORT_ONLY")),
     )
     log.info("Running %d variants", len(v["pv_kwp_options"]) * len(v["bess_kwh_options"]))
     results = gen.run_all(parallel=True)
@@ -302,6 +305,12 @@ def build_run_variants_response(
             "mrk_penalty_avoided_eur": float(s.sav_mrk_penalty_avoided_eur),
             "merchant_eur": _merch,
             "bess_total_eur": _bess_self + _arb + _merch,
+            # BOD 11: jasné oddelenie hodnoty — účet za elektrinu OM vs obchodovanie bilančnej skupiny
+            "site_savings_eur": (_solar_streams + _bess_self + _arb + _peak
+                                 + float(s.sav_mrk_penalty_avoided_eur)),
+            "merchant_revenue_eur": _merch,
+            "total_project_value_eur": (_solar_streams + _bess_self + _arb + _peak
+                          + float(s.sav_mrk_penalty_avoided_eur) + _merch),
             "total_eur": (_solar_streams + _bess_self + _arb + _peak
                           + float(s.sav_mrk_penalty_avoided_eur) + _merch),
         }
@@ -414,6 +423,9 @@ def build_run_variants_response(
             # === NEW: real data pre charts ===
             "cashflow_array": cf_array,
             "value_streams": value_streams,
+            "site_savings_eur": value_streams["site_savings_eur"],
+            "merchant_revenue_eur": value_streams["merchant_revenue_eur"],
+            "total_project_value_eur": value_streams["total_project_value_eur"],
             "monthly_summary": monthly_summary,
             "energy_flow": energy_flow,
             "solar_consumption_pct": solar_consumption_pct,

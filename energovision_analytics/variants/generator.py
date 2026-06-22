@@ -123,6 +123,9 @@ class VariantGenerator:
         export_price_eur_kwh: float = 0.06,
         merchant_mode: bool = False,
         merchant_organizer_fee_pct: float = 15.0,
+        merchant_imbalance_eur_mwh: float = 0.0,   # BOD 3: odchýlka per MWh obchodu
+        merchant_degradation_eur_mwh: float = 0.0, # BOD 3: cyklová degradačná rezerva per MWh
+        bess_mode: str = "SITE_SUPPORT_ONLY",     # BOD 1: SITE_SUPPORT_ONLY | BALANCE_GROUP_MERCHANT_100
     ) -> None:
         # Lazy import aby sa rieš cyklický import
         from energovision_analytics.core.defaults import ECON
@@ -173,8 +176,12 @@ class VariantGenerator:
         self.export_price = float(export_price_eur_kwh) if export_price_eur_kwh else 0.06
         # Merchant mód: batéria slúži ako podpora bilančnej skupiny (grid-to-grid arbitráž
         # plnou paľbou, nie samospotreba). Default OFF → normálne varianty bez zmeny.
-        self.merchant_mode = bool(merchant_mode)
+        # BOD 1: explicitný režim batérie. BALANCE_GROUP_MERCHANT_100 = merchant; mapuje sa na merchant_mode
+        self.bess_mode = str(bess_mode or "SITE_SUPPORT_ONLY")
+        self.merchant_mode = bool(merchant_mode) or self.bess_mode == "BALANCE_GROUP_MERCHANT_100"
         self.merchant_organizer_fee_pct = float(merchant_organizer_fee_pct)
+        self.merchant_imbalance_eur_mwh = float(merchant_imbalance_eur_mwh or 0.0)
+        self.merchant_degradation_eur_mwh = float(merchant_degradation_eur_mwh or 0.0)
 
     # ------------------------------------------------------------------ Build inputs
     def _make_pv(self, kwp: float) -> PVInput:
@@ -244,7 +251,9 @@ class VariantGenerator:
         tariff = self.tariff_engine.get(self.site.distribuutor, self.site.sadzba)
         retail = RetailCalculator(tariff, typ_tarify=self.site.typ_tarify)
 
-        if bess:
+        # BOD 11 FIX: v merchant móde batéria neslúži OM → site KPI/summary = PV-only
+        # (samospotreba/samostatnosť odrážajú LEN PV; batéria zarába zvlášť ako merchant).
+        if bess and not self.merchant_mode:
             battery = BatteryPack(bess, initial_soc_pct=0.5)
             ems = RuleBasedEMS(
                 battery, self.site, tariff, retail,
@@ -256,7 +265,7 @@ class VariantGenerator:
             )
             intervals, summary = ems.run_year(load_kw, pv_kw, self.spot, self.timestamps, 60)
         else:
-            # PV-only — vyrobíme fake summary bez batérie
+            # PV-only (alebo merchant: batéria mimo OM) — site summary len z PV
             summary = self._build_pv_only_summary(load_kw, pv_kw, retail)
             intervals = []
 
@@ -302,6 +311,8 @@ class VariantGenerator:
                 rk_kw=_rk_kw,
                 export_kw=_export_kw,
                 organizer_fee_pct=self.merchant_organizer_fee_pct,
+                imbalance_cost_eur_mwh=self.merchant_imbalance_eur_mwh,
+                degradation_cost_eur_mwh=self.merchant_degradation_eur_mwh,
                 window=_window,
             )
             # Batéria neslúži záťaži → vynuluj jej samospotrebné/arbitráž/peak streamy

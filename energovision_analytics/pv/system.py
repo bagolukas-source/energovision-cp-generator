@@ -40,7 +40,9 @@ class PVSystemSim:
             sklon=self.pv.sklon_stupne,
             azimut=self.pv.azimut_stupne,
             timestep_min=timestep_min,
-            losses_factor=self.loss_factor,
+            # BOD 6 FIX: PVGIS yieldy sú net (~14%). Komponentový model strát aplikujeme LEN ak
+            # je projekt HORŠÍ než PVGIS baseline (0.86); nikdy nenafukujeme nad PVGIS net.
+            losses_factor=min(1.0, self.loss_factor / 0.86),
             konfig=getattr(self.pv.konfiguracia, "value", str(self.pv.konfiguracia)),
         )
 

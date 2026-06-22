@@ -218,7 +218,7 @@ def synthesize_hourly_profile(
     sklon: float = 30,
     azimut: float = 180,
     timestep_min: int = 60,
-    losses_factor: float = 0.86,
+    losses_factor: float = 1.0,   # BOD 6 FIX: PVGIS tabuľky sú UŽ net po ~14% stratách → default 1.0 (žiadne dvojité počítanie)
     konfig: str = "2xP",
 ) -> pd.DataFrame:
     """Syntetizuj hodinový PV profil pre celý rok.
@@ -229,7 +229,9 @@ def synthesize_hourly_profile(
         installed_kwp: inštalovaný výkon
         sklon, azimut: orientácia
         timestep_min: 15 alebo 60
-        losses_factor: kumulatívne losses (soiling, snow, mismatch, wiring, inverter)
+        losses_factor: VOLITEĽNÝ dodatočný derating (1.0 = žiadny). POZOR: PVGIS yieldy
+            v SK_PVGIS_MONTHLY sú už net po ~14% systémových stratách — toto NIE je
+            opätovné uplatnenie 14%, ale len extra zrážka ak je projekt horší než baseline.
 
     Returns:
         DataFrame s timestamp index a stĺpcom 'pv_kw'.
@@ -263,6 +265,7 @@ def synthesize_hourly_profile(
     # Konverzia na kW per timestep
     for ts, cs in zip(timestamps, cs_per_ts):
         m_idx = ts.month - 1
+        # monthly_yields je už net (PVGIS 14%); losses_factor je dodatočný derating (default 1.0)
         target_kwh_month = monthly_yields[m_idx] * installed_kwp * losses_factor
         if monthly_cs_sums[m_idx] > 0 and cs > 0:
             # Aplikuj normalizáciu
