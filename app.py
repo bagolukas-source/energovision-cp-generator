@@ -15095,7 +15095,7 @@ def webhook_urgent_watchdog():
     reminders = escalations = dones = 0
     # A) pripomienky
     q = (f"{SUPABASE_URL}/rest/v1/personal_tasks?select={sel}"
-         f"&is_urgent=eq.true&status=in.(new,not_started)&escalated_at=is.null"
+         f"&is_urgent=eq.true&status=in.(new,open)&escalated_at=is.null"
          f"&escalation_count=lt.3&escalation_next_at=lte.{nowiso}")
     for t in (requests.get(q, headers=_supa_headers(), timeout=20).json() or []):
         notify(t["assignee_user_id"], "🔴", f"⏰ Urgent pripomienka: {t['title']}",
@@ -15106,7 +15106,7 @@ def webhook_urgent_watchdog():
         reminders += 1
     # B) eskalácia na zadávateľa
     q = (f"{SUPABASE_URL}/rest/v1/personal_tasks?select={sel}"
-         f"&is_urgent=eq.true&status=in.(new,not_started)&escalated_at=is.null"
+         f"&is_urgent=eq.true&status=in.(new,open)&escalated_at=is.null"
          f"&escalation_count=gte.3&escalation_next_at=lte.{nowiso}")
     for t in (requests.get(q, headers=_supa_headers(), timeout=20).json() or []):
         notify(t["created_by"], "⚠️", f"⚠️ Bez reakcie na urgent: {t['title']}",
