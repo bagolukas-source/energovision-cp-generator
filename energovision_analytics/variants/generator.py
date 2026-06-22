@@ -126,6 +126,7 @@ class VariantGenerator:
         merchant_imbalance_eur_mwh: float = 0.0,   # BOD 3: odchýlka per MWh obchodu
         merchant_degradation_eur_mwh: float = 0.0, # BOD 3: cyklová degradačná rezerva per MWh
         bess_mode: str = "SITE_SUPPORT_ONLY",     # BOD 1: SITE_SUPPORT_ONLY | BALANCE_GROUP_MERCHANT_100
+        merchant_revenue_share_pct: float = 1.0,   # R2 #6: podiel klienta z čistého merchant výnosu
     ) -> None:
         # Lazy import aby sa rieš cyklický import
         from energovision_analytics.core.defaults import ECON
@@ -182,6 +183,7 @@ class VariantGenerator:
         self.merchant_organizer_fee_pct = float(merchant_organizer_fee_pct)
         self.merchant_imbalance_eur_mwh = float(merchant_imbalance_eur_mwh or 0.0)
         self.merchant_degradation_eur_mwh = float(merchant_degradation_eur_mwh or 0.0)
+        self.merchant_revenue_share_pct = float(merchant_revenue_share_pct if merchant_revenue_share_pct is not None else 1.0)
 
     # ------------------------------------------------------------------ Build inputs
     def _make_pv(self, kwp: float) -> PVInput:
@@ -313,6 +315,7 @@ class VariantGenerator:
                 organizer_fee_pct=self.merchant_organizer_fee_pct,
                 imbalance_cost_eur_mwh=self.merchant_imbalance_eur_mwh,
                 degradation_cost_eur_mwh=self.merchant_degradation_eur_mwh,
+                revenue_share_pct=self.merchant_revenue_share_pct,
                 window=_window,
             )
             # Batéria neslúži záťaži → vynuluj jej samospotrebné/arbitráž/peak streamy

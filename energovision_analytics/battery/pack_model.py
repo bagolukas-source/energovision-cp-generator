@@ -111,17 +111,23 @@ class BatteryPack:
         )
 
     # ------------------------------------------------------------------ Dispatch
-    def can_charge_kwh(self, dt_hours: float) -> float:
-        """Maximálne kWh, ktoré sa dá nabit v tomto timestepe."""
-        max_by_power = self.bess.power_kw_ac * dt_hours
-        max_by_capacity = (self.soc_max_kwh * self.soh - self.soc_kwh)
-        return max(0.0, min(max_by_power, max_by_capacity))
+    def can_charge_kwh(self, dt_hours: float, eta_charge: float | None = None) -> float:
+        """Max AC kWh na nabitie v kroku (AC báza). R2 #2 FIX: AC výkonový limit (menič) vs
+        DC headroom prepočítaný na AC-in cez eta_charge (predtým sa miešalo AC s DC)."""
+        if eta_charge is None:
+            eta_charge = self.bess.rte_ac_ac ** 0.5
+        max_by_power = self.bess.power_kw_ac * dt_hours                                   # AC
+        max_by_headroom_ac = (self.soc_max_kwh * self.soh - self.soc_kwh) / max(eta_charge, 1e-6)  # DC→AC-in
+        return max(0.0, min(max_by_power, max_by_headroom_ac))
 
-    def can_discharge_kwh(self, dt_hours: float) -> float:
-        """Maximálne kWh, ktoré sa dá vybit v tomto timestepe."""
-        max_by_power = self.bess.power_kw_ac * dt_hours
-        max_by_capacity = (self.soc_kwh - self.soc_min_kwh * self.soh)
-        return max(0.0, min(max_by_power, max_by_capacity))
+    def can_discharge_kwh(self, dt_hours: float, eta_discharge: float | None = None) -> float:
+        """Max AC kWh na vybitie v kroku (AC báza). R2 #2 FIX: AC výkonový limit vs DC dostupné
+        prepočítané na AC-out cez eta_discharge (predtým power-limit podhodnotený o eta)."""
+        if eta_discharge is None:
+            eta_discharge = self.bess.rte_ac_ac ** 0.5
+        max_by_power = self.bess.power_kw_ac * dt_hours                                   # AC
+        max_by_capacity_ac = (self.soc_kwh - self.soc_min_kwh * self.soh) * eta_discharge  # DC→AC-out
+        return max(0.0, min(max_by_power, max_by_capacity_ac))
 
     def charge(self, requested_kwh: float, dt_hours: float, temp_c: Optional[float] = None) -> DispatchResult:
         """Nabite batériu (požadovaná energia z AC strany).
@@ -148,7 +154,7 @@ class BatteryPack:
         eta_ch, _eta_dis = split_rte(rte)
 
         # Enforcement: capacity + power limit
-        max_allowed = self.can_charge_kwh(dt_hours)
+        max_allowed = self.can_charge_kwh(dt_hours, eta_ch)   # R2 #2: AC báza (headroom/eta)
         actual_ac = min(requested_kwh, max_allowed)
         if actual_ac < requested_kwh:
             result.rejected_reason = (
@@ -194,8 +200,8 @@ class BatteryPack:
         result.rte_used = rte
         _eta_ch, eta_dis = split_rte(rte)
 
-        # Maximum AC výstup určuje SoC × eta_dis
-        max_ac_out = self.can_discharge_kwh(dt_hours) * eta_dis
+        # R2 #2 FIX: can_discharge_kwh už vracia AC-out (DC×eta alebo AC power limit) — nenásobiť eta znova
+        max_ac_out = self.can_discharge_kwh(dt_hours, eta_dis)
         actual_ac = min(requested_kwh, max_ac_out)
         if actual_ac < requested_kwh:
             result.rejected_reason = (

@@ -267,9 +267,10 @@ class RuleBasedEMS:
             soc_after = self.bat.soc_kwh
 
             # EFC tracking
-            # BOD 9 FIX: 1 plné nabitie usable = 1 EFC (čitateľ=nabíjanie). Predtým /2×usable
-            # podhodnocovalo cykly ~2× → cyklový rozpočet bol príliš voľný.
-            efc_this = (pv_to_bat_kwh + grid_to_bat_kwh) / self.bat.usable_capacity_kwh \
+            # BOD 9 FIX: 1 plné nabitie usable = 1 EFC. R2 #3 FIX: pv_to_bat/grid_to_bat sú AC-in,
+            # usable_capacity je DC → AC-in × eta_charge = DC uložené (konzistentná DC báza, nemiešať).
+            _eta_ch = self.bat.bess.rte_ac_ac ** 0.5
+            efc_this = (pv_to_bat_kwh + grid_to_bat_kwh) * _eta_ch / self.bat.usable_capacity_kwh \
                 if self.bat.usable_capacity_kwh > 0 else 0.0
             self.efc_used_this_year += efc_this
 

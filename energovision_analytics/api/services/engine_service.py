@@ -189,6 +189,7 @@ def run_variants_pipeline(request_dict: dict, progress_cb=None) -> dict:
         merchant_organizer_fee_pct=float(v.get("merchant_organizer_fee_pct", 15.0)),
         merchant_imbalance_eur_mwh=float(v.get("merchant_imbalance_eur_mwh", 0.0)),
         merchant_degradation_eur_mwh=float(v.get("merchant_degradation_eur_mwh", 0.0)),
+        merchant_revenue_share_pct=float(v.get("merchant_revenue_share_pct", 1.0)),
         bess_mode=str(v.get("bess_mode", "SITE_SUPPORT_ONLY")),
     )
     log.info("Running %d variants", len(v["pv_kwp_options"]) * len(v["bess_kwh_options"]))
