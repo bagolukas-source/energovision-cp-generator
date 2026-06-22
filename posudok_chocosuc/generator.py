@@ -45,6 +45,7 @@ def _energy_flow_svg(ctx):
     grid_imp = n("grid_import_mwh"); exp = n("export_mwh")
     pv_load = n("pv_to_load_mwh") or max(0.0, pv - exp)
     bat_out = n("bat_to_load_mwh")
+    bat_chg = n("pv_to_bat_mwh") + n("grid_to_bat_mwh")
     def f(x):
         return ("%0.0f" % round(x)).replace(",", " ")
     def circ(cx, cy, r, fill, border, title, big, sub):
@@ -70,7 +71,7 @@ def _energy_flow_svg(ctx):
     parts.append(circ(720,150,72,"#FEF3C7","#FCD34D","Solar PV",f(pv),"MWh generácia"))
     parts.append(circ(230,300,72,"#DBEAFE","#93C5FD","Sieť",f(grid_imp),f"MWh · export {f(exp)}"))
     parts.append(circ(470,300,72,"#F3E8FF","#D8B4FE","Spotreba",f(load),"MWh spotreba"))
-    parts.append(circ(720,352,56,"#DCFCE7","#86EFAC","Batéria",f(bat_out),"MWh výstup"))
+    parts.append(circ(720,352,56,"#DCFCE7","#86EFAC","Batéria",f(bat_out),(f"MWh von · {f(bat_chg)} nabité" if bat_chg>0.5 else "MWh výstup")))
     # labely tokov
     parts.append(lbl(475,52,f(exp),AMBER))
     parts.append(lbl(600,243,f(pv_load),AMBER))
@@ -109,7 +110,7 @@ def _chartjs_init(ctx):
     _donut_d = {"l": ["%s  %s %%" % (nm, round(v, 1)) for nm, v, c in _dsegs],
                 "v": [round(v, 1) for nm, v, c in _dsegs],
                 "c": [c for nm, v, c in _dsegs],
-                "center": (str(_samosp).rstrip("0").rstrip(".") if "." in str(_samosp) else str(_samosp)) + " %",
+                "center": (("%g"%_samosp).replace(".",",")) + " %",
                 "centerSub": "samospotreba"}
     D = {
         "donut": _donut_d,
@@ -160,8 +161,8 @@ def render_chocosuc_html(ctx: dict) -> str:
     _drows=[("Priamo do odberu","#92D050",_dir,_pvm*_dir/100.0)]
     if _bat>0.4: _drows.append(("Cez batériu","#5E8E2A",_bat,_pvm*_bat/100.0))
     _drows.append(("Export do siete","#9DB2C9",_exp,_expm))
-    donut_rows=("".join('<div style="margin:5px 0;font-size:11.5pt;color:#374151"><span style="display:inline-block;width:11px;height:11px;background:%s;border-radius:2px;margin-right:8px;vertical-align:middle"></span>%s — <b>%s %%</b> <span style="color:#9CA3AF">(%s MWh)</span></div>' % (c,nm,(("%g"%round(v,1))),(("%g"%round(m,0))) ) for nm,c,v,m in _drows)
-        + '<div style="margin-top:10px;font-size:10.5pt;color:#6B7280;line-height:1.5">Vďaka profilu odberu sa <b>%s %%</b> vyrobenej energie spotrebuje priamo na mieste; do siete odchádza len <b>%s %%</b>. Vysoká samospotreba je kľúčová pre rýchlu návratnosť.</div>' % (("%g"%round(_dir+_bat,1)),("%g"%round(_exp,1))))
+    donut_rows=("".join('<div style="margin:5px 0;font-size:11.5pt;color:#374151"><span style="display:inline-block;width:11px;height:11px;background:%s;border-radius:2px;margin-right:8px;vertical-align:middle"></span>%s — <b>%s %%</b> <span style="color:#9CA3AF">(%s MWh)</span></div>' % (c,nm,(("%g"%round(v,1)).replace(".",",")),(("%g"%round(m,0))) ) for nm,c,v,m in _drows)
+        + '<div style="margin-top:10px;font-size:10.5pt;color:#6B7280;line-height:1.5">Vďaka profilu odberu sa <b>%s %%</b> vyrobenej energie spotrebuje priamo na mieste; do siete odchádza len <b>%s %%</b>. Vysoká samospotreba je kľúčová pre rýchlu návratnosť.</div>' % ((("%g"%round(_dir+_bat,1)).replace(".",","),("%g"%round(_exp,1)).replace(".",","))))
     S=ctx["scenarios3"]; bza=S[0]; full=next((x for x in S if x.get("recommended")), bza); opti=S[-1]
     pm=ctx.get("profile_metrics",{})
     recs=ctx.get("recommendations",[])
@@ -198,7 +199,7 @@ def render_chocosuc_html(ctx: dict) -> str:
     ])
     id_table=f'<table>{trow(["Údaj","Hodnota","Komentár"],head=True)}{_rows}</table>'
     if _missing:
-        id_table+=f'<p class="note">Údaje na doplnenie z faktúry/zmluvy: {", ".join(_missing)}.</p>'
+        pass  # klientovi nezobrazovať „údaje na doplnenie" — pôsobí ako draft
 
     html = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><style>
 @page {{ size:A4; margin:18mm 16mm 16mm 16mm;
@@ -322,7 +323,8 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
   <table>{trow(["Veličina","Hodnota","Podiel"],head=True,align=['l','r','r'])}
     {trow(["Ročná výroba FVE",f"{num(ctx.get('fve_prod_mwh'))} MWh","100 %"])}
     {trow(["Samospotreba",f"{num(ctx.get('self_use_mwh'))} MWh",f"{num(ctx.get('samosp_pct'),1)} %"],em="em")}
-    {trow(["Export prebytkov",f"{num(ctx.get('export_mwh'))} MWh",f"{num(100-(ctx.get('samosp_pct') or 0),1)} %"])}
+    {trow(["Export prebytkov",f"{num(ctx.get('export_mwh'))} MWh",f"{num(ctx.get('export_pct') or 0,1)} %"])}
+    {trow(["Straty / nevyužité",f"{num(ctx.get('loss_mwh'))} MWh",f"{num(ctx.get('loss_pct') or 0,1)} %"]) if (ctx.get('loss_mwh') or 0) >= 0.5 else ""}
     {trow(["Import zo siete",f"{num(ctx.get('grid_import_mwh'))} MWh","—"])}
     {trow(["Pokrytie spotreby OM",f"{num(ctx.get('coverage_pct'),1)} %","FVE vs spotreba"])}
   </table>

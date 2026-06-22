@@ -115,7 +115,7 @@ def generate_chocosuc_docx(ctx: dict) -> bytes:
     _table(doc,["Veličina","Hodnota","Podiel"],[
         ["Ročná výroba FVE",f"{num(ctx.get('fve_prod_mwh'))} MWh","100 %"],
         ["Samospotreba",f"{num(ctx.get('self_use_mwh'))} MWh",f"{num(ctx.get('samosp_pct'),1)} %"],
-        ["Export prebytkov",f"{num(ctx.get('export_mwh'))} MWh",f"{num(100-(ctx.get('samosp_pct') or 0),1)} %"],
+        ["Export prebytkov",f"{num(ctx.get('export_mwh'))} MWh",f"{num(ctx.get('export_pct') or 0,1)} %"],
         ["Import zo siete",f"{num(ctx.get('grid_import_mwh'))} MWh","—"],
         ["Pokrytie spotreby OM",f"{num(ctx.get('coverage_pct'),1)} %","FVE vs spotreba"],
     ],aligns=["l","r","r"])
