@@ -218,7 +218,7 @@ def calculate_bom_v2(sb, config: dict) -> dict:
             "position": pos, "category": "Striedače",
             "product_name": p["inverter"]["name"],
             "qty": p["qty"], "unit": "ks",
-            "cost_per_unit": p["inverter"]["price"] * 0.77,
+            "cost_per_unit": (float(p["inverter"]["cost"]) if p["inverter"].get("cost") is not None else float(p["inverter"]["price"]) * 0.77),
             "price_per_unit": float(p["inverter"]["price"]),
             "rule_id": f"menic.{vendor_key}.{p['inverter']['key']}",
             "vendor_stack": vendor_key,
