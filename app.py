@@ -15567,8 +15567,8 @@ def _eva_tools_spec():
          "input_schema": s(popis={"type": "string"}, lead_id={"type": "string"}, customer_id={"type": "string"}, lead_ev_id={"type": "string"}, klient={"type": "string"}, marza_pct={"type": "number"})},
     ]
 
-def _eva_load_history(phone, limit=12, minutes=90):
-    """Posledne spravy konverzacie (chronologicky) pre dane cislo."""
+def _eva_load_history(phone, limit=40, minutes=1440):
+    """Posledne spravy konverzacie (chronologicky) pre dane cislo. Okno: 40 sprav / 24h (predtym 12/90min)."""
     try:
         import datetime as _dt
         since = (_dt.datetime.utcnow() - _dt.timedelta(minutes=minutes)).isoformat()
