@@ -249,6 +249,24 @@ def calculate_bom_v2(sb, config: dict) -> dict:
         })
         pos += 1
     
+    # ===== 2b. SIEŤOVÝ ANALYZÁTOR (Janitza) — auto pri >prah kW; kompatibilný so všetkými meničmi =====
+    _acc = stack.get("accessories") or []
+    _nas = [a for a in _acc if a.get("category") == "network_analyzer"]
+    if _nas and config.get("has_janitza") is not False:
+        _thr = float(_nas[0].get("offer_above_kw") or 10)
+        if kwp_actual > _thr:
+            _jk = config.get("janitza_key")
+            _ja = next((a for a in _nas if a.get("key") == _jk), _nas[0])
+            _jcost = float(_ja["cost"]) if _ja.get("cost") is not None else float(_ja["price"]) * 0.77
+            items.append({
+                "position": pos, "category": "Diagnostika siete",
+                "product_name": _ja["name"], "qty": 1, "unit": "ks",
+                "cost_per_unit": _jcost, "price_per_unit": float(_ja["price"]),
+                "rule_id": f"accessory.{_ja['key']}", "vendor_stack": vendor_key,
+                "ai_note": f"Auto pri >{_thr:g} kW; kompatibilné so všetkými meničmi",
+            })
+            pos += 1
+
     # ===== 3. KONŠTRUKCIA =====
     k_rules = _load_konstrukcia_rule(sb, typ_strechy)
     for r in k_rules:
@@ -368,23 +386,49 @@ def calculate_bom_v2(sb, config: dict) -> dict:
                 })
                 pos += 1
     
-    # ===== 11. BESS (vendor-specific!) =====
-    if has_bess and (bess_kwh > 0 or bess_count > 0):
+    # ===== 11. BESS (vendor-specific + trieda rez/priemysel + limity) =====
+    if has_bess and (bess_kwh > 0 or bess_count > 0 or config.get("bess_sku") or config.get("bess_key")):
         batteries = stack.get("batteries") or []
+        # Filter podľa triedy (residential / industrial) — toggle z UI
+        bess_class = (config.get("bess_class") or "").strip().lower()
+        if bess_class in ("residential", "industrial"):
+            _cls = [b for b in batteries if (b.get("battery_class") or "residential") == bess_class]
+            batteries = _cls or batteries
+        # Explicitne zvolený model (key) z UI
+        _bsku = config.get("bess_sku") or config.get("bess_key")
+        if _bsku:
+            _chosen = [b for b in batteries if b.get("key") == _bsku]
+            if _chosen:
+                batteries = _chosen
         picked_batt = _pick_bess(batteries, bess_kwh, bess_count)
+        # Limit ks na menič (napr. Solinteg max 2)
+        for pb in picked_batt:
+            _mx = pb["battery"].get("max_units")
+            if _mx and pb["qty"] > int(_mx):
+                warnings.append({"severity": "warning", "kind": "bess_limit",
+                                 "message": f"{pb['battery']['name']}: max {int(_mx)} ks na menič — znížené z {pb['qty']} na {int(_mx)}."})
+                pb["qty"] = int(_mx)
         # efektívna kapacita (kWh) z reálne vybraných modulov — pre downstream/ekonomiku
         if picked_batt:
             bess_kwh = sum(float(p["battery"]["capacity_kwh"]) * p["qty"] for p in picked_batt) or bess_kwh
         for b in picked_batt:
+            _bat = b["battery"]
+            # NÁKUPNÁ cena: ak je 'cost' (nové batérie z distribútorov), použi ju priamo; inak 77% z 'price' (legacy list)
+            _cost = float(_bat["cost"]) if _bat.get("cost") is not None else float(_bat["price"]) * 0.77
             items.append({
                 "position": pos, "category": "Batéria",
-                "product_name": b["battery"]["name"], "qty": b["qty"], "unit": "ks",
-                "cost_per_unit": b["battery"]["price"] * 0.77,
-                "price_per_unit": float(b["battery"]["price"]),
-                "rule_id": f"battery.{vendor_key}.{b['battery']['key']}",
+                "product_name": _bat["name"], "qty": b["qty"], "unit": "ks",
+                "cost_per_unit": _cost,
+                "price_per_unit": float(_bat["price"]),
+                "rule_id": f"battery.{vendor_key}.{_bat['key']}",
                 "vendor_stack": vendor_key,
             })
             pos += 1
+            # C&I batéria čo potrebuje samostatný PCS (Huawei LUNA-200/241)
+            _bk = _bat.get("key") or ""
+            if _bat.get("battery_class") == "industrial" and ("luna2000_200" in _bk or "luna2000_241" in _bk):
+                warnings.append({"severity": "warning", "kind": "pcs_required",
+                                 "message": f"{_bat['name']} vyžaduje samostatný PCS (SUN2000-…KTL-H) — doplniť do ponuky (cena nie je v katalógu)."})
         # Montáž batérie
         items.append({
             "position": pos, "category": "Batéria",
