@@ -400,7 +400,11 @@ def calculate_bom_v2(sb, config: dict) -> dict:
             _chosen = [b for b in batteries if b.get("key") == _bsku]
             if _chosen:
                 batteries = _chosen
-        picked_batt = _pick_bess(batteries, bess_kwh, bess_count)
+        # Ak je zvolený konkrétny model bez počtu/kWh → default 1 ks
+        _eff_count = bess_count
+        if _bsku and _eff_count <= 0 and bess_kwh <= 0:
+            _eff_count = 1
+        picked_batt = _pick_bess(batteries, bess_kwh, _eff_count)
         # Limit ks na menič (napr. Solinteg max 2)
         for pb in picked_batt:
             _mx = pb["battery"].get("max_units")
