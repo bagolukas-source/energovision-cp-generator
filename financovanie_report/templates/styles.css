@@ -343,3 +343,20 @@ body {
 .guide-desc { font-size: 8pt; color: #374151; line-height: 1.45; }
 .vprops { width: 100%; border-collapse: separate; border-spacing: 8px; margin-top: 4px; }
 .vprops td { width: 50%; background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 8px; padding: 9px 12px; font-size: 8.5pt; color: #374151; }
+
+/* ── Strana 3: insights pod grafom ── */
+.insight-title { font-size: 10pt; font-weight: 800; color: #0f172a; margin: 16px 0 2px; }
+.kpi-row { width: 100%; border-collapse: separate; border-spacing: 8px 0; margin-top: 6px; }
+.kpi-box { width: 25%; vertical-align: top; background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 8px; padding: 9px 11px; break-inside: avoid; }
+.kpi-box-label { font-size: 6.8pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #64748b; margin-bottom: 3px; }
+.kpi-box-value { font-size: 12pt; font-weight: 800; color: #0f172a; line-height: 1.1; }
+.kpi-box-sub { font-size: 7.3pt; color: #475569; margin-top: 3px; }
+.kpi-hi { border-left: 3px solid #3b82f6; }
+.kpi-reco { border-left: 3px solid #92D050; background: #f0fdf4; }
+.kpi-reco .kpi-box-value { color: #15803d; }
+.be-table { width: 100%; border-collapse: separate; border-spacing: 6px; margin-top: 6px; }
+.be-cell { width: 25%; vertical-align: top; background: #ffffff; border: 1px solid #eef2f7; border-radius: 7px; padding: 7px 9px; text-align: left; break-inside: avoid; }
+.be-chip { display: inline-block; font-size: 7pt; font-weight: 700; padding: 1px 7px; border-radius: 20px; }
+.be-year { display: block; font-size: 9.5pt; font-weight: 800; color: #0f172a; margin-top: 4px; }
+.howto { margin-top: 14px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 14px; font-size: 8.5pt; line-height: 1.55; color: #334155; break-inside: avoid; }
+.esg-strip { margin-top: 10px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 9px 14px; font-size: 8.5pt; color: #14532d; break-inside: avoid; }

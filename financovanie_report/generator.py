@@ -290,6 +290,14 @@ def generate_financovanie_pdf(context: dict) -> bytes:
                     pass
         v["cum_milestones"] = [cum_by_year.get(yr) for yr in (5, 10, 15, 20, 25)]
         v["cum_by_year"] = {int(k): val for k, val in cum_by_year.items()}
+        # Bod zvratu: prvý rok, kde kumulatív >= 0 (odvodené z reálnych dát)
+        _be = None
+        for _yr in sorted(v["cum_by_year"].keys()):
+            _val = v["cum_by_year"].get(_yr)
+            if _val is not None and _val >= 0:
+                _be = _yr
+                break
+        v["breakeven_year"] = _be
 
     # Záverečná tabuľka: roky 1–10 po jednom + 15/20/25
     ctx["final_years"] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20]
@@ -304,6 +312,9 @@ def generate_financovanie_pdf(context: dict) -> bytes:
         npv_winner = max(variants, key=lambda v: _n(v.get("npv")))
         recommended = next((v for v in variants if v.get("key") == "sih"), None) or npv_winner
         low_up = min(variants, key=lambda v: (v.get("initial_investment") or 0))
+        ctx["lowest_upfront"] = low_up
+        _be_vs = [vv for vv in variants if vv.get("breakeven_year")]
+        ctx["fastest_be"] = min(_be_vs, key=lambda vv: vv["breakeven_year"]) if _be_vs else recommended
         ctx["npv_winner"] = npv_winner
         ctx["recommended"] = recommended
         # prepíš headline odporúčanie na vyváženú voľbu (konzistentne s webom)

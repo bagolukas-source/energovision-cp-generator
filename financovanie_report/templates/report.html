@@ -113,7 +113,16 @@
   </table>
   {% endif %}
 
-  {% if cumulative_svg %}
+</div>
+
+{# ═══════════════════ STRANA 3: GRAF + INSIGHTS ═══════════════════ #}
+{% if cumulative_svg %}
+<div class="page">
+  <div class="section-header">
+    <div class="section-title">Kumulatívny tok a čo z neho vyplýva</div>
+    <div class="section-meta">20-ročný horizont · Scenár: {{ scenario|default('Realistický') }}</div>
+  </div>
+
   <div class="chart-container">
     <div class="chart-title">Kumulatívny cashflow za 20 rokov (€)</div>
     {{ cumulative_svg|safe }}
@@ -128,8 +137,53 @@
     </div>
     {% endif %}
   </div>
+
+  {% if variants %}
+  <div class="insight-title">Čo z grafu vyplýva</div>
+  <table class="kpi-row"><tr>
+    <td class="kpi-box kpi-hi">
+      <div class="kpi-box-label">Najvyššia hodnota</div>
+      <div class="kpi-box-value">{{ npv_winner.npv|eur }}</div>
+      <div class="kpi-box-sub">{{ npv_winner.label }} · NPV 20 r</div>
+    </td>
+    <td class="kpi-box">
+      <div class="kpi-box-label">Najrýchlejšie v pluse</div>
+      <div class="kpi-box-value">{% if fastest_be and fastest_be.breakeven_year and fastest_be.breakeven_year > 1 %}rok {{ fastest_be.breakeven_year }}{% else %}od začiatku{% endif %}</div>
+      <div class="kpi-box-sub">{{ fastest_be.label if fastest_be else '—' }}</div>
+    </td>
+    <td class="kpi-box">
+      <div class="kpi-box-label">Najnižší vstup</div>
+      <div class="kpi-box-value">{{ (lowest_upfront.initial_investment if lowest_upfront else 0)|eur }}</div>
+      <div class="kpi-box-sub">{{ lowest_upfront.label if lowest_upfront else '—' }}</div>
+    </td>
+    <td class="kpi-box kpi-reco">
+      <div class="kpi-box-label">Naše odporúčanie</div>
+      <div class="kpi-box-value">{{ best_label }}</div>
+      <div class="kpi-box-sub">{% if best_npv %}NPV {{ best_npv|eur }}{% endif %}</div>
+    </td>
+  </tr></table>
+
+  <div class="insight-title">Bod zvratu — odkedy je model v pluse</div>
+  <table class="be-table"><tr>
+    {% for v in variants %}
+    <td class="be-cell">
+      <span class="be-chip" style="background:{{ v.color }}1f;color:{{ v.color }};border:1px solid {{ v.color }}55;">{{ v.label }}</span>
+      <span class="be-year">{% if v.breakeven_year and v.breakeven_year > 1 %}rok {{ v.breakeven_year }}{% elif v.breakeven_year %}od začiatku{% else %}nad 20 r{% endif %}</span>
+    </td>
+    {% if loop.index % 4 == 0 and not loop.last %}</tr><tr>{% endif %}
+    {% endfor %}
+  </tr></table>
+
+  <div class="howto">
+    <strong>Ako čítať graf:</strong> každá krivka je kumulatívny čistý tok daného modelu. Kde pretne prerušovanú čiaru „bod zvratu (0 €)", odvtedy vám elektráreň zarába. Čím vyššie krivka končí v roku 20, tým väčší je celkový prínos. Modely bez vstupného vkladu (PPA, SIH) sú v pluse prakticky od začiatku; vlastná kúpa nabieha pomalšie, no končí najvyššie.
+  </div>
+
+  {% if annual_prod_mwh %}
+  <div class="esg-strip"><strong>ESG / CSRD:</strong> elektráreň vyrobí za 20 rokov približne {{ (annual_prod_mwh * 20 * 0.92)|num(0) }} MWh čistej energie — doložiteľné zníženie uhlíkovej stopy a nezávislosť od rastu cien elektriny.</div>
+  {% endif %}
   {% endif %}
 </div>
+{% endif %}
 
 {# ═══════════════════════════ PAGES 3+: DETAIL PER VARIANT ═══════════════════════════ #}
 {% for v in variants %}
