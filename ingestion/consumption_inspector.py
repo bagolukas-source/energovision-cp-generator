@@ -112,79 +112,94 @@ def canonical_csv(series15_mwh: pd.Series) -> bytes:
     return ("\n".join(lines)).encode("utf-8-sig")
 
 
-# ─────────────────────────── grafy (SVG, robustné) ───────────────────────────
+# ─────────────────────────── grafy (SVG) ───────────────────────────
+_FONT = 'font-family="-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif"'
+
+
+def _lerp(a, b, t): return tuple(int(a[k] + (b[k] - a[k]) * t) for k in range(3))
+
+
 def _ramp(t: float) -> str:
     t = max(0.0, min(1.0, t))
-    a = (234, 242, 251); b = (30, 64, 175)
-    return "#%02x%02x%02x" % tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(3))
+    s0, s1, s2 = (239, 246, 255), (96, 165, 250), (30, 58, 138)
+    c = _lerp(s0, s1, t / 0.5) if t <= 0.5 else _lerp(s1, s2, (t - 0.5) / 0.5)
+    return "#%02x%02x%02x" % c
+
+
+def _frame(W, H, title):
+    return [f'<svg xmlns="http://www.w3.org/2000/svg" width="{W:.0f}" height="{H:.0f}" viewBox="0 0 {W:.0f} {H:.0f}" {_FONT}>',
+            f'<rect x="0.5" y="0.5" width="{W-1:.0f}" height="{H-1:.0f}" rx="10" fill="#ffffff" stroke="#e9eef5"/>',
+            f'<text x="16" y="21" font-size="10.5" font-weight="700" fill="#0f172a">{title}</text>']
 
 
 def _svg_heatmap(s: pd.Series) -> str:
     kw = s * 4000.0
     d = pd.DataFrame({"kw": kw.values}, index=s.index)
     d["date"] = d.index.normalize(); d["hour"] = d.index.hour
-    piv = d.pivot_table(index="hour", columns="date", values="kw", aggfunc="mean")
-    piv = piv.reindex(index=range(24))
+    piv = d.pivot_table(index="hour", columns="date", values="kw", aggfunc="mean").reindex(index=range(24))
     dates = list(piv.columns); ndays = len(dates)
     if ndays == 0:
         return ""
     vmax = float(np.nanpercentile(piv.values, 98)) or 1.0
-    cw = max(1.4, min(3.2, 720.0 / ndays)); rh = 6.0
-    W = 46 + ndays * cw + 8; H = 22 + 24 * rh + 26
-    p = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{W:.0f}" height="{H:.0f}" viewBox="0 0 {W:.0f} {H:.0f}">',
-         '<rect width="100%" height="100%" fill="white"/>']
+    cw = max(1.6, min(3.4, 900.0 / ndays)); rh = 7.0; ox, oy = 48, 36
+    W = ox + ndays * cw + 16; H = oy + 24 * rh + 30
+    p = _frame(W, H, "Heatmapa deň × hodina — intenzita odberu (kW)")
     for hr in range(24):
-        y = 22 + hr * rh
-        if hr % 6 == 0:
-            p.append(f'<text x="42" y="{y+5:.0f}" text-anchor="end" font-size="7" fill="#94a3b8">{hr:02d}:00</text>')
-        for j, dtc in enumerate(dates):
-            v = piv.iat[hr, j] if hr < piv.shape[0] else np.nan
-            x = 46 + j * cw
-            col = "#fde2e2" if (v != v) else _ramp(float(v) / vmax)
-            p.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{cw+0.3:.1f}" height="{rh+0.3:.1f}" fill="{col}"/>')
-    # mesačné popisy na osi X
+        y = oy + hr * rh
+        if hr % 3 == 0:
+            p.append(f'<text x="{ox-6}" y="{y+5:.0f}" text-anchor="end" font-size="7" fill="#94a3b8">{hr:02d}h</text>')
+        for j in range(ndays):
+            v = piv.iat[hr, j]
+            col = "#eef2f7" if (v != v) else _ramp(float(v) / vmax)
+            p.append(f'<rect x="{ox+j*cw:.1f}" y="{y:.1f}" width="{cw+0.4:.1f}" height="{rh+0.4:.1f}" fill="{col}"/>')
     for j, dtc in enumerate(dates):
         if pd.Timestamp(dtc).day == 1:
-            x = 46 + j * cw
-            p.append(f'<text x="{x:.0f}" y="{H-8:.0f}" font-size="7" fill="#94a3b8">{pd.Timestamp(dtc).strftime("%b")}</text>')
-    p.append(f'<text x="46" y="12" font-size="8" font-weight="700" fill="#334155">Heatmapa deň × hodina (kW) — biele/červené = chýbajúce dáta</text>')
+            p.append(f'<text x="{ox+j*cw:.0f}" y="{H-10:.0f}" font-size="7.5" fill="#64748b">{pd.Timestamp(dtc).strftime("%b")}</text>')
+    lgx = W - 150
+    p.append(f'<defs><linearGradient id="hg" x1="0" x2="1"><stop offset="0" stop-color="{_ramp(0)}"/><stop offset="0.5" stop-color="{_ramp(0.5)}"/><stop offset="1" stop-color="{_ramp(1)}"/></linearGradient></defs>')
+    p.append(f'<rect x="{lgx}" y="14" width="96" height="7" rx="2" fill="url(#hg)"/>')
+    p.append(f'<text x="{lgx-4}" y="21" text-anchor="end" font-size="6.5" fill="#94a3b8">0</text>')
+    p.append(f'<text x="{lgx+100}" y="21" font-size="6.5" fill="#94a3b8">{vmax:.0f} kW</text>')
     p.append("</svg>"); return "".join(p)
 
 
+def _yaxis(p, ox, oy, W, plotH, vmax):
+    for g in (0.25, 0.5, 0.75, 1.0):
+        y = oy + plotH * (1 - g)
+        p.append(f'<line x1="{ox}" y1="{y:.1f}" x2="{W-10}" y2="{y:.1f}" stroke="#eef2f7"/>')
+        p.append(f'<text x="{ox-5}" y="{y+3:.1f}" text-anchor="end" font-size="6.5" fill="#cbd5e1">{vmax*g:.0f}</text>')
+
+
 def _svg_monthly(s: pd.Series) -> str:
-    m = (s.groupby(s.index.month).sum())
+    m = s.groupby(s.index.month).sum()
     months = ["", "Jan", "Feb", "Mar", "Apr", "Máj", "Jún", "Júl", "Aug", "Sep", "Okt", "Nov", "Dec"]
-    W, H, PL, PB = 560, 170, 40, 26; vmax = float(m.max() or 1)
-    bw = (W - PL - 10) / 12.0
-    p = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}">',
-         '<rect width="100%" height="100%" fill="white"/>',
-         '<text x="8" y="12" font-size="8" font-weight="700" fill="#334155">Mesačná spotreba (MWh)</text>']
+    W, H, ox, oy, bottom = 540, 190, 40, 42, 30; vmax = float(m.max() or 1)
+    bw = (W - ox - 16) / 12.0; plotH = H - oy - bottom
+    p = _frame(W, H, "Mesačná spotreba (MWh)"); _yaxis(p, ox, oy, W, plotH, vmax)
     for i in range(1, 13):
-        v = float(m.get(i, 0.0)); h = (v / vmax) * (H - PB - 22)
-        x = PL + (i - 1) * bw; y = H - PB - h
-        p.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{bw-4:.1f}" height="{h:.1f}" rx="2" fill="#3b82f6"/>')
-        p.append(f'<text x="{x+bw/2-2:.1f}" y="{H-PB+10:.0f}" text-anchor="middle" font-size="7" fill="#94a3b8">{months[i]}</text>')
+        v = float(m.get(i, 0.0)); h = (v / vmax) * plotH; x = ox + (i - 1) * bw; y = oy + plotH - h
+        p.append(f'<rect x="{x+2.5:.1f}" y="{y:.1f}" width="{bw-6:.1f}" height="{max(h,0.5):.1f}" rx="3" fill="#92D050"/>')
+        p.append(f'<text x="{x+bw/2:.1f}" y="{H-bottom+16:.0f}" text-anchor="middle" font-size="7.5" fill="#64748b">{months[i]}</text>')
         if v > 0:
-            p.append(f'<text x="{x+bw/2-2:.1f}" y="{y-2:.1f}" text-anchor="middle" font-size="6.5" fill="#475569">{v:.0f}</text>')
+            p.append(f'<text x="{x+bw/2:.1f}" y="{y-3:.1f}" text-anchor="middle" font-size="7" fill="#475569">{v:.0f}</text>')
     p.append("</svg>"); return "".join(p)
 
 
 def _svg_load_duration(s: pd.Series) -> str:
-    kw = np.sort((s.values * 4000.0))[::-1]
-    n = len(kw)
+    kw = np.sort(s.values * 4000.0)[::-1]; n = len(kw)
     if n == 0:
         return ""
-    idx = np.linspace(0, n - 1, min(n, 240)).astype(int); ys = kw[idx]
-    W, H, PL, PB = 560, 170, 46, 24; vmax = float(ys.max() or 1)
-    def X(i): return PL + i / (len(ys) - 1) * (W - PL - 10)
-    def Y(v): return 20 + (1 - v / vmax) * (H - PB - 20)
-    pts = " ".join(f"{X(i):.1f},{Y(v):.1f}" for i, v in enumerate(ys))
-    p = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}">',
-         '<rect width="100%" height="100%" fill="white"/>',
-         '<text x="8" y="12" font-size="8" font-weight="700" fill="#334155">Load duration curve (kW zoradené)</text>',
-         f'<polyline points="{pts}" fill="none" stroke="#0ea5e9" stroke-width="2"/>',
-         f'<text x="{PL-4}" y="24" text-anchor="end" font-size="7" fill="#94a3b8">{vmax:.0f}</text>',
-         f'<text x="{PL-4}" y="{H-PB:.0f}" text-anchor="end" font-size="7" fill="#94a3b8">0</text>']
+    idx = np.linspace(0, n - 1, min(n, 260)).astype(int); ys = kw[idx]
+    W, H, ox, oy, bottom = 540, 190, 44, 42, 28; vmax = float(ys.max() or 1); plotH = H - oy - bottom
+    def X(k): return ox + k / (len(ys) - 1) * (W - ox - 14)
+    def Y(v): return oy + (1 - v / vmax) * plotH
+    p = _frame(W, H, "Krivka trvania záťaže (kW zoradené od špičky)"); _yaxis(p, ox, oy, W, plotH, vmax)
+    line = " ".join(f"{X(k):.1f},{Y(v):.1f}" for k, v in enumerate(ys))
+    p.append(f'<polygon points="{ox},{oy+plotH:.1f} {line} {W-14},{oy+plotH:.1f}" fill="#0ea5e91f"/>')
+    p.append(f'<polyline points="{line}" fill="none" stroke="#0ea5e9" stroke-width="2"/>')
+    for frac, lab in ((0, "0 %"), (0.5, "50 %"), (1.0, "100 %")):
+        x = ox + frac * (W - ox - 14)
+        p.append(f'<text x="{x:.0f}" y="{H-bottom+15:.0f}" text-anchor="middle" font-size="7" fill="#94a3b8">{lab} času</text>')
     p.append("</svg>"); return "".join(p)
 
 
@@ -192,21 +207,22 @@ def _svg_typical(s: pd.Series) -> str:
     kw = s * 4000.0; d = pd.DataFrame({"kw": kw.values}, index=s.index)
     d["hour"] = d.index.hour; d["wd"] = d.index.weekday
     wk = d[d.wd < 5].groupby("hour")["kw"].mean(); we = d[d.wd >= 5].groupby("hour")["kw"].mean()
-    W, H, PL, PB = 560, 170, 46, 24
-    vmax = float(max(wk.max() if len(wk) else 0, we.max() if len(we) else 0) or 1)
-    def X(h): return PL + h / 23.0 * (W - PL - 10)
-    def Y(v): return 20 + (1 - v / vmax) * (H - PB - 20)
-    def line(sr, col):
-        pts = " ".join(f"{X(h):.1f},{Y(float(sr.get(h,0))):.1f}" for h in range(24))
-        return f'<polyline points="{pts}" fill="none" stroke="{col}" stroke-width="2"/>'
-    p = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}">',
-         '<rect width="100%" height="100%" fill="white"/>',
-         '<text x="8" y="12" font-size="8" font-weight="700" fill="#334155">Typický deň (kW): pracovný vs víkend</text>',
-         line(wk, "#3b82f6"), line(we, "#f59e0b"),
-         '<text x="470" y="12" font-size="7" fill="#3b82f6">■ pracovný</text>',
-         '<text x="470" y="21" font-size="7" fill="#f59e0b">■ víkend</text>']
+    W, H, ox, oy, bottom = 540, 190, 40, 42, 28
+    vmax = float(max(wk.max() if len(wk) else 0, we.max() if len(we) else 0) or 1); plotH = H - oy - bottom
+    def X(h): return ox + h / 23.0 * (W - ox - 14)
+    def Y(v): return oy + (1 - v / vmax) * plotH
+    p = _frame(W, H, "Typický deň — priemerný odber (kW)"); _yaxis(p, ox, oy, W, plotH, vmax)
+    def pts_of(sr): return " ".join(f"{X(h):.1f},{Y(float(sr.get(h,0))):.1f}" for h in range(24))
+    def area(pts, fill): return f'<polygon points="{ox},{oy+plotH:.1f} {pts} {X(23):.1f},{oy+plotH:.1f}" fill="{fill}"/>'
+    def poly(pts, col): return f'<polyline points="{pts}" fill="none" stroke="{col}" stroke-width="2.4"/>'
+    pw, pe = pts_of(wk), pts_of(we)
+    # najprv obe plochy (svetlé), potom obe čiary navrch → obe vždy viditeľné
+    p.append(area(pe, "#f59e0b18")); p.append(area(pw, "#3b82f618"))
+    p.append(poly(pe, "#f59e0b")); p.append(poly(pw, "#3b82f6"))
+    p.append(f'<rect x="{W-152}" y="13" width="8" height="8" rx="2" fill="#3b82f6"/><text x="{W-140}" y="20" font-size="7.5" fill="#475569">pracovný</text>')
+    p.append(f'<rect x="{W-82}" y="13" width="8" height="8" rx="2" fill="#f59e0b"/><text x="{W-70}" y="20" font-size="7.5" fill="#475569">víkend</text>')
     for h in (0, 6, 12, 18, 23):
-        p.append(f'<text x="{X(h):.0f}" y="{H-8:.0f}" text-anchor="middle" font-size="7" fill="#94a3b8">{h:02d}</text>')
+        p.append(f'<text x="{X(h):.0f}" y="{H-bottom+15:.0f}" text-anchor="middle" font-size="7" fill="#94a3b8">{h:02d}:00</text>')
     p.append("</svg>"); return "".join(p)
 
 
