@@ -15897,6 +15897,35 @@ def webhook_financovanie_report():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/webhook/consumption-inspector", methods=["POST"])
+@require_secret
+def webhook_consumption_inspector():
+    """Inšpektor spotreby: hocijaký profil → štatistiky + diagnostika + grafy(SVG) + kanonický CSV."""
+    import base64 as _b
+    body = request.get_json(force=True, silent=True) or {}
+    try:
+        from ingestion.consumption_inspector import inspect as _inspect
+        files = []
+        for f in (body.get("files") or []):
+            b64 = f.get("bytes_base64") or f.get("base64") or ""
+            if not b64:
+                continue
+            files.append({"filename": f.get("filename") or "subor", "bytes": _b.b64decode(b64)})
+        if not files:
+            return jsonify({"ok": False, "error": "žiadne súbory"}), 400
+        res = _inspect(
+            files,
+            unit_override=body.get("unit"),
+            invoice_annual_kwh=(float(body["invoice_annual_kwh"]) if body.get("invoice_annual_kwh") else None),
+            mrk_kw=(float(body["mrk_kw"]) if body.get("mrk_kw") else None),
+            year=int(body.get("year") or 2025),
+        )
+        return jsonify(res)
+    except Exception as e:
+        log.exception("consumption-inspector failed")
+        return jsonify({"ok": False, "error": str(e)[:300]}), 500
+
+
 @app.route("/webhook/render-html-pdf", methods=["POST"])
 @require_secret
 def webhook_render_html_pdf():
