@@ -6,7 +6,7 @@ Human-in-the-loop: UI ukáže čísla + grafy, používateľ chybu (napr. zlú j
 odhalí okom ešte pred spustením analýzy.
 """
 from __future__ import annotations
-import io, base64, warnings
+import io, base64, warnings, os
 import pandas as pd
 import numpy as np
 from ingestion import normalizer as _norm
@@ -295,38 +295,74 @@ def _quality(final: pd.Series, mrk_kw, invoice_kwh, n_dupes, generic_units):
 
 
 # ─────────────────────────── hlavná funkcia ───────────────────────────
+def _ai_available() -> bool:
+    return bool(os.environ.get("ANTHROPIC_API_KEY"))
+
+
+_MAX_INTERVAL_MIN = 180  # nad 3h = agregované dáta (denné/mesačné), nie interval profil
+
+
+def _parse_one(raw: bytes, fn: str, unit_override, spec_cache):
+    """Stupňovito: 1) Python fast-path, 2) Python generický, 3) AI. Vráti (série_15min_MWh|None, meta)."""
+    def _finish(kw, meta):
+        gran = int(kw.attrs.get("granularity_min", _norm._infer_gran(kw.index)))
+        if gran > _MAX_INTERVAL_MIN:
+            return None, {**meta, "error": f"detegované agregované dáta (~{max(1, gran // 60)} h krok), nie 15-min/hodinový profil — z toho sa presný profil nedá získať"}
+        return _norm._kw_to_15min_mwh(kw), {**meta, "granularity_min": gran}
+    # 1) Python fast-path — natvrdo napísané distribútorské parsery
+    try:
+        f1 = _norm._fastpath_kw(raw, fn)
+        if f1 is not None:
+            kw, src = f1
+            return _finish(kw, {"filename": fn, "source": src, "stage": "python-fastpath"})
+    except Exception:
+        pass
+    # 2) Python generický — auto-detekcia stĺpca času a hodnoty
+    try:
+        g = _generic_parse(raw, fn, unit_override)
+        if g:
+            kw, gm = g
+            return _finish(kw, {"filename": fn, "source": gm["source"], "stage": "python-generic",
+                                "unit": gm["unit"], "unit_confidence": gm["unit_confidence"],
+                                "value_col": gm["value_col"], "ts_col": gm["ts_col"]})
+    except Exception:
+        pass
+    # 3) AI — posledná záchrana (len ak je nastavený ANTHROPIC_API_KEY)
+    if _ai_available():
+        try:
+            fpri = _norm._fingerprint(raw, fn)
+            spec = spec_cache.get(fpri) if (spec_cache is not None and fpri) else None
+            if spec is None:
+                spec = _norm._ai_detect_spec(raw, fn, {})
+                if spec_cache is not None and fpri:
+                    spec_cache[fpri] = spec
+            kw = _norm._apply_spec_to_kw(raw, fn, spec)
+            return _finish(kw, {"filename": fn, "source": "ai", "stage": "ai",
+                                "unit": spec.get("value_unit"), "ai_sheet": spec.get("sheet_name"),
+                                "value_col": spec.get("value_cols"), "ts_col": spec.get("timestamp_col")})
+        except Exception as e:
+            return None, {"filename": fn, "stage": "ai-failed", "error": f"AI parser zlyhal: {str(e)[:140]}"}
+    return None, {"filename": fn, "stage": "none",
+                  "error": "neznámy formát — Python (fast-path aj generický) nenašiel časový a hodnotový stĺpec"
+                           + ("" if _ai_available() else "; AI vrstva je vypnutá (na Renderi treba ANTHROPIC_API_KEY)")}
+
+
 def inspect(files: list[dict], unit_override: str | None = None,
             invoice_annual_kwh: float | None = None, mrk_kw: float | None = None,
             year: int = 2025) -> dict:
     """files: [{filename, bytes}]. Vráti stats + flags + charts(SVG) + kanonický CSV(base64)."""
     series_list, per_file, generic_units, spec_cache = [], [], [], {}
+    used_ai = False
     for f in files:
-        fn = f.get("filename", "súbor"); raw = f["bytes"]; got = False
-        try:
-            r = _norm.normalize_file(raw, fn, {}, spec_cache)
-            if r.get("ok"):
-                series_list.append(r["series"])
-                per_file.append({"filename": fn, "source": r.get("source"), "mwh": r.get("mwh"),
-                                 "granularity_min": r.get("granularity_min")})
-                got = True
-        except Exception:
-            pass
-        if not got:
-            try:
-                g = _generic_parse(raw, fn, unit_override)
-            except Exception as e:
-                g = None
-                per_file.append({"filename": fn, "error": f"generický parser zlyhal: {str(e)[:120]}"})
-            if g:
-                kw, meta = g
-                series_list.append(_norm._kw_to_15min_mwh(kw))
+        fn = f.get("filename", "súbor")
+        series, meta = _parse_one(f["bytes"], fn, unit_override, spec_cache)
+        per_file.append(meta)
+        if series is not None:
+            series_list.append(series)
+            if meta.get("stage") == "ai":
+                used_ai = True
+            if meta.get("stage") == "python-generic":
                 generic_units.append(meta.get("unit_confidence", ""))
-                per_file.append({"filename": fn, "source": meta["source"], "unit": meta["unit"],
-                                 "unit_confidence": meta["unit_confidence"],
-                                 "value_col": meta["value_col"], "ts_col": meta["ts_col"],
-                                 "granularity_min": meta["granularity_min"]})
-            elif not any(p.get("filename") == fn for p in per_file):
-                per_file.append({"filename": fn, "error": "neznámy formát — nenašiel sa časový a hodnotový stĺpec"})
 
     if not series_list:
         return {"ok": False,
@@ -347,6 +383,8 @@ def inspect(files: list[dict], unit_override: str | None = None,
     final = _remap_to_calendar_year(final, year)
 
     flags, verdict, stats = _quality(final, mrk_kw, invoice_annual_kwh, n_dupes, generic_units)
+    if used_ai:
+        flags.insert(0, {"level": "info", "text": "Formát rozpoznaný cez AI (Python parsery ho nezvládli) — over prosím čísla aj grafy, či sedia s realitou (MRK, faktúra)."})
     if remapped:
         flags.insert(0, {"level": "info", "text": f"Výstup premapovaný na kalendárny rok {year} (1.1.–31.12.). Zdroj: {src_from} – {src_to}."})
     stats["source_period"] = f"{src_from} – {src_to}"
