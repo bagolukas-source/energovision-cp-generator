@@ -127,6 +127,15 @@ def canonical_csv(series15_mwh: pd.Series) -> bytes:
     return ("\n".join(lines)).encode("utf-8-sig")
 
 
+def pvsol_txt(series15_mwh: pd.Series, year: int) -> bytes:
+    """PV*SOL formát: presne 35040 hodnôt pod sebou (kWh za 15 min), desatinná čiarka, CRLF, bez hlavičky."""
+    grid = pd.date_range(f"{year}-01-01 00:00", f"{year}-12-31 23:45", freq="15min")
+    s = series15_mwh.reindex(grid).ffill().fillna(0.0)   # doplň prípadné medzery, garantuj 35040 riadkov
+    kwh = s * 1000.0
+    lines = [("%.3f" % float(v)).replace(".", ",") for v in kwh.values]
+    return ("\r\n".join(lines)).encode("utf-8")
+
+
 # ─────────────────────────── grafy (SVG) ───────────────────────────
 _FONT = 'font-family="-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif"'
 
@@ -398,8 +407,11 @@ def inspect(files: list[dict], unit_override: str | None = None,
             charts[name] = ""
 
     csv_bytes = canonical_csv(final)
+    txt_bytes = pvsol_txt(final, year)
     return {"ok": True, "verdict": verdict, "stats": stats, "flags": flags,
             "charts": charts, "per_file": per_file,
             "csv_base64": base64.b64encode(csv_bytes).decode("ascii"),
             "csv_filename": "spotreba_15min_ocistene.csv",
+            "txt_base64": base64.b64encode(txt_bytes).decode("ascii"),
+            "txt_filename": "spotreba_15min_PVSOL.txt",
             "detected_unit": (per_file[-1].get("unit") if per_file else None)}
