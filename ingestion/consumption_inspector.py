@@ -6,7 +6,7 @@ Human-in-the-loop: UI ukáže čísla + grafy, používateľ chybu (napr. zlú j
 odhalí okom ešte pred spustením analýzy.
 """
 from __future__ import annotations
-import io, base64
+import io, base64, warnings
 import pandas as pd
 import numpy as np
 from ingestion import normalizer as _norm
@@ -27,6 +27,7 @@ def _to_num(sr: pd.Series) -> pd.Series:
 
 def _find_datetime_col(df: pd.DataFrame):
     best, best_ok = None, 0.0
+    warnings.simplefilter("ignore")
     for c in df.columns:
         col = df[c].astype(str).str.strip()
         for fmt in ("%d.%m.%Y %H:%M", "%d.%m.%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S",
@@ -328,7 +329,11 @@ def inspect(files: list[dict], unit_override: str | None = None,
                 per_file.append({"filename": fn, "error": "neznámy formát — nenašiel sa časový a hodnotový stĺpec"})
 
     if not series_list:
-        return {"ok": False, "error": "Žiadny súbor sa nepodarilo prečítať. Podporované: ZSD/SSE 15-min diagram, alebo tabuľka so stĺpcom času a hodnoty.",
+        return {"ok": False,
+                "error": ("Nenašiel sa 15-min/hodinový profil — teda stĺpec s dátumom+časom a k nemu hodnota. "
+                          "Podporované: ZSD/SSE intervalový diagram (Odberový diagram), alebo tabuľka typu „čas ; hodnota“. "
+                          "Ak máš len mesačný výkaz alebo faktúru (mesačné/ročné súčty), 15-min profil sa z nich spätne získať nedá — "
+                          "buď si vyžiadaj od distribútora intervalový diagram, alebo v Analýze OM zadaj ročnú spotrebu z faktúry a profil sa nasyntetizuje."),
                 "per_file": per_file}
 
     combined = pd.concat(series_list).sort_index()
