@@ -114,6 +114,8 @@ def _covered_fraction(series_15: pd.Series) -> float:
 
 
 def _synthesize_from_invoice(annual_kwh: float, segment: str, year: int):
+    if not annual_kwh or annual_kwh <= 0:
+        raise ValueError("syntetický profil odmietnutý: annual_kwh <= 0 (chýba ročná spotreba)")
     """Iba faktúra → syntetický 15-min profil z ročnej spotreby + segmentu."""
     from energovision_analytics.data.auto_fill import synthetic_load_profile
     params = _SEGMENT_TEMPLATE.get((segment or "kancelaria").lower(), _SEGMENT_TEMPLATE["kancelaria"])
@@ -228,6 +230,23 @@ def run_agent(files: list[dict], context: dict | None = None, year: int = 2025, 
     hourly = final.resample("1h").sum() * 1000.0   # kWh/h
     peak_kw_h = float(hourly.max())
     avg_kw = float(hourly.mean())
+
+    # ── TVRDÁ VALIDAČNÁ BRÁNA ──────────────────────────────────────────
+    # Nikdy nevyrob posudok na nulovej/nezmyselnej alebo príliš tenkej spotrebe.
+    # Prepojené s engine.parse_consumption → ok:False = status:error = žiadny posudok.
+    _MIN_ANNUAL_KWH = 500.0          # < 0,5 MWh/rok = zjavne rozbitý/nečitateľný vstup pre OM
+    _MIN_MEASURED_PTS = 5760         # ~60 dní 15-min; menej + bez faktúry = nespoľahlivý prepočet roka
+    _measured_pts = int((measured > 0).sum()) if len(measured) else 0
+    _fail = []
+    if annual_kwh <= _MIN_ANNUAL_KWH or peak_kw_15 <= 0 or avg_kw <= 0:
+        _fail.append(f"ročná spotreba vyšla {round(annual_kwh)} kWh (peak {round(peak_kw_15)} kW) — vstup je nulový alebo nečitateľný")
+    if strategy in ("measured", "extrapolated") and not invoice_annual and _measured_pts < _MIN_MEASURED_PTS:
+        _fail.append(f"len {_measured_pts} nameraných 15-min intervalov a bez faktúry — nevieme spoľahlivo dopočítať celý rok")
+    if _fail:
+        return {"ok": False, "strategy": "invalid_input",
+                "reason": "Chyba vstupu: " + "; ".join(_fail) + ". Skontroluj formát a obsah súboru (podporované: ZSD/SSE 15-min diagram, alebo faktúra s ročnou spotrebou).",
+                "annual_kwh": round(annual_kwh), "coverage_pct": round(coverage * 100, 1),
+                "per_file": per_file, "warnings": warnings}
 
     validation = _cross_check(annual_kwh, peak_kw_15, avg_kw, coverage, invoice_annual, mrk_kw, strategy)
 
