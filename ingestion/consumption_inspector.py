@@ -101,6 +101,20 @@ def _generic_parse(raw: bytes, filename: str, unit_override: str | None):
                 "unit_confidence": conf, "granularity_min": gran, "source": "generic_ts_value"}
 
 
+def _remap_to_calendar_year(s: pd.Series, year: int) -> pd.Series:
+    """Presunie profil na kalendárny rok (1.1.–31.12. cieľového roka) podľa deň/hodina/min.
+    Aug2023–Aug2024 → čistý rok 2025. Feb 29 v nepriestupnom cieľovom roku sa vynechá."""
+    new_ts, keep = [], []
+    for ts, v in zip(s.index, s.values):
+        try:
+            new_ts.append(pd.Timestamp(year=year, month=ts.month, day=ts.day, hour=ts.hour, minute=ts.minute))
+            keep.append(v)
+        except ValueError:
+            continue  # napr. 29.2. v nepriestupnom roku
+    out = pd.Series(keep, index=pd.DatetimeIndex(new_ts))
+    return out[~out.index.duplicated(keep="first")].sort_index()
+
+
 # ─────────────────────────── kanonický CSV ───────────────────────────
 def canonical_csv(series15_mwh: pd.Series) -> bytes:
     """SSE/ZSDIS formát: 5 riadkov hlavičky, potom DD.MM.YYYY HH:MM;MWh;; (desatinná čiarka)."""
@@ -321,7 +335,16 @@ def inspect(files: list[dict], unit_override: str | None = None,
     n_dupes = int(combined.index.duplicated().sum())
     final = combined[~combined.index.duplicated(keep="first")].sort_index()
 
+    # Premapuj na kalendárny rok (1.1.–31.12. cieľového roka) — presne to, čo AOM analyzátor očakáva.
+    src_from = final.index.min().strftime("%d.%m.%Y")
+    src_to = final.index.max().strftime("%d.%m.%Y")
+    remapped = (final.index.min().year != year) or (final.index.max().year != year)
+    final = _remap_to_calendar_year(final, year)
+
     flags, verdict, stats = _quality(final, mrk_kw, invoice_annual_kwh, n_dupes, generic_units)
+    if remapped:
+        flags.insert(0, {"level": "info", "text": f"Výstup premapovaný na kalendárny rok {year} (1.1.–31.12.). Zdroj: {src_from} – {src_to}."})
+    stats["source_period"] = f"{src_from} – {src_to}"
 
     charts = {}
     for name, fnc in (("heatmap", _svg_heatmap), ("monthly", _svg_monthly),
