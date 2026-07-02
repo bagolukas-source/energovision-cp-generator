@@ -454,7 +454,9 @@ def _values_match(desired: str, readback_param: Dict) -> bool:
     if enum_d and rb == enum_d:
         return True
     try:
-        return abs(float(rb) - float(d)) < 0.01
+        fr, fd = float(rb), float(d)
+        # ratio parametre: zápis v desatinách % (0–1000), readback v % (0–100) → faktor 10
+        return abs(fr - fd) < 0.01 or abs(fr * 10 - fd) < 0.01 or abs(fr - fd * 10) < 0.01
     except (TypeError, ValueError):
         return False
 
@@ -607,12 +609,17 @@ def send_command(ps_id: str, command_type: str, params: Optional[Dict] = None) -
             last = result
         return _logger_fail_hint(False, last)
 
-    # Appendix 10: ratio kódy (10008/10014/10087) sú v DESATINÁCH percenta (0–1000 = 0–100 %).
+    # Appendix 10 + empiria (KRUP Logger1000, 2026-07-02):
+    # - Logger EMS/power-control: 10088 = SELEKTOR módu (0 unlimited | 1 value | 2 percentage |
+    #   3/4/5 per-phase), NIE 170/85; 10087 = ratio v desatinách % pri zápise, readback v %.
+    # - Zero export = 10088:"2" + 10087:"0"; návrat = 10087:"1000" (mód ostáva percentage).
+    # - Data-collector mode loggery používajú 10012 (1/0) + 10014 — fallback variant.
+    # - Ratio kódy (10008/10014/10087) sa zapisujú v DESATINÁCH percenta (0–1000 = 0–100 %).
     if command_type in ("enable_zero_export", "set_active_power_limit_zero"):
         if logger_uuid:
             return _logger_try_variants([
+                [{"param_code": "10088", "set_value": "2"}, {"param_code": "10087", "set_value": "0"}],
                 [{"param_code": "10012", "set_value": "1"}, {"param_code": "10014", "set_value": "0"}],
-                [{"param_code": "10088", "set_value": "170"}, {"param_code": "10087", "set_value": "0"}],
             ])
         return _param_setting(uuids, [
             {"param_code": "10012", "set_value": "1"},
@@ -621,8 +628,8 @@ def send_command(ps_id: str, command_type: str, params: Optional[Dict] = None) -
     if command_type in ("disable_zero_export", "normal_export"):
         if logger_uuid:
             return _logger_try_variants([
+                [{"param_code": "10087", "set_value": "1000"}],
                 [{"param_code": "10012", "set_value": "0"}],
-                [{"param_code": "10088", "set_value": "85"}],
             ])
         return _param_setting(uuids, [
             {"param_code": "10012", "set_value": "0"},
@@ -634,12 +641,12 @@ def send_command(ps_id: str, command_type: str, params: Optional[Dict] = None) -
         if logger_uuid:
             if pct >= 100:
                 return _logger_try_variants([
+                    [{"param_code": "10087", "set_value": "1000"}],
                     [{"param_code": "10012", "set_value": "0"}],
-                    [{"param_code": "10088", "set_value": "85"}],
                 ])
             return _logger_try_variants([
+                [{"param_code": "10088", "set_value": "2"}, {"param_code": "10087", "set_value": pct10}],
                 [{"param_code": "10012", "set_value": "1"}, {"param_code": "10014", "set_value": pct10}],
-                [{"param_code": "10088", "set_value": "170"}, {"param_code": "10087", "set_value": pct10}],
             ])
         if pct >= 100:
             return _param_setting(uuids, [{"param_code": "10007", "set_value": "0"}])
@@ -651,8 +658,8 @@ def send_command(ps_id: str, command_type: str, params: Optional[Dict] = None) -
         if logger_uuid:
             # Logger vie garantovane riadiť len feed-in → SHUTDOWN degraduje na zero export
             return _logger_try_variants([
+                [{"param_code": "10088", "set_value": "2"}, {"param_code": "10087", "set_value": "0"}],
                 [{"param_code": "10012", "set_value": "1"}, {"param_code": "10014", "set_value": "0"}],
-                [{"param_code": "10088", "set_value": "170"}, {"param_code": "10087", "set_value": "0"}],
             ])
         # Kurtailment na 0 % namiesto power-off (reverzibilnejšie; staršie FW môžu limit ignorovať)
         return _param_setting(uuids, [
