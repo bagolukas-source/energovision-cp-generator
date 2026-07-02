@@ -6005,6 +6005,65 @@ def webhook_huawei_sync_stations():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/webhook/sungrow-sync-stations", methods=["POST", "GET"])
+def webhook_sungrow_sync_stations():
+    """Pull plant list z iSolarCloud → upsert do inverter_sites (vendor='sungrow') + device uuid do metadata."""
+    if not _hs_auth_ok(request):
+        return jsonify({"error": "unauthorized"}), 401
+    try:
+        import sungrow_oauth
+        return jsonify(sungrow_oauth.sync_stations())
+    except Exception as e:
+        log.exception("[sungrow-sync-stations] failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/sungrow/test", methods=["GET"])
+def sungrow_test():
+    """Diagnostika Sungrow integrácie: credentials → token → plant list."""
+    try:
+        import sungrow_oauth
+        return jsonify(sungrow_oauth.diagnose())
+    except Exception as e:
+        log.exception("[sungrow-test] failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/auth/sungrow/callback", methods=["GET"])
+def sungrow_oauth_callback():
+    """
+    OAuth callback pre Sungrow iSolarCloud (proxované cez Supabase edge function
+    sungrow-oauth-callback — Redirect URL registrovaný v iSolarCloud appke).
+    iSolarCloud posiela LEN ?code= (state sa späť neprenáša) → master-mode:
+    tokeny sa uložia do inverter_vendor_credentials (vendor='sungrow').
+    """
+    code = request.args.get("code")
+    error = request.args.get("error")
+    if error:
+        return f"<h1>Sungrow authorization error</h1><p>{error}</p>", 400
+    if not code:
+        return "<h1>Missing code</h1>", 400
+
+    try:
+        import sungrow_oauth
+        ok, result = sungrow_oauth.exchange_code_for_tokens(code)
+    except Exception as e:
+        log.exception("[sungrow-callback] failed")
+        return f"<h1>Sungrow token exchange failed</h1><pre>{str(e)[:300]}</pre>", 500
+
+    if not ok:
+        return f"<h1>Sungrow token exchange failed</h1><pre>{result}</pre>", 500
+
+    ps_list = result.get("auth_ps_list") or []
+    return f"""<html><head><title>Sungrow prepojené</title></head>
+<body style="font-family:sans-serif;text-align:center;padding:50px">
+<h1>✅ Sungrow iSolarCloud prepojené</h1>
+<p>Autorizovaných elektrární: <strong>{len(ps_list)}</strong>. Tokeny uložené, auto-refresh beží.</p>
+<p>Ďalší krok: sync staníc do CRM prebehne automaticky (alebo tlačidlom na SPOT dashboarde).</p>
+<a href="https://app.energovision.sk/admin/spot/stanice" style="background:#10b981;color:white;padding:10px 20px;text-decoration:none;border-radius:6px;display:inline-block;margin-top:20px">Späť do CRM</a>
+</body></html>"""
+
+
 @app.route("/webhook/huawei-login-test", methods=["POST", "GET"])
 def webhook_huawei_login_test():
     """

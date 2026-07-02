@@ -632,6 +632,12 @@ def vendor_send_command(vendor: str, station_code: str, command_type: str, param
             return solinteg_send(station_code, command_type, params)
         except Exception as e:
             return False, {"error": f"solinteg send_command failed: {str(e)[:300]}"}
+    elif vendor == "sungrow":
+        try:
+            from sungrow_oauth import send_command as sungrow_send
+            return sungrow_send(station_code, command_type, params)
+        except Exception as e:
+            return False, {"error": f"sungrow send_command failed: {str(e)[:300]}"}
     else:
         return False, {"error": f"unknown vendor: {vendor}"}
 
