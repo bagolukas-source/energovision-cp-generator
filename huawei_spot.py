@@ -1010,17 +1010,33 @@ def huawei_get_station_list(debug: bool = False, force_refresh: bool = False):
     # Update last_call_at PRED API call (worker B vidí že worker A ide na API)
     _save_api_state("plant_list", {"last_call_at": now_dt.isoformat()})
 
-    token = huawei_login()
-    if not token:
-        debug_info["login"] = "failed (None token)"
-        return ([], debug_info) if debug else []
-    debug_info["login"] = f"OK (token len={len(token)})"
+    # OAuth Bearer first — client_credentials token stačí na read API (rovnako ako fleet-status).
+    # NBI login (username/password) je fallback; účet vracia 20400 user_or_value_invalid (overené 2026-07-02).
+    base = None
+    headers = None
+    oauth_token = None
+    try:
+        from huawei_oauth import get_valid_access_token
+        oauth_token = get_valid_access_token("huawei")
+    except Exception as oe:
+        log.warning("[huawei_get_station_list] OAuth token unavailable: %s", oe)
 
-    base = _huawei_session.get("base") or HUAWEI_BASE
+    if oauth_token:
+        base = "https://intl.fusionsolar.huawei.com/thirdData"
+        headers = {"Authorization": f"Bearer {oauth_token}", "Content-Type": "application/json"}
+        debug_info["login"] = "OAuth Bearer"
+    else:
+        token = huawei_login()
+        if not token:
+            debug_info["login"] = "failed (no OAuth + no NBI token)"
+            return ([], debug_info) if debug else []
+        debug_info["login"] = f"NBI OK (token len={len(token)})"
+        base = _huawei_session.get("base") or HUAWEI_BASE
+        # Huawei eu5 NBI odteraz vyžaduje XSRF-TOKEN aj ako COOKIE (nielen hlavičku) — bez cookie
+        # vracia prázdne telo (2026-06-13). Cookie hodnota == token hodnota.
+        headers = {"XSRF-TOKEN": token, "Cookie": f"XSRF-TOKEN={token}", "Content-Type": "application/json"}
+
     url = f"{base}/stations"
-    # Huawei eu5 NBI odteraz vyžaduje XSRF-TOKEN aj ako COOKIE (nielen hlavičku) — bez cookie
-    # vracia prázdne telo (2026-06-13). Cookie hodnota == token hodnota.
-    headers = {"XSRF-TOKEN": token, "Cookie": f"XSRF-TOKEN={token}", "Content-Type": "application/json"}
     debug_info["url"] = url
 
     all_stations: List[Dict[str, Any]] = []
