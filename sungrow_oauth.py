@@ -432,9 +432,50 @@ def _translate_enum(logical_value: str, param_result: Dict) -> Optional[str]:
     return None
 
 
+def _values_match(desired: str, readback_param: Dict) -> bool:
+    """Porovná želanú hodnotu s hodnotou prečítanou z meniča (enum aj numericky)."""
+    rb = str(readback_param.get("return_value") if readback_param.get("return_value") is not None else "")
+    d = str(desired)
+    if rb == d:
+        return True
+    enum_d = _translate_enum(d, readback_param)
+    if enum_d and rb == enum_d:
+        return True
+    try:
+        return abs(float(rb) - float(d)) < 0.01
+    except (TypeError, ValueError):
+        return False
+
+
+def _readback_verify(uuid: str, param_list: List[Dict]) -> Tuple[bool, List[Dict]]:
+    """Ground truth: prečíta hodnoty z meniča a porovná so želanými.
+    Vracia (all_match, mismatches[s enum info pre prípadný preklad])."""
+    codes = [str(p["param_code"]) for p in param_list]
+    rb = read_params(uuid, codes)
+    if not rb.get("ok"):
+        return False, [{"param_code": c, "error": "readback failed"} for c in codes]
+    # read_params vracia zjednodušené hodnoty — potrebujeme aj enum mapy, doplň z raw ak treba
+    by_code: Dict[str, Dict] = {}
+    for v in rb.get("values") or []:
+        by_code[str(v.get("param_code"))] = {"return_value": v.get("value"),
+                                             "set_val_name": v.get("label"),
+                                             "set_val_name_val": v.get("enum_vals")}
+    mismatches = []
+    for p in param_list:
+        code = str(p["param_code"])
+        rp = by_code.get(code)
+        if rp is None or not _values_match(str(p["set_value"]), rp):
+            mismatches.append({"param_code": code, "desired": p["set_value"],
+                               "actual": (rp or {}).get("return_value"),
+                               "set_val_name": (rp or {}).get("set_val_name"),
+                               "set_val_name_val": (rp or {}).get("set_val_name_val")})
+    return not mismatches, mismatches
+
+
 def _submit_and_verify(uuid: str, param_list: List[Dict], task_name: str) -> Dict:
-    """Submitne write task a POČKÁ na per-parameter výsledok (command_status 4=OK, 5=zamietnuté).
-    Task-level 'Operation successful' totiž neznamená, že menič hodnoty prijal."""
+    """Submitne write task, počká na dokončenie a OVERÍ READBACKOM, že menič je v želanom stave.
+    'Operation successful' tasku ani per-param status nestačia — jediná pravda je readback
+    (param s hodnotou, ktorá už platí, menič 'zamietne', hoci stav je správny)."""
     ok, data = _call("/openapi/platform/paramSetting", {
         "set_type": 0, "uuid": str(uuid), "task_name": task_name,
         "expire_second": 120, "param_list": param_list,
@@ -446,18 +487,16 @@ def _submit_and_verify(uuid: str, param_list: List[Dict], task_name: str) -> Dic
         return {"ok": False, "error": data, "param_list": param_list}
     task_id = dev_results[0].get("task_id")
 
-    for _ in range(5):
-        time.sleep(3)
+    # počkaj na dokončenie tasku (best effort, max ~32 s), potom readback
+    for _ in range(8):
+        time.sleep(4)
         ok2, task = check_task(task_id, uuid)
-        if not ok2 or not isinstance(task, dict):
-            continue
-        if str(task.get("command_status")) == "8":
-            params = task.get("param_list") or []
-            failed = [p for p in params if str(p.get("command_status")) == "5"]
-            return {"ok": not failed, "task_id": task_id, "params": params,
-                    "failed_params": failed, "param_list": param_list}
-    return {"ok": False, "task_id": task_id, "error": "task timeout (nedokončil sa do ~15 s)",
-            "param_list": param_list}
+        if ok2 and isinstance(task, dict) and str(task.get("command_status")) == "8":
+            break
+
+    verified, mismatches = _readback_verify(uuid, param_list)
+    return {"ok": verified, "task_id": task_id, "param_list": param_list,
+            "failed_params": mismatches}
 
 
 def _param_setting(uuids: List[str], param_list: List[Dict]) -> Tuple[bool, Dict]:
@@ -650,7 +689,8 @@ def read_params(uuid: str, codes: List[str]) -> Dict:
                     "values": [{"param_code": p.get("param_code"),
                                 "value": p.get("return_value") or p.get("set_value"),
                                 "name": p.get("point_name"), "unit": p.get("unit"),
-                                "label": p.get("set_val_name")} for p in params]}
+                                "label": p.get("set_val_name"),
+                                "enum_vals": p.get("set_val_name_val")} for p in params]}
         if status not in ("2", "None"):  # iný stav než beží — vráť raw
             return {"ok": False, "task_id": task_id, "command_status": status, "raw": task}
     return {"ok": False, "task_id": task_id, "error": "timeout — task stále beží", "last": task if 'task' in dir() else None}
