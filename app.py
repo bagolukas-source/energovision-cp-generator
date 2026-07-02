@@ -6089,6 +6089,19 @@ def sungrow_param_write(uuid):
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/api/sungrow/setting-history/<uuid>", methods=["GET"])
+def sungrow_setting_history(uuid):
+    """História zápisov parametrov zariadenia (?codes=10012,10014&hours=48) — remark = dôvod zlyhania."""
+    codes = (request.args.get("codes") or "10012,10014").split(",")
+    hours = int(request.args.get("hours") or "48")
+    try:
+        import sungrow_oauth
+        ok, data = sungrow_oauth.setting_history([uuid], codes, hours)
+        return jsonify({"ok": ok, "data": data})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/api/sungrow/task-status/<uuid>/<task_id>", methods=["GET"])
 def sungrow_task_status(uuid, task_id):
     """Výsledok paramSetting tasku (command_status 2=beží, 8=hotovo)."""

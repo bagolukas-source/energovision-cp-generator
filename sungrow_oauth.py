@@ -588,58 +588,72 @@ def send_command(ps_id: str, command_type: str, params: Optional[Dict] = None) -
     def _logger_fail_hint(ok: bool, result: Dict) -> Tuple[bool, Dict]:
         if not ok:
             result["hint"] = (
-                "Stanica má Logger, ktorý odmieta vzdialený zápis (per-param status 5). "
-                "Servis: na Loggeri povoliť remote parameter setting / power control, "
-                "prípadne kontaktovať Sungrow support."
+                "Logger neprijal zápis ani v data-collector, ani v EMS móde. "
+                "Over cez /api/sungrow/setting-history/<logger_uuid> remark zlyhania; "
+                "možné príčiny: oprávnenie param kódu (6-1) alebo mód loggera."
             )
         return ok, result
 
-    # Param codes: menič — 10012 feed-in switch (enum napr. 170/85), 10013 limit (kW),
-    # 10007 active power switch, 10008 ratio (%). Logger — 10012 (enum 1/0), 10014 ratio (%).
+    def _logger_try_variants(variants: List[List[Dict]]) -> Tuple[bool, Dict]:
+        """Logger má 2 sady feed-in parametrov podľa módu (Appendix 10):
+        data collector mode → 10012 (1/0) + 10014; energy management mode → 10088 (170/85) + 10087.
+        Skúšame postupne, úspech = readback potvrdí."""
+        last = {}
+        for param_list in variants:
+            ok, result = _param_setting([logger_uuid], param_list)
+            result["variant"] = [p["param_code"] for p in param_list]
+            if ok:
+                return True, result
+            last = result
+        return _logger_fail_hint(False, last)
+
+    # Appendix 10: ratio kódy (10008/10014/10087) sú v DESATINÁCH percenta (0–1000 = 0–100 %).
     if command_type in ("enable_zero_export", "set_active_power_limit_zero"):
         if logger_uuid:
-            # Logger RIADI export — per-inverter zápis by prepísal; píš na logger
-            return _logger_fail_hint(*_param_setting([logger_uuid], [
-                {"param_code": "10012", "set_value": "1"},
-                {"param_code": "10014", "set_value": "0"},
-            ]))
+            return _logger_try_variants([
+                [{"param_code": "10012", "set_value": "1"}, {"param_code": "10014", "set_value": "0"}],
+                [{"param_code": "10088", "set_value": "170"}, {"param_code": "10087", "set_value": "0"}],
+            ])
         return _param_setting(uuids, [
             {"param_code": "10012", "set_value": "1"},
             {"param_code": "10013", "set_value": "0"},
         ])
     if command_type in ("disable_zero_export", "normal_export"):
         if logger_uuid:
-            return _logger_fail_hint(*_param_setting([logger_uuid], [
-                {"param_code": "10012", "set_value": "0"},
-            ]))
+            return _logger_try_variants([
+                [{"param_code": "10012", "set_value": "0"}],
+                [{"param_code": "10088", "set_value": "85"}],
+            ])
         return _param_setting(uuids, [
             {"param_code": "10012", "set_value": "0"},
             {"param_code": "10007", "set_value": "0"},
         ])
     if command_type == "set_active_power_limit":
         pct = float(params.get("limit_pct", 100))
+        pct10 = str(int(pct * 10))  # 0–1000 = 0–100 %
         if logger_uuid:
             if pct >= 100:
-                return _logger_fail_hint(*_param_setting([logger_uuid], [
-                    {"param_code": "10012", "set_value": "0"},
-                ]))
-            return _logger_fail_hint(*_param_setting([logger_uuid], [
-                {"param_code": "10012", "set_value": "1"},
-                {"param_code": "10014", "set_value": str(int(pct))},
-            ]))
+                return _logger_try_variants([
+                    [{"param_code": "10012", "set_value": "0"}],
+                    [{"param_code": "10088", "set_value": "85"}],
+                ])
+            return _logger_try_variants([
+                [{"param_code": "10012", "set_value": "1"}, {"param_code": "10014", "set_value": pct10}],
+                [{"param_code": "10088", "set_value": "170"}, {"param_code": "10087", "set_value": pct10}],
+            ])
         if pct >= 100:
             return _param_setting(uuids, [{"param_code": "10007", "set_value": "0"}])
         return _param_setting(uuids, [
             {"param_code": "10007", "set_value": "1"},
-            {"param_code": "10008", "set_value": str(int(pct))},
+            {"param_code": "10008", "set_value": pct10},
         ])
     if command_type == "full_shutdown":
         if logger_uuid:
             # Logger vie garantovane riadiť len feed-in → SHUTDOWN degraduje na zero export
-            return _logger_fail_hint(*_param_setting([logger_uuid], [
-                {"param_code": "10012", "set_value": "1"},
-                {"param_code": "10014", "set_value": "0"},
-            ]))
+            return _logger_try_variants([
+                [{"param_code": "10012", "set_value": "1"}, {"param_code": "10014", "set_value": "0"}],
+                [{"param_code": "10088", "set_value": "170"}, {"param_code": "10087", "set_value": "0"}],
+            ])
         # Kurtailment na 0 % namiesto power-off (reverzibilnejšie; staršie FW môžu limit ignorovať)
         return _param_setting(uuids, [
             {"param_code": "10007", "set_value": "1"},
@@ -732,6 +746,19 @@ def control_audit() -> Dict:
 def check_task(task_id: str, uuid: str) -> Tuple[bool, Any]:
     """Poll výsledku paramSetting tasku (command_status 2=beží, 8=hotovo)."""
     return _call("/openapi/platform/getParamSettingTask", {"task_id": str(task_id), "uuid": str(uuid)})
+
+
+def setting_history(uuids: List[str], codes: List[str], hours_back: int = 48) -> Tuple[bool, Any]:
+    """História zápisov parametrov vrátane remark (dôvod zlyhania) a taskSource
+    (1=portál, 2=OpenAPI). Server používa čas +08:00 — okno berieme veľkoryso."""
+    end = datetime.now(timezone.utc) + timedelta(hours=14)
+    start = end - timedelta(hours=hours_back + 14)
+    return _call("/openapi/platform/getDeviceSettingRecordList", {
+        "paramList": [int(c) for c in codes],
+        "uuidList": [int(u) for u in uuids],
+        "startTime": start.strftime("%Y-%m-%d %H:%M:%S"),
+        "endTime": end.strftime("%Y-%m-%d %H:%M:%S"),
+    })
 
 
 def read_params(uuid: str, codes: List[str]) -> Dict:
