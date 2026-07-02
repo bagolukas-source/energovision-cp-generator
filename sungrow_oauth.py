@@ -18,6 +18,7 @@ Control (vyžaduje schválený Configuration & Control scope):
 Cloud data refresh ~5 min → nepollovať častejšie.
 """
 import os
+import re
 import time
 import logging
 import requests
@@ -242,6 +243,54 @@ def list_plants() -> Tuple[bool, Any]:
     return True, plants
 
 
+CAP_KEYS = ("ps_capacity", "total_capcity", "total_capacity", "design_capacity", "install_capacity")
+
+
+def _cap_to_kwp(v) -> float:
+    """Kapacita môže prísť ako číslo, string alebo dict {value, unit} (kW/kWp/MWp/W)."""
+    unit = ""
+    if isinstance(v, dict):
+        unit = str(v.get("unit") or "")
+        v = v.get("value")
+    try:
+        f = float(v)
+    except Exception:
+        return 0.0
+    u = unit.lower()
+    if "mw" in u:
+        return f * 1000
+    if u in ("w", "wp"):
+        return f / 1000
+    return f
+
+
+def _extract_capacity(d: Dict) -> float:
+    for k in CAP_KEYS:
+        if d.get(k) is not None:
+            kwp = _cap_to_kwp(d[k])
+            if kwp > 0:
+                return kwp
+    return 0.0
+
+
+def _model_ac_kw(model: str) -> float:
+    """AC rating z názvu modelu: SG33CX-P2 → 33, SG110CX → 110, SH10RT → 10."""
+    m = re.search(r"S[GH](\d+(?:\.\d+)?)", str(model or "").upper())
+    return float(m.group(1)) if m else 0.0
+
+
+def fetch_station_details(ps_ids: List[str]) -> Dict[str, Dict]:
+    """getPowerStationDetail v dávkach po 50 — kapacita často chýba v pageListe."""
+    out: Dict[str, Dict] = {}
+    for i in range(0, len(ps_ids), 50):
+        chunk = ps_ids[i:i + 50]
+        ok, data = _call("/openapi/platform/getPowerStationDetail", {"ps_ids": ",".join(chunk)})
+        if ok:
+            for row in (data or {}).get("data_list") or []:
+                out[str(row.get("ps_id"))] = row
+    return out
+
+
 def list_devices(ps_id: str) -> Tuple[bool, Any]:
     ok, data = _call("/openapi/platform/getDeviceListByPsId", {"ps_id": str(ps_id), "page": 1, "size": 100})
     if not ok:
@@ -265,6 +314,9 @@ def sync_stations() -> Dict[str, Any]:
     ).json()
     existing_map = {str(s.get("vendor_station_id")): s for s in existing if s.get("vendor_station_id")}
 
+    # Kapacita v pageListe často chýba → dotiahni detaily v dávkach
+    detail_map = fetch_station_details([str(p.get("ps_id")) for p in plants if p.get("ps_id")])
+
     added, updated, skipped = 0, 0, 0
     details = []
     for p in plants:
@@ -273,17 +325,11 @@ def sync_stations() -> Dict[str, Any]:
             skipped += 1
             continue
         name = p.get("ps_name") or ps_id
-        # ps_capacity býva kWp; ak príde dict {value, unit}, vezmi value
-        cap = p.get("ps_capacity")
-        if isinstance(cap, dict):
-            cap = cap.get("value")
-        try:
-            dc_kwp = float(cap or 0)
-        except Exception:
-            dc_kwp = 0.0
+        dc_kwp = _extract_capacity(p) or _extract_capacity(detail_map.get(ps_id, {}))
 
-        # uuid inverteru pre control API
+        # uuid inverteru pre control API + AC výkon z modelov meničov
         sungrow_meta = {}
+        ac_kw = 0.0
         dev_ok, devices = list_devices(ps_id)
         if dev_ok:
             inverters = [d for d in devices if str(d.get("device_type")) == "1"]
@@ -296,6 +342,7 @@ def sync_stations() -> Dict[str, Any]:
                     "inverter_count": len(inverters),
                     "all_uuids": [d.get("uuid") for d in inverters if d.get("uuid")],
                 }
+                ac_kw = sum(_model_ac_kw(d.get("device_model_code") or d.get("type_name")) for d in inverters)
 
         row = {
             "vendor": "sungrow",
@@ -304,6 +351,8 @@ def sync_stations() -> Dict[str, Any]:
             "dc_kwp": dc_kwp,
             "monitoring_enabled": True,
         }
+        if ac_kw > 0:
+            row["ac_kw"] = ac_kw
         if p.get("latitude") is not None:
             row["latitude"] = p.get("latitude")
         if p.get("longitude") is not None:
@@ -314,8 +363,12 @@ def sync_stations() -> Dict[str, Any]:
             merged_meta = {**(site.get("metadata") or {})}
             if sungrow_meta:
                 merged_meta["sungrow"] = sungrow_meta
-            patch = {"site_name": name, "dc_kwp": dc_kwp, "metadata": merged_meta,
+            patch = {"site_name": name, "metadata": merged_meta,
                      "last_sync_at": datetime.now(timezone.utc).isoformat()}
+            if dc_kwp > 0:
+                patch["dc_kwp"] = dc_kwp
+            if ac_kw > 0:
+                patch["ac_kw"] = ac_kw
             requests.patch(
                 f"{SUPABASE_URL}/rest/v1/inverter_sites",
                 headers=_sb_headers(),
