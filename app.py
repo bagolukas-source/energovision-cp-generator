@@ -6053,6 +6053,28 @@ def sungrow_control_check(ps_id):
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/api/sungrow/task-status/<uuid>/<task_id>", methods=["GET"])
+def sungrow_task_status(uuid, task_id):
+    """Výsledok paramSetting tasku (command_status 2=beží, 8=hotovo)."""
+    try:
+        import sungrow_oauth
+        ok, data = sungrow_oauth.check_task(task_id, uuid)
+        return jsonify({"ok": ok, "data": data})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/sungrow/param-read/<uuid>", methods=["GET"])
+def sungrow_param_read(uuid):
+    """Read-only: aktuálne hodnoty control parametrov meniča (?codes=10012,10013,...)."""
+    codes = (request.args.get("codes") or "10012,10013,10007,10008,10011").split(",")
+    try:
+        import sungrow_oauth
+        return jsonify(sungrow_oauth.read_params(uuid, codes))
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/api/auth/sungrow/callback", methods=["GET"])
 def sungrow_oauth_callback():
     """

@@ -563,6 +563,41 @@ def check_task(task_id: str, uuid: str) -> Tuple[bool, Any]:
     return _call("/openapi/platform/getParamSettingTask", {"task_id": str(task_id), "uuid": str(uuid)})
 
 
+def read_params(uuid: str, codes: List[str]) -> Dict:
+    """Prečíta AKTUÁLNE hodnoty parametrov z meniča (set_type=2 = read, nič nemení).
+    Submitne read task a polluje výsledok."""
+    ok, data = _call("/openapi/platform/paramSetting", {
+        "set_type": 2,
+        "uuid": str(uuid),
+        "task_name": f"Energovision read {datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
+        "expire_second": 120,
+        "param_list": [{"param_code": str(c), "set_value": ""} for c in codes],
+    })
+    if not ok:
+        return {"ok": False, "step": "submit", "error": data}
+    dev_results = (data or {}).get("dev_result_list") or []
+    if not dev_results or str(dev_results[0].get("code")) != "1":
+        return {"ok": False, "step": "submit", "error": data}
+    task_id = dev_results[0].get("task_id")
+
+    for attempt in range(6):
+        time.sleep(3)
+        ok2, task = check_task(task_id, uuid)
+        if not ok2:
+            continue
+        status = str((task or {}).get("command_status"))
+        if status == "8":  # done
+            params = (task or {}).get("param_list") or []
+            return {"ok": True, "task_id": task_id, "command_status": status,
+                    "values": [{"param_code": p.get("param_code"),
+                                "value": p.get("return_value") or p.get("set_value"),
+                                "name": p.get("point_name"), "unit": p.get("unit"),
+                                "label": p.get("set_val_name")} for p in params]}
+        if status not in ("2", "None"):  # iný stav než beží — vráť raw
+            return {"ok": False, "task_id": task_id, "command_status": status, "raw": task}
+    return {"ok": False, "task_id": task_id, "error": "timeout — task stále beží", "last": task if 'task' in dir() else None}
+
+
 def diagnose() -> Dict:
     """Diagnostika pre /api/sungrow/test: credentials → token → plant list."""
     cred = load_credentials()
