@@ -389,16 +389,26 @@ def huawei_send_command(station_code: str, command_type: str, params: Dict[str, 
     """
     # OAuth Bearer token (Service Provider scope=control)
     oauth_token = None
+    token_source = None
     try:
-        from huawei_oauth import get_valid_access_token
-        oauth_token = get_valid_access_token("huawei")
+        from huawei_oauth import get_access_token_info
+        oauth_token, token_source = get_access_token_info("huawei")
     except Exception as oe:
         log.warning("[huawei_send_command] OAuth token unavailable: %s", oe)
-    
+
     if not oauth_token:
         return False, {
             "error": "no OAuth Bearer token — Owner authorization required",
             "fix": "Otvor /admin/integrations a re-authorize Huawei OAuth",
+        }
+
+    # Control API akceptuje LEN owner-autorizovaný token (authorization_code flow).
+    # client_credentials token by Huawei odmietol s failCode 305 INVALID_CREDENTIAL.
+    if token_source != "owner_authorization":
+        return False, {
+            "error": f"OAuth token nie je owner-authorized (token_source={token_source or 'unknown'}) — control API by vrátilo 305 INVALID_CREDENTIAL",
+            "fix": "Prihlás sa do FusionSolar owner účtom a dokonči autorizáciu: /admin/integrations → Authorize Huawei",
+            "auth_method": "oauth_bearer",
         }
     
     # Base URL pre OpenAPI control endpoints (NIE /thirdData)
@@ -567,8 +577,9 @@ def estimate_savings_eur(site: Dict[str, Any], to_state: str, spot_eur_mwh: floa
 
 
 def log_state_transition(site: Dict[str, Any], from_state: str, to_state: str, spot: float,
-                          reason: str, dry_run: bool, command_id: Optional[str]) -> None:
-    savings = estimate_savings_eur(site, to_state, spot)
+                          reason: str, dry_run: bool, command_id: Optional[str],
+                          failed: bool = False) -> None:
+    savings = estimate_savings_eur(site, to_state, spot) if not failed else 0.0
     payload = [{
         "site_id": site["id"],
         "from_state": from_state,
@@ -581,6 +592,7 @@ def log_state_transition(site: Dict[str, Any], from_state: str, to_state: str, s
         "dry_run": dry_run,
         "command_id": command_id,
         "customer_savings_eur": savings,
+        "failed": failed,
     }]
     sb_post("spot_state_transitions", payload)
 
@@ -633,6 +645,7 @@ def execute_transition(site: Dict[str, Any], from_state: str, to_state: str, spo
             commands.append({"type": "forced_charge", "params": {"target_soc": 100}})
 
     results = []
+    fail_msgs = []
     for cmd in commands:
         cmd_row = {
             "site_id": site_id,
@@ -660,10 +673,25 @@ def execute_transition(site: Dict[str, Any], from_state: str, to_state: str, spo
                     "completed_at": datetime.now(timezone.utc).isoformat(),
                 })
                 results[-1]["vendor_ok"] = ok
+                if not ok:
+                    err = resp.get("error") or resp.get("message") or f"failCode {resp.get('failCode')}"
+                    fail_msgs.append(f"{cmd['type']}: {str(err)[:180]}")
         else:
             log.error("[execute_transition] insert command failed: %s %s", r.status_code, r.text[:200])
 
-    return {"commands_issued": len(results), "details": results}
+    # LIVE vyhodnotenie: uspel aspoň jeden / všetky vendor príkazy? (dry_run = automaticky OK)
+    vendor_results = [d.get("vendor_ok") for d in results if "vendor_ok" in d]
+    any_ok = dry_run or (len(vendor_results) > 0 and any(vendor_results))
+    all_ok = dry_run or (len(vendor_results) > 0 and all(vendor_results))
+
+    if fail_msgs:
+        slack_notify(
+            f":x: SPOT príkazy ZLYHALI `{site.get('site_name')}` ({from_state} → {to_state}):\n"
+            + "\n".join(f"• {m}" for m in fail_msgs)
+        )
+
+    return {"commands_issued": len(results), "details": results,
+            "any_ok": any_ok, "all_ok": all_ok, "fail_msgs": fail_msgs}
 
 
 def spot_reactor(dry_run_override: Optional[bool] = None) -> Dict[str, Any]:
@@ -754,13 +782,23 @@ def spot_reactor(dry_run_override: Optional[bool] = None) -> Dict[str, Any]:
             reason = f"SPOT={current_spot:.2f}/MWh eff={effective_spot:.2f}"
             result = execute_transition(site, current, target, current_spot, site_dry_run)
             cmd_id = (result["details"][0].get("command_id") if result["details"] else None)
-            log_state_transition(site, current, target, current_spot, reason, site_dry_run, cmd_id)
+            succeeded = bool(result.get("any_ok"))
+            log_state_transition(site, current, target, current_spot, reason, site_dry_run, cmd_id,
+                                 failed=not succeeded)
 
-            sb_patch(f"inverter_sites?id=eq.{site['id']}", {
-                "spot_current_state": target,
-                "spot_last_transition_at": datetime.now(timezone.utc).isoformat(),
-                "spot_last_transition_reason": reason,
-            })
+            if succeeded:
+                # Stav prepni LEN keď menič príkaz reálne prijal (alebo dry_run) —
+                # inak by dashboard ukazoval stav, ktorý v elektrárni neplatí.
+                sb_patch(f"inverter_sites?id=eq.{site['id']}", {
+                    "spot_current_state": target,
+                    "spot_last_transition_at": datetime.now(timezone.utc).isoformat(),
+                    "spot_last_transition_reason": reason,
+                })
+            else:
+                fail_summary = "; ".join(result.get("fail_msgs") or [])[:300] or "vendor príkazy zlyhali"
+                sb_patch(f"inverter_sites?id=eq.{site['id']}", {
+                    "spot_last_transition_reason": f"FAILED {current}->{target}: {fail_summary}",
+                })
 
             transitions.append({
                 "site_id": site["id"],
@@ -770,14 +808,17 @@ def spot_reactor(dry_run_override: Optional[bool] = None) -> Dict[str, Any]:
                 "spot": current_spot,
                 "dry_run": site_dry_run,
                 "commands": result["commands_issued"],
+                "succeeded": succeeded,
             })
 
-            emoji = {"NORMAL": ":white_check_mark:", "ZERO_EXPORT_ONLY": ":no_entry:", "FULL_SHUTDOWN": ":octagonal_sign:"}
-            mode = "DRY-RUN" if site_dry_run else "LIVE"
-            slack_notify(
-                f"{emoji.get(target,':bell:')} SPOT reactor [{mode}] `{site.get('site_name')}` "
-                f"{current} -> {target} (SPOT={current_spot:.2f}/MWh)"
-            )
+            if succeeded:
+                emoji = {"NORMAL": ":white_check_mark:", "ZERO_EXPORT_ONLY": ":no_entry:", "FULL_SHUTDOWN": ":octagonal_sign:"}
+                mode = "DRY-RUN" if site_dry_run else "LIVE"
+                slack_notify(
+                    f"{emoji.get(target,':bell:')} SPOT reactor [{mode}] `{site.get('site_name')}` "
+                    f"{current} -> {target} (SPOT={current_spot:.2f}/MWh)"
+                )
+            # pri zlyhaní Slack alert už poslal execute_transition
 
         except Exception as e:
             log.exception("[spot_reactor] site=%s failed", site.get("id"))
@@ -843,18 +884,41 @@ def manual_force_state(site_id: str, target_state: str, issued_by: str = "manual
     full_reason = f"{reason} (by {issued_by})"
     result = execute_transition(site, current_state, target_state, current_spot, dry_run)
     cmd_id = (result["details"][0].get("command_id") if result["details"] else None)
-    log_state_transition(site, current_state, target_state, current_spot, full_reason, dry_run, cmd_id)
+    succeeded = bool(result.get("any_ok"))
+    log_state_transition(site, current_state, target_state, current_spot, full_reason, dry_run, cmd_id,
+                         failed=not succeeded)
 
-    sb_patch(f"inverter_sites?id=eq.{site_id}", {
-        "spot_current_state": target_state,
-        "spot_last_transition_at": datetime.now(timezone.utc).isoformat(),
-        "spot_last_transition_reason": full_reason,
-    })
-
-    slack_notify(
-        f":wrench: SPOT *manual override* [{'DRY' if dry_run else 'LIVE'}] `{site.get('site_name')}` "
-        f"{current_state} → *{target_state}* (by {issued_by})"
-    )
+    if succeeded:
+        sb_patch(f"inverter_sites?id=eq.{site_id}", {
+            "spot_current_state": target_state,
+            "spot_last_transition_at": datetime.now(timezone.utc).isoformat(),
+            "spot_last_transition_reason": full_reason,
+        })
+        slack_notify(
+            f":wrench: SPOT *manual override* [{'DRY' if dry_run else 'LIVE'}] `{site.get('site_name')}` "
+            f"{current_state} → *{target_state}* (by {issued_by})"
+        )
+    else:
+        fail_summary = "; ".join(result.get("fail_msgs") or [])[:300] or "vendor príkazy zlyhali"
+        # Override zruš — forced stav sa v elektrárni NEuplatnil, reactor má stanicu ďalej riadiť
+        sb_patch(f"inverter_sites?id=eq.{site_id}", {
+            "spot_last_transition_reason": f"FAILED manual {current_state}->{target_state}: {fail_summary}",
+            "spot_manual_override_state": None,
+            "spot_manual_override_until": None,
+            "spot_manual_override_by": None,
+            "spot_manual_override_at": None,
+        })
+        return {
+            "ok": False,
+            "site_id": site_id,
+            "site_name": site.get("site_name"),
+            "from": current_state,
+            "to": target_state,
+            "dry_run": dry_run,
+            "commands_issued": result["commands_issued"],
+            "command_id": cmd_id,
+            "error": fail_summary,
+        }
 
     return {
         "ok": True,

@@ -39,7 +39,7 @@ def load_oauth_credentials(vendor: str = "huawei") -> Optional[Dict]:
         f"{SUPABASE_URL}/rest/v1/inverter_vendor_credentials",
         headers=_sb_headers(),
         params={
-            "select": "id,base_url,client_id,encrypted_client_secret,current_token,refresh_token,token_expires_at,oauth_scope,auth_type",
+            "select": "id,base_url,client_id,encrypted_client_secret,current_token,refresh_token,token_expires_at,oauth_scope,auth_type,token_source",
             "vendor": f"eq.{vendor}",
             "auth_type": "eq.oauth",
             "is_active": "eq.true",
@@ -115,8 +115,13 @@ def request_new_token(cred: Dict) -> Tuple[bool, Optional[Dict]]:
         return False, {"error": str(e)}
 
 
-def save_tokens(cred_id: str, access_token: str, refresh_token: Optional[str], expires_in_sec: int) -> None:
-    """Persist nový access_token + refresh_token + expiry do DB."""
+def save_tokens(cred_id: str, access_token: str, refresh_token: Optional[str], expires_in_sec: int,
+                token_source: Optional[str] = None) -> None:
+    """Persist nový access_token + refresh_token + expiry do DB.
+
+    token_source: 'owner_authorization' (authorization_code/refresh_token flow) alebo
+    'client_credentials'. Control API funguje LEN s owner_authorization tokenom.
+    """
     expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in_sec - 60)  # -60s safety buffer
     payload = {
         "current_token": access_token,
@@ -125,6 +130,8 @@ def save_tokens(cred_id: str, access_token: str, refresh_token: Optional[str], e
     }
     if refresh_token:
         payload["refresh_token"] = refresh_token
+    if token_source:
+        payload["token_source"] = token_source
 
     requests.patch(
         f"{SUPABASE_URL}/rest/v1/inverter_vendor_credentials",
@@ -135,15 +142,27 @@ def save_tokens(cred_id: str, access_token: str, refresh_token: Optional[str], e
     )
 
 
-def get_valid_access_token(vendor: str = "huawei", force_refresh: bool = False) -> Optional[str]:
+def _slack_ops(text: str) -> None:
+    """Slack alert do ops kanála (rovnaký webhook ako huawei_spot.slack_notify)."""
+    hook = os.environ.get("SLACK_WEBHOOK_OPS", "")
+    if not hook:
+        return
+    try:
+        requests.post(hook, json={"text": text}, timeout=10)
+    except Exception:
+        pass
+
+
+def get_access_token_info(vendor: str = "huawei", force_refresh: bool = False) -> Tuple[Optional[str], Optional[str]]:
     """
-    Hlavná funkcia — vráti platný access_token pre použitie v API calls.
+    Hlavná funkcia — vráti (access_token, token_source) pre použitie v API calls.
+    token_source: 'owner_authorization' | 'client_credentials' | None.
     Ak je current_token ešte platný → použije cache.
-    Ak vypršal → nový request.
+    Ak vypršal → refresh_token (owner) alebo client_credentials fallback.
     """
     cred = load_oauth_credentials(vendor)
     if not cred:
-        return None
+        return None, None
 
     # Skontroluj cache
     if not force_refresh:
@@ -153,7 +172,7 @@ def get_valid_access_token(vendor: str = "huawei", force_refresh: bool = False) 
             try:
                 expires_at = datetime.fromisoformat(expires_str.replace("Z", "+00:00"))
                 if expires_at > datetime.now(timezone.utc):
-                    return current
+                    return current, cred.get("token_source")
             except Exception:
                 pass
 
@@ -181,30 +200,43 @@ def get_valid_access_token(vendor: str = "huawei", force_refresh: bool = False) 
                         access_token=j["access_token"],
                         refresh_token=j.get("refresh_token", refresh_token),
                         expires_in_sec=j.get("expires_in", DEFAULT_TOKEN_TTL_SECONDS),
+                        token_source="owner_authorization",
                     )
-                    return j["access_token"]
+                    return j["access_token"], "owner_authorization"
             log.warning("refresh_token failed: %s %s", r.status_code, r.text[:200])
+            _slack_ops(
+                f":rotating_light: Huawei OAuth *refresh_token zlyhal* ({r.status_code}) — "
+                f"owner autorizácia sa stratí, treba re-authorize v /admin/integrations. Body: {r.text[:150]}"
+            )
         except Exception as e:
             log.exception("refresh_token exception: %s", e)
-    
-    # Fallback: client_credentials (NIE owner-authorized, posledná možnosť)
+            _slack_ops(f":rotating_light: Huawei OAuth refresh_token exception: {str(e)[:150]}")
+
+    # Fallback: client_credentials (NIE owner-authorized — control API s ním NEfunguje)
     log.info("Falling back to client_credentials for %s", vendor)
     ok, result = request_new_token(cred)
     if not ok:
         log.error("Token request failed: %s", result)
-        return None
+        return None, None
 
     access_token = result.get("access_token")
     if not access_token:
-        return None
+        return None, None
 
     save_tokens(
         cred_id=cred["id"],
         access_token=access_token,
         refresh_token=result.get("refresh_token"),
         expires_in_sec=result.get("expires_in_sec", DEFAULT_TOKEN_TTL_SECONDS),
+        token_source="client_credentials",
     )
-    return access_token
+    return access_token, "client_credentials"
+
+
+def get_valid_access_token(vendor: str = "huawei", force_refresh: bool = False) -> Optional[str]:
+    """Spätne kompatibilný wrapper — vráti len token (read API mu stačí)."""
+    token, _source = get_access_token_info(vendor, force_refresh)
+    return token
 
 
 def get_authenticated_session() -> Tuple[Optional[requests.Session], Optional[Dict]]:
@@ -801,6 +833,7 @@ def try_client_credentials_smart() -> Dict:
                 access_token=success_attempt["access_token"],
                 refresh_token=None,
                 expires_in_sec=success_attempt.get("ttl_sec") or DEFAULT_TOKEN_TTL_SECONDS,
+                token_source="client_credentials",
             )
             result["saved_to_db"] = True
         except Exception as e:

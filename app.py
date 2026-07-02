@@ -13340,21 +13340,45 @@ def huawei_oauth_callback():
     
     from huawei_oauth import exchange_code_for_tokens, save_customer_authorization, save_tokens, load_oauth_credentials
     
+    def _log_oauth_failure(step: str, detail):
+        """Nedokončené OAuth pokusy boli doteraz neviditeľné — zaloguj do huawei_write_log."""
+        try:
+            requests.post(
+                f"{SUPABASE_URL}/rest/v1/huawei_write_log",
+                headers={
+                    "apikey": SUPABASE_SERVICE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+                    "Prefer": "return=minimal",
+                },
+                json={
+                    "command_type": "oauth_callback",
+                    "command_source": "oauth_callback",
+                    "command_payload": {"step": step, "state": state[:32]},
+                    "success": False,
+                    "error_message": str(detail)[:500],
+                },
+                timeout=10,
+            )
+        except Exception:
+            log.warning("failed to log oauth failure")
+
     # TEST MASTER mode: state=testmaster* — uloží token do inverter_vendor_credentials (alphanumeric only per Huawei spec)
     if state.startswith("testmaster"):
         ok, tokens = exchange_code_for_tokens(code, redirect_uri)
         if not ok:
+            _log_oauth_failure("exchange_code_master", tokens)
             return f"<h1>Token exchange failed</h1><pre>{tokens}</pre>", 500
-        
+
         cred = load_oauth_credentials("huawei")
         if not cred:
             return "<h1>No huawei credentials in DB</h1>", 500
-        
+
         save_tokens(
             cred_id=cred["id"],
             access_token=tokens.get("access_token"),
             refresh_token=tokens.get("refresh_token"),
             expires_in_sec=tokens.get("expires_in_sec", 3600),
+            token_source="owner_authorization",
         )
         
         return f"""<html><head><title>Huawei master prepojené</title></head>
@@ -13377,11 +13401,13 @@ def huawei_oauth_callback():
         timeout=10,
     )
     if not r.ok or not r.json():
+        _log_oauth_failure("state_validation", f"invalid state, http={r.status_code}")
         return "<h1>Invalid state — possible CSRF</h1>", 400
     pending = r.json()[0]
-    
+
     ok, tokens = exchange_code_for_tokens(code, redirect_uri)
     if not ok:
+        _log_oauth_failure("exchange_code_customer", tokens)
         return f"<h1>Token exchange failed</h1><pre>{tokens}</pre>", 500
     
     save_customer_authorization(
