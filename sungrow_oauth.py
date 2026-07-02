@@ -478,7 +478,11 @@ def _readback_verify(uuid: str, param_list: List[Dict]) -> Tuple[bool, List[Dict
     for p in param_list:
         code = str(p["param_code"])
         rp = by_code.get(code)
-        if rp is None or not _values_match(str(p["set_value"]), rp):
+        actual = str((rp or {}).get("return_value") if (rp or {}).get("return_value") is not None else "")
+        # accept: alternatívne hodnoty rovnakého významu — napr. 10088 je v Local móde
+        # selektor (2=percentage), v Remote/dispatch móde ON/OFF (170=Enable)
+        accepted = actual in [str(a) for a in (p.get("accept") or [])]
+        if not accepted and (rp is None or not _values_match(str(p["set_value"]), rp)):
             mismatches.append({"param_code": code, "desired": p["set_value"],
                                "actual": (rp or {}).get("return_value"),
                                "set_val_name": (rp or {}).get("set_val_name"),
@@ -490,15 +494,17 @@ def _submit_and_verify(uuid: str, param_list: List[Dict], task_name: str) -> Dic
     """Submitne write task, počká na dokončenie a OVERÍ READBACKOM, že menič je v želanom stave.
     'Operation successful' tasku ani per-param status nestačia — jediná pravda je readback
     (param s hodnotou, ktorá už platí, menič 'zamietne', hoci stav je správny)."""
+    # API payload smie obsahovať len param_code/set_value (accept je interné pre verifikáciu)
+    api_params = [{"param_code": p["param_code"], "set_value": p["set_value"]} for p in param_list]
     ok, data = _call("/openapi/platform/paramSetting", {
         "set_type": 0, "uuid": str(uuid), "task_name": task_name,
-        "expire_second": 120, "param_list": param_list,
+        "expire_second": 120, "param_list": api_params,
     })
     if not ok:
-        return {"ok": False, "error": data, "param_list": param_list}
+        return {"ok": False, "error": data, "param_list": api_params}
     dev_results = (data or {}).get("dev_result_list") or []
     if not dev_results or str(dev_results[0].get("code")) != "1":
-        return {"ok": False, "error": data, "param_list": param_list}
+        return {"ok": False, "error": data, "param_list": api_params}
     task_id = dev_results[0].get("task_id")
 
     # počkaj na dokončenie tasku (best effort, max ~15 s — readback je aj tak rozhodujúci)
@@ -618,7 +624,7 @@ def send_command(ps_id: str, command_type: str, params: Optional[Dict] = None) -
     if command_type in ("enable_zero_export", "set_active_power_limit_zero"):
         if logger_uuid:
             return _logger_try_variants([
-                [{"param_code": "10088", "set_value": "2"}, {"param_code": "10087", "set_value": "0"}],
+                [{"param_code": "10088", "set_value": "2", "accept": ["2", "170", "1"]}, {"param_code": "10087", "set_value": "0"}],
                 [{"param_code": "10012", "set_value": "1"}, {"param_code": "10014", "set_value": "0"}],
             ])
         return _param_setting(uuids, [
@@ -645,7 +651,7 @@ def send_command(ps_id: str, command_type: str, params: Optional[Dict] = None) -
                     [{"param_code": "10012", "set_value": "0"}],
                 ])
             return _logger_try_variants([
-                [{"param_code": "10088", "set_value": "2"}, {"param_code": "10087", "set_value": pct10}],
+                [{"param_code": "10088", "set_value": "2", "accept": ["2", "170", "1"]}, {"param_code": "10087", "set_value": pct10}],
                 [{"param_code": "10012", "set_value": "1"}, {"param_code": "10014", "set_value": pct10}],
             ])
         if pct >= 100:
@@ -658,7 +664,7 @@ def send_command(ps_id: str, command_type: str, params: Optional[Dict] = None) -
         if logger_uuid:
             # Logger vie garantovane riadiť len feed-in → SHUTDOWN degraduje na zero export
             return _logger_try_variants([
-                [{"param_code": "10088", "set_value": "2"}, {"param_code": "10087", "set_value": "0"}],
+                [{"param_code": "10088", "set_value": "2", "accept": ["2", "170", "1"]}, {"param_code": "10087", "set_value": "0"}],
                 [{"param_code": "10012", "set_value": "1"}, {"param_code": "10014", "set_value": "0"}],
             ])
         # Kurtailment na 0 % namiesto power-off (reverzibilnejšie; staršie FW môžu limit ignorovať)
