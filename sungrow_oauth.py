@@ -505,6 +505,59 @@ def check_control_support(ps_id: str) -> Dict:
     return {"ok": True, "devices": per_device, "control_supported": all_supported}
 
 
+def control_audit() -> Dict:
+    """
+    Overovací audit celej Sungrow flotily: pre každú stanicu neinvazívne skontroluje
+    (paramSettingCheck), či VŠETKY meniče prijímajú remote príkazy.
+    Výsledok uloží do inverter_sites.metadata.sungrow.control_check:
+      {"status": "ok"|"partial"|"failed"|"error", "checked_at": iso,
+       "devices_ok": n, "devices_total": m}
+    Značka sa zobrazuje v CRM na /admin/spot/stanice — servis vidí, kde ovládanie nefunguje.
+    """
+    r = requests.get(
+        f"{SUPABASE_URL}/rest/v1/inverter_sites",
+        headers=_sb_headers(),
+        params={"select": "id,vendor_station_id,site_name,metadata", "vendor": "eq.sungrow",
+                "archived_at": "is.null"},
+        timeout=20,
+    )
+    sites = r.json() if r.ok else []
+    summary = {"checked": 0, "ok": 0, "partial": 0, "failed": 0, "error": 0, "details": []}
+
+    for site in sites:
+        ps_id = site.get("vendor_station_id")
+        if not ps_id:
+            continue
+        res = check_control_support(str(ps_id))
+        checked_at = datetime.now(timezone.utc).isoformat()
+        if not res.get("ok"):
+            check = {"status": "error", "checked_at": checked_at, "error": str(res.get("error"))[:150]}
+            summary["error"] += 1
+        else:
+            devs = res.get("devices") or []
+            n_ok = sum(1 for d in devs if d.get("control_supported"))
+            status = "ok" if n_ok == len(devs) and devs else ("failed" if n_ok == 0 else "partial")
+            check = {"status": status, "checked_at": checked_at,
+                     "devices_ok": n_ok, "devices_total": len(devs)}
+            summary[status] += 1
+        summary["checked"] += 1
+
+        merged = {**(site.get("metadata") or {})}
+        merged["sungrow"] = {**(merged.get("sungrow") or {}), "control_check": check}
+        requests.patch(
+            f"{SUPABASE_URL}/rest/v1/inverter_sites",
+            headers=_sb_headers(),
+            params={"id": f"eq.{site['id']}"},
+            json={"metadata": merged},
+            timeout=15,
+        )
+        if check["status"] != "ok":
+            summary["details"].append({"site": site.get("site_name"), "ps_id": ps_id, **check})
+
+    summary["ok_flag"] = True
+    return summary
+
+
 def check_task(task_id: str, uuid: str) -> Tuple[bool, Any]:
     """Poll výsledku paramSetting tasku (command_status 2=beží, 8=hotovo)."""
     return _call("/openapi/platform/getParamSettingTask", {"task_id": str(task_id), "uuid": str(uuid)})

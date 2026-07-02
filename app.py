@@ -6018,6 +6018,19 @@ def webhook_sungrow_sync_stations():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/webhook/sungrow-control-audit", methods=["POST", "GET"])
+def webhook_sungrow_control_audit():
+    """Audit ovládateľnosti Sungrow flotily → metadata.sungrow.control_check (badge v CRM)."""
+    if not _hs_auth_ok(request):
+        return jsonify({"error": "unauthorized"}), 401
+    try:
+        import sungrow_oauth
+        return jsonify(sungrow_oauth.control_audit())
+    except Exception as e:
+        log.exception("[sungrow-control-audit] failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/api/sungrow/test", methods=["GET"])
 def sungrow_test():
     """Diagnostika Sungrow integrácie: credentials → token → plant list."""
