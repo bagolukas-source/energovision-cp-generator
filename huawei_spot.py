@@ -486,8 +486,9 @@ def huawei_send_command(station_code: str, command_type: str, params: Dict[str, 
     else:
         return False, {"error": f"unknown command_type: {command_type}"}
     
-    try:
-        r = requests.post(url, headers=headers, json=payload, timeout=60)
+    def _dispatch(bearer: str) -> Tuple[bool, Dict[str, Any]]:
+        hdrs = {"Authorization": f"Bearer {bearer}", "Content-Type": "application/json"}
+        r = requests.post(url, headers=hdrs, json=payload, timeout=60)
         try:
             result = r.json()
         except Exception:
@@ -503,6 +504,18 @@ def huawei_send_command(station_code: str, command_type: str, params: Dict[str, 
                 result["idempotent_noop"] = True
         result["endpoint_used"] = url
         result["auth_method"] = "oauth_bearer"
+        return success, result
+
+    try:
+        success, result = _dispatch(oauth_token)
+        # Huawei drží len najnovší token per klient — iný proces mohol náš token invalidovať.
+        # 305 USER_MUST_RELOGIN → vynúť refresh a skús PRESNE raz znova.
+        if not success and result.get("failCode") == 305:
+            from huawei_oauth import get_access_token_info as _gati
+            fresh_token, fresh_source = _gati("huawei", force_refresh=True)
+            if fresh_token and fresh_source == "owner_authorization":
+                success, result = _dispatch(fresh_token)
+                result["retried_after_refresh"] = True
         if not success:
             log.warning("[huawei_send_command] %s → %s", command_type, str(result)[:300])
         return success, result
@@ -1054,11 +1067,20 @@ def huawei_get_station_list(debug: bool = False, force_refresh: bool = False):
     all_stations: List[Dict[str, Any]] = []
     page_no = 1
     max_pages = 50
+    refresh_retried = False
 
     while page_no <= max_pages:
         body = {"pageNo": page_no}
         try:
             r = requests.post(url, headers=headers, json=body, timeout=60)
+            # 305 s OAuth Bearer = token medzičasom invalidovaný → jeden force refresh a retry tej istej page
+            if oauth_token and not refresh_retried and r.ok and (r.json() or {}).get("failCode") == 305:
+                refresh_retried = True
+                from huawei_oauth import get_access_token_info as _gati
+                fresh_token, _src = _gati("huawei", force_refresh=True)
+                if fresh_token:
+                    headers = {"Authorization": f"Bearer {fresh_token}", "Content-Type": "application/json"}
+                    continue
             page_debug = {"page": page_no, "http_status": r.status_code}
             body_text = (r.text or "")[:600]
             page_debug["body_preview"] = body_text

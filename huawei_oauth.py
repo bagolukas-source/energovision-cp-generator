@@ -176,6 +176,31 @@ def get_access_token_info(vendor: str = "huawei", force_refresh: bool = False) -
             except Exception:
                 pass
 
+    # Refresh mutex cez DB: Huawei drží len NAJNOVŠÍ token per klient — súbežný refresh
+    # z viacerých workerov navzájom invaliduje tokeny. Nárokuj si refresh podmieneným
+    # UPDATE; kto prehrá, počká a použije token, ktorý uložil víťaz.
+    now_iso = datetime.now(timezone.utc).isoformat()
+    cutoff_iso = (datetime.now(timezone.utc) - timedelta(seconds=20)).isoformat()
+    try:
+        claim = requests.patch(
+            f"{SUPABASE_URL}/rest/v1/inverter_vendor_credentials",
+            headers={**_sb_headers(), "Prefer": "return=representation"},
+            params={
+                "id": f"eq.{cred['id']}",
+                "or": f"(last_token_refresh_at.is.null,last_token_refresh_at.lt.{cutoff_iso})",
+            },
+            json={"last_token_refresh_at": now_iso},
+            timeout=10,
+        )
+        if claim.ok and not claim.json():
+            # Iný worker refreshuje práve teraz — počkaj a prevezmi jeho výsledok
+            time.sleep(2.5)
+            cred2 = load_oauth_credentials(vendor)
+            if cred2 and cred2.get("current_token"):
+                return cred2["current_token"], cred2.get("token_source")
+    except Exception as e:
+        log.warning("refresh mutex claim failed (pokračujem bez mutexu): %s", e)
+
     # Cache expired → najprv skús refresh_token (owner-authorized) ak je v DB
     refresh_token = cred.get("refresh_token")
     if refresh_token:
