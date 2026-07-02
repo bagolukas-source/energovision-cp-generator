@@ -510,9 +510,14 @@ def _submit_and_verify(uuid: str, param_list: List[Dict], task_name: str) -> Dic
             break
 
     verified, mismatches = _readback_verify(uuid, param_list)
-    # Niektoré logger parametre sa nedajú spätne prečítať (readback vracia prázdno, napr. 10014).
-    # Pri prázdnom readbacku rozhoduje per-param status write tasku (4=prijaté, 5=zamietnuté).
-    if mismatches:
+    if not verified and any(m.get("error") == "readback failed" for m in mismatches):
+        # Celý readback zlyhal (busy API) → skús raz znova; ak nejde, NEVERIŤ tasku —
+        # logger vie task "prijať" (status 4) a hodnotu aj tak nezapísať (overené na KRUP).
+        time.sleep(5)
+        verified, mismatches = _readback_verify(uuid, param_list)
+    # Fallback na status tasku LEN pre parametre, ktoré sa nedajú čítať (readback OK,
+    # ale hodnota prázdna — napr. logger 10014). Nikdy nie pri zlyhaní celého readbacku.
+    if not verified and mismatches and all(m.get("error") != "readback failed" for m in mismatches):
         real_mismatches = []
         for m in mismatches:
             actual = m.get("actual")
