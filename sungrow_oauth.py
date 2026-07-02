@@ -487,9 +487,9 @@ def _submit_and_verify(uuid: str, param_list: List[Dict], task_name: str) -> Dic
         return {"ok": False, "error": data, "param_list": param_list}
     task_id = dev_results[0].get("task_id")
 
-    # počkaj na dokončenie tasku (best effort, max ~32 s), potom readback
-    for _ in range(8):
-        time.sleep(4)
+    # počkaj na dokončenie tasku (best effort, max ~15 s — readback je aj tak rozhodujúci)
+    for _ in range(5):
+        time.sleep(3)
         ok2, task = check_task(task_id, uuid)
         if ok2 and isinstance(task, dict) and str(task.get("command_status")) == "8":
             break
@@ -499,50 +499,50 @@ def _submit_and_verify(uuid: str, param_list: List[Dict], task_name: str) -> Dic
             "failed_params": mismatches}
 
 
+def _apply_to_device(uuid: str, param_list: List[Dict], task_name: str) -> Dict:
+    """Zápis + readback verifikácia + prípadný enum-retry pre JEDEN menič."""
+    res = _submit_and_verify(uuid, param_list, task_name)
+
+    # Retry s enum prekladom: nezhodné parametre skús poslať s enum hodnotou z readbacku meniča
+    if not res.get("ok") and res.get("failed_params"):
+        corrected = []
+        changed = False
+        orig_by_code = {str(p["param_code"]): str(p["set_value"]) for p in param_list}
+        for p in param_list:
+            code = str(p["param_code"])
+            fail = next((f for f in res["failed_params"] if str(f.get("param_code")) == code), None)
+            if fail:
+                enum_val = _translate_enum(orig_by_code[code], fail)
+                if enum_val and enum_val != orig_by_code[code]:
+                    corrected.append({"param_code": code, "set_value": enum_val})
+                    changed = True
+                    continue
+            corrected.append(p)
+        if changed:
+            res2 = _submit_and_verify(uuid, corrected, task_name + "R")
+            res2["enum_retry"] = True
+            res = res2
+
+    return {"uuid": uuid, "ok": bool(res.get("ok")), "task_id": res.get("task_id"),
+            "enum_retry": res.get("enum_retry", False),
+            "failed_params": res.get("failed_params") or [],
+            "error": res.get("error")}
+
+
 def _param_setting(uuids: List[str], param_list: List[Dict]) -> Tuple[bool, Dict]:
-    """Pošle paramSetting na KAŽDÝ menič, overí per-parameter výsledok a pri zamietnutej
-    hodnote automaticky preloží 1/0 na device enum (napr. 170/85) a skúsi raz znova."""
+    """Pošle paramSetting na KAŽDÝ menič PARALELNE (gunicorn timeout 120 s — sériovo by
+    multi-menič stanica nestihla), overí readbackom, enum hodnoty preloží automaticky."""
+    import concurrent.futures
     task_name = f"Energovision SPOT {datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
-    per_device = []
-    all_ok = True
-    for uuid in uuids:
-        res = _submit_and_verify(uuid, param_list, task_name)
-
-        # Retry s enum prekladom: zamietnuté parametre skús poslať s enum hodnotou z odpovede meniča
-        if not res.get("ok") and res.get("failed_params"):
-            corrected = []
-            changed = False
-            orig_by_code = {str(p["param_code"]): str(p["set_value"]) for p in param_list}
-            for p in param_list:
-                code = str(p["param_code"])
-                fail = next((f for f in res["failed_params"] if str(f.get("param_code")) == code), None)
-                if fail:
-                    enum_val = _translate_enum(orig_by_code[code], fail)
-                    if enum_val and enum_val != orig_by_code[code]:
-                        corrected.append({"param_code": code, "set_value": enum_val})
-                        changed = True
-                        continue
-                corrected.append(p)
-            if changed:
-                res2 = _submit_and_verify(uuid, corrected, task_name + "R")
-                res2["enum_retry"] = True
-                res = res2
-
-        ok = bool(res.get("ok"))
-        all_ok = all_ok and ok
-        per_device.append({"uuid": uuid, "ok": ok, "task_id": res.get("task_id"),
-                           "enum_retry": res.get("enum_retry", False),
-                           "failed_params": [{"param_code": f.get("param_code"),
-                                              "enum": f.get("set_val_name_val")}
-                                             for f in (res.get("failed_params") or [])],
-                           "error": res.get("error")})
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(uuids)) or 1) as ex:
+        per_device = list(ex.map(lambda u: _apply_to_device(u, param_list, task_name), uuids))
 
     failed = [d for d in per_device if not d.get("ok")]
     result = {"devices": per_device, "devices_total": len(uuids), "devices_failed": len(failed),
               "param_list": param_list, "auth_method": "sungrow_oauth"}
     if failed:
-        result["error"] = f"{len(failed)}/{len(uuids)} meničov nepotvrdilo zápis parametrov"
-    return all_ok, result
+        result["error"] = f"{len(failed)}/{len(uuids)} meničov nepotvrdilo zápis parametrov (readback)"
+    return len(failed) == 0, result
 
 
 def send_command(ps_id: str, command_type: str, params: Optional[Dict] = None) -> Tuple[bool, Dict]:
