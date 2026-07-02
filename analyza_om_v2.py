@@ -8,6 +8,7 @@ Pridáva 2 nové endpointy k existujúcim:
 Vyžaduje energovision_analytics nainštalovaný (importnutý zo render-repo/energovision_analytics/).
 """
 import os
+import re
 import io
 import logging
 import tempfile
@@ -797,7 +798,8 @@ def render_posudok_premium(sb, analyza_id: str) -> dict:
     )
     
     # Upload do Storage
-    storage_path = f"analyza_om/{analyza_id}/posudok_premium_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+    _slug_prem = re.sub(r"[^A-Za-z0-9]+", "_", (client_name or "OM")).strip("_")[:40] or "OM"  # BUG-7
+    storage_path = f"analyza_om/{analyza_id}/Posudok_FVE_{_slug_prem}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
     sb.storage.from_("documents").upload(
         storage_path, docx_bytes,
         {"content-type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "upsert": "true"}
@@ -1413,7 +1415,8 @@ def render_posudok_orkestra(sb, analyza_id: str) -> dict:
 
     # === PDF upload ===
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    pdf_path = f"analyza_om/{analyza_id}/posudok_orkestra_{ts}.pdf"
+    _slug_ork = re.sub(r"[^A-Za-z0-9]+", "_", (context.get("client_name") or "OM")).strip("_")[:40] or "OM"  # BUG-7
+    pdf_path = f"analyza_om/{analyza_id}/Posudok_FVE_{_slug_ork}_orkestra_{ts}.pdf"
     sb.storage.from_("documents").upload(
         pdf_path, pdf_bytes,
         {"content-type": "application/pdf", "upsert": "true"}
@@ -2543,7 +2546,8 @@ def render_posudok_web(sb, analyza_id: str) -> dict:
     html = _pw.build_web_posudok_html(ctx, {"client_name": client})
 
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    base = f"analyza_om/{analyza_id}/posudok_web_{ts}"
+    _slug_web = re.sub(r"[^A-Za-z0-9]+", "_", (client or "OM")).strip("_")[:40] or "OM"  # BUG-7
+    base = f"analyza_om/{analyza_id}/Posudok_web_{_slug_web}_{ts}"
     st = sb.storage.from_("documents")
     # 1) HTML do public storage = zdielatelny link
     st.upload(f"{base}.html", html.encode("utf-8"), {"content-type": "text/html; charset=utf-8", "upsert": "true"})

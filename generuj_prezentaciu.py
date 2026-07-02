@@ -155,7 +155,8 @@ def generuj_prezentaciu_pdf(g: dict) -> bytes:
 
 
 def _eur(v):
-    try: return f"{float(v):,.0f} €".replace(",", " ")
+    # BUG-6: NBSP oddeľovače — suma sa nikdy nezalomí uprostred ani pred €
+    try: return f"{float(v):,.0f}\u00A0€".replace(",", "\u00A0")
     except Exception: return "—"
 
 def _eur_c(v):
