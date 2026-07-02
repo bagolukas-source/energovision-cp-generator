@@ -6029,6 +6029,17 @@ def sungrow_test():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/api/sungrow/control-check/<ps_id>", methods=["GET"])
+def sungrow_control_check(ps_id):
+    """Neinvazívna kontrola remote control podpory pre stanicu (paramSettingCheck)."""
+    try:
+        import sungrow_oauth
+        return jsonify(sungrow_oauth.check_control_support(ps_id))
+    except Exception as e:
+        log.exception("[sungrow-control-check] failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/api/auth/sungrow/callback", methods=["GET"])
 def sungrow_oauth_callback():
     """

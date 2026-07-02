@@ -470,6 +470,19 @@ def send_command(ps_id: str, command_type: str, params: Optional[Dict] = None) -
     return False, {"error": f"unknown command_type: {command_type}"}
 
 
+def check_control_support(ps_id: str) -> Dict:
+    """Neinvazívna kontrola: podporuje zariadenie remote paramSetting? (nič nenastavuje)"""
+    uuid = _get_site_uuid(str(ps_id))
+    if not uuid:
+        return {"ok": False, "error": f"chýba uuid pre ps_id={ps_id} — spusti sync staníc"}
+    ok, data = _call("/openapi/platform/paramSettingCheck", {"set_type": 0, "uuid": str(uuid)})
+    if not ok:
+        return {"ok": False, "error": "paramSettingCheck failed", "detail": data}
+    dev_results = (data or {}).get("dev_result_list") or []
+    supported = bool(dev_results) and str(dev_results[0].get("check_result")) == "1"
+    return {"ok": True, "uuid": uuid, "control_supported": supported, "raw": data}
+
+
 def check_task(task_id: str, uuid: str) -> Tuple[bool, Any]:
     """Poll výsledku paramSetting tasku (command_status 2=beží, 8=hotovo)."""
     return _call("/openapi/platform/getParamSettingTask", {"task_id": str(task_id), "uuid": str(uuid)})
