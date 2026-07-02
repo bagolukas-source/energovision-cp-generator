@@ -417,34 +417,92 @@ def _get_site_uuids(ps_id: str) -> List[str]:
     return [str(u) for u in uuids if u]
 
 
+def _translate_enum(logical_value: str, param_result: Dict) -> Optional[str]:
+    """Preloží logickú hodnotu 1/0 (enable/disable) na device enum podľa set_val_name_val.
+    Napr. SG125CX: Feed-in power limitation Enable=170, Disable=85 — hodnotu '1' menič ticho odmietne."""
+    names = [n.strip().lower() for n in (param_result.get("set_val_name") or "").split("|")]
+    vals = [v.strip() for v in (param_result.get("set_val_name_val") or "").split("|")]
+    if len(names) != len(vals) or len(names) < 2:
+        return None
+    mapping = dict(zip(names, vals))
+    if str(logical_value) in ("1", "true"):
+        return mapping.get("enable") or mapping.get("on")
+    if str(logical_value) in ("0", "false"):
+        return mapping.get("disable") or mapping.get("off")
+    return None
+
+
+def _submit_and_verify(uuid: str, param_list: List[Dict], task_name: str) -> Dict:
+    """Submitne write task a POČKÁ na per-parameter výsledok (command_status 4=OK, 5=zamietnuté).
+    Task-level 'Operation successful' totiž neznamená, že menič hodnoty prijal."""
+    ok, data = _call("/openapi/platform/paramSetting", {
+        "set_type": 0, "uuid": str(uuid), "task_name": task_name,
+        "expire_second": 120, "param_list": param_list,
+    })
+    if not ok:
+        return {"ok": False, "error": data, "param_list": param_list}
+    dev_results = (data or {}).get("dev_result_list") or []
+    if not dev_results or str(dev_results[0].get("code")) != "1":
+        return {"ok": False, "error": data, "param_list": param_list}
+    task_id = dev_results[0].get("task_id")
+
+    for _ in range(5):
+        time.sleep(3)
+        ok2, task = check_task(task_id, uuid)
+        if not ok2 or not isinstance(task, dict):
+            continue
+        if str(task.get("command_status")) == "8":
+            params = task.get("param_list") or []
+            failed = [p for p in params if str(p.get("command_status")) == "5"]
+            return {"ok": not failed, "task_id": task_id, "params": params,
+                    "failed_params": failed, "param_list": param_list}
+    return {"ok": False, "task_id": task_id, "error": "task timeout (nedokončil sa do ~15 s)",
+            "param_list": param_list}
+
+
 def _param_setting(uuids: List[str], param_list: List[Dict]) -> Tuple[bool, Dict]:
-    """Pošle paramSetting na KAŽDÝ menič; úspech len ak všetky tasky prijaté."""
+    """Pošle paramSetting na KAŽDÝ menič, overí per-parameter výsledok a pri zamietnutej
+    hodnote automaticky preloží 1/0 na device enum (napr. 170/85) a skúsi raz znova."""
     task_name = f"Energovision SPOT {datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
     per_device = []
     all_ok = True
     for uuid in uuids:
-        ok, data = _call("/openapi/platform/paramSetting", {
-            "set_type": 0,
-            "uuid": str(uuid),
-            "task_name": task_name,
-            "expire_second": 120,
-            "param_list": param_list,
-        })
-        if not ok:
-            all_ok = False
-            per_device.append({"uuid": uuid, "ok": False, "error": data})
-            continue
-        dev_results = (data or {}).get("dev_result_list") or []
-        task_ok = bool(dev_results) and str(dev_results[0].get("code")) == "1"
-        all_ok = all_ok and task_ok
-        per_device.append({"uuid": uuid, "ok": task_ok,
-                           "task_id": dev_results[0].get("task_id") if dev_results else None,
-                           "msg": dev_results[0].get("msg") if dev_results else None})
+        res = _submit_and_verify(uuid, param_list, task_name)
+
+        # Retry s enum prekladom: zamietnuté parametre skús poslať s enum hodnotou z odpovede meniča
+        if not res.get("ok") and res.get("failed_params"):
+            corrected = []
+            changed = False
+            orig_by_code = {str(p["param_code"]): str(p["set_value"]) for p in param_list}
+            for p in param_list:
+                code = str(p["param_code"])
+                fail = next((f for f in res["failed_params"] if str(f.get("param_code")) == code), None)
+                if fail:
+                    enum_val = _translate_enum(orig_by_code[code], fail)
+                    if enum_val and enum_val != orig_by_code[code]:
+                        corrected.append({"param_code": code, "set_value": enum_val})
+                        changed = True
+                        continue
+                corrected.append(p)
+            if changed:
+                res2 = _submit_and_verify(uuid, corrected, task_name + "R")
+                res2["enum_retry"] = True
+                res = res2
+
+        ok = bool(res.get("ok"))
+        all_ok = all_ok and ok
+        per_device.append({"uuid": uuid, "ok": ok, "task_id": res.get("task_id"),
+                           "enum_retry": res.get("enum_retry", False),
+                           "failed_params": [{"param_code": f.get("param_code"),
+                                              "enum": f.get("set_val_name_val")}
+                                             for f in (res.get("failed_params") or [])],
+                           "error": res.get("error")})
+
     failed = [d for d in per_device if not d.get("ok")]
     result = {"devices": per_device, "devices_total": len(uuids), "devices_failed": len(failed),
               "param_list": param_list, "auth_method": "sungrow_oauth"}
     if failed:
-        result["error"] = f"{len(failed)}/{len(uuids)} meničov neprijalo príkaz"
+        result["error"] = f"{len(failed)}/{len(uuids)} meničov nepotvrdilo zápis parametrov"
     return all_ok, result
 
 
