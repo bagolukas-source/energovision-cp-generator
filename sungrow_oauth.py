@@ -400,7 +400,9 @@ def sync_stations() -> Dict[str, Any]:
 # Control — paramSetting (vyžaduje Configuration & Control scope na appke)
 # ============================================================================
 
-def _get_site_uuid(ps_id: str) -> Optional[str]:
+def _get_site_uuids(ps_id: str) -> List[str]:
+    """VŠETKY uuid meničov stanice — príkaz musí ísť na každý menič, nie len prvý
+    (multi-inverter stanica by inak ďalej exportovala cez zvyšné meniče)."""
     r = requests.get(
         f"{SUPABASE_URL}/rest/v1/inverter_sites",
         headers=_sb_headers(),
@@ -408,58 +410,75 @@ def _get_site_uuid(ps_id: str) -> Optional[str]:
         timeout=10,
     )
     rows = r.json() if r.ok else []
-    if rows:
-        return ((rows[0].get("metadata") or {}).get("sungrow") or {}).get("uuid")
-    return None
+    if not rows:
+        return []
+    sg = (rows[0].get("metadata") or {}).get("sungrow") or {}
+    uuids = sg.get("all_uuids") or ([sg.get("uuid")] if sg.get("uuid") else [])
+    return [str(u) for u in uuids if u]
 
 
-def _param_setting(uuid: str, param_list: List[Dict]) -> Tuple[bool, Dict]:
-    ok, data = _call("/openapi/platform/paramSetting", {
-        "set_type": 0,
-        "uuid": str(uuid),
-        "task_name": f"Energovision SPOT {datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
-        "expire_second": 120,
-        "param_list": param_list,
-    })
-    if not ok:
-        return False, {"error": "paramSetting failed", "detail": data, "param_list": param_list}
-    dev_results = (data or {}).get("dev_result_list") or []
-    task_ok = bool(dev_results) and str(dev_results[0].get("code")) == "1"
-    return task_ok, {"task_id": (dev_results[0].get("task_id") if dev_results else None),
-                     "raw": data, "param_list": param_list, "auth_method": "sungrow_oauth"}
+def _param_setting(uuids: List[str], param_list: List[Dict]) -> Tuple[bool, Dict]:
+    """Pošle paramSetting na KAŽDÝ menič; úspech len ak všetky tasky prijaté."""
+    task_name = f"Energovision SPOT {datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+    per_device = []
+    all_ok = True
+    for uuid in uuids:
+        ok, data = _call("/openapi/platform/paramSetting", {
+            "set_type": 0,
+            "uuid": str(uuid),
+            "task_name": task_name,
+            "expire_second": 120,
+            "param_list": param_list,
+        })
+        if not ok:
+            all_ok = False
+            per_device.append({"uuid": uuid, "ok": False, "error": data})
+            continue
+        dev_results = (data or {}).get("dev_result_list") or []
+        task_ok = bool(dev_results) and str(dev_results[0].get("code")) == "1"
+        all_ok = all_ok and task_ok
+        per_device.append({"uuid": uuid, "ok": task_ok,
+                           "task_id": dev_results[0].get("task_id") if dev_results else None,
+                           "msg": dev_results[0].get("msg") if dev_results else None})
+    failed = [d for d in per_device if not d.get("ok")]
+    result = {"devices": per_device, "devices_total": len(uuids), "devices_failed": len(failed),
+              "param_list": param_list, "auth_method": "sungrow_oauth"}
+    if failed:
+        result["error"] = f"{len(failed)}/{len(uuids)} meničov neprijalo príkaz"
+    return all_ok, result
 
 
 def send_command(ps_id: str, command_type: str, params: Optional[Dict] = None) -> Tuple[bool, Dict]:
     """Vendor router adapter — rovnaké command_type ako Huawei (volané z huawei_spot.vendor_send_command)."""
     params = params or {}
-    uuid = _get_site_uuid(str(ps_id))
-    if not uuid:
-        return False, {"error": f"chýba device uuid pre ps_id={ps_id} — spusti sync staníc (metadata.sungrow.uuid)"}
+    uuids = _get_site_uuids(str(ps_id))
+    if not uuids:
+        return False, {"error": f"chýbajú device uuids pre ps_id={ps_id} — spusti sync staníc (metadata.sungrow.all_uuids)"}
 
     # Param codes (pysolarcloud, validované na live EU API):
     # 10012 feed_in_limitation switch, 10013 feed_in_limitation_value (W),
     # 10007 limited_power_switch, 10008 active_power_limit_ratio (%), 10011 power_on
     if command_type in ("enable_zero_export", "set_active_power_limit_zero"):
-        return _param_setting(uuid, [
+        return _param_setting(uuids, [
             {"param_code": "10012", "set_value": "1"},
             {"param_code": "10013", "set_value": "0"},
         ])
     if command_type in ("disable_zero_export", "normal_export"):
-        return _param_setting(uuid, [
+        return _param_setting(uuids, [
             {"param_code": "10012", "set_value": "0"},
             {"param_code": "10007", "set_value": "0"},
         ])
     if command_type == "set_active_power_limit":
         pct = float(params.get("limit_pct", 100))
         if pct >= 100:
-            return _param_setting(uuid, [{"param_code": "10007", "set_value": "0"}])
-        return _param_setting(uuid, [
+            return _param_setting(uuids, [{"param_code": "10007", "set_value": "0"}])
+        return _param_setting(uuids, [
             {"param_code": "10007", "set_value": "1"},
             {"param_code": "10008", "set_value": str(int(pct))},
         ])
     if command_type == "full_shutdown":
         # Kurtailment na 0 % namiesto power-off (reverzibilnejšie; staršie FW môžu limit ignorovať)
-        return _param_setting(uuid, [
+        return _param_setting(uuids, [
             {"param_code": "10007", "set_value": "1"},
             {"param_code": "10008", "set_value": "0"},
         ])
@@ -471,16 +490,19 @@ def send_command(ps_id: str, command_type: str, params: Optional[Dict] = None) -
 
 
 def check_control_support(ps_id: str) -> Dict:
-    """Neinvazívna kontrola: podporuje zariadenie remote paramSetting? (nič nenastavuje)"""
-    uuid = _get_site_uuid(str(ps_id))
-    if not uuid:
-        return {"ok": False, "error": f"chýba uuid pre ps_id={ps_id} — spusti sync staníc"}
-    ok, data = _call("/openapi/platform/paramSettingCheck", {"set_type": 0, "uuid": str(uuid)})
-    if not ok:
-        return {"ok": False, "error": "paramSettingCheck failed", "detail": data}
-    dev_results = (data or {}).get("dev_result_list") or []
-    supported = bool(dev_results) and str(dev_results[0].get("check_result")) == "1"
-    return {"ok": True, "uuid": uuid, "control_supported": supported, "raw": data}
+    """Neinvazívna kontrola: podporujú VŠETKY meniče stanice remote paramSetting? (nič nenastavuje)"""
+    uuids = _get_site_uuids(str(ps_id))
+    if not uuids:
+        return {"ok": False, "error": f"chýbajú uuids pre ps_id={ps_id} — spusti sync staníc"}
+    per_device = []
+    for uuid in uuids:
+        ok, data = _call("/openapi/platform/paramSettingCheck", {"set_type": 0, "uuid": str(uuid)})
+        dev_results = ((data or {}).get("dev_result_list") or []) if ok else []
+        supported = bool(dev_results) and str(dev_results[0].get("check_result")) == "1"
+        per_device.append({"uuid": uuid, "control_supported": supported if ok else None,
+                           "error": None if ok else data})
+    all_supported = all(d.get("control_supported") for d in per_device)
+    return {"ok": True, "devices": per_device, "control_supported": all_supported}
 
 
 def check_task(task_id: str, uuid: str) -> Tuple[bool, Any]:
