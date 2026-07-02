@@ -6089,6 +6089,17 @@ def sungrow_param_write(uuid):
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/api/sungrow/plant-curve/<ps_id>", methods=["GET"])
+def sungrow_plant_curve(ps_id):
+    """Minútová krivka plant power (?minutes=60)."""
+    minutes = int(request.args.get("minutes") or "60")
+    try:
+        import sungrow_oauth
+        return jsonify(sungrow_oauth.plant_minute_curve(ps_id, minutes))
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/api/sungrow/plant-realtime/<ps_id>", methods=["GET"])
 def sungrow_plant_realtime(ps_id):
     """Realtime hodnoty stanice z merania (plant power, load, feed-in today)."""

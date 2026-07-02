@@ -783,6 +783,24 @@ def plant_realtime(ps_id: str) -> Dict:
     return {"ok": True, "values": values}
 
 
+def plant_minute_curve(ps_id: str, minutes_back: int = 60) -> Dict:
+    """Minútová krivka plant power (83033) — na forenzné overenie, či zásah fyzicky nastal."""
+    # server pracuje v +08:00
+    now8 = datetime.now(timezone.utc) + timedelta(hours=8)
+    start8 = now8 - timedelta(minutes=minutes_back)
+    ok, data = _call("/openapi/platform/getPowerStationPointMinuteDataList", {
+        "ps_id_list": [str(ps_id)],
+        "points": "p83033",
+        "start_time_stamp": start8.strftime("%Y%m%d%H%M%S"),
+        "end_time_stamp": now8.strftime("%Y%m%d%H%M%S"),
+        "minute_interval": 5,
+        "is_get_point_dict": "1",
+    })
+    if not ok:
+        return {"ok": False, "error": data}
+    return {"ok": True, "raw": data}
+
+
 def setting_history(uuids: List[str], codes: List[str], hours_back: int = 48) -> Tuple[bool, Any]:
     """História zápisov parametrov vrátane remark (dôvod zlyhania) a taskSource
     (1=portál, 2=OpenAPI). Server používa čas +08:00 — okno berieme veľkoryso."""
