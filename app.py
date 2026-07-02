@@ -6089,6 +6089,16 @@ def sungrow_param_write(uuid):
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/api/sungrow/plant-realtime/<ps_id>", methods=["GET"])
+def sungrow_plant_realtime(ps_id):
+    """Realtime hodnoty stanice z merania (plant power, load, feed-in today)."""
+    try:
+        import sungrow_oauth
+        return jsonify(sungrow_oauth.plant_realtime(ps_id))
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/api/sungrow/setting-history/<uuid>", methods=["GET"])
 def sungrow_setting_history(uuid):
     """História zápisov parametrov zariadenia (?codes=10012,10014&hours=48) — remark = dôvod zlyhania."""

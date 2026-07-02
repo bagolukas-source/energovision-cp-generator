@@ -761,6 +761,28 @@ def check_task(task_id: str, uuid: str) -> Tuple[bool, Any]:
     return _call("/openapi/platform/getParamSettingTask", {"task_id": str(task_id), "uuid": str(uuid)})
 
 
+def plant_realtime(ps_id: str) -> Dict:
+    """Ground truth z merania stanice: 83033 plant power (W), 83106 load (W),
+    83022 daily yield (Wh), 83072 feed-in today (Wh). Refresh ~5 min."""
+    ok, data = _call("/openapi/platform/getPowerStationRealTimeData", {
+        "ps_id_list": [str(ps_id)],
+        "point_id_list": ["83033", "83106", "83022", "83072", "83102"],
+        "is_get_point_dict": "1",
+    })
+    if not ok:
+        return {"ok": False, "error": data}
+    points = {str(p.get("point_id")): f"{p.get('point_name')} [{p.get('point_unit')}]"
+              for p in (data or {}).get("point_dict") or []}
+    rows = (data or {}).get("device_point_list") or []
+    values = {}
+    for row in rows:
+        dp = row.get("device_point") or row
+        for k, v in dp.items():
+            if k.startswith("p") and k[1:].isdigit():
+                values[points.get(k[1:], k)] = v
+    return {"ok": True, "values": values}
+
+
 def setting_history(uuids: List[str], codes: List[str], hours_back: int = 48) -> Tuple[bool, Any]:
     """História zápisov parametrov vrátane remark (dôvod zlyhania) a taskSource
     (1=portál, 2=OpenAPI). Server používa čas +08:00 — okno berieme veľkoryso."""
