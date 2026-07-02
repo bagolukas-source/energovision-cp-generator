@@ -333,6 +333,9 @@ def sync_stations() -> Dict[str, Any]:
         dev_ok, devices = list_devices(ps_id)
         if dev_ok:
             inverters = [d for d in devices if str(d.get("device_type")) == "1"]
+            # Logger (device_type 9) na multi-menič staniciach RIADI export a prepisuje
+            # per-inverter nastavenia — control musí ísť cez neho (ak povolí zápis)
+            loggers = [d for d in devices if str(d.get("device_type")) == "9"]
             if inverters:
                 sungrow_meta = {
                     "uuid": inverters[0].get("uuid"),
@@ -342,6 +345,9 @@ def sync_stations() -> Dict[str, Any]:
                     "inverter_count": len(inverters),
                     "all_uuids": [d.get("uuid") for d in inverters if d.get("uuid")],
                 }
+                if loggers:
+                    sungrow_meta["logger_uuid"] = loggers[0].get("uuid")
+                    sungrow_meta["logger_model"] = loggers[0].get("device_model_code") or loggers[0].get("type_name")
                 ac_kw = sum(_model_ac_kw(d.get("device_model_code") or d.get("type_name")) for d in inverters)
 
         row = {
@@ -400,9 +406,9 @@ def sync_stations() -> Dict[str, Any]:
 # Control — paramSetting (vyžaduje Configuration & Control scope na appke)
 # ============================================================================
 
-def _get_site_uuids(ps_id: str) -> List[str]:
-    """VŠETKY uuid meničov stanice — príkaz musí ísť na každý menič, nie len prvý
-    (multi-inverter stanica by inak ďalej exportovala cez zvyšné meniče)."""
+def _get_site_control_info(ps_id: str) -> Dict:
+    """Meniče + prípadný logger stanice. Ak je logger, control ide cez NEHO —
+    per-inverter zápisy by prepísal svojou konfiguráciou."""
     r = requests.get(
         f"{SUPABASE_URL}/rest/v1/inverter_sites",
         headers=_sb_headers(),
@@ -411,10 +417,15 @@ def _get_site_uuids(ps_id: str) -> List[str]:
     )
     rows = r.json() if r.ok else []
     if not rows:
-        return []
+        return {"uuids": [], "logger_uuid": None}
     sg = (rows[0].get("metadata") or {}).get("sungrow") or {}
     uuids = sg.get("all_uuids") or ([sg.get("uuid")] if sg.get("uuid") else [])
-    return [str(u) for u in uuids if u]
+    return {"uuids": [str(u) for u in uuids if u],
+            "logger_uuid": str(sg["logger_uuid"]) if sg.get("logger_uuid") else None}
+
+
+def _get_site_uuids(ps_id: str) -> List[str]:
+    return _get_site_control_info(ps_id)["uuids"]
 
 
 def _translate_enum(logical_value: str, param_result: Dict) -> Optional[str]:
@@ -548,25 +559,54 @@ def _param_setting(uuids: List[str], param_list: List[Dict]) -> Tuple[bool, Dict
 def send_command(ps_id: str, command_type: str, params: Optional[Dict] = None) -> Tuple[bool, Dict]:
     """Vendor router adapter — rovnaké command_type ako Huawei (volané z huawei_spot.vendor_send_command)."""
     params = params or {}
-    uuids = _get_site_uuids(str(ps_id))
-    if not uuids:
+    info = _get_site_control_info(str(ps_id))
+    uuids = info["uuids"]
+    logger_uuid = info["logger_uuid"]
+    if not uuids and not logger_uuid:
         return False, {"error": f"chýbajú device uuids pre ps_id={ps_id} — spusti sync staníc (metadata.sungrow.all_uuids)"}
 
-    # Param codes (pysolarcloud, validované na live EU API):
-    # 10012 feed_in_limitation switch, 10013 feed_in_limitation_value (W),
-    # 10007 limited_power_switch, 10008 active_power_limit_ratio (%), 10011 power_on
+    def _logger_fail_hint(ok: bool, result: Dict) -> Tuple[bool, Dict]:
+        if not ok:
+            result["hint"] = (
+                "Stanica má Logger, ktorý odmieta vzdialený zápis (per-param status 5). "
+                "Servis: na Loggeri povoliť remote parameter setting / power control, "
+                "prípadne kontaktovať Sungrow support."
+            )
+        return ok, result
+
+    # Param codes: menič — 10012 feed-in switch (enum napr. 170/85), 10013 limit (kW),
+    # 10007 active power switch, 10008 ratio (%). Logger — 10012 (enum 1/0), 10014 ratio (%).
     if command_type in ("enable_zero_export", "set_active_power_limit_zero"):
+        if logger_uuid:
+            # Logger RIADI export — per-inverter zápis by prepísal; píš na logger
+            return _logger_fail_hint(*_param_setting([logger_uuid], [
+                {"param_code": "10012", "set_value": "1"},
+                {"param_code": "10014", "set_value": "0"},
+            ]))
         return _param_setting(uuids, [
             {"param_code": "10012", "set_value": "1"},
             {"param_code": "10013", "set_value": "0"},
         ])
     if command_type in ("disable_zero_export", "normal_export"):
+        if logger_uuid:
+            return _logger_fail_hint(*_param_setting([logger_uuid], [
+                {"param_code": "10012", "set_value": "0"},
+            ]))
         return _param_setting(uuids, [
             {"param_code": "10012", "set_value": "0"},
             {"param_code": "10007", "set_value": "0"},
         ])
     if command_type == "set_active_power_limit":
         pct = float(params.get("limit_pct", 100))
+        if logger_uuid:
+            if pct >= 100:
+                return _logger_fail_hint(*_param_setting([logger_uuid], [
+                    {"param_code": "10012", "set_value": "0"},
+                ]))
+            return _logger_fail_hint(*_param_setting([logger_uuid], [
+                {"param_code": "10012", "set_value": "1"},
+                {"param_code": "10014", "set_value": str(int(pct))},
+            ]))
         if pct >= 100:
             return _param_setting(uuids, [{"param_code": "10007", "set_value": "0"}])
         return _param_setting(uuids, [
@@ -574,6 +614,12 @@ def send_command(ps_id: str, command_type: str, params: Optional[Dict] = None) -
             {"param_code": "10008", "set_value": str(int(pct))},
         ])
     if command_type == "full_shutdown":
+        if logger_uuid:
+            # Logger vie garantovane riadiť len feed-in → SHUTDOWN degraduje na zero export
+            return _logger_fail_hint(*_param_setting([logger_uuid], [
+                {"param_code": "10012", "set_value": "1"},
+                {"param_code": "10014", "set_value": "0"},
+            ]))
         # Kurtailment na 0 % namiesto power-off (reverzibilnejšie; staršie FW môžu limit ignorovať)
         return _param_setting(uuids, [
             {"param_code": "10007", "set_value": "1"},
