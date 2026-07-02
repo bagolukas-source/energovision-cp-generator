@@ -826,18 +826,23 @@ def try_client_credentials_smart() -> Dict:
         result["token_preview"] = success_attempt["token_preview"]
         result["ttl_sec"] = success_attempt["ttl_sec"]
 
-        # Persist token do DB
-        try:
-            save_tokens(
-                cred_id=cred["id"],
-                access_token=success_attempt["access_token"],
-                refresh_token=None,
-                expires_in_sec=success_attempt.get("ttl_sec") or DEFAULT_TOKEN_TTL_SECONDS,
-                token_source="client_credentials",
-            )
-            result["saved_to_db"] = True
-        except Exception as e:
+        # Persist token do DB — ALE nikdy neprepíš aktívny owner token client_credentials tokenom
+        # (degradoval by ovládanie meničov až do najbližšieho refreshu).
+        if cred.get("token_source") == "owner_authorization" and cred.get("refresh_token"):
             result["saved_to_db"] = False
-            result["save_error"] = str(e)[:200]
+            result["save_skipped"] = "owner_authorization token aktívny — diagnostický token sa neukladá"
+        else:
+            try:
+                save_tokens(
+                    cred_id=cred["id"],
+                    access_token=success_attempt["access_token"],
+                    refresh_token=None,
+                    expires_in_sec=success_attempt.get("ttl_sec") or DEFAULT_TOKEN_TTL_SECONDS,
+                    token_source="client_credentials",
+                )
+                result["saved_to_db"] = True
+            except Exception as e:
+                result["saved_to_db"] = False
+                result["save_error"] = str(e)[:200]
 
     return result
