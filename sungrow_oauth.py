@@ -368,7 +368,8 @@ def sync_stations() -> Dict[str, Any]:
             site = existing_map[ps_id]
             merged_meta = {**(site.get("metadata") or {})}
             if sungrow_meta:
-                merged_meta["sungrow"] = sungrow_meta
+                # MERGE, nie replace — inak by sync zmazal control_check a iné kľúče
+                merged_meta["sungrow"] = {**(merged_meta.get("sungrow") or {}), **sungrow_meta}
             patch = {"site_name": name, "metadata": merged_meta,
                      "last_sync_at": datetime.now(timezone.utc).isoformat()}
             if dc_kwp > 0:
@@ -633,19 +634,27 @@ def send_command(ps_id: str, command_type: str, params: Optional[Dict] = None) -
 
 
 def check_control_support(ps_id: str) -> Dict:
-    """Neinvazívna kontrola: podporujú VŠETKY meniče stanice remote paramSetting? (nič nenastavuje)"""
-    uuids = _get_site_uuids(str(ps_id))
-    if not uuids:
+    """Neinvazívna kontrola ovládateľnosti (nič nenastavuje).
+    Stanica s Loggerom: rozhoduje LOGGER (per-inverter zápisy by aj tak prepísal).
+    Bez loggera: musia podporovať všetky meniče."""
+    info = _get_site_control_info(str(ps_id))
+    uuids = info["uuids"]
+    logger_uuid = info["logger_uuid"]
+    if not uuids and not logger_uuid:
         return {"ok": False, "error": f"chýbajú uuids pre ps_id={ps_id} — spusti sync staníc"}
+
+    check_targets = [logger_uuid] if logger_uuid else uuids
     per_device = []
-    for uuid in uuids:
+    for uuid in check_targets:
         ok, data = _call("/openapi/platform/paramSettingCheck", {"set_type": 0, "uuid": str(uuid)})
         dev_results = ((data or {}).get("dev_result_list") or []) if ok else []
         supported = bool(dev_results) and str(dev_results[0].get("check_result")) == "1"
-        per_device.append({"uuid": uuid, "control_supported": supported if ok else None,
+        per_device.append({"uuid": uuid, "is_logger": uuid == logger_uuid,
+                           "control_supported": supported if ok else None,
                            "error": None if ok else data})
     all_supported = all(d.get("control_supported") for d in per_device)
-    return {"ok": True, "devices": per_device, "control_supported": all_supported}
+    return {"ok": True, "devices": per_device, "control_supported": all_supported,
+            "via": "logger" if logger_uuid else "inverters"}
 
 
 def control_audit() -> Dict:
