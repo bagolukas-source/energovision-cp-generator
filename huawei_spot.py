@@ -494,6 +494,13 @@ def huawei_send_command(station_code: str, command_type: str, params: Dict[str, 
             result = {"http_status": r.status_code, "body": r.text[:500]}
         # Huawei OpenAPI success: r.ok + result.success=true + failCode=0
         success = r.ok and result.get("success", False) and (result.get("failCode") in (None, 0))
+        # Idempotentný no-op: Huawei odmietne task, ak je hodnota už nastavená
+        # ("The configured value is the same as the current value.") — cieľový stav už platí → úspech.
+        if not success and r.ok:
+            task_results = ((result.get("data") or {}).get("result")) or []
+            if task_results and all("same as the current value" in str(t.get("message", "")) for t in task_results):
+                success = True
+                result["idempotent_noop"] = True
         result["endpoint_used"] = url
         result["auth_method"] = "oauth_bearer"
         if not success:
@@ -624,21 +631,22 @@ def execute_transition(site: Dict[str, Any], from_state: str, to_state: str, spo
     has_bess = float(site.get("bess_kwh") or 0) > 0
     grid_charge = bool(site.get("spot_bess_grid_charge_enabled")) and has_bess
 
+    # POZOR: enable/disable_zero_export aj set_active_power_limit mapujú na TEN ISTÝ Huawei
+    # endpoint (active-power-control) — posledný príkaz vyhráva. Preto na grid limit posielame
+    # vždy len JEDEN príkaz; set_active_power_limit(100) po enable_zero_export by zero export zrušil.
     commands = []
     if to_state == "NORMAL":
-        commands.append({"type": "disable_zero_export", "params": {}})
-        commands.append({"type": "set_active_power_limit", "params": {"limit_pct": 100}})
+        commands.append({"type": "disable_zero_export", "params": {}, "critical": True})
         if has_bess:
             commands.append({"type": "set_battery_mode_self", "params": {}})
     elif to_state == "ZERO_EXPORT_ONLY":
-        commands.append({"type": "enable_zero_export", "params": {}})
-        commands.append({"type": "set_active_power_limit", "params": {"limit_pct": 100}})
+        commands.append({"type": "enable_zero_export", "params": {}, "critical": True})
     elif to_state == "FULL_SHUTDOWN":
         # FULL_SHUTDOWN — Huawei: power_limit=0; Solinteg: priamy stop endpoint.
         if vendor == "solinteg":
-            commands.append({"type": "full_shutdown", "params": {}})
+            commands.append({"type": "full_shutdown", "params": {}, "critical": True})
         else:
-            commands.append({"type": "set_active_power_limit", "params": {"limit_pct": 0}})
+            commands.append({"type": "set_active_power_limit", "params": {"limit_pct": 0}, "critical": True})
         if grid_charge:
             # Rešpektuje "Pri FULL_SHUTDOWN nabíjať BESS zo siete" checkbox
             commands.append({"type": "set_battery_mode_grid_charge", "params": {}})
@@ -662,7 +670,8 @@ def execute_transition(site: Dict[str, Any], from_state: str, to_state: str, spo
         r = requests.post(url, headers=headers, json=[cmd_row], timeout=30)
         if r.status_code in (200, 201) and r.json():
             cmd_id = r.json()[0].get("id")
-            results.append({"type": cmd["type"], "command_id": cmd_id, "dry_run": dry_run})
+            results.append({"type": cmd["type"], "command_id": cmd_id, "dry_run": dry_run,
+                            "critical": bool(cmd.get("critical"))})
 
             if not dry_run and station_code:
                 ok, resp = vendor_send_command(vendor, station_code, cmd["type"], cmd["params"])
@@ -679,9 +688,12 @@ def execute_transition(site: Dict[str, Any], from_state: str, to_state: str, spo
         else:
             log.error("[execute_transition] insert command failed: %s %s", r.status_code, r.text[:200])
 
-    # LIVE vyhodnotenie: uspel aspoň jeden / všetky vendor príkazy? (dry_run = automaticky OK)
+    # LIVE vyhodnotenie: stav sa smie prepnúť len keď prešli KRITICKÉ príkazy (grid limit);
+    # battery mode je best-effort. dry_run = automaticky OK.
     vendor_results = [d.get("vendor_ok") for d in results if "vendor_ok" in d]
-    any_ok = dry_run or (len(vendor_results) > 0 and any(vendor_results))
+    critical_results = [d.get("vendor_ok") for d in results if "vendor_ok" in d and d.get("critical")]
+    gating = critical_results if critical_results else vendor_results
+    any_ok = dry_run or (len(gating) > 0 and all(gating))
     all_ok = dry_run or (len(vendor_results) > 0 and all(vendor_results))
 
     if fail_msgs:
