@@ -500,13 +500,27 @@ def _submit_and_verify(uuid: str, param_list: List[Dict], task_name: str) -> Dic
     task_id = dev_results[0].get("task_id")
 
     # počkaj na dokončenie tasku (best effort, max ~15 s — readback je aj tak rozhodujúci)
+    task_param_status: Dict[str, str] = {}
     for _ in range(5):
         time.sleep(3)
         ok2, task = check_task(task_id, uuid)
         if ok2 and isinstance(task, dict) and str(task.get("command_status")) == "8":
+            for p in task.get("param_list") or []:
+                task_param_status[str(p.get("param_code"))] = str(p.get("command_status"))
             break
 
     verified, mismatches = _readback_verify(uuid, param_list)
+    # Niektoré logger parametre sa nedajú spätne prečítať (readback vracia prázdno, napr. 10014).
+    # Pri prázdnom readbacku rozhoduje per-param status write tasku (4=prijaté, 5=zamietnuté).
+    if mismatches:
+        real_mismatches = []
+        for m in mismatches:
+            actual = m.get("actual")
+            if (actual is None or str(actual) == "") and task_param_status.get(str(m["param_code"])) == "4":
+                continue  # zapísané, len sa nedá prečítať späť
+            real_mismatches.append(m)
+        mismatches = real_mismatches
+        verified = not mismatches
     return {"ok": verified, "task_id": task_id, "param_list": param_list,
             "failed_params": mismatches}
 
