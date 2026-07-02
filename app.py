@@ -6053,6 +6053,42 @@ def sungrow_control_check(ps_id):
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/api/sungrow/devices/<ps_id>", methods=["GET"])
+def sungrow_devices(ps_id):
+    """Raw zoznam VŠETKÝCH zariadení stanice (aj Logger/EMS/meter — nie len meniče)."""
+    try:
+        import sungrow_oauth
+        ok, devices = sungrow_oauth.list_devices(ps_id)
+        if not ok:
+            return jsonify({"ok": False, "error": devices}), 502
+        return jsonify({"ok": True, "count": len(devices), "devices": [
+            {"device_type": d.get("device_type"), "type_name": d.get("type_name"),
+             "device_name": d.get("device_name"), "device_sn": d.get("device_sn"),
+             "uuid": d.get("uuid"), "ps_key": d.get("ps_key"),
+             "model": d.get("device_model_code")} for d in devices]})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/sungrow/param-write/<uuid>", methods=["POST"])
+def sungrow_param_write(uuid):
+    """Diagnostický zápis parametrov na JEDEN menič (secret-guarded).
+    Body: {"params": [{"param_code": "10012", "set_value": "170"}]}"""
+    if not _hs_auth_ok(request):
+        return jsonify({"error": "unauthorized"}), 401
+    try:
+        import sungrow_oauth
+        body = request.get_json(force=True) or {}
+        params = body.get("params") or []
+        if not params:
+            return jsonify({"ok": False, "error": "params required"}), 400
+        ok, result = sungrow_oauth._param_setting([str(uuid)], params)
+        return jsonify({"ok": ok, **result})
+    except Exception as e:
+        log.exception("[sungrow-param-write] failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/api/sungrow/task-status/<uuid>/<task_id>", methods=["GET"])
 def sungrow_task_status(uuid, task_id):
     """Výsledok paramSetting tasku (command_status 2=beží, 8=hotovo)."""
