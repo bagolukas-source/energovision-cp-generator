@@ -144,6 +144,15 @@ def _resolve_striedac(typ_menica):
     for k in STRIEDACE.keys():
         if k.lower() in typ_menica.lower() or typ_menica.lower() in k.lower():
             return STRIEDACE[k]
+    # výkonový token (…-150K-… / 10K): kandidát s rovnakým K-tokenom je lepší než slepý 10K default
+    m = re.search(r'(\d{1,3}(?:[.,]\d)?)\s*K', typ_menica.upper())
+    if m:
+        tok = m.group(1).replace(",", ".")
+        for k, v in STRIEDACE.items():
+            if re.search(r'\b' + re.escape(tok) + r'\s*K', k.upper()) or str(v.get("PMAX", "")).strip() == tok:
+                log.warning("[pd] menič '%s' nie je v katalógu — použitý výkonový ekvivalent '%s'", typ_menica, k)
+                return v
+    log.warning("[pd] menič '%s' nie je v katalógu — fallback MHT-10K-25 (SKONTROLUJ výkon AC!)", typ_menica)
     return STRIEDACE["MHT-10K-25"]
 
 
@@ -383,14 +392,47 @@ def _build_ctx(lead_data):
 # GENEROVANIE — fill Lukášovych templatov cez docxtpl
 # ============================================================
 
-def _render_template(template_name, ctx, output_path):
-    """Načítaj template, vyplň cez Jinja2, ulož."""
+def _render_template(template_name, ctx, output_path, prefer_subdir=None):
+    """Načítaj template, vyplň cez Jinja2, ulož.
+    prefer_subdir: skús najprv variant v podadresári (napr. 'revpro' — sada
+    so zákazníckou hlavičkou); keď tam nie je, použi štandardnú šablónu."""
     from docxtpl import DocxTemplate
-    template_path = _find_template(template_name)
+    template_path = None
+    if prefer_subdir:
+        try:
+            template_path = _find_template(str(Path(prefer_subdir) / template_name))
+        except FileNotFoundError:
+            template_path = None
+    if template_path is None:
+        template_path = _find_template(template_name)
     doc = DocxTemplate(str(template_path))
     doc.render(ctx, autoescape=True)
     doc.save(str(output_path))
     return output_path
+
+
+def _je_revpro(lead_data):
+    """Hlavička PD ≠ Energovision → sada šablón so zákazníckou hlavičkou (revpro/)."""
+    h = (lead_data.get("hlavicka_pd") or "energovision").strip().lower()
+    return h not in ("", "energovision", "ev")
+
+
+def _vykon_ac_kw(lead_data):
+    """Σ PMAX × počet cez typ_menic1-3 (ako Make modul 602). Fallback: 0."""
+    def _num(v):
+        try:
+            return float(str(v).replace(",", ".").strip())
+        except Exception:
+            return 0.0
+    total = 0.0
+    for i in (1, 2, 3):
+        typ = lead_data.get("typ_menic%d" % i)
+        if typ:
+            s = _resolve_striedac(typ)
+            total += _num(s.get("PMAX")) * max(int(_num(lead_data.get("pocet_menic%d" % i)) or 1), 1)
+    if not total and lead_data.get("menic"):
+        total = _num(_resolve_striedac(lead_data.get("menic")).get("PMAX"))
+    return round(total, 1)
 
 
 def gen_kryci_list(lead_data, output_path):
@@ -555,58 +597,186 @@ _POTVRDENIE_OCHRANA = {
     "ZSDIS": "Potvrdenie_ochrana_ZSDIS.docx",
 }
 
-def _admin_docs_for(stupen, dis):
-    """Vráti list (kluc, filename) admin dokumentov podľa stupňa a distribučky."""
-    s = (stupen or "").upper()
-    d = (dis or "").upper()
-    docs = []
-    # Potvrdenie o ochrane údajov — per distribučka (vždy ak DIS známa)
-    if d in _POTVRDENIE_OCHRANA:
-        docs.append(("potvrdenie_ochrana", _POTVRDENIE_OCHRANA[d]))
-    # Vyhlásenie zodpovedného projektanta + revízna správa FVZ — súčasť odovzdania
-    docs.append(("vyhlasenie_projektant", "Vyhlasenie_projektant.docx"))
-    docs.append(("revizna_sprava", "Revizna_sprava_FVZ.docx"))
-    # PSZaPS (nad 100 kW): URSO + IFT zmluva o dátových prenosoch
-    if "PSZAPS" in s or "PSZ" in s:
-        docs += [
-            ("urso_oznamovacia", "URSO_oznamovacia_povinnost.docx"),
-            ("urso_vyroba_lz", "URSO_vyroba_LZ.docx"),
-            ("ift_zmluva", "IFT_zmluva_datove_prenosy.docx"),
-            ("ift_priloha", "IFT_priloha_1.docx"),
-        ]
-    # DSV (skutočné vyhotovenie): preberacie protokoly
-    if "DSV" in s or "SKUTO" in s:
-        docs += [
-            ("preberaci_komponenty", "Preberaci_protokol_komponenty.docx"),
-            ("preberaci_final", "Preberaci_protokol_final.docx"),
-        ]
-    return docs
+
+def _protokol_ochrany_pdf(dis, ctx):
+    """(template_rel, fields) pre AcroForm protokol ochrany per DIS — mapovanie z Make blueprintu.
+    SSD je XFA formulár (nevyplniteľný pypdf) → None; namiesto neho ide editable DOCX."""
+    sidlo = f'{ctx.get("ulica_a_cislo","")}, {ctx.get("psc_mesto","")}'.strip(", ")
+    prev = f'{ctx.get("preulica_a_cislo","")}, {ctx.get("prepsc_mesto","")}, {ctx.get("parcely","")}'.strip(", ")
+    if dis == "ZSDIS":
+        return "protokoly/ZSD_protokol_ochrany.pdf", {
+            "Telefon_1": ctx.get("tel_zak", ""), "Email_1": ctx.get("mail_zak", ""),
+            "ICO_1": ctx.get("ico_zak", ""), "EIC_2": ctx.get("EIC", ""),
+            "Obchodne_meno_meno_priezvisko_1": ctx.get("nazov_zakaznika", ""),
+            "Sidlo_1": sidlo, "Adresa_2": prev,
+        }
+    if dis == "VSD":
+        return "protokoly/VSD_protokol_ochrany.pdf", {
+            "Text Field 2": ctx.get("nazov_zakaznika", ""),
+            "Text Field 21": ctx.get("tel_zak", ""), "Text Field 20": ctx.get("mail_zak", ""),
+            "Text Field 22": prev, "Text Field 18": sidlo,
+            "Text Field 19": ctx.get("ico_zak", ""), "Text Field 23": ctx.get("EIC", ""),
+        }
+    return None, None
 
 
 def vygeneruj_pd_sada(lead_data, out_dir):
-    """Kompletná sada PD podľa stupňa: jadro (B2B) + admin/úradné dokumenty. Vráti {kluc: path}."""
+    """Kompletná sada PD — parita s Make „Komplet automatizácia Firma":
+    jadro (krycí + titul/zoznam/PoUVV + súhrnná + technická) + Pomocný word (master)
+    + RDC schémy podľa fg_sum (DC rozvádzač) + úradné dokumenty podľa DIS a AC výkonu.
+    hlavicka_pd ≠ energovision → sada šablón revpro/ (zákaznícka hlavička).
+    Vráti {kluc: path}."""
     out_dir = Path(out_dir); out_dir.mkdir(parents=True, exist_ok=True)
     if not lead_data.get('dis'):
         g = _resolve_dis_from_psc(lead_data.get('psc'))
         if g:
             lead_data['dis'] = g
-    out = dict(vygeneruj_pd_b2b(lead_data, out_dir))  # jadro
+    dis = (lead_data.get('dis') or "").upper()
+    ac = _vykon_ac_kw(lead_data)
+    revpro = _je_revpro(lead_data)
+    sub = "revpro" if revpro else None
+    ctx = _build_ctx(lead_data)
 
     priezvisko = lead_data.get('meno_priezvisko', 'Klient').split()[-1] if lead_data.get('meno_priezvisko') else 'Klient'
     base = re.sub(r'[^A-Za-zÁ-ž0-9]+', '_', priezvisko).strip('_') or 'Klient'
     ev_id = lead_data.get('ev_id', 'EV-XX')
-    ctx = _build_ctx(lead_data)
 
-    n = 2
-    for kluc, fname in _admin_docs_for(lead_data.get('stupen_projektu'), lead_data.get('dis')):
+    out = {}
+    n = 0
+
+    def add_docx(kluc, label, template, subdir=sub):
+        nonlocal n
         n += 1
-        label = re.sub(r'\.docx$', '', fname)
         try:
             path = out_dir / f"{ev_id}_PD_{n:02d}_{label}_{base}.docx"
-            out[kluc] = _render_template(fname, ctx, path)
+            out[kluc] = _render_template(template, ctx, path, prefer_subdir=subdir)
         except Exception as e:
-            log.warning("[pd-sada] admin dok %s zlyhal: %s", fname, e)
-            n -= 1
-    log.info("[pd-sada] %d dokumentov (stupeň=%s, dis=%s)", len(out),
-             lead_data.get('stupen_projektu'), lead_data.get('dis'))
+            log.warning("[pd-sada] %s (%s) zlyhal: %s", kluc, template, e)
+
+    # ── jadro PD (Make: vždy) ──
+    add_docx('kryci', 'Kryci_list', 'Kryc.docx')
+    if revpro:
+        # zákaznícka sada nemá zlúčený Tit_Zoz_POUVV — generujú sa samostatne ako v Make
+        add_docx('titulny', 'Titulny_list', 'Tit.docx')
+        add_docx('zoznam', 'Zoznam_dokumentacie', 'Zoz.docx')
+        add_docx('pouvv', 'PoUVV', 'POUVV.docx')
+    else:
+        add_docx('titul_zoznam_pouvv', 'Titul_Zoznam_PoUVV', 'Tit_Zoz_POUVV.docx')
+    add_docx('suhrnna', 'Suhrnna_sprava', 'suhr_technicka_sprava.docx')
+    # technická správa: AC ≥ 100 kW → per-DIS šablóna (Make), inak jednotná b2b
+    if ac >= 100 and dis in ("SSD", "VSD", "ZSDIS"):
+        add_docx('technicka', 'Technicka_sprava', f'technicka_sprava{dis}.docx')
+    else:
+        add_docx('technicka', 'Technicka_sprava', 'technicka_sprava.docx' if revpro else 'technicka_sprava_b2b.docx')
+    # Pomocný word — záloha všetkých vstupov (Make: vždy)
+    add_docx('master', 'Pomocny_word', 'Pomocny word.docx', subdir=None)
+
+    # ── schémy (PDF) ──
+    def _n(v):
+        try:
+            return int(float(str(v).replace(",", ".")))
+        except Exception:
+            return 0
+    fg = _n(lead_data.get('fg_sum')) or _n(ctx.get('pocet_menic')) or 1
+    stupen_full = ctx.get('stupen_projektu', '')
+    stupen_skr = ctx.get('OZN', '')
+
+    # RDC schémy — DC rozvádzač=Áno → 1 schéma na menič (fg_sum), ako Make repeater
+    if lead_data.get('dc_rozvadzac'):
+        try:
+            import pdf_forms as PF
+            strings_per = _n(lead_data.get('stringov_na_rdc')) or 2
+            avail = [1, 2, 4, 6, 10, 12]
+            cfg = "2x%d" % min(avail, key=lambda x: abs(x - max(1, strings_per)))
+            for i in range(1, min(fg, 12) + 1):
+                n += 1
+                pdf = PF.vyplň_rdc(ctx, cfg, i, stupen_full=stupen_full, stupen_skr=stupen_skr)
+                p = out_dir / f"{ev_id}_PD_{n:02d}_Schema_RDC{i}_{base}.pdf"
+                p.write_bytes(pdf)
+                out['rdc_%d' % i] = p
+        except Exception as e:
+            log.warning("[pd-sada] RDC schémy zlyhali: %s", e)
+
+    # RFV schéma zapojenia — Make tabuľka: AC≤50 → S1/S2 (FG 1/2), M3/M4 (FG 3/4);
+    # 50<AC<100 → M1..M4 podľa FG (FG>4 → M4); AC≥100 → žiadna RFV.
+    # (FG>4 pri AC≤50 nemal v Make route — dopĺňame M4, logujeme.)
+    try:
+        import pdf_forms as PF
+        rfv = None
+        if ac <= 50:
+            rfv = {1: "S1", 2: "S2", 3: "M3"}.get(fg) or ("M4" if fg >= 4 else None)
+            if fg > 4:
+                log.warning("[pd-sada] AC≤50 s FG=%d nemal v Make vetvu — použitá M4", fg)
+        elif ac < 100:
+            rfv = {1: "M1", 2: "M2", 3: "M3"}.get(fg) or ("M4" if fg >= 4 else None)
+        if rfv:
+            n += 1
+            pdf = PF.vyplň_rfv(ctx, rfv, stupen_full=stupen_full, stupen_skr=stupen_skr)
+            p = out_dir / f"{ev_id}_PD_{n:02d}_Schema_zapojenia_RFV_{rfv}_{base}.pdf"
+            p.write_bytes(pdf)
+            out['rozvadzac'] = p
+    except Exception as e:
+        log.warning("[pd-sada] RFV schéma zlyhala: %s", e)
+
+    # DWG podklady (DISP + JPS) — Make ich prikladal len pri zákazníckej hlavičke (revpro)
+    if revpro:
+        for kluc, fname in (("dwg_disp", "24-460 DISP.dwg"), ("dwg_jps", "24-460 JPS.dwg")):
+            try:
+                src = _find_template(str(Path("revpro") / fname))
+                n += 1
+                p = out_dir / f"{ev_id}_PD_{n:02d}_{fname.replace(' ', '_')}"
+                p.write_bytes(Path(src).read_bytes())
+                out[kluc] = p
+            except Exception as e:
+                log.warning("[pd-sada] DWG %s zlyhal: %s", fname, e)
+
+    # ── úradné/admin dokumenty (templates_admin, bez revpro variantov) ──
+    admin = []
+    # potvrdenie ochrany per DIS — Make pásma: SSD vždy; ZSDIS/VSD len 10 < AC < 100
+    if dis == "SSD" or (dis in ("VSD", "ZSDIS") and 10 < ac < 100):
+        admin.append(('potvrdenie_ochrana', _POTVRDENIE_OCHRANA[dis], 'Potvrdenie_ochrana_' + dis))
+    admin.append(('vyhlasenie_projektant', 'Vyhlasenie_projektant.docx', 'Vyhlasenie_projektant'))
+    admin.append(('revizna_sprava', 'Revizna_sprava_FVZ.docx', 'Revizna_sprava_FVZ'))
+    # URSO — Make: vždy (priečinok podľa AC rieši CRM register)
+    admin.append(('urso_oznamovacia', 'URSO_oznamovacia_povinnost.docx', 'URSO_oznamovacia_povinnost'))
+    admin.append(('urso_vyroba_lz', 'URSO_vyroba_LZ.docx', 'URSO_vyroba_LZ'))
+    # IFT dátové prenosy — Make: len ZSDIS ∧ AC ≥ 100
+    if dis == "ZSDIS" and ac >= 100:
+        admin.append(('ift_zmluva', 'IFT_zmluva_datove_prenosy.docx', 'IFT_zmluva'))
+        admin.append(('ift_priloha', 'IFT_priloha_1.docx', 'IFT_priloha_1'))
+    # preberacie protokoly — Make: vždy (filtre 114/115 prázdne)
+    admin.append(('preberaci_komponenty', 'Preberaci_protokol_komponenty.docx', 'Preberaci_protokol_komponenty'))
+    admin.append(('preberaci_final', 'Preberaci_protokol_final.docx', 'Preberaci_protokol_final'))
+    # SSD protokol funkčnej skúšky — Make mal XFA PDF (nevyplniteľné), tu editable DOCX
+    if dis == "SSD":
+        admin.append(('protokol_skuska', 'SSD_protokol_funkcna_skuska.docx', 'SSD_protokol_funkcna_skuska'))
+    for kluc, fname, label in admin:
+        add_docx(kluc, label, fname, subdir=None)
+
+    # IFT cenník (statický XLSX — Príloha č. 2)
+    if dis == "ZSDIS" and ac >= 100:
+        try:
+            n += 1
+            src = _find_template('IFT_priloha_2_cennik.xlsx')
+            p = out_dir / f"{ev_id}_PD_{n:02d}_IFT_priloha_2_cennik_{base}.xlsx"
+            p.write_bytes(Path(src).read_bytes())
+            out['ift_cennik'] = p
+        except Exception as e:
+            log.warning("[pd-sada] IFT cenník zlyhal: %s", e)
+
+    # PDF protokol ochrany (AcroForm) — ZSDIS/VSD v pásme 10–100 kW
+    if dis in ("ZSDIS", "VSD") and 10 < ac < 100:
+        try:
+            import pdf_forms as PF
+            rel, fields = _protokol_ochrany_pdf(dis, ctx)
+            if rel:
+                n += 1
+                p = out_dir / f"{ev_id}_PD_{n:02d}_Protokol_ochrany_{dis}_{base}.pdf"
+                p.write_bytes(PF.fill_pdf(rel, fields))
+                out['protokol_ochrany'] = p
+        except Exception as e:
+            log.warning("[pd-sada] protokol ochrany %s zlyhal: %s", dis, e)
+
+    log.info("[pd-sada] %d dokumentov (stupeň=%s, dis=%s, AC=%.1f kW, revpro=%s)",
+             len(out), lead_data.get('stupen_projektu'), dis, ac, revpro)
     return out

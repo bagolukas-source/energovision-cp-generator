@@ -88,3 +88,18 @@ def rdc_field_values(ctx, i, stupen_full=None, stupen_skr=None):
 def vyplň_rdc(ctx, config, i, stupen_full=None, stupen_skr=None):
     """Vyplní jednu RDC schému. config = názov base šablóny bez .pdf (napr. '2x2')."""
     return fill_pdf(f"rdc/{config}.pdf", rdc_field_values(ctx, i, stupen_full, stupen_skr))
+
+
+def rfv_field_values(ctx, stupen_full=None, stupen_skr=None):
+    """RFV schéma zapojenia (S1/S2/M1–M4) — rovnaká rohová pečiatka ako RDC (Text1–Text23),
+    Text6 je konštanta bez RDC čísla; Text24–26 (+RDC/+FG označenia) RFV nemá."""
+    vals = rdc_field_values(ctx, 0, stupen_full, stupen_skr)
+    vals["Text6"] = "05- Schéma zapojenia"
+    for k in ("Text24", "Text25", "Text26"):
+        vals.pop(k, None)
+    return vals
+
+
+def vyplň_rfv(ctx, name, stupen_full=None, stupen_skr=None):
+    """Vyplní RFV schému zapojenia. name = S1/S2/M1..M4 (bez .pdf)."""
+    return fill_pdf(f"rfv/{name}.pdf", rfv_field_values(ctx, stupen_full, stupen_skr))
