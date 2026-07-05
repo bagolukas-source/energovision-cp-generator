@@ -8413,6 +8413,10 @@ _FLEET_CACHE = {"ts": 0.0, "data": None}
 _FLEET_CACHE_TTL_SEC = 120  # 2 min cache (Huawei API quota)
 
 
+_DEV_LIST_CACHE = {"ts": 0.0, "data": None}   # getDevList — 6 h (zoznam meničov je stabilný)
+_DEV_KPI_CACHE = {"ts": 0.0, "data": None}    # getDevRealKpi výsledok — 300 s (Huawei limit 1×/5 min)
+
+
 def _huawei_fetch_active_power_per_station(station_codes: list, base: str, headers: dict) -> dict:
     """Pre každú stanicu zistí aktuálny AC výkon [kW] sumovaním active_power
     všetkých jej inverterov.
@@ -8428,23 +8432,44 @@ def _huawei_fetch_active_power_per_station(station_codes: list, base: str, heade
     if not station_codes:
         return power_by_station
 
-    # 1. Zoznam zariadení pre všetky stanice naraz (max 100 staníc per call)
-    try:
-        r = requests.post(
-            f"{base}/getDevList",
-            headers=headers,
-            json={"stationCodes": ",".join(station_codes)},
-            timeout=30,
-        )
-        if r.status_code != 200:
-            log.warning("[fleet-status] getDevList HTTP %s: %s", r.status_code, r.text[:200])
+    # Power cache 300 s — Huawei getDevRealKpi má frequency limit 1×/5 min;
+    # častejšie volania vracajú failCode 407 a nulový výsledok.
+    now_ts = _time.time()
+    if _DEV_KPI_CACHE["data"] is not None and (now_ts - _DEV_KPI_CACHE["ts"]) < 300:
+        return dict(_DEV_KPI_CACHE["data"])
+
+    # 1. Zoznam zariadení — chunk po 100 staníc (limit getDevList) + 6h cache
+    #    (zoznam meničov sa nemení, netreba ho ťahať pri každom refreshi)
+    devices: list = []
+    if _DEV_LIST_CACHE["data"] is not None and (now_ts - _DEV_LIST_CACHE["ts"]) < 6 * 3600:
+        devices = _DEV_LIST_CACHE["data"]
+    else:
+        try:
+            for i in range(0, len(station_codes), 100):
+                chunk_codes = station_codes[i:i + 100]
+                r = requests.post(
+                    f"{base}/getDevList",
+                    headers=headers,
+                    json={"stationCodes": ",".join(chunk_codes)},
+                    timeout=30,
+                )
+                if r.status_code != 200:
+                    log.warning("[fleet-status] getDevList HTTP %s: %s", r.status_code, r.text[:200])
+                    continue
+                payload = r.json() or {}
+                if payload.get("failCode") not in (None, 0):
+                    log.warning("[fleet-status] getDevList failCode %s", payload.get("failCode"))
+                    continue
+                rows = payload.get("data") or []
+                if isinstance(rows, list):
+                    devices.extend(rows)
+            if devices:
+                _DEV_LIST_CACHE["data"] = devices
+                _DEV_LIST_CACHE["ts"] = now_ts
+        except Exception as e:
+            log.warning("[fleet-status] getDevList failed: %s", e)
             return power_by_station
-        payload = r.json() or {}
-        devices = payload.get("data") or []
-        if not isinstance(devices, list):
-            return power_by_station
-    except Exception as e:
-        log.warning("[fleet-status] getDevList failed: %s", e)
+    if not devices:
         return power_by_station
 
     # 2. Filter len invertery (devTypeId 1 = string inverter, 38 = residential inverter)
@@ -8477,6 +8502,9 @@ def _huawei_fetch_active_power_per_station(station_codes: list, base: str, heade
                 if r.status_code != 200:
                     continue
                 payload = r.json() or {}
+                if payload.get("failCode") not in (None, 0):
+                    log.warning("[fleet-status] getDevRealKpi failCode %s (devType %s)", payload.get("failCode"), dev_type)
+                    continue
                 rows = payload.get("data") or []
                 if not isinstance(rows, list):
                     continue
@@ -8502,6 +8530,11 @@ def _huawei_fetch_active_power_per_station(station_codes: list, base: str, heade
                         power_by_station[station_code] = power_by_station.get(station_code, 0.0) + kw
             except Exception as e:
                 log.warning("[fleet-status] getDevRealKpi failed for devType %s: %s", dev_type, e)
+
+    # Ulož do 5-min cache len zmysluplný výsledok (nie prázdny po rate-limite)
+    if power_by_station:
+        _DEV_KPI_CACHE["data"] = dict(power_by_station)
+        _DEV_KPI_CACHE["ts"] = _time.time()
 
     return power_by_station
 
@@ -8666,6 +8699,61 @@ def _fleet_status_compute() -> dict:
             log.exception("[fleet-status] Huawei batch fetch failed")
             huawei_error = str(e)[:200]
 
+    # 3b. Sungrow live — queryPowerStationList (max ~2 volania pre celú flotilu 112 staníc)
+    sungrow_kpi_returned = 0
+    sungrow_codes = {
+        str(s.get("vendor_station_id")) for s in sites
+        if s.get("vendor") == "sungrow" and s.get("monitoring_enabled") and s.get("vendor_station_id")
+    }
+    if sungrow_codes:
+        def _sg_num(v, unit_default):
+            """curr_power/today_energy môžu prísť ako číslo alebo {value, unit} (W/kW/MW…)."""
+            unit = unit_default
+            if isinstance(v, dict):
+                unit = str(v.get("unit") or unit_default)
+                v = v.get("value")
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                return None
+            u = unit.lower()
+            if u.startswith("mw"):
+                return f * 1000.0
+            if u in ("w", "wh"):
+                return f / 1000.0
+            return f
+
+        try:
+            from sungrow_oauth import list_plants as _sg_list_plants
+            sg_ok, sg_plants = _sg_list_plants()
+            if sg_ok and isinstance(sg_plants, list):
+                for p in sg_plants:
+                    ps_id = str(p.get("ps_id") or "")
+                    if ps_id not in sungrow_codes:
+                        continue
+                    kw = _sg_num(p.get("curr_power"), "kW")
+                    day_kwh = _sg_num(p.get("today_energy"), "kWh")
+                    total_kwh = _sg_num(p.get("total_energy"), "kWh")
+                    if kw is None and day_kwh is None:
+                        continue
+                    live_kpi[ps_id] = {
+                        "current_ac_power_kw": kw,
+                        "health_state": 3,
+                        "current_day_yield_kwh": day_kwh,
+                        "current_total_yield_kwh": total_kwh,
+                        "current_total_yield_mwh": (total_kwh / 1000.0) if total_kwh else None,
+                        "current_month_yield_kwh": None,
+                        "current_day_export_kwh": None,
+                        "current_day_load_kwh": None,
+                        "current_day_income_eur": None,
+                        "current_total_income_eur": None,
+                    }
+                    sungrow_kpi_returned += 1
+            elif not sg_ok:
+                log.warning("[fleet-status] sungrow list_plants failed: %s", str(sg_plants)[:200])
+        except Exception as e:
+            log.warning("[fleet-status] sungrow live failed: %s", e)
+
     # 4. Combine
     now_iso = datetime.now(timezone.utc).isoformat()
     enriched = []
@@ -8748,7 +8836,8 @@ def _fleet_status_compute() -> dict:
             "monitored": sum(1 for x in enriched if x["monitoring_enabled"]),
             "live": sum(1 for x in enriched if x["status_label"] == "Live"),
             "huawei_codes_polled": len(huawei_codes),
-            "huawei_kpi_returned": len(live_kpi),
+            "huawei_kpi_returned": len(live_kpi) - sungrow_kpi_returned,
+            "sungrow_kpi_returned": sungrow_kpi_returned,
             "huawei_error": huawei_error,
             "alarms_total": sum(alarm_counts.values()),
         },
@@ -14866,6 +14955,165 @@ def huawei_refresh_station(plant_code):
         }), 200
     except Exception as e:
         log.exception("refresh-station")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ============================================================
+# HUAWEI FLEET ALARM SYNC — getAlarmList → inverter_alarms (→ alarm-to-ticket cron)
+# ============================================================
+def _huawei_normalize_alarm_code(name: str, cause: str) -> str:
+    """Preloží Huawei alarm na normalizovaný kód z alarm_sla_mapping."""
+    blob = f"{name or ''} {cause or ''}".lower()
+    if "arc" in blob:
+        return "DC_ARC_FAULT"
+    if "overvolt" in blob or "over-volt" in blob or "over volt" in blob:
+        return "DC_OVERVOLTAGE"
+    if "communication" in blob or "comm." in blob or "offline" in blob or "connection" in blob:
+        return "COMM_LOSS"
+    if "string" in blob:
+        return "STRING_OFFLINE"
+    if "battery" in blob and ("temp" in blob or "overheat" in blob):
+        return "BATT_TEMP_HIGH"
+    if "battery" in blob and "soh" in blob:
+        return "BATT_SOH_LOW"
+    return "GENERIC_INFO"
+
+
+_HUAWEI_LEV_SEVERITY = {1: "critical", 2: "critical", 3: "warning", 4: "info"}
+
+
+@app.route("/api/huawei/v1/sync-alarms-fleet", methods=["POST", "GET"])
+def huawei_sync_alarms_fleet():
+    """Fleet-wide alarm sync: getAlarmList (48h okno, batch po 50 staníc)
+    → upsert inverter_alarms (dedup cez raw_json.alarmId) → alarm-to-ticket
+    cron na Verceli z nich potom robí tikety podľa alarm_sla_mapping."""
+    if not _hs_auth_ok(request):
+        return jsonify({"error": "unauthorized"}), 401
+    try:
+        base, headers, auth_method = _huawei_get_auth()
+        if not base or not headers:
+            return jsonify({"success": False, "error": "Huawei auth failed"}), 503
+
+        sr = requests.get(
+            f"{SUPABASE_URL}/rest/v1/inverter_sites",
+            headers={"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"},
+            params={"select": "id,site_name,vendor_plant_code,vendor_station_id", "vendor": "eq.huawei",
+                    "monitoring_enabled": "eq.true", "archived_at": "is.null"},
+            timeout=10,
+        )
+        if not sr.ok:
+            return jsonify({"success": False, "error": "DB query failed"}), 500
+        sites = sr.json()
+        code_to_site = {}
+        for s in sites:
+            c = s.get("vendor_plant_code") or s.get("vendor_station_id")
+            if c:
+                code_to_site[str(c)] = s
+
+        codes = list(code_to_site.keys())
+        end_ms = int(_time.time() * 1000)
+        start_ms = end_ms - 48 * 3600 * 1000
+
+        active_rows = []
+        api_calls = 0
+        for i in range(0, len(codes), 50):
+            chunk = codes[i:i + 50]
+            try:
+                r = requests.post(
+                    f"{base}/getAlarmList", headers=headers,
+                    json={"stationCodes": ",".join(chunk), "beginTime": start_ms, "endTime": end_ms, "language": "en_US"},
+                    timeout=30,
+                )
+                api_calls += 1
+                if r.status_code != 200:
+                    continue
+                payload = r.json() or {}
+                if payload.get("failCode") not in (None, 0):
+                    log.warning("[alarm-sync] getAlarmList failCode %s", payload.get("failCode"))
+                    continue
+                rows = payload.get("data") or []
+                if isinstance(rows, list):
+                    active_rows.extend([x for x in rows if isinstance(x, dict)])
+            except Exception as e:
+                log.warning("[alarm-sync] chunk failed: %s", e)
+
+        # Existujúce alarmy okna (dedup podľa vendor alarmId)
+        er = requests.get(
+            f"{SUPABASE_URL}/rest/v1/inverter_alarms",
+            headers={"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"},
+            params={"select": "id,raw_json,status", "raised_at": f"gte.{datetime.fromtimestamp(start_ms/1000, tz=timezone.utc).isoformat()}"},
+            timeout=10,
+        )
+        existing = er.json() if er.ok else []
+        existing_by_vid = {}
+        for a in existing:
+            vid = str(((a.get("raw_json") or {}) if isinstance(a.get("raw_json"), dict) else {}).get("alarmId") or "")
+            if vid:
+                existing_by_vid[vid] = a
+
+        inserted = 0
+        seen_vids = set()
+        for row in active_rows:
+            vid = str(row.get("alarmId") or "")
+            code = str(row.get("stationCode") or "")
+            site = code_to_site.get(code)
+            # Huawei status: 1 = aktívny (uncleared); ostatné stavy neriešime ako aktívne
+            is_active = str(row.get("status")) in ("1", "None", "") or row.get("status") is None
+            if not vid or not site or not is_active:
+                continue
+            seen_vids.add(vid)
+            if vid in existing_by_vid:
+                continue
+            name = row.get("alarmName") or "Huawei alarm"
+            cause = row.get("alarmCause") or ""
+            lev = row.get("lev")
+            try:
+                lev = int(lev)
+            except (TypeError, ValueError):
+                lev = 4
+            raised_ms = row.get("raiseTime") or end_ms
+            payload = {
+                "site_id": site["id"],
+                "alarm_code": _huawei_normalize_alarm_code(name, cause),
+                "alarm_name": str(name)[:300],
+                "severity": _HUAWEI_LEV_SEVERITY.get(lev, "info"),
+                "raised_at": datetime.fromtimestamp(int(raised_ms) / 1000, tz=timezone.utc).isoformat(),
+                "status": "open",
+                "raw_description": (str(cause)[:800] + (("\nNáprava: " + str(row.get("repairSuggestion") or ""))[:800] if row.get("repairSuggestion") else "")),
+                "raw_json": row,
+            }
+            ir = requests.post(
+                f"{SUPABASE_URL}/rest/v1/inverter_alarms",
+                headers={"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+                         "Content-Type": "application/json", "Prefer": "return=minimal"},
+                json=payload, timeout=10,
+            )
+            if ir.ok:
+                inserted += 1
+            else:
+                log.warning("[alarm-sync] insert failed: %s", ir.text[:200])
+
+        # Alarmy, ktoré už Huawei nehlási ako aktívne → resolved
+        resolved = 0
+        for vid, a in existing_by_vid.items():
+            if vid not in seen_vids and a.get("status") == "open":
+                rr = requests.patch(
+                    f"{SUPABASE_URL}/rest/v1/inverter_alarms",
+                    headers={"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+                             "Content-Type": "application/json", "Prefer": "return=minimal"},
+                    params={"id": f"eq.{a['id']}"},
+                    json={"status": "resolved", "resolved_at": datetime.now(timezone.utc).isoformat()},
+                    timeout=10,
+                )
+                if rr.ok:
+                    resolved += 1
+
+        return jsonify({
+            "success": True, "auth": auth_method, "stations": len(codes), "api_calls": api_calls,
+            "active_from_api": len(active_rows), "inserted": inserted, "resolved": resolved,
+        }), 200
+    except Exception as e:
+        log.exception("alarm-sync-fleet")
         return jsonify({"success": False, "error": str(e)}), 500
 
 
