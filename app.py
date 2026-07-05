@@ -8410,11 +8410,12 @@ def webhook_aom_orphan_reset():
 # No mutations — SPOT reactor is unaffected.
 
 _FLEET_CACHE = {"ts": 0.0, "data": None}
-_FLEET_CACHE_TTL_SEC = 120  # 2 min cache (Huawei API quota)
+_FLEET_CACHE_TTL_SEC = 300  # 5 min cache — getStationRealKpi/getDevRealKpi frequency limit je 1×/5 min
 
 
 _DEV_LIST_CACHE = {"ts": 0.0, "data": None}   # getDevList — 6 h (zoznam meničov je stabilný)
 _DEV_KPI_CACHE = {"ts": 0.0, "data": None}    # getDevRealKpi výsledok — 300 s (Huawei limit 1×/5 min)
+_HUAWEI_KPI_LAST: dict = {}                    # posledné známe station KPI per stationCode — partial chunky sa skladajú
 
 
 def _huawei_fetch_active_power_per_station(station_codes: list, base: str, headers: dict) -> dict:
@@ -8699,6 +8700,17 @@ def _fleet_status_compute() -> dict:
             log.exception("[fleet-status] Huawei batch fetch failed")
             huawei_error = str(e)[:200]
 
+    # 3a-merge: Huawei frequency limit prepúšťa len časť chunkov per beh —
+    # partial výsledky sa skladajú s poslednými známymi (last-good per stanica).
+    try:
+        hw_set = set(str(c) for c in huawei_codes)
+        for code, entry in list(_HUAWEI_KPI_LAST.items()):
+            if code in hw_set and code not in live_kpi:
+                live_kpi[code] = entry
+        _HUAWEI_KPI_LAST.update({c: v for c, v in live_kpi.items() if c in hw_set})
+    except Exception:
+        pass
+
     # 3b. Sungrow live — queryPowerStationList (max ~2 volania pre celú flotilu 112 staníc)
     sungrow_kpi_returned = 0
     sungrow_codes = {
@@ -8706,51 +8718,30 @@ def _fleet_status_compute() -> dict:
         if s.get("vendor") == "sungrow" and s.get("monitoring_enabled") and s.get("vendor_station_id")
     }
     if sungrow_codes:
-        def _sg_num(v, unit_default):
-            """curr_power/today_energy môžu prísť ako číslo alebo {value, unit} (W/kW/MW…)."""
-            unit = unit_default
-            if isinstance(v, dict):
-                unit = str(v.get("unit") or unit_default)
-                v = v.get("value")
-            try:
-                f = float(v)
-            except (TypeError, ValueError):
-                return None
-            u = unit.lower()
-            if u.startswith("mw"):
-                return f * 1000.0
-            if u in ("w", "wh"):
-                return f / 1000.0
-            return f
-
         try:
-            from sungrow_oauth import list_plants as _sg_list_plants
-            sg_ok, sg_plants = _sg_list_plants()
-            if sg_ok and isinstance(sg_plants, list):
-                for p in sg_plants:
-                    ps_id = str(p.get("ps_id") or "")
-                    if ps_id not in sungrow_codes:
-                        continue
-                    kw = _sg_num(p.get("curr_power"), "kW")
-                    day_kwh = _sg_num(p.get("today_energy"), "kWh")
-                    total_kwh = _sg_num(p.get("total_energy"), "kWh")
-                    if kw is None and day_kwh is None:
-                        continue
-                    live_kpi[ps_id] = {
-                        "current_ac_power_kw": kw,
-                        "health_state": 3,
-                        "current_day_yield_kwh": day_kwh,
-                        "current_total_yield_kwh": total_kwh,
-                        "current_total_yield_mwh": (total_kwh / 1000.0) if total_kwh else None,
-                        "current_month_yield_kwh": None,
-                        "current_day_export_kwh": None,
-                        "current_day_load_kwh": None,
-                        "current_day_income_eur": None,
-                        "current_total_income_eur": None,
-                    }
-                    sungrow_kpi_returned += 1
-            elif not sg_ok:
-                log.warning("[fleet-status] sungrow list_plants failed: %s", str(sg_plants)[:200])
+            from sungrow_oauth import fleet_realtime as _sg_fleet_realtime
+            sg_map = _sg_fleet_realtime(list(sungrow_codes))
+            for ps_id, vals in (sg_map or {}).items():
+                if ps_id not in sungrow_codes:
+                    continue
+                kw = vals.get("kw")
+                day_kwh = vals.get("day_kwh")
+                if kw is None and day_kwh is None:
+                    continue
+                live_kpi[ps_id] = {
+                    "current_ac_power_kw": kw,
+                    "health_state": 3,
+                    "current_day_yield_kwh": day_kwh,
+                    "current_total_yield_kwh": None,
+                    "current_total_yield_mwh": None,
+                    "current_month_yield_kwh": None,
+                    "current_day_export_kwh": None,
+                    "current_day_load_kwh": None,
+                    "current_day_income_eur": None,
+                    "current_total_income_eur": None,
+                }
+                sungrow_kpi_returned += 1
+            log.info("[fleet-status] sungrow live: %d/%d staníc", sungrow_kpi_returned, len(sungrow_codes))
         except Exception as e:
             log.warning("[fleet-status] sungrow live failed: %s", e)
 

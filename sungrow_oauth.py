@@ -875,3 +875,44 @@ def diagnose() -> Dict:
         if not ok:
             out["plant_list_error"] = plants
     return out
+
+
+def fleet_realtime(ps_ids: List[str]) -> Dict[str, Dict]:
+    """Batch realtime pre celú flotilu: 83033 plant power (W), 83022 daily yield (Wh).
+    Chunk po 50 ps_id. Returns {ps_id: {"kw": float|None, "day_kwh": float|None}}."""
+    out: Dict[str, Dict] = {}
+    ids = [str(p) for p in ps_ids if p]
+    for i in range(0, len(ids), 50):
+        chunk = ids[i:i + 50]
+        ok, data = _call("/openapi/platform/getPowerStationRealTimeData", {
+            "ps_id_list": chunk,
+            "point_id_list": ["83033", "83022"],
+        })
+        if not ok:
+            continue
+        rows = (data or {}).get("device_point_list") or []
+        for row in rows:
+            dp = row.get("device_point") or row
+            if not isinstance(dp, dict):
+                continue
+            ps = str(dp.get("ps_id") or "")
+            if not ps:
+                ps_key = str(dp.get("ps_key") or "")
+                ps = ps_key.split("_")[0] if ps_key else ""
+            if not ps:
+                continue
+
+            def _num(key):
+                v = dp.get(key)
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    return None
+
+            p_w = _num("p83033")
+            e_wh = _num("p83022")
+            out[ps] = {
+                "kw": (p_w / 1000.0) if p_w is not None else None,
+                "day_kwh": (e_wh / 1000.0) if e_wh is not None else None,
+            }
+    return out
