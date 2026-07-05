@@ -172,6 +172,13 @@ def _sk(value, decimals=2):
         return str(value)
 
 
+def _ciarka_ak(hodnota, sep=", "):
+    """Pomocný placeholder pre šablóny, ktoré majú medzi dvoma poľami PEVNÚ čiarku
+    v XML (napr. '{{preulica_a_cislo}}, {{prepsc_mesto}}'). Vráti sep len keď je
+    predchádzajúce pole neprázdne — inak prázdny reťazec (žiadna visiaca ', ')."""
+    return sep if hodnota and str(hodnota).strip() else ""
+
+
 # ============================================================
 # BUILD KONTEXTU pre docxtpl
 # ============================================================
@@ -220,6 +227,12 @@ def _build_ctx(lead_data):
     _oznacenie_menic = " + ".join(
         ((str(c) + "× ") if c > 1 else "") + _safe(s.get("Type"), "menič") for s, c in _inverters
     )
+    # Rozbalený zoznam JEDNOTLIVÝCH meničov (fyzické obvody FA1/FA2/... v revíznej správe) —
+    # napr. 2× SUN2000-50KTL → ["SUN2000-50KTL", "SUN2000-50KTL"]. Použité pre per-obvod placeholdery.
+    _menice_jednotlivo = []
+    for _s, _c in _inverters:
+        for _ in range(_c):
+            _menice_jednotlivo.append(_safe(_s.get("Type"), "menič"))
 
     meno = _safe(lead_data.get('meno_priezvisko'))
     # Split meno na (prvé, posledné)
@@ -263,6 +276,11 @@ def _build_ctx(lead_data):
         "nazov_zakaznika": meno,
         "meno_zak": meno_zak,
         "priez_zak": priez_zak,
+        # Štatutárny orgán (mená a priezviská) — LEN z výslovného payload poľa `statutar`.
+        # Žiadny fallback na meno_zak/priez_zak: pre B2B firmu by to split-lo obchodné meno
+        # (napr. "DEMO-A2 s.r.o." → meno_zak="DEMO-A2", priez_zak="s.r.o.") a dalo nezmyselný
+        # výsledok do úradného tlačiva URSO. Prázdne pole je čestné — projektant ho ručne doplní.
+        "statutar": _safe(lead_data.get('statutar')),
         "mail_zak": _safe(lead_data.get('email')),
         "email_obchodnik": _safe(lead_data.get('email_obchodnik')),
         "tel_zak": _safe(lead_data.get('telefon')),
@@ -275,11 +293,15 @@ def _build_ctx(lead_data):
         "psc_mesto": f"{psc} {mesto}".strip(),
         "mesto_zak": mesto,
         "cena": _safe(lead_data.get('cena')),
+        # Čiarka medzi ulicou a mestom v šablónach, kde je natvrdo v XML ('{{ulica_a_cislo}}, {{psc_mesto}}') —
+        # zabráni visiacej ", " keď ulica/adresa chýba (napr. B2B projekt bez vyplnenej ulice).
+        "ciarka_ulica": _ciarka_ak(ulica),
 
         # Prevádzka / Miesto stavby
         "prevadzka": prevadzka,
         "preulica_a_cislo": preulica,
         "prepsc_mesto": prepsc_mesto,
+        "ciarka_preulica": _ciarka_ak(preulica),
         "parcely": _safe(lead_data.get('parcelne_cisla')),
 
         # Projekt
@@ -310,6 +332,16 @@ def _build_ctx(lead_data):
         "EIC": _safe(lead_data.get('eic')),
         "EIC1": _safe(lead_data.get('eic_dodavka')),
         "ISC": _safe(panel.get("ISC"), "15,15"),  # Make: 644.ISC = panel
+        # Trafostanica — voliteľné pole z CRM (zatiaľ nie je v customers/projects schéme);
+        # keď chýba, neutrálny text namiesto natvrdo vpísanej TS z cudzieho referenčného projektu.
+        "trafostanica": _safe(lead_data.get('trafostanica'), "TS podľa vyjadrenia PDS"),
+
+        # Per-obvod menič (revízna správa — tabuľka FA1/FA2/…): jednotlivé kusy, nie skupiny.
+        # Fallback na primárny menič, keď je obvodov viac než reálnych meničov (radšej správny typ než "—").
+        "oznacenie_menic_fa1": _menice_jednotlivo[0] if len(_menice_jednotlivo) > 0 else _safe(striedac.get("Type"), "menič"),
+        "oznacenie_menic_fa2": _menice_jednotlivo[1] if len(_menice_jednotlivo) > 1 else (_menice_jednotlivo[0] if _menice_jednotlivo else _safe(striedac.get("Type"), "menič")),
+        "oznacenie_menic_fa3": _menice_jednotlivo[2] if len(_menice_jednotlivo) > 2 else "",
+        "oznacenie_menic_fa4": _menice_jednotlivo[3] if len(_menice_jednotlivo) > 3 else "",
     }
 
     # ============================================================
