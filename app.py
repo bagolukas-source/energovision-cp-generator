@@ -6399,8 +6399,11 @@ def webhook_draft_email():
             body.get("target_type", "lead"),
             body["target_id"],
             body.get("purpose", "kontakt s klientom"),
-            body.get("employee_name", "Dominik Galaba"),
-            body.get("incoming_email"),
+            # bez mena podpisuje neutrálne "Energovision s.r.o." (žiadny hardcoded človek)
+            employee_name=body.get("employee_name") or "",
+            incoming_email=body.get("incoming_email"),
+            reply_to=body.get("reply_to"),
+            reply_to_name=body.get("reply_to_name"),
         )
         return jsonify({"status": "ok", **result})
     except Exception as e:
