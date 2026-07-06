@@ -809,11 +809,16 @@ body {
   display: flex;
   gap: 20pt;
 }
+.pick-metric {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
 .pick-metric-value {
   font-size: 16pt;
   font-weight: 800;
   color: #0F172A;
   letter-spacing: -0.01em;
+  white-space: nowrap;
 }
 .pick-metric-label {
   font-size: 8pt;
@@ -821,6 +826,7 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   margin-top: 2pt;
+  white-space: nowrap;
 }
 
 .variants-table .dominated-row td {

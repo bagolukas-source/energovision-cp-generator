@@ -1554,9 +1554,16 @@ def render_porovnanie(sb, analyza_id: str, variant_ids: list | None = None) -> d
     pick_npv["is_pick_npv"] = True
     same_winner = pick_npv["id"] == pick_payback["id"]
 
+    # Kód prípadu (napr. "P-26-322") žije len ako voľný text v názvoch variantov,
+    # nie ako vlastné pole na analyza_om — vytiahni ho odtiaľ, inak posudok_number, inak skratka id.
+    project_id = analyza.get("posudok_number") or f"AOM-{str(analyza_id)[:8]}"
+    code_match = next((re.match(r"^(P-\d{2}-\d{3})", (v.get("name") or "")) for v in picked if re.match(r"^(P-\d{2}-\d{3})", (v.get("name") or ""))), None)
+    if code_match:
+        project_id = code_match.group(1)
+
     context = {
         "project_name": analyza.get("name") or "Porovnanie ponúk",
-        "project_id": (analyza.get("name") or "AOM")[:24],
+        "project_id": project_id,
         "client_name": client_name,
         "site_address": analyza.get("om_address") or "—",
         "annual_kwh": float(analyza.get("consumption_annual_mwh") or 0) * 1000,
