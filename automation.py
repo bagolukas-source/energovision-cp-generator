@@ -187,15 +187,21 @@ Napíš profesionálny email v slovenčine.
 Pravidlá:
 - Slovenský jazyk, vykanie, zdvorilé ale stručné (3-5 viet)
 - Žiadne marketingové frázy, vecne
-- Vždy podpis: "S pozdravom,\\n{employee_name}\\nEnergovision s.r.o."
+- Vždy podpis presne podľa poľa "Podpis" v zadaní: "S pozdravom,\\n<Podpis>"
 - Ak follow-up: zmieň konkrétnu vec čo čakáš
+- NIKDY si nevymýšľaj fakty, prísľuby, termíny ani mená kolegov, ktoré nie sú
+  v zadaní — ak informáciu nemáš, formuluj neutrálne („ozveme sa s termínom")
+- Ak odpovedáš na prišlý mail, odpoveď adresuj jeho ODOSIELATEĽOVI (môže to byť
+  dodávateľ či subkontraktor, nie nutne zákazník projektu)
 
 Výstup IBA JSON: {"subject":"...", "body_text":"..."}"""
 
 
 def draft_email(supabase: Client, target_type: str, target_id: str,
-                purpose: str, employee_name: str = "Dominik Galaba",
-                incoming_email: Optional[str] = None) -> Dict[str, Any]:
+                purpose: str, employee_name: str = "",
+                incoming_email: Optional[str] = None,
+                reply_to: Optional[str] = None,
+                reply_to_name: Optional[str] = None) -> Dict[str, Any]:
 
     if target_type == "lead":
         ctx = build_context_lead(supabase, target_id)
@@ -211,16 +217,23 @@ def draft_email(supabase: Client, target_type: str, target_id: str,
     customer_email = customer.get("email") or customer.get("contact_email")
     customer_name = customer.get("company_name") or f"{customer.get('first_name','')} {customer.get('last_name','')}".strip()
 
+    podpis = f"{employee_name}\nEnergovision s.r.o." if employee_name else "Energovision s.r.o."
     parts = [
         f"Účel: {purpose}",
-        f"Zákazník: {customer_name}",
-        f"Email zákazníka: {customer_email or '—'}",
-        f"Podpis: {employee_name}",
+        f"Zákazník projektu: {customer_name}",
+        f"Podpis: {podpis}",
     ]
     if incoming_email:
-        parts.append(f"\nPrišiel mail od klienta:\n```\n{incoming_email[:2000]}\n```\nNapíš odpoveď.")
+        adresat = (f"{reply_to_name or ''} <{reply_to}>".strip() if reply_to
+                   else "odosielateľ pôvodného mailu")
+        parts.append(
+            f"\nOdpovedáš na tento prišlý mail (adresát odpovede: {adresat}):\n"
+            f"```\n{incoming_email[:2000]}\n```\n"
+            "Napíš odpoveď ODOSIELATEĽOVI tohto mailu."
+        )
     else:
         ctx_lite = {k: v for k, v in ctx.items() if k not in ('activities','solaredge_raw')}
+        parts.append(f"Email zákazníka: {customer_email or '—'}")
         parts.append(f"\nKontext: {json.dumps(ctx_lite, default=str, ensure_ascii=False)[:2500]}")
 
     resp = get_anthropic().messages.create(
@@ -237,11 +250,19 @@ def draft_email(supabase: Client, target_type: str, target_id: str,
         subject = f"Energovision — {purpose}"
         body = resp.content[0].text
 
+    # Odpoveď na prišlý mail patrí jeho ODOSIELATEĽOVI — nikdy nie automaticky
+    # zákazníkovi projektu (mail mohol prísť od dodávateľa/subkontraktora).
+    # Bez reply_to nechávame adresáta prázdneho — doplní ho človek pri kontrole.
+    if incoming_email:
+        to_list = [reply_to] if reply_to else []
+    else:
+        to_list = [customer_email] if customer_email else []
+
     row = {
         "target_type": target_type,
         "target_id": target_id,
         "workspace": ctx.get("workspace"),
-        "to_emails": [customer_email] if customer_email else [],
+        "to_emails": to_list,
         "subject": subject,
         "body_text": body,
         "ai_generated": True,
@@ -249,7 +270,7 @@ def draft_email(supabase: Client, target_type: str, target_id: str,
         "status": "draft",
     }
     ins = supabase.table("email_drafts").insert(row).execute()
-    return {"draft_id": (ins.data[0]["id"] if ins.data else None), "subject": subject, "body": body, "to": customer_email}
+    return {"draft_id": (ins.data[0]["id"] if ins.data else None), "subject": subject, "body": body, "to": (to_list[0] if to_list else None)}
 
 
 # =============================================
