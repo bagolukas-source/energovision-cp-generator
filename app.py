@@ -6964,6 +6964,26 @@ def webhook_aom_render_chocosuc():
     return jsonify({"ok": True, "pending": True, "message": "Posudok sa generuje na pozadí (~1-2 min)."})
 
 
+@app.route("/webhook/analyza-om-porovnanie", methods=["POST"])
+def webhook_aom_porovnanie():
+    """Porovnávací súhrn viacerých ponúk pre jedného klienta — branded PDF (WeasyPrint),
+    žiadny nový engine beh, len formátovanie existujúcich analyza_om_variants riadkov.
+    Body: { analyza_id, variant_ids?: [uuid, ...] } — bez variant_ids porovná všetky."""
+    if not _aom_v2:
+        return jsonify({"ok": False, "error": "analyza_om_v2 not loaded"}), 500
+    body = request.get_json(silent=True) or {}
+    aid = body.get("analyza_id")
+    if not aid:
+        return jsonify({"ok": False, "error": "analyza_id required"}), 400
+    variant_ids = body.get("variant_ids") or []
+    try:
+        result = _aom_v2.render_porovnanie(_sb(), aid, variant_ids)
+        return jsonify(result)
+    except Exception as e:
+        log.exception("[aom-porovnanie] failed")
+        return jsonify({"ok": False, "error": str(e)[:500]}), 500
+
+
 @app.route("/webhook/analyza-om-render-web", methods=["POST"])
 def analyza_om_render_web():
     """Pekny HTML posudok (Chart.js) -> verejny link + Chromium PDF."""

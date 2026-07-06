@@ -12,6 +12,16 @@ Brand farby:
 - Pozadie sekcií: #F5F6F8
 - Text primary: #1F2937
 """
-from .generator import generate_orkestra_pdf, render_orkestra_html
+from .generator import (
+    generate_orkestra_pdf,
+    render_orkestra_html,
+    generate_porovnanie_pdf,
+    render_porovnanie_html,
+)
 
-__all__ = ["generate_orkestra_pdf", "render_orkestra_html"]
+__all__ = [
+    "generate_orkestra_pdf",
+    "render_orkestra_html",
+    "generate_porovnanie_pdf",
+    "render_porovnanie_html",
+]
