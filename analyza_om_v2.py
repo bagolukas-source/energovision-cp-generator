@@ -1467,6 +1467,131 @@ def render_posudok_orkestra(sb, analyza_id: str) -> dict:
         "client": context.get("client_name", ""),
     }
 
+def _short_variant_label(name: str, client_name: str) -> str:
+    """Skráti dlhý názov variantu (napr. 'P-26-322 CIPI, s.r.o. SOLINTEG 535 kWp / 224 kWh exaktná ponuka')
+    na čitateľný chart/tabuľkový label ('SOLINTEG 535 kWp / 224 kWh')."""
+    s = (name or "Variant").strip()
+    prefix = re.compile(r"^P-\d{2}-\d{3}\s+" + re.escape(client_name or "") + r"\s*,?\s*", re.IGNORECASE)
+    s = prefix.sub("", s).strip()
+    s = re.sub(r"\s*exaktná ponuka\s*$", "", s, flags=re.IGNORECASE).strip()
+    if len(s) > 34:
+        s = s[:32].rstrip() + "…"
+    return s or "Variant"
+
+
+def _variant_dominates(a: dict, b: dict) -> bool:
+    """True ak varianta `a` dominuje variantu `b` — aspoň rovnako dobrá vo všetkom
+    (CAPEX nižší/rovnaký, NPV/IRR vyššie/rovnaké, návratnosť kratšia/rovnaká)
+    a v aspoň jednom ukazovateli prísne lepšia."""
+    at_least_as_good = (
+        a["capex_eur"] <= b["capex_eur"] and a["npv_eur"] >= b["npv_eur"]
+        and a["irr_pct"] >= b["irr_pct"] and a["payback_y"] <= b["payback_y"]
+    )
+    strictly_better = (
+        a["capex_eur"] < b["capex_eur"] or a["npv_eur"] > b["npv_eur"]
+        or a["irr_pct"] > b["irr_pct"] or a["payback_y"] < b["payback_y"]
+    )
+    return at_least_as_good and strictly_better
+
+
+def render_porovnanie(sb, analyza_id: str, variant_ids: list | None = None) -> dict:
+    """Porovnávací súhrn ponúk — rieši sťažnosť, že zákazník dostane viac samostatných
+    posudkov (napr. SOLINTEG/HUAWEI × s/bez BESS) a nevie sa v nich zorientovať.
+
+    Berie EXISTUJÚCE riadky z analyza_om_variants (žiadny nový engine beh) — formátuje
+    ich do 1 branded PDF s dominance-analýzou (ktoré ponuky sú vo všetkom horšie než iná
+    porovnávaná ponuka) a dvomi odporúčanými voľbami (najvyššie NPV / najrýchlejšia
+    návratnosť), presne v duchu Orkestra posudku (grafy, WeasyPrint, Energovision branding).
+    """
+    from posudok_orkestra import generate_porovnanie_pdf
+
+    a_res = sb.table("analyza_om").select(
+        "*, customers(first_name, last_name, company_name, email, ico)"
+    ).eq("id", analyza_id).single().execute()
+    analyza = a_res.data
+    if not analyza:
+        raise ValueError(f"Analyza {analyza_id} not found")
+
+    cust = analyza.get("customers") or {}
+    client_name = cust.get("company_name") or f"{cust.get('first_name') or ''} {cust.get('last_name') or ''}".strip() or analyza.get("name") or "Klient"
+
+    v_res = sb.table("analyza_om_variants").select("*").eq("analyza_id", analyza_id).order("position").execute()
+    all_variants = v_res.data or []
+    if variant_ids:
+        wanted = {str(x) for x in variant_ids}
+        picked = [v for v in all_variants if str(v.get("id")) in wanted]
+    else:
+        picked = all_variants
+    if len(picked) < 2:
+        raise ValueError("Potrebné aspoň 2 varianty na porovnanie")
+
+    selected_id = str(analyza.get("selected_variant_id") or "")
+
+    rows = []
+    for v in picked:
+        rows.append({
+            "id": str(v.get("id")),
+            "short_label": _short_variant_label(v.get("name"), client_name),
+            "pv_kwp": float(v.get("fve_kwp") or 0),
+            "bess_kwh": float(v.get("bess_kwh") or 0),
+            "capex_eur": float(v.get("capex_eur") or 0),
+            "npv_eur": float(v.get("result_npv_eur_base") or 0),
+            "irr_pct": float(v.get("result_irr_pct_base") or 0),
+            "payback_y": float(v.get("result_payback_y_base") or 0),
+            "is_selected": str(v.get("id")) == selected_id,
+            "dominated_by": None,
+        })
+
+    # Dominance — O(n²), n je vždy malé (pár desiatok variantov max)
+    for r in rows:
+        beater = next((o for o in rows if o["id"] != r["id"] and _variant_dominates(o, r)), None)
+        if beater:
+            r["dominated_by"] = beater["short_label"]
+
+    viable = [r for r in rows if not r["dominated_by"]]
+    pick_npv = max(viable, key=lambda r: r["npv_eur"])
+    pick_payback = min(viable, key=lambda r: r["payback_y"])
+    pick_npv["is_pick_npv"] = True
+    same_winner = pick_npv["id"] == pick_payback["id"]
+
+    context = {
+        "project_name": analyza.get("name") or "Porovnanie ponúk",
+        "project_id": (analyza.get("name") or "AOM")[:24],
+        "client_name": client_name,
+        "site_address": analyza.get("om_address") or "—",
+        "annual_kwh": float(analyza.get("consumption_annual_mwh") or 0) * 1000,
+        "peak_kw": float(analyza.get("consumption_peak_kw_15min") or 0),
+        "mrk_kw": float(analyza.get("om_mrk_kw") or 0),
+        "rows": rows,
+        "n_variants": len(rows),
+        "dominated_count": len(rows) - len(viable),
+        "viable_count": len(viable),
+        "same_winner": same_winner,
+        "pick_npv": pick_npv,
+        "pick_payback": pick_payback,
+    }
+
+    pdf_bytes = generate_porovnanie_pdf(context)
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    slug = re.sub(r"[^A-Za-z0-9]+", "_", client_name).strip("_")[:40] or "OM"
+    fname = f"Porovnanie_{slug}_{ts}.pdf"
+    pdf_path = f"analyza_om/{analyza_id}/{fname}"
+    sb.storage.from_("documents").upload(pdf_path, pdf_bytes, {"content-type": "application/pdf", "upsert": "true"})
+    pdf_url = sb.storage.from_("documents").get_public_url(pdf_path)
+
+    _record_doc(sb, analyza_id, "porovnanie_pdf", "Porovnávací súhrn (PDF)", fname, pdf_url, pdf_path, len(pdf_bytes) // 1024, None)
+
+    return {
+        "ok": True,
+        "pdf_url": pdf_url,
+        "size_kb": len(pdf_bytes) // 1024,
+        "n_variants": len(rows),
+        "dominated_count": len(rows) - len(viable),
+        "client": client_name,
+    }
+
+
 def _nominatim_geocode_psc(psc: str) -> dict | None:
     """Geocoduje SK PSČ cez OpenStreetMap Nominatim (free, no key).
     Vráti {lat, lon, city, region} alebo None pri chybe.

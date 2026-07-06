@@ -758,3 +758,108 @@ body {
 .ai-footer em {
   font-style: italic;
 }
+
+/* ============================================================================
+   POROVNÁVACÍ SÚHRN (viacero ponúk pre jedného klienta)
+   ============================================================================ */
+.finding-callout {
+  background: #F0FDF4;
+  border-left: 3pt solid #16A34A;
+  padding: 14pt 16pt;
+  border-radius: 0 6pt 6pt 0;
+  font-size: 10pt;
+  color: #1F2937;
+  line-height: 1.55;
+  margin-bottom: 20pt;
+}
+.finding-callout strong { color: #0F172A; font-weight: 700; }
+
+.pick-cards {
+  display: grid;
+  gap: 12pt;
+  margin-bottom: 20pt;
+}
+.pick-cards.two { grid-template-columns: 1fr 1fr; }
+.pick-card {
+  border: 1.5pt solid #E5E7EB;
+  border-radius: 8pt;
+  padding: 16pt 18pt;
+  background: #FFFFFF;
+}
+.pick-card.primary {
+  border-color: #16A34A;
+  background: #F0FDF4;
+}
+.pick-tag {
+  font-size: 8.5pt;
+  font-weight: 700;
+  color: #16A34A;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 6pt;
+}
+.pick-title {
+  font-size: 14pt;
+  font-weight: 800;
+  color: #0F172A;
+  margin-bottom: 12pt;
+  letter-spacing: -0.01em;
+}
+.pick-metrics {
+  display: flex;
+  gap: 20pt;
+}
+.pick-metric-value {
+  font-size: 16pt;
+  font-weight: 800;
+  color: #0F172A;
+  letter-spacing: -0.01em;
+}
+.pick-metric-label {
+  font-size: 8pt;
+  color: #6B7280;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-top: 2pt;
+}
+
+.variants-table .dominated-row td {
+  color: #9CA3AF;
+}
+.variants-table .dominated-row .variant-name { color: #6B7280; }
+.dominated-note {
+  display: block;
+  font-size: 7.5pt;
+  font-style: italic;
+  color: #9CA3AF;
+  margin-top: 2pt;
+  font-weight: 400;
+}
+.choice-col { text-align: center; }
+.choice-box {
+  display: inline-block;
+  width: 11pt;
+  height: 11pt;
+  border: 1.4pt solid #9CA3AF;
+  border-radius: 2pt;
+}
+
+.decision-block {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 28pt;
+  margin-top: 28pt;
+  padding-top: 18pt;
+  border-top: 1px solid #E5E7EB;
+}
+.decision-line {
+  border-bottom: 1px solid #9CA3AF;
+  height: 26pt;
+}
+.decision-caption {
+  font-size: 8pt;
+  color: #9CA3AF;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-top: 5pt;
+}

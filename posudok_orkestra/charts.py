@@ -330,3 +330,82 @@ def chart_upfront_costs(
     ax.yaxis.set_major_formatter(plt.FuncFormatter(fmt))
     ax.spines["bottom"].set_visible(False)
     return _save_svg(fig)
+
+
+# ============ CHART 7: POROVNANIE — CAPEX vs NPV (Porovnávací súhrn) ============
+def chart_capex_vs_npv(
+    names: list[str],
+    capex: list[float],
+    npv: list[float],
+    highlight_idx: Optional[int] = None,
+    dominated_mask: Optional[list[bool]] = None,
+    width_in: float = 9.5,
+    height_in: float = 4.6,
+) -> str:
+    """Zoskupené stĺpce CAPEX (vstup) vs NPV 20r (zisk) pre každú porovnávanú ponuku.
+    Dominované ponuky (horšie vo všetkom než iná ponuka v tomto porovnaní) sú stlmené sivou."""
+    n = len(names)
+    x = np.arange(n)
+    w = 0.36
+    dominated_mask = dominated_mask or [False] * n
+
+    fig, ax = plt.subplots(figsize=(width_in, height_in))
+    capex_colors = [COLOR_NEUTRAL if d else COLOR_GRID for d in dominated_mask]
+    npv_colors = [COLOR_NEUTRAL if d else COLOR_BATTERY for d in dominated_mask]
+    ax.bar(x - w / 2, capex, width=w, color=capex_colors, label="CAPEX (vstup)")
+    ax.bar(x + w / 2, npv, width=w, color=npv_colors, label="NPV 20 r (zisk)")
+
+    ax.set_xticks(x)
+    tick_labels = ax.set_xticklabels(names, fontsize=8.5, rotation=14, ha="right")
+    if highlight_idx is not None and 0 <= highlight_idx < n:
+        tick_labels[highlight_idx].set_fontweight("bold")
+        tick_labels[highlight_idx].set_color(COLOR_TEXT)
+    fig.subplots_adjust(bottom=0.22)
+
+    def fmt(y, _):
+        if abs(y) >= 1000:
+            return f"{y/1000:.0f}k€"
+        return f"{y:.0f}€"
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(fmt))
+    ax.legend(loc="upper right", frameon=False, fontsize=9)
+    ax.axhline(0, color=COLOR_AXIS, linewidth=0.8)
+    return _save_svg(fig)
+
+
+# ============ CHART 8: POROVNANIE — NÁVRATNOSŤ RANKING (Porovnávací súhrn) ============
+def chart_payback_ranking(
+    names: list[str],
+    payback: list[float],
+    highlight_idx: Optional[int] = None,
+    dominated_mask: Optional[list[bool]] = None,
+    width_in: float = 9.5,
+    height_in: float = 4.0,
+) -> str:
+    """Horizontálne stĺpce návratnosti (roky), zoradené od najrýchlejšej po najpomalšiu."""
+    n = len(names)
+    dominated_mask = dominated_mask or [False] * n
+    order = sorted(range(n), key=lambda i: payback[i] if payback[i] is not None else 1e9)
+    names_o = [names[i] for i in order]
+    payback_o = [payback[i] or 0 for i in order]
+    colors_o = []
+    for i in order:
+        if dominated_mask[i]:
+            colors_o.append(COLOR_NEUTRAL)
+        elif i == highlight_idx:
+            colors_o.append(COLOR_BATTERY)
+        else:
+            colors_o.append(COLOR_GRID)
+
+    fig, ax = plt.subplots(figsize=(width_in, height_in))
+    y = np.arange(n)
+    ax.barh(y, payback_o, color=colors_o, height=0.55)
+    ax.set_yticks(y)
+    ax.set_yticklabels(names_o, fontsize=8.5)
+    ax.invert_yaxis()  # najrýchlejšia hore
+    max_pb = max(payback_o) if payback_o else 1
+    for yi, v in zip(y, payback_o):
+        ax.text(v + max_pb * 0.015, yi, f"{v:.1f} r", va="center", fontsize=8.5, color=COLOR_TEXT)
+    ax.set_xlabel("Návratnosť (roky) — kratšia je lepšia", fontsize=9, color=COLOR_TEXT)
+    ax.spines["left"].set_visible(False)
+    ax.tick_params(left=False)
+    return _save_svg(fig)

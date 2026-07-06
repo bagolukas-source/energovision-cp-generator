@@ -324,3 +324,74 @@ def generate_orkestra_pdf(context: dict[str, Any]) -> bytes:
     """Generate PDF bytes from context dict."""
     html_str = render_orkestra_html(context)
     return HTML(string=html_str, base_url=str(_TEMPLATES_DIR)).write_pdf()
+
+
+# ============ POROVNÁVACÍ SÚHRN (viacero ponúk pre jedného klienta) ============
+def _build_porovnanie_context(user_ctx: dict[str, Any]) -> dict[str, Any]:
+    """Merge user context (rows už majú dominated_by dopočítané) + vygeneruje porovnávacie grafy."""
+    c: dict[str, Any] = {
+        "project_name": "Porovnanie ponúk",
+        "project_id": "AOM-DEMO",
+        "client_name": "Klient",
+        "site_address": "—",
+        "posudok_date": datetime.now().strftime("%d.%m.%Y"),
+        "prepared_by_name": "Lukáš Bago",
+        "prepared_by_email": "lukas.bago@energovision.sk",
+        "prepared_by_phone": "0918 187 762",
+        "company_ico": "53 036 280",
+        "analysis_years": 20,
+        "annual_kwh": 0,
+        "peak_kw": 0,
+        "mrk_kw": 0,
+        "rows": [],
+        "n_variants": 0,
+        "dominated_count": 0,
+        "viable_count": 0,
+        "same_winner": False,
+        "pick_npv": {},
+        "pick_payback": {},
+    }
+    c.update(user_ctx)
+    c["logo_b64"] = _logo_b64()
+
+    rows = c["rows"]
+    names = [r["short_label"] for r in rows]
+    capex = [float(r.get("capex_eur") or 0) for r in rows]
+    npv = [float(r.get("npv_eur") or 0) for r in rows]
+    payback = [float(r.get("payback_y") or 0) for r in rows]
+    dominated_mask = [bool(r.get("dominated_by")) for r in rows]
+    highlight_idx = next((i for i, r in enumerate(rows) if r.get("is_pick_npv")), None)
+
+    try:
+        c["chart_capex_npv_svg"] = charts.chart_capex_vs_npv(
+            names=names, capex=capex, npv=npv,
+            highlight_idx=highlight_idx, dominated_mask=dominated_mask,
+        )
+    except Exception as e:
+        c["chart_capex_npv_svg"] = f"<p>Chart capex/npv error: {e}</p>"
+
+    try:
+        c["chart_payback_svg"] = charts.chart_payback_ranking(
+            names=names, payback=payback,
+            highlight_idx=highlight_idx, dominated_mask=dominated_mask,
+        )
+    except Exception as e:
+        c["chart_payback_svg"] = f"<p>Chart payback error: {e}</p>"
+
+    return c
+
+
+def render_porovnanie_html(context: dict[str, Any]) -> str:
+    """Render porovnávací súhrn HTML string (for debugging / preview)."""
+    env = _make_env()
+    template = env.get_template("porovnanie.html")
+    full_ctx = _build_porovnanie_context(context)
+    css_path = _TEMPLATES_DIR / "styles.css"
+    full_ctx["css"] = css_path.read_text(encoding="utf-8") if css_path.exists() else ""
+    return template.render(**full_ctx)
+
+
+def generate_porovnanie_pdf(context: dict[str, Any]) -> bytes:
+    """Generate porovnávací súhrn PDF bytes from context dict."""
+    html_str = render_porovnanie_html(context)
+    return HTML(string=html_str, base_url=str(_TEMPLATES_DIR)).write_pdf()

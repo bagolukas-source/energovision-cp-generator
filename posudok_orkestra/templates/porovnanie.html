@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+<meta charset="UTF-8">
+<title>{{ project_name }} — Porovnávací súhrn ponúk</title>
+<style>{{ css|safe }}</style>
+</head>
+<body>
+
+{# =========================================================================
+   PAGE 1 — COVER + K VECI + ODPORÚČANÉ VOĽBY
+   ========================================================================= #}
+<section class="page cover">
+  <header class="cover-header">
+    <img src="data:image/png;base64,{{ logo_b64 }}" alt="Energovision" class="logo">
+    <div class="cover-meta">
+      <div class="meta-label">Pripravené pre</div>
+      <div class="meta-value">{{ client_name }}</div>
+    </div>
+  </header>
+
+  <div class="cover-hero" style="border-bottom:none; padding-bottom:0;">
+    <div class="cover-eyebrow">Porovnávací súhrn ponúk</div>
+    <h1 class="cover-title">{{ project_name }}</h1>
+    <p class="cover-subtitle">{{ n_variants }} porovnávaných ponúk{% if site_address and site_address != '—' %} · {{ site_address }}{% endif %} · ročná spotreba {{ (annual_kwh/1000)|round|int }} MWh, špička {{ peak_kw|round|int }} kW, MRK {{ mrk_kw|round|int }} kW</p>
+  </div>
+
+  {% if dominated_count > 0 %}
+  <div class="finding-callout">
+    <strong>K veci.</strong> Z {{ n_variants }} predložených ponúk {% if dominated_count == 1 %}je <strong>1 ponuka</strong>{% else %}sú <strong>{{ dominated_count }} ponuky</strong>{% endif %} vo všetkých ukazovateľoch (CAPEX, NPV, IRR, návratnosť) horšia než iná ponuka v tomto porovnaní — reálna voľba je medzi zvyšnými {{ viable_count }}.
+  </div>
+  {% endif %}
+
+  <h3 class="section-label">{% if same_winner %}Odporúčaná voľba{% else %}Dve rozumné voľby{% endif %}</h3>
+  <div class="pick-cards {% if same_winner %}one{% else %}two{% endif %}">
+    <div class="pick-card primary">
+      <div class="pick-tag">Najvyšší zisk (NPV){% if pick_npv.is_selected %} · aktuálne vybrané{% endif %}</div>
+      <div class="pick-title">{{ pick_npv.short_label }}</div>
+      <div class="pick-metrics">
+        <div><div class="pick-metric-value">{{ pick_npv.npv_eur|format_currency }}</div><div class="pick-metric-label">NPV</div></div>
+        <div><div class="pick-metric-value">{{ pick_npv.irr_pct|round(1) }} %</div><div class="pick-metric-label">IRR</div></div>
+        <div><div class="pick-metric-value">{{ pick_npv.payback_y|round(1) }} r</div><div class="pick-metric-label">Návratnosť</div></div>
+      </div>
+    </div>
+    {% if not same_winner %}
+    <div class="pick-card">
+      <div class="pick-tag">Najrýchlejšia návratnosť{% if pick_payback.is_selected %} · aktuálne vybrané{% endif %}</div>
+      <div class="pick-title">{{ pick_payback.short_label }}</div>
+      <div class="pick-metrics">
+        <div><div class="pick-metric-value">{{ pick_payback.npv_eur|format_currency }}</div><div class="pick-metric-label">NPV</div></div>
+        <div><div class="pick-metric-value">{{ pick_payback.irr_pct|round(1) }} %</div><div class="pick-metric-label">IRR</div></div>
+        <div><div class="pick-metric-value">{{ pick_payback.payback_y|round(1) }} r</div><div class="pick-metric-label">Návratnosť</div></div>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <footer class="cover-footer">
+    <div class="cover-footer-col">
+      <div class="meta-label">Vystavené</div>
+      <div class="meta-value">{{ posudok_date }}</div>
+    </div>
+    <div class="cover-footer-col">
+      <div class="meta-label">Pripravil</div>
+      <div class="meta-value">{{ prepared_by_name }}<br>{{ prepared_by_email }}<br>{{ prepared_by_phone }}</div>
+    </div>
+    <div class="cover-footer-col">
+      <div class="meta-label">Identifikátor</div>
+      <div class="meta-value">{{ project_id }}</div>
+    </div>
+  </footer>
+</section>
+
+{# =========================================================================
+   PAGE 2 — TABUĽKA + GRAFY
+   ========================================================================= #}
+<section class="page">
+  <h2 class="page-title">Všetky porovnávané ponuky</h2>
+  <p class="page-subtitle">{{ n_variants }} ponúk · dominované ponuky (šedé, kurzívou) nemajú za žiadnych preferencií zmysel vybrať</p>
+
+  <table class="variants-table">
+    <thead>
+      <tr>
+        <th>Variant</th>
+        <th class="num">FVE (DC)</th>
+        <th class="num">BESS</th>
+        <th class="num">CAPEX</th>
+        <th class="num">NPV 20r</th>
+        <th class="num">IRR</th>
+        <th class="num">Návratnosť</th>
+        <th class="choice-col">Voľba</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for v in rows %}
+      <tr class="{% if v.is_selected %}winner-row{% elif v.dominated_by %}dominated-row{% endif %}">
+        <td>
+          <span class="variant-name">{{ v.short_label }}</span>{% if v.is_selected %} <span class="winner-badge">VYBRANÉ</span>{% endif %}
+          {% if v.dominated_by %}<span class="dominated-note">Horšie vo všetkom než „{{ v.dominated_by }}"</span>{% endif %}
+        </td>
+        <td class="num">{{ v.pv_kwp|round|int }} kWp</td>
+        <td class="num">{% if v.bess_kwh %}{{ v.bess_kwh|round|int }} kWh{% else %}—{% endif %}</td>
+        <td class="num">{{ v.capex_eur|format_currency }}</td>
+        <td class="num">{{ v.npv_eur|format_currency }}</td>
+        <td class="num">{{ v.irr_pct|round(1) }} %</td>
+        <td class="num">{{ v.payback_y|round(1) }} r</td>
+        <td class="choice-col"><span class="choice-box"></span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="chart-card chart-card-full" style="margin-top:16pt;">
+    <div class="chart-title">CAPEX vs. NPV — vstup oproti zisku</div>
+    <div class="chart-sub">Modrá = vstupná investícia, zelená = čistý zisk za 20 rokov (súčasná hodnota). Šedá = dominovaná ponuka.</div>
+    {{ chart_capex_npv_svg|safe }}
+  </div>
+
+  <div class="chart-card chart-card-full">
+    <div class="chart-title">Návratnosť — od najrýchlejšej po najpomalšiu</div>
+    <div class="chart-sub">Zelená = odporúčaná ponuka (najvyššie NPV), šedá = dominovaná ponuka.</div>
+    {{ chart_payback_svg|safe }}
+  </div>
+</section>
+
+{# =========================================================================
+   PAGE 3 — AKO ČÍTAŤ + ROZHODNUTIE
+   ========================================================================= #}
+<section class="page">
+  <h2 class="page-title">Ako čítať toto porovnanie</h2>
+  <p class="page-subtitle">Vysvetlivky pojmov, bez odbornej finančnej terminológie</p>
+
+  <div class="methodology">
+    <p><strong>CAPEX</strong> — celková vstupná investícia bez DPH.</p>
+    <p><strong>NPV (čistá súčasná hodnota)</strong> — čistý zisk za {{ analysis_years }} rokov prevádzky, po odpočítaní investície, prepočítaný na dnešnú hodnotu peňazí. Vyššie číslo = viac peňazí v peňaženke za 20 rokov.</p>
+    <p><strong>IRR (vnútorná miera výnosu)</strong> — ročné zhodnotenie investície v percentách. Porovnaj s bežným bankovým úrokom alebo alternatívnou investíciou.</p>
+    <p><strong>Návratnosť</strong> — počet rokov, za ktoré sa investícia vráti z úspor na energii.</p>
+    <p><strong>BESS (batériové úložisko)</strong> — ochrana pred pokutou za prekročenie maximálnej rezervovanej kapacity (MRK) a výnos z obchodovania so spotovou cenou elektriny (arbitráž).</p>
+    <p><strong>Dominovaná ponuka</strong> — existuje iná porovnávaná ponuka, ktorá je súčasne lacnejšia aj výnosnejšia vo všetkých ukazovateľoch. Takú ponuku nemá zmysel vybrať za žiadnych preferencií.</p>
+  </div>
+
+  <div class="decision-block">
+    <div>
+      <div class="decision-line"></div>
+      <div class="decision-caption">Podpis zákazníka · vybraný variant</div>
+    </div>
+    <div>
+      <div class="decision-line"></div>
+      <div class="decision-caption">Dátum</div>
+    </div>
+  </div>
+
+  <div class="contact-card">
+    <h3>Kontakt</h3>
+    <p><strong>{{ prepared_by_name }}</strong><br>
+    {{ prepared_by_email }}<br>
+    {{ prepared_by_phone }}</p>
+    <p class="company-info">Energovision s.r.o. · IČO {{ company_ico }} · app.energovision.sk</p>
+  </div>
+  <div class="footer-disclaimer">
+    Porovnávací súhrn nahrádza samostatné technické posudky priložené k jednotlivým ponukám. Podrobný technický posudok k vybranému variantu je na vyžiadanie k dispozícii v plnom znení. Generated {{ posudok_date }}.
+  </div>
+</section>
+
+</body>
+</html>
