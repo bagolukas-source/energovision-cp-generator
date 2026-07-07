@@ -4,33 +4,100 @@
 <meta charset="UTF-8">
 <title>{{ project_name }} — Porovnávací súhrn ponúk</title>
 <style>{{ css|safe }}</style>
+<style>
+/* ===== Overrides len pre porovnávací súhrn — plynulý tok, žiadne nútené celé strany ===== */
+@page {
+  @bottom-center {
+    content: "Energovision · Porovnávací súhrn ponúk · " counter(page) " / " counter(pages);
+    font-size: 8pt;
+    color: #9CA3AF;
+    font-family: 'Inter', -apple-system, sans-serif;
+  }
+}
+.pv-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding-bottom: 12pt;
+  border-bottom: 1px solid #E5E7EB;
+  margin-bottom: 18pt;
+}
+.pv-header .logo { height: 26pt; width: auto; }
+.pv-title-block { margin-bottom: 14pt; }
+.pv-title {
+  font-size: 24pt;
+  font-weight: 800;
+  color: #0F172A;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  margin: 4pt 0 4pt;
+}
+.pv-subtitle { font-size: 10pt; color: #6B7280; }
+.pv-section { margin-bottom: 16pt; }
+.avoid-break { break-inside: avoid; page-break-inside: avoid; }
+.chart-card { break-inside: avoid; page-break-inside: avoid; }
+.pick-cards { margin-bottom: 0; }
+.pick-card { padding: 12pt 14pt; }
+.pick-title { font-size: 12.5pt; margin-bottom: 8pt; }
+.pick-metric-value { font-size: 14pt; }
+.variants-table td { padding: 8pt 8pt; }
+.pv-meta {
+  display: flex;
+  gap: 24pt;
+  padding: 10pt 0;
+  border-top: 1px solid #E5E7EB;
+  border-bottom: 1px solid #E5E7EB;
+  margin-bottom: 16pt;
+}
+.pv-meta-col { flex: 1; }
+.pv-legend { font-size: 9pt; }
+.pv-legend p { margin-bottom: 4pt; padding-left: 12pt; }
+.decision-block { margin-top: 18pt; padding-top: 12pt; }
+.contact-card { margin-top: 14pt; padding: 10pt 14pt; }
+.footer-disclaimer { margin-top: 10pt; }
+</style>
 </head>
 <body>
 
-{# =========================================================================
-   PAGE 1 — COVER + K VECI + ODPORÚČANÉ VOĽBY
-   ========================================================================= #}
-<section class="page cover">
-  <header class="cover-header">
-    <img src="data:image/png;base64,{{ logo_b64 }}" alt="Energovision" class="logo">
-    <div class="cover-meta">
-      <div class="meta-label">Pripravené pre</div>
-      <div class="meta-value">{{ client_name }}</div>
-    </div>
-  </header>
-
-  <div class="cover-hero" style="border-bottom:none; padding-bottom:0;">
-    <div class="cover-eyebrow">Porovnávací súhrn ponúk</div>
-    <h1 class="cover-title">{{ project_name }}</h1>
-    <p class="cover-subtitle">{{ n_variants }} porovnávaných ponúk{% if site_address and site_address != '—' %} · {{ site_address }}{% endif %} · ročná spotreba {{ (annual_kwh/1000)|round|int }} MWh, špička {{ peak_kw|round|int }} kW, MRK {{ mrk_kw|round|int }} kW</p>
+{# ===== HLAVIČKA + TITUL ===== #}
+<div class="pv-header">
+  <img src="data:image/png;base64,{{ logo_b64 }}" alt="Energovision" class="logo">
+  <div class="cover-meta">
+    <div class="meta-label">Pripravené pre</div>
+    <div class="meta-value">{{ client_name }}</div>
   </div>
+</div>
 
-  {% if dominated_count > 0 %}
-  <div class="finding-callout">
-    <strong>K veci.</strong> Z {{ n_variants }} predložených ponúk {% if dominated_count == 1 %}je <strong>1 ponuka</strong>{% else %}sú <strong>{{ dominated_count }} ponuky</strong>{% endif %} vo všetkých ukazovateľoch (CAPEX, NPV, IRR, návratnosť) horšia než iná ponuka v tomto porovnaní — reálna voľba je medzi zvyšnými {{ viable_count }}.
+<div class="pv-title-block">
+  <div class="cover-eyebrow">Porovnávací súhrn ponúk</div>
+  <h1 class="pv-title">{{ project_name }}</h1>
+  <p class="pv-subtitle">{{ n_variants }} porovnávaných ponúk · ročná spotreba {{ (annual_kwh/1000)|round|int }} MWh · špička {{ peak_kw|round|int }} kW · MRK {{ mrk_kw|round|int }} kW{% if site_address and site_address != '—' %} · {{ site_address }}{% endif %}</p>
+</div>
+
+<div class="pv-meta">
+  <div class="pv-meta-col">
+    <div class="meta-label">Vystavené</div>
+    <div class="meta-value">{{ posudok_date }}</div>
   </div>
-  {% endif %}
+  <div class="pv-meta-col">
+    <div class="meta-label">Pripravil</div>
+    <div class="meta-value">{{ prepared_by_name }} · {{ prepared_by_phone }}</div>
+  </div>
+  <div class="pv-meta-col">
+    <div class="meta-label">Identifikátor</div>
+    <div class="meta-value">{{ project_id }}</div>
+  </div>
+</div>
 
+{# ===== K VECI ===== #}
+{% if dominated_count > 0 %}
+<div class="finding-callout avoid-break pv-section">
+  <strong>K veci.</strong> Z {{ n_variants }} predložených ponúk {% if dominated_count == 1 %}je <strong>1 ponuka</strong>{% else %}sú <strong>{{ dominated_count }} ponuky</strong>{% endif %} vo všetkých ukazovateľoch (CAPEX, NPV, IRR, návratnosť) horšia než iná ponuka v tomto porovnaní — reálna voľba je medzi zvyšnými {{ viable_count }}.
+</div>
+{% endif %}
+
+{# ===== ODPORÚČANÉ VOĽBY ===== #}
+<div class="pv-section avoid-break">
   <h3 class="section-label">{% if same_winner %}Odporúčaná voľba{% else %}Dve rozumné voľby{% endif %}</h3>
   <div class="pick-cards {% if same_winner %}one{% else %}two{% endif %}">
     <div class="pick-card primary">
@@ -54,30 +121,11 @@
     </div>
     {% endif %}
   </div>
+</div>
 
-  <footer class="cover-footer">
-    <div class="cover-footer-col">
-      <div class="meta-label">Vystavené</div>
-      <div class="meta-value">{{ posudok_date }}</div>
-    </div>
-    <div class="cover-footer-col">
-      <div class="meta-label">Pripravil</div>
-      <div class="meta-value">{{ prepared_by_name }}<br>{{ prepared_by_email }}<br>{{ prepared_by_phone }}</div>
-    </div>
-    <div class="cover-footer-col">
-      <div class="meta-label">Identifikátor</div>
-      <div class="meta-value">{{ project_id }}</div>
-    </div>
-  </footer>
-</section>
-
-{# =========================================================================
-   PAGE 2 — TABUĽKA + GRAFY
-   ========================================================================= #}
-<section class="page">
-  <h2 class="page-title">Všetky porovnávané ponuky</h2>
-  <p class="page-subtitle">{{ n_variants }} ponúk · dominované ponuky (šedé, kurzívou) nemajú za žiadnych preferencií zmysel vybrať</p>
-
+{# ===== TABUĽKA ===== #}
+<div class="pv-section avoid-break">
+  <h3 class="section-label">Všetky porovnávané ponuky ({{ n_variants }})</h3>
   <table class="variants-table">
     <thead>
       <tr>
@@ -109,36 +157,36 @@
       {% endfor %}
     </tbody>
   </table>
+</div>
 
-  <div class="chart-card chart-card-full" style="margin-top:16pt;">
-    <div class="chart-title">CAPEX vs. NPV — vstup oproti zisku</div>
-    <div class="chart-sub">Modrá = vstupná investícia, zelená = čistý zisk za 20 rokov (súčasná hodnota). Šedá = dominovaná ponuka.</div>
-    {{ chart_capex_npv_svg|safe }}
-  </div>
+{# ===== GRAFY ===== #}
+<div class="chart-card chart-card-full pv-section">
+  <div class="chart-title">CAPEX vs. NPV — vstup oproti zisku</div>
+  <div class="chart-sub">Modrá = vstupná investícia, zelená = čistý zisk za 20 rokov (súčasná hodnota). Šedá = dominovaná ponuka.</div>
+  {{ chart_capex_npv_svg|safe }}
+</div>
 
-  <div class="chart-card chart-card-full">
-    <div class="chart-title">Návratnosť — od najrýchlejšej po najpomalšiu</div>
-    <div class="chart-sub">Zelená = odporúčaná ponuka (najvyššie NPV), šedá = dominovaná ponuka.</div>
-    {{ chart_payback_svg|safe }}
-  </div>
-</section>
+<div class="chart-card chart-card-full pv-section">
+  <div class="chart-title">Návratnosť — od najrýchlejšej po najpomalšiu</div>
+  <div class="chart-sub">Zelená = odporúčaná ponuka (najvyššie NPV), šedá = dominovaná ponuka.</div>
+  {{ chart_payback_svg|safe }}
+</div>
 
-{# =========================================================================
-   PAGE 3 — AKO ČÍTAŤ + ROZHODNUTIE
-   ========================================================================= #}
-<section class="page">
-  <h2 class="page-title">Ako čítať toto porovnanie</h2>
-  <p class="page-subtitle">Vysvetlivky pojmov, bez odbornej finančnej terminológie</p>
-
-  <div class="methodology">
+{# ===== AKO ČÍTAŤ ===== #}
+<div class="pv-section avoid-break">
+  <h3 class="section-label">Ako čítať toto porovnanie</h3>
+  <div class="methodology pv-legend">
     <p><strong>CAPEX</strong> — celková vstupná investícia bez DPH.</p>
-    <p><strong>NPV (čistá súčasná hodnota)</strong> — čistý zisk za {{ analysis_years }} rokov prevádzky, po odpočítaní investície, prepočítaný na dnešnú hodnotu peňazí. Vyššie číslo = viac peňazí v peňaženke za 20 rokov.</p>
-    <p><strong>IRR (vnútorná miera výnosu)</strong> — ročné zhodnotenie investície v percentách. Porovnaj s bežným bankovým úrokom alebo alternatívnou investíciou.</p>
+    <p><strong>NPV (čistá súčasná hodnota)</strong> — čistý zisk za {{ analysis_years }} rokov prevádzky, po odpočítaní investície, v dnešnej hodnote peňazí. Vyššie číslo = viac peňazí za 20 rokov.</p>
+    <p><strong>IRR (vnútorná miera výnosu)</strong> — ročné zhodnotenie investície v percentách; porovnaj s bankovým úrokom alebo alternatívnou investíciou.</p>
     <p><strong>Návratnosť</strong> — počet rokov, za ktoré sa investícia vráti z úspor na energii.</p>
-    <p><strong>BESS (batériové úložisko)</strong> — ochrana pred pokutou za prekročenie maximálnej rezervovanej kapacity (MRK) a výnos z obchodovania so spotovou cenou elektriny (arbitráž).</p>
-    <p><strong>Dominovaná ponuka</strong> — existuje iná porovnávaná ponuka, ktorá je súčasne lacnejšia aj výnosnejšia vo všetkých ukazovateľoch. Takú ponuku nemá zmysel vybrať za žiadnych preferencií.</p>
+    <p><strong>BESS (batériové úložisko)</strong> — ochrana pred pokutou za prekročenie MRK a výnos z obchodovania so spotovou cenou elektriny (arbitráž).</p>
+    <p><strong>Dominovaná ponuka</strong> — existuje iná porovnávaná ponuka, ktorá je súčasne lacnejšia aj výnosnejšia vo všetkých ukazovateľoch; nemá zmysel ju vybrať za žiadnych preferencií.</p>
   </div>
+</div>
 
+{# ===== ROZHODNUTIE + KONTAKT ===== #}
+<div class="avoid-break">
   <div class="decision-block">
     <div>
       <div class="decision-line"></div>
@@ -152,15 +200,13 @@
 
   <div class="contact-card">
     <h3>Kontakt</h3>
-    <p><strong>{{ prepared_by_name }}</strong><br>
-    {{ prepared_by_email }}<br>
-    {{ prepared_by_phone }}</p>
+    <p><strong>{{ prepared_by_name }}</strong> · {{ prepared_by_email }} · {{ prepared_by_phone }}</p>
     <p class="company-info">Energovision s.r.o. · IČO {{ company_ico }} · app.energovision.sk</p>
   </div>
   <div class="footer-disclaimer">
     Porovnávací súhrn nahrádza samostatné technické posudky priložené k jednotlivým ponukám. Podrobný technický posudok k vybranému variantu je na vyžiadanie k dispozícii v plnom znení. Generated {{ posudok_date }}.
   </div>
-</section>
+</div>
 
 </body>
 </html>
