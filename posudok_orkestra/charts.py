@@ -340,7 +340,7 @@ def chart_capex_vs_npv(
     highlight_idx: Optional[int] = None,
     dominated_mask: Optional[list[bool]] = None,
     width_in: float = 9.5,
-    height_in: float = 4.6,
+    height_in: float = 3.6,
 ) -> str:
     """Zoskupené stĺpce CAPEX (vstup) vs NPV 20r (zisk) pre každú porovnávanú ponuku.
     Dominované ponuky (horšie vo všetkom než iná ponuka v tomto porovnaní) sú stlmené sivou."""
@@ -350,6 +350,7 @@ def chart_capex_vs_npv(
     dominated_mask = dominated_mask or [False] * n
 
     fig, ax = plt.subplots(figsize=(width_in, height_in))
+    ax.set_axisbelow(True)
     capex_colors = [COLOR_NEUTRAL if d else COLOR_GRID for d in dominated_mask]
     npv_colors = [COLOR_NEUTRAL if d else COLOR_BATTERY for d in dominated_mask]
     ax.bar(x - w / 2, capex, width=w, color=capex_colors, label="CAPEX (vstup)")
@@ -379,7 +380,7 @@ def chart_payback_ranking(
     highlight_idx: Optional[int] = None,
     dominated_mask: Optional[list[bool]] = None,
     width_in: float = 9.5,
-    height_in: float = 4.0,
+    height_in: float = 2.9,
 ) -> str:
     """Horizontálne stĺpce návratnosti (roky), zoradené od najrýchlejšej po najpomalšiu."""
     n = len(names)
@@ -397,6 +398,9 @@ def chart_payback_ranking(
             colors_o.append(COLOR_GRID)
 
     fig, ax = plt.subplots(figsize=(width_in, height_in))
+    ax.set_axisbelow(True)
+    ax.grid(axis="x")
+    ax.grid(axis="y", visible=False)
     y = np.arange(n)
     ax.barh(y, payback_o, color=colors_o, height=0.55)
     ax.set_yticks(y)

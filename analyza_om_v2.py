@@ -1494,14 +1494,106 @@ def _variant_dominates(a: dict, b: dict) -> bool:
     return at_least_as_good and strictly_better
 
 
+def _porovnanie_fallback_assessments(rows: list, mrk_kw: float) -> list:
+    """Deterministické výhody/nevýhody per ponuka z čísel — fail-safe keď AI nejde.
+    Dokument NIKDY nesmie odísť s prázdnou sekciou hodnotenia."""
+    out = []
+    best_npv = max(r["npv_eur"] for r in rows)
+    best_pb = min(r["payback_y"] for r in rows if r["payback_y"] > 0)
+    lowest_capex = min(r["capex_eur"] for r in rows)
+    for r in rows:
+        pros, cons = [], []
+        if r["npv_eur"] >= best_npv - 1:
+            pros.append(f"Najvyšší čistý zisk za 20 rokov zo všetkých porovnávaných ponúk ({round(r['npv_eur']):,} €).".replace(",", " "))
+        if r["payback_y"] > 0 and r["payback_y"] <= best_pb + 0.05:
+            pros.append(f"Najrýchlejšia návratnosť v porovnaní ({r['payback_y']:.1f} roka).")
+        if r["capex_eur"] <= lowest_capex + 1:
+            pros.append(f"Najnižšia vstupná investícia ({round(r['capex_eur']):,} €).".replace(",", " "))
+        if r["bess_kwh"] > 0:
+            pros.append(f"Batéria {round(r['bess_kwh'])} kWh chráni pred prekročením MRK {round(mrk_kw)} kW a umožňuje arbitráž na spotovom trhu.")
+            cons.append("Vyššia vstupná investícia oproti variantu bez batérie a dodatočná technológia na údržbu.")
+        else:
+            pros.append("Jednoduchšie riešenie bez batériového úložiska — menej technológie, nižší CAPEX.")
+            cons.append(f"Bez ochrany pred prekročením MRK {round(mrk_kw)} kW a bez výnosu z arbitráže.")
+        if r["dominated_by"]:
+            cons.append(f"Vo všetkých ukazovateľoch horšia než „{r['dominated_by']}“ — nemá zmysel ju vybrať.")
+        if r["irr_pct"] and r["irr_pct"] == max(x["irr_pct"] for x in rows):
+            pros.append(f"Najvyššie ročné zhodnotenie investície (IRR {r['irr_pct']:.1f} %).")
+        out.append({"id": r["id"], "verdict": "", "pros": pros[:4], "cons": cons[:3]})
+    return out
+
+
+def _generate_porovnanie_ai(input_data: dict) -> dict:
+    """AI naratív pre porovnávací súhrn — Claude, grounded na dátach porovnania.
+    Rovnaký vzor ako _generate_ai_expert_commentary (fail-safe: prázdne defaults)."""
+    import json
+    try:
+        from anthropic import Anthropic
+        client = Anthropic()
+
+        system_prompt = (
+            "Si senior energetický konzultant Energovision (slovenský EPC dodávateľ FVE a batériových úložísk) "
+            "s 20+ rokmi praxe. Klient dostal viacero ponúk (rôzni výrobcovia, s batériou / bez batérie) a potrebuje "
+            "sa rozhodnúť. Píšeš porovnávací súhrn pre B2B klienta — vecne, data-first, klientovi vykáš.\n\n"
+            "TÓN (záväzne):\n"
+            "- Vecný, technický, dôveryhodný. Žiadne marketingové frázy, žiadne superlatívy.\n"
+            "- Každé tvrdenie = fakt + dôsledok. Argumentuj číslom z dát.\n"
+            "- Si nezávislý poradca, NIE predajca — kompromisy priznávaj otvorene.\n\n"
+            "GROUNDING (KRITICKÉ — dokument ide klientovi bez ľudskej kontroly):\n"
+            "- Používaj VÝHRADNE čísla z poslaného JSON. NEVYMÝŠĽAJ žiadnu hodnotu.\n"
+            "- Každé číslo v texte sa MUSÍ presne zhodovať s číslom z JSON.\n"
+            "- Neuvádzaj ceny komponentov, marže ani interné údaje.\n\n"
+            "VÝSTUP — striktný JSON (žiadny markdown, žiadne fences):\n"
+            "{\n"
+            "  \"executive_summary\": \"2-3 odseky HTML s <p> tagmi — charakter odberného miesta (spotreba, špička, MRK), čo porovnanie ponúk ukazuje a medzi čím sa klient reálne rozhoduje\",\n"
+            "  \"variant_assessments\": [{\"id\": \"...id z dát...\", \"verdict\": \"1 veta — pre koho/kedy má táto ponuka zmysel\", \"pros\": [\"2-4 konkrétne výhody s číslami\"], \"cons\": [\"2-3 konkrétne nevýhody s číslami\"]}, ... pre KAŽDÚ ponuku z dát],\n"
+            "  \"recommendation\": {\"title\": \"krátky titulok odporúčania\", \"detail\": \"2-4 vety HTML — ktorú ponuku odporúčaš a prečo (čísla!), a za akých preferencií dáva zmysel druhá voľba\"},\n"
+            "  \"technical_notes\": [{\"title\": \"...\", \"detail\": \"1-2 vety\"}, ... 3-5 technických faktov/dôsledkov relevantných pre TOTO odberné miesto (MRK vs špička, rola batérie, export, samospotreba)],\n"
+            "  \"open_questions\": [{\"title\": \"...\", \"detail\": \"prečo to overiť\"}, ... 3-5 otázok pred podpisom]\n"
+            "}"
+        )
+        msg = client.messages.create(
+            model="claude-sonnet-4-5-20250929",
+            max_tokens=4000,
+            temperature=0.3,
+            system=system_prompt,
+            messages=[{"role": "user", "content": f"Dáta porovnania ponúk:\n{json.dumps(input_data, ensure_ascii=False, indent=2)}\n\nVyrob porovnávací súhrn podľa štandardu Energovision."}],
+        )
+        text = msg.content[0].text.strip()
+        if text.startswith("```"):
+            lines = text.split("\n")[1:]
+            if lines and lines[-1].strip().startswith("```"):
+                lines = lines[:-1]
+            text = "\n".join(lines).strip()
+        if text.startswith("json"):
+            text = text[4:].strip()
+        result = json.loads(text)
+        return {
+            "ai_executive_summary": result.get("executive_summary", ""),
+            "ai_variant_assessments": result.get("variant_assessments", []),
+            "ai_recommendation": result.get("recommendation", {}),
+            "ai_technical_notes": result.get("technical_notes", []),
+            "ai_open_questions": result.get("open_questions", []),
+        }
+    except Exception as e:
+        logging.error(f"Porovnanie AI generation failed: {e}")
+        return {
+            "ai_executive_summary": "",
+            "ai_variant_assessments": [],
+            "ai_recommendation": {},
+            "ai_technical_notes": [],
+            "ai_open_questions": [],
+        }
+
+
 def render_porovnanie(sb, analyza_id: str, variant_ids: list | None = None) -> dict:
     """Porovnávací súhrn ponúk — rieši sťažnosť, že zákazník dostane viac samostatných
     posudkov (napr. SOLINTEG/HUAWEI × s/bez BESS) a nevie sa v nich zorientovať.
 
     Berie EXISTUJÚCE riadky z analyza_om_variants (žiadny nový engine beh) — formátuje
-    ich do 1 branded PDF s dominance-analýzou (ktoré ponuky sú vo všetkom horšie než iná
-    porovnávaná ponuka) a dvomi odporúčanými voľbami (najvyššie NPV / najrýchlejšia
-    návratnosť), presne v duchu Orkestra posudku (grafy, WeasyPrint, Energovision branding).
+    ich do 1 branded PDF s dominance-analýzou, AI naratívom (grounded, fail-safe fallback),
+    výhodami/nevýhodami per ponuka, technickými faktami a odporúčaním — v duchu Orkestra
+    posudku (grafy, WeasyPrint, Energovision branding).
     """
     from posudok_orkestra import generate_porovnanie_pdf
 
@@ -1529,15 +1621,24 @@ def render_porovnanie(sb, analyza_id: str, variant_ids: list | None = None) -> d
 
     rows = []
     for v in picked:
+        capex = float(v.get("capex_eur") or 0)
+        payback = float(v.get("result_payback_y_base") or 0)
         rows.append({
             "id": str(v.get("id")),
             "short_label": _short_variant_label(v.get("name"), client_name),
             "pv_kwp": float(v.get("fve_kwp") or 0),
             "bess_kwh": float(v.get("bess_kwh") or 0),
-            "capex_eur": float(v.get("capex_eur") or 0),
+            "bess_kw": float(v.get("bess_kw") or 0),
+            "capex_eur": capex,
             "npv_eur": float(v.get("result_npv_eur_base") or 0),
             "irr_pct": float(v.get("result_irr_pct_base") or 0),
-            "payback_y": float(v.get("result_payback_y_base") or 0),
+            "payback_y": payback,
+            "samosp_pct": float(v.get("result_samosp_pct") or 0),
+            "samostat_pct": float(v.get("result_samostat_pct") or 0),
+            "vyroba_mwh": float(v.get("result_vyroba_mwh") or 0),
+            "export_mwh": float(v.get("result_export_mwh") or 0),
+            "import_mwh": float(v.get("result_import_mwh") or 0),
+            "annual_saving_eur": (capex / payback) if payback > 0 else 0,
             "is_selected": str(v.get("id")) == selected_id,
             "dominated_by": None,
         })
@@ -1561,14 +1662,23 @@ def render_porovnanie(sb, analyza_id: str, variant_ids: list | None = None) -> d
     if code_match:
         project_id = code_match.group(1)
 
+    annual_mwh = float(analyza.get("consumption_annual_mwh") or 0)
+    peak_kw = float(analyza.get("consumption_peak_kw_15min") or 0)
+    mrk_kw = float(analyza.get("om_mrk_kw") or 0)
+    tarif_buy = float(analyza.get("tarif_buy") or 0)
+    tarif_sell = float(analyza.get("tarif_sell") or 0)
+
     context = {
         "project_name": analyza.get("name") or "Porovnanie ponúk",
         "project_id": project_id,
         "client_name": client_name,
         "site_address": analyza.get("om_address") or "—",
-        "annual_kwh": float(analyza.get("consumption_annual_mwh") or 0) * 1000,
-        "peak_kw": float(analyza.get("consumption_peak_kw_15min") or 0),
-        "mrk_kw": float(analyza.get("om_mrk_kw") or 0),
+        "annual_kwh": annual_mwh * 1000,
+        "peak_kw": peak_kw,
+        "mrk_kw": mrk_kw,
+        "tarif_buy": tarif_buy,
+        "tarif_sell": tarif_sell,
+        "max_export_kw": float(analyza.get("max_export_kw") or 0),
         "rows": rows,
         "n_variants": len(rows),
         "dominated_count": len(rows) - len(viable),
@@ -1577,6 +1687,63 @@ def render_porovnanie(sb, analyza_id: str, variant_ids: list | None = None) -> d
         "pick_npv": pick_npv,
         "pick_payback": pick_payback,
     }
+
+    # === AI naratív (grounded na dátach porovnania; fail-safe deterministický fallback) ===
+    ai_input = {
+        "klient": client_name,
+        "odberne_miesto": {
+            "rocna_spotreba_mwh": round(annual_mwh, 1),
+            "spicka_odberu_kw_15min": round(peak_kw),
+            "mrk_kw": round(mrk_kw),
+            "spicka_prekracuje_mrk": peak_kw > mrk_kw > 0,
+            "tarif_nakup_eur_kwh": tarif_buy,
+            "tarif_vykup_eur_kwh": tarif_sell,
+        },
+        "ponuky": [
+            {
+                "id": r["id"],
+                "nazov": r["short_label"],
+                "fve_kwp": round(r["pv_kwp"]),
+                "bess_kwh": round(r["bess_kwh"]),
+                "bess_kw": round(r["bess_kw"], 1),
+                "capex_eur": round(r["capex_eur"]),
+                "npv_20r_eur": round(r["npv_eur"]),
+                "irr_pct": round(r["irr_pct"], 1),
+                "payback_y": round(r["payback_y"], 1),
+                "samospotreba_pct": round(r["samosp_pct"], 1),
+                "rocna_vyroba_mwh": round(r["vyroba_mwh"], 1),
+                "export_mwh": round(r["export_mwh"], 1),
+                "odhad_rocnej_uspory_eur": round(r["annual_saving_eur"]),
+                "aktualne_vybrane": r["is_selected"],
+                "dominovana_horsou_ponukou": r["dominated_by"],
+            } for r in rows
+        ],
+        "odporucane": {
+            "najvyssie_npv": pick_npv["short_label"],
+            "najrychlejsia_navratnost": pick_payback["short_label"],
+        },
+    }
+    ai = _generate_porovnanie_ai(ai_input)
+    context.update(ai)
+    # Fallback: hodnotenia ponúk nikdy nesmú chýbať
+    if not context.get("ai_variant_assessments"):
+        context["ai_variant_assessments"] = _porovnanie_fallback_assessments(rows, mrk_kw)
+    # Namapuj hodnotenia na rows (template iteruje rows, hodnotenie hľadá podľa id)
+    assess_by_id = {str(a.get("id")): a for a in context["ai_variant_assessments"]}
+    for r in rows:
+        r["assessment"] = assess_by_id.get(r["id"]) or {}
+    if not context.get("ai_recommendation") or not context["ai_recommendation"].get("detail"):
+        if same_winner:
+            rec_detail = (f"Ponuka „{pick_npv['short_label']}“ má súčasne najvyšší čistý zisk za 20 rokov "
+                          f"({round(pick_npv['npv_eur']):,} €) aj najrýchlejšiu návratnosť ({pick_npv['payback_y']:.1f} r) — "
+                          f"jednoznačná voľba v tomto porovnaní.").replace(",", " ")
+        else:
+            rec_detail = (f"Ponuka „{pick_npv['short_label']}“ prinesie za 20 rokov najvyšší čistý zisk "
+                          f"({round(pick_npv['npv_eur']):,} € pri návratnosti {pick_npv['payback_y']:.1f} r). "
+                          f"Ak preferujete nižšiu vstupnú investíciu a najrýchlejší návrat peňazí, zvoľte "
+                          f"„{pick_payback['short_label']}“ ({round(pick_payback['capex_eur']):,} €, návratnosť "
+                          f"{pick_payback['payback_y']:.1f} r).").replace(",", " ")
+        context["ai_recommendation"] = {"title": "Odporúčanie Energovision", "detail": rec_detail}
 
     pdf_bytes = generate_porovnanie_pdf(context)
 
