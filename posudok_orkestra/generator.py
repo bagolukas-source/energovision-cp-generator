@@ -361,7 +361,12 @@ def _build_porovnanie_context(user_ctx: dict[str, Any]) -> dict[str, Any]:
         "ai_open_questions": [],
     }
     c.update(user_ctx)
-    c["logo_b64"] = _logo_b64()
+    # Čisté logo (energovision_logo.png) — nie hlavičkový papier s drobnými kontaktmi
+    # (energovision_header.png), ktorý je v malej hlavičke nečitateľný.
+    clean_logo = _HERE.parent / "energovision_logo.png"
+    c["logo_b64"] = (
+        base64.b64encode(clean_logo.read_bytes()).decode("ascii") if clean_logo.exists() else _logo_b64()
+    )
 
     rows = c["rows"]
     names = [r["short_label"] for r in rows]
