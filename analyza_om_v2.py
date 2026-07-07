@@ -1543,31 +1543,63 @@ def _generate_porovnanie_ai(input_data: dict) -> dict:
             "- Používaj VÝHRADNE čísla z poslaného JSON. NEVYMÝŠĽAJ žiadnu hodnotu.\n"
             "- Každé číslo v texte sa MUSÍ presne zhodovať s číslom z JSON.\n"
             "- Neuvádzaj ceny komponentov, marže ani interné údaje.\n\n"
-            "VÝSTUP — striktný JSON (žiadny markdown, žiadne fences):\n"
-            "{\n"
-            "  \"executive_summary\": \"2-3 odseky HTML s <p> tagmi — charakter odberného miesta (spotreba, špička, MRK), čo porovnanie ponúk ukazuje a medzi čím sa klient reálne rozhoduje\",\n"
-            "  \"variant_assessments\": [{\"id\": \"...id z dát...\", \"verdict\": \"1 veta — pre koho/kedy má táto ponuka zmysel\", \"pros\": [\"2-4 konkrétne výhody s číslami\"], \"cons\": [\"2-3 konkrétne nevýhody s číslami\"]}, ... pre KAŽDÚ ponuku z dát],\n"
-            "  \"recommendation\": {\"title\": \"krátky titulok odporúčania\", \"detail\": \"2-4 vety HTML — ktorú ponuku odporúčaš a prečo (čísla!), a za akých preferencií dáva zmysel druhá voľba\"},\n"
-            "  \"technical_notes\": [{\"title\": \"...\", \"detail\": \"1-2 vety\"}, ... 3-5 technických faktov/dôsledkov relevantných pre TOTO odberné miesto (MRK vs špička, rola batérie, export, samospotreba)],\n"
-            "  \"open_questions\": [{\"title\": \"...\", \"detail\": \"prečo to overiť\"}, ... 3-5 otázok pred podpisom]\n"
-            "}"
+            "Výstup odovzdaj VÝHRADNE volaním nástroja porovnanie_report."
         )
+        # Vynútený tool-use — SDK vráti hotový dict (žiadne parsovanie textu,
+        # ktoré padalo na neescapovanej úvodzovke v slovenskom texte).
+        report_tool = {
+            "name": "porovnanie_report",
+            "description": "Odovzdá hotový porovnávací súhrn ponúk.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "executive_summary": {"type": "string", "description": "2-3 odseky HTML s <p> tagmi — charakter odberného miesta (spotreba, špička, MRK), čo porovnanie ukazuje a medzi čím sa klient reálne rozhoduje"},
+                    "variant_assessments": {
+                        "type": "array",
+                        "description": "Hodnotenie pre KAŽDÚ ponuku z dát",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string", "description": "id ponuky z dát"},
+                                "verdict": {"type": "string", "description": "1 veta — pre koho/kedy má táto ponuka zmysel"},
+                                "pros": {"type": "array", "items": {"type": "string"}, "description": "2-4 konkrétne výhody s číslami"},
+                                "cons": {"type": "array", "items": {"type": "string"}, "description": "2-3 konkrétne nevýhody s číslami"},
+                            },
+                            "required": ["id", "verdict", "pros", "cons"],
+                        },
+                    },
+                    "recommendation": {
+                        "type": "object",
+                        "properties": {
+                            "title": {"type": "string", "description": "krátky titulok odporúčania"},
+                            "detail": {"type": "string", "description": "2-4 vety HTML — ktorú ponuku a prečo (čísla!), a kedy dáva zmysel druhá voľba"},
+                        },
+                        "required": ["title", "detail"],
+                    },
+                    "technical_notes": {
+                        "type": "array",
+                        "description": "3-5 technických faktov/dôsledkov pre TOTO odberné miesto (MRK vs špička, rola batérie, export, samospotreba)",
+                        "items": {"type": "object", "properties": {"title": {"type": "string"}, "detail": {"type": "string"}}, "required": ["title", "detail"]},
+                    },
+                    "open_questions": {
+                        "type": "array",
+                        "description": "3-5 otázok pred podpisom",
+                        "items": {"type": "object", "properties": {"title": {"type": "string"}, "detail": {"type": "string"}}, "required": ["title", "detail"]},
+                    },
+                },
+                "required": ["executive_summary", "variant_assessments", "recommendation", "technical_notes", "open_questions"],
+            },
+        }
         msg = client.messages.create(
             model="claude-sonnet-4-5-20250929",
             max_tokens=4000,
             temperature=0.3,
             system=system_prompt,
+            tools=[report_tool],
+            tool_choice={"type": "tool", "name": "porovnanie_report"},
             messages=[{"role": "user", "content": f"Dáta porovnania ponúk:\n{json.dumps(input_data, ensure_ascii=False, indent=2)}\n\nVyrob porovnávací súhrn podľa štandardu Energovision."}],
         )
-        text = msg.content[0].text.strip()
-        if text.startswith("```"):
-            lines = text.split("\n")[1:]
-            if lines and lines[-1].strip().startswith("```"):
-                lines = lines[:-1]
-            text = "\n".join(lines).strip()
-        if text.startswith("json"):
-            text = text[4:].strip()
-        result = json.loads(text)
+        result = next(b.input for b in msg.content if b.type == "tool_use")
         return {
             "ai_executive_summary": result.get("executive_summary", ""),
             "ai_variant_assessments": result.get("variant_assessments", []),
