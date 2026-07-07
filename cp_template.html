@@ -358,6 +358,31 @@
     color: var(--green-dark); font-weight: 700;
   }
 
+  /* ===== BOM ROZPIS (transparentná ponuka) ===== */
+  .bom-table {
+    width: 100%; border-collapse: collapse; font-size: 9.5pt;
+    page-break-inside: auto;
+  }
+  .bom-table th {
+    text-align: left; font-size: 8pt; text-transform: uppercase; letter-spacing: 1px;
+    color: var(--gray); padding: 2mm 2mm; border-bottom: 1.5px solid var(--black);
+  }
+  .bom-table th.num, .bom-table td.num { text-align: right; white-space: nowrap; }
+  .bom-table td { padding: 1.6mm 2mm; border-bottom: 0.5px solid #ddd; color: #333; }
+  .bom-table tr.group td {
+    background: var(--green-bg); color: var(--green-dark);
+    font-weight: 700; font-size: 9pt; text-transform: uppercase; letter-spacing: 1px;
+    border-bottom: none;
+  }
+  .bom-table tr.subtotal td {
+    font-weight: 700; background: #f7f7f7; border-bottom: 1px solid #ccc;
+  }
+  .bom-table tr.total td {
+    font-weight: 700; font-size: 10.5pt; border-top: 2px solid var(--black);
+    border-bottom: none; padding-top: 2.5mm;
+  }
+  .bom-table tr.total.final td { color: var(--green-dark); font-size: 12pt; }
+
   /* ===== "PREČO MY" — rozšírená ===== */
   .why-row {
     display: table; width: 100%; margin-bottom: 5mm;
@@ -758,6 +783,50 @@
   <p class="lead-text">{{ navratnost_text | safe }}</p>
   <p class="lead-text" style="font-size: 10pt; color: var(--gray);">Detailné grafy návratnosti, mesačnej výroby a porovnania nákladov nájdete na ďalšej strane.</p>
 </div>
+
+{% if bom_rozpis %}
+<!-- ============ STRANA — DETAILNÝ ROZPIS MATERIÁLU A PRÁC ============ -->
+<div class="page">
+  <div class="page-header">
+    <div class="page-header-cell left">energo<span class="accent">vision</span></div>
+    <div class="page-header-cell right page-header-meta">
+      Cenová ponuka  ·  {{ cislo_ponuky }}  ·  {{ today }}
+    </div>
+  </div>
+
+  <div class="section-eyebrow">04  ·  Cena — detailný rozpis</div>
+  <h2 class="section-title">Z čoho sa cena skladá
+    <small>Kompletný rozpis materiálu, technológií a prác. Žiadne skryté položky — presne toto u Vás namontujeme.</small>
+  </h2>
+
+  <table class="bom-table">
+    <thead>
+      <tr>
+        <th>Položka</th>
+        <th class="num">Množstvo</th>
+        <th class="num">Cena bez DPH</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr class="group"><td colspan="3">Materiál a technológie</td></tr>
+      {% for i in bom_rozpis.material %}
+      <tr><td>{{ i.name }}</td><td class="num">{{ i.qty_txt }}</td><td class="num">{{ i.total_eur }}</td></tr>
+      {% endfor %}
+      <tr class="subtotal"><td colspan="2">Materiál a technológie spolu</td><td class="num">{{ bom_rozpis.material_spolu_eur }}</td></tr>
+
+      <tr class="group"><td colspan="3">Práca a služby</td></tr>
+      {% for i in bom_rozpis.praca %}
+      <tr><td>{{ i.name }}</td><td class="num">{{ i.qty_txt }}</td><td class="num">{{ i.total_eur }}</td></tr>
+      {% endfor %}
+      <tr class="subtotal"><td colspan="2">Práca a služby spolu</td><td class="num">{{ bom_rozpis.praca_spolu_eur }}</td></tr>
+
+      <tr class="total"><td colspan="2">Cena bez DPH</td><td class="num">{{ bom_rozpis.cena_bez_dph_eur }}</td></tr>
+      <tr><td colspan="2" style="border-bottom:none;">DPH 23 %</td><td class="num" style="border-bottom:none;">{{ bom_rozpis.dph_eur }}</td></tr>
+      <tr class="total final"><td colspan="2">Cena s DPH</td><td class="num">{{ bom_rozpis.cena_s_dph_eur }}</td></tr>
+    </tbody>
+  </table>
+</div>
+{% endif %}
 
 <!-- ============ STRANA 6 — GRAFY (3 spolu) ============ -->
 <div class="page">

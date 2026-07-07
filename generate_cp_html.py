@@ -256,7 +256,63 @@ def gen_copywriting(lead, konfig, ceny, navratnost):
     }
 
 
-def vyrob_html_pdf(lead, konfig, ceny, navratnost, grafy, out_pdf):
+def priprav_bom_rozpis(items, cena_bez_dph, cena_s_dph):
+    """Transparentný rozpis materiálu a prác pre PDF (feedback klientov 2026-07).
+
+    Vstup: sanitizovaný BOM z CRM — [{sku, name, qty, unit, total}] s PREDAJNÝMI cenami.
+    Položky sa škálujú koeficientom cena_bez_dph / Σtotal, aby súčet sedel presne
+    na cenu ponuky (rovnaká logika ako verejná stránka /b/[token] v CRM).
+    """
+    clean = []
+    for i in items or []:
+        try:
+            total = float(i.get("total") or 0)
+            if total < 0:
+                continue
+            clean.append({
+                "sku": str(i.get("sku") or ""),
+                "name": str(i.get("name") or ""),
+                "qty": float(i.get("qty") or 0),
+                "unit": str(i.get("unit") or "ks"),
+                "total": total,
+            })
+        except (TypeError, ValueError):
+            continue
+    if not clean or not cena_bez_dph or cena_bez_dph <= 0:
+        return None
+
+    suma = sum(i["total"] for i in clean)
+    k = cena_bez_dph / suma if suma > 0 else 1.0
+    for i in clean:
+        i["total"] = round(i["total"] * k, 2)
+    # Zvyšok po zaokrúhlení na najväčšiu položku, nech súčet sedí na cent
+    drift = round(cena_bez_dph - sum(i["total"] for i in clean), 2)
+    if abs(drift) >= 0.01:
+        max(clean, key=lambda i: i["total"])["total"] = round(
+            max(clean, key=lambda i: i["total"])["total"] + drift, 2)
+
+    def _qty_txt(i):
+        q = i["qty"]
+        q_txt = f"{q:g}".replace(".", ",")
+        return f"{q_txt} {i['unit']}"
+
+    def _rows(subset):
+        return [{"name": i["name"], "qty_txt": _qty_txt(i), "total_eur": fmt_eur(i["total"])} for i in subset]
+
+    praca = [i for i in clean if i["sku"].startswith("PRC")]
+    material = [i for i in clean if not i["sku"].startswith("PRC")]
+    return {
+        "material": _rows(material),
+        "praca": _rows(praca),
+        "material_spolu_eur": fmt_eur(sum(i["total"] for i in material)),
+        "praca_spolu_eur": fmt_eur(sum(i["total"] for i in praca)),
+        "cena_bez_dph_eur": fmt_eur(cena_bez_dph),
+        "dph_eur": fmt_eur(cena_s_dph - cena_bez_dph),
+        "cena_s_dph_eur": fmt_eur(cena_s_dph),
+    }
+
+
+def vyrob_html_pdf(lead, konfig, ceny, navratnost, grafy, out_pdf, bom_rozpis=None):
     from jinja2 import Environment, FileSystemLoader
     from weasyprint import HTML, CSS
 
@@ -330,6 +386,7 @@ def vyrob_html_pdf(lead, konfig, ceny, navratnost, grafy, out_pdf):
         "orientacia_text": orientacia_text,
         "rocna_faktura_eur": f"{lead['rocna_spotreba_kwh'] * lead.get('cena_el_eur_kwh', 0.16):,.0f}".replace(",", " "),
         "cena_el_sk": f"{lead.get('cena_el_eur_kwh', 0.16):.2f}".replace(".", ","),
+        "bom_rozpis": bom_rozpis,
         **cw,
     }
 
