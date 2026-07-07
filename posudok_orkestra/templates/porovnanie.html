@@ -37,9 +37,9 @@
       <div class="pick-tag">Najvyšší zisk (NPV){% if pick_npv.is_selected %} · aktuálne vybrané{% endif %}</div>
       <div class="pick-title">{{ pick_npv.short_label }}</div>
       <div class="pick-metrics">
-        <div><div class="pick-metric-value">{{ pick_npv.npv_eur|format_currency }}</div><div class="pick-metric-label">NPV</div></div>
-        <div><div class="pick-metric-value">{{ pick_npv.irr_pct|round(1) }} %</div><div class="pick-metric-label">IRR</div></div>
-        <div><div class="pick-metric-value">{{ pick_npv.payback_y|round(1) }} r</div><div class="pick-metric-label">Návratnosť</div></div>
+        <div class="pick-metric"><div class="pick-metric-value">{{ pick_npv.npv_eur|format_currency }}</div><div class="pick-metric-label">NPV</div></div>
+        <div class="pick-metric"><div class="pick-metric-value">{{ pick_npv.irr_pct|round(1) }} %</div><div class="pick-metric-label">IRR</div></div>
+        <div class="pick-metric"><div class="pick-metric-value">{{ pick_npv.payback_y|round(1) }} r</div><div class="pick-metric-label">Návratnosť</div></div>
       </div>
     </div>
     {% if not same_winner %}
@@ -47,9 +47,9 @@
       <div class="pick-tag">Najrýchlejšia návratnosť{% if pick_payback.is_selected %} · aktuálne vybrané{% endif %}</div>
       <div class="pick-title">{{ pick_payback.short_label }}</div>
       <div class="pick-metrics">
-        <div><div class="pick-metric-value">{{ pick_payback.npv_eur|format_currency }}</div><div class="pick-metric-label">NPV</div></div>
-        <div><div class="pick-metric-value">{{ pick_payback.irr_pct|round(1) }} %</div><div class="pick-metric-label">IRR</div></div>
-        <div><div class="pick-metric-value">{{ pick_payback.payback_y|round(1) }} r</div><div class="pick-metric-label">Návratnosť</div></div>
+        <div class="pick-metric"><div class="pick-metric-value">{{ pick_payback.npv_eur|format_currency }}</div><div class="pick-metric-label">NPV</div></div>
+        <div class="pick-metric"><div class="pick-metric-value">{{ pick_payback.irr_pct|round(1) }} %</div><div class="pick-metric-label">IRR</div></div>
+        <div class="pick-metric"><div class="pick-metric-value">{{ pick_payback.payback_y|round(1) }} r</div><div class="pick-metric-label">Návratnosť</div></div>
       </div>
     </div>
     {% endif %}
