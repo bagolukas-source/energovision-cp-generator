@@ -4476,6 +4476,18 @@ def _generate_pdf_supabase_impl():
 
     navratnost = vyrataj_navratnost(konfig, ceny, lead)
 
+    # === BOM ROZPIS (transparentná ponuka, feedback klientov 2026-07) ===
+    # CRM posiela sanitizovaný BOM (predajné ceny) → PDF dostane stranu
+    # "Detailný rozpis materiálu a prác". Bez BOM sa strana nevyrenderuje.
+    bom_rozpis = None
+    try:
+        bom_items = body.get("bom") or []
+        if bom_items:
+            from generate_cp_html import priprav_bom_rozpis
+            bom_rozpis = priprav_bom_rozpis(bom_items, ceny["cena_bez_dph"], ceny["cena_s_dph"])
+    except Exception as _bom_e:
+        log.warning(f"[generate-pdf-supabase] BOM rozpis preskočený: {_bom_e}")
+
     with tempfile.TemporaryDirectory() as tmpdir:
         priezvisko = safe_filename(lead["meno"].split()[-1])
         ev_id = lead.get("cislo_ponuky", f"EV-XX-001-{variant}")
@@ -4485,7 +4497,7 @@ def _generate_pdf_supabase_impl():
 
         grafy = vyrob_grafy(navratnost, lead, tmpdir, base)
         pdf_path = os.path.join(tmpdir, f"{base}.pdf")
-        vyrob_html_pdf(lead, konfig, ceny, navratnost, grafy, pdf_path)
+        vyrob_html_pdf(lead, konfig, ceny, navratnost, grafy, pdf_path, bom_rozpis=bom_rozpis)
         pdf_size = os.path.getsize(pdf_path)
 
         import base64
