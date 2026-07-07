@@ -343,6 +343,9 @@ def _build_porovnanie_context(user_ctx: dict[str, Any]) -> dict[str, Any]:
         "annual_kwh": 0,
         "peak_kw": 0,
         "mrk_kw": 0,
+        "tarif_buy": 0,
+        "tarif_sell": 0,
+        "max_export_kw": 0,
         "rows": [],
         "n_variants": 0,
         "dominated_count": 0,
@@ -350,6 +353,12 @@ def _build_porovnanie_context(user_ctx: dict[str, Any]) -> dict[str, Any]:
         "same_winner": False,
         "pick_npv": {},
         "pick_payback": {},
+        # AI naratív (fail-safe: prázdne = sekcia sa nezobrazí / použije sa fallback)
+        "ai_executive_summary": "",
+        "ai_variant_assessments": [],
+        "ai_recommendation": {},
+        "ai_technical_notes": [],
+        "ai_open_questions": [],
     }
     c.update(user_ctx)
     c["logo_b64"] = _logo_b64()

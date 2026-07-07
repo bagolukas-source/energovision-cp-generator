@@ -55,6 +55,56 @@
 .decision-block { margin-top: 18pt; padding-top: 12pt; }
 .contact-card { margin-top: 14pt; padding: 10pt 14pt; }
 .footer-disclaimer { margin-top: 10pt; }
+
+/* ===== Hodnotenie ponúk — výhody / nevýhody ===== */
+.assess-card {
+  border: 1px solid #E5E7EB;
+  border-radius: 6pt;
+  padding: 10pt 14pt;
+  margin-bottom: 8pt;
+  background: #FFFFFF;
+}
+.assess-card.assess-selected { border-color: #16A34A; background: #F0FDF4; }
+.assess-card.assess-dominated { background: #FAFAFA; }
+.assess-card.assess-dominated .assess-title,
+.assess-card.assess-dominated .assess-list li { color: #9CA3AF; }
+.assess-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8pt;
+  padding-bottom: 6pt;
+  border-bottom: 1px solid #F3F4F6;
+  margin-bottom: 6pt;
+}
+.assess-title { font-size: 11pt; font-weight: 700; color: #0F172A; }
+.assess-kpis { margin-left: auto; font-size: 8pt; color: #6B7280; white-space: nowrap; }
+.assess-dominated-tag {
+  font-size: 7.5pt; text-transform: uppercase; letter-spacing: 0.05em;
+  color: #9CA3AF; font-style: italic;
+}
+.assess-verdict { font-size: 9.5pt; color: #1F2937; margin: 0 0 6pt; }
+.assess-cols { display: flex; gap: 16pt; }
+.assess-col { flex: 1; }
+.assess-col-label {
+  font-size: 8pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+  margin-bottom: 3pt;
+}
+.assess-col-label.pros { color: #16A34A; }
+.assess-col-label.cons { color: #B45309; }
+.assess-list { list-style: none; padding: 0; margin: 0; font-size: 8.5pt; color: #374151; }
+.assess-list li { padding-left: 11pt; position: relative; margin-bottom: 2.5pt; line-height: 1.4; }
+.assess-list.pros li::before { content: "✓"; position: absolute; left: 0; color: #16A34A; font-weight: 700; }
+.assess-list.cons li::before { content: "✕"; position: absolute; left: 0; color: #B45309; font-weight: 700; }
+
+/* ===== Odporúčanie ===== */
+.recommendation-block {
+  background: linear-gradient(135deg, #F0FDF4 0%, #DCFCE7 100%);
+  border: 1.5pt solid #16A34A;
+  border-radius: 8pt;
+  padding: 14pt 18pt;
+}
+.recommendation-title { font-size: 12pt; font-weight: 800; color: #14532D; margin-bottom: 6pt; }
+.recommendation-detail { font-size: 10pt; color: #1F2937; line-height: 1.55; }
 </style>
 </head>
 <body>
@@ -93,6 +143,14 @@
 {% if dominated_count > 0 %}
 <div class="finding-callout avoid-break pv-section">
   <strong>K veci.</strong> Z {{ n_variants }} predložených ponúk {% if dominated_count == 1 %}je <strong>1 ponuka</strong>{% else %}sú <strong>{{ dominated_count }} ponuky</strong>{% endif %} vo všetkých ukazovateľoch (CAPEX, NPV, IRR, návratnosť) horšia než iná ponuka v tomto porovnaní — reálna voľba je medzi zvyšnými {{ viable_count }}.
+</div>
+{% endif %}
+
+{# ===== ZHRNUTIE SITUÁCIE (AI, grounded) ===== #}
+{% if ai_executive_summary %}
+<div class="pv-section avoid-break">
+  <h3 class="section-label">Zhrnutie situácie</h3>
+  <div class="ai-commentary">{{ ai_executive_summary|safe }}</div>
 </div>
 {% endif %}
 
@@ -171,6 +229,84 @@
   <div class="chart-sub">Zelená = odporúčaná ponuka (najvyššie NPV), šedá = dominovaná ponuka.</div>
   {{ chart_payback_svg|safe }}
 </div>
+
+{# ===== HODNOTENIE JEDNOTLIVÝCH PONÚK — výhody / nevýhody ===== #}
+<div class="pv-section">
+  <h3 class="section-label">Hodnotenie jednotlivých ponúk</h3>
+  {% for v in rows %}
+  <div class="assess-card avoid-break {% if v.is_selected %}assess-selected{% elif v.dominated_by %}assess-dominated{% endif %}">
+    <div class="assess-head">
+      <span class="assess-title">{{ v.short_label }}</span>
+      {% if v.is_selected %}<span class="winner-badge">VYBRANÉ</span>{% endif %}
+      {% if v.dominated_by %}<span class="assess-dominated-tag">dominovaná ponuka</span>{% endif %}
+      <span class="assess-kpis">{{ v.capex_eur|format_currency }} · NPV {{ v.npv_eur|format_currency }} · IRR {{ v.irr_pct|round(1) }} % · {{ v.payback_y|round(1) }} r</span>
+    </div>
+    {% if v.assessment.verdict %}<p class="assess-verdict">{{ v.assessment.verdict }}</p>{% endif %}
+    <div class="assess-cols">
+      <div class="assess-col">
+        <div class="assess-col-label pros">Výhody</div>
+        <ul class="assess-list pros">
+          {% for p in v.assessment.pros %}<li>{{ p }}</li>{% endfor %}
+        </ul>
+      </div>
+      <div class="assess-col">
+        <div class="assess-col-label cons">Nevýhody</div>
+        <ul class="assess-list cons">
+          {% for c in v.assessment.cons %}<li>{{ c }}</li>{% endfor %}
+        </ul>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{# ===== ODPORÚČANIE ===== #}
+{% if ai_recommendation and ai_recommendation.detail %}
+<div class="pv-section avoid-break">
+  <h3 class="section-label">Odporúčanie</h3>
+  <div class="recommendation-block">
+    <div class="recommendation-title">{{ ai_recommendation.title or "Odporúčanie Energovision" }}</div>
+    <div class="recommendation-detail">{{ ai_recommendation.detail|safe }}</div>
+  </div>
+</div>
+{% endif %}
+
+{# ===== TECHNICKÉ FAKTY ===== #}
+<div class="pv-section avoid-break">
+  <h3 class="section-label">Technické fakty o odbernom mieste</h3>
+  <table class="dotacia-table">
+    <tbody>
+      <tr><td>Ročná spotreba elektriny</td><td class="num">{{ (annual_kwh/1000)|round|int }} MWh</td></tr>
+      <tr><td>Špička odberu (15-min maximum)</td><td class="num">{{ peak_kw|round|int }} kW</td></tr>
+      <tr><td>Maximálna rezervovaná kapacita (MRK)</td><td class="num">{{ mrk_kw|round|int }} kW</td></tr>
+      {% if peak_kw > mrk_kw and mrk_kw > 0 %}<tr><td><strong>⚠ Špička odberu prekračuje MRK</strong> — riziko pokút od distribútora; batéria ho vie znížiť (peak shaving)</td><td class="num">+{{ (peak_kw - mrk_kw)|round|int }} kW</td></tr>{% endif %}
+      {% if tarif_buy %}<tr><td>Cena elektriny — nákup</td><td class="num">{{ tarif_buy|round(3) }} €/kWh</td></tr>{% endif %}
+      {% if tarif_sell %}<tr><td>Cena elektriny — výkup prebytkov</td><td class="num">{{ tarif_sell|round(3) }} €/kWh</td></tr>{% endif %}
+      {% if pick_npv.vyroba_mwh %}<tr><td>Ročná výroba FVE ({{ pick_npv.short_label }})</td><td class="num">{{ pick_npv.vyroba_mwh|round|int }} MWh</td></tr>{% endif %}
+      {% if pick_npv.samosp_pct %}<tr><td>Samospotreba vyrobenej elektriny</td><td class="num">{{ pick_npv.samosp_pct|round|int }} %</td></tr>{% endif %}
+      {% if pick_npv.export_mwh %}<tr><td>Ročný export prebytkov do siete</td><td class="num">{{ pick_npv.export_mwh|round|int }} MWh</td></tr>{% endif %}
+    </tbody>
+  </table>
+  {% if ai_technical_notes %}
+  <div class="methodology pv-legend" style="margin-top: 8pt;">
+    {% for t in ai_technical_notes %}
+    <p><strong>{{ t.title }}</strong> — {{ t.detail }}</p>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+
+{# ===== OTÁZKY PRED PODPISOM ===== #}
+{% if ai_open_questions %}
+<div class="pv-section avoid-break">
+  <h3 class="section-label">Čo si overiť pred rozhodnutím</h3>
+  <ol class="open-questions">
+    {% for q in ai_open_questions %}
+    <li><strong>{{ q.title }}</strong><div class="oq-detail">{{ q.detail }}</div></li>
+    {% endfor %}
+  </ol>
+</div>
+{% endif %}
 
 {# ===== AKO ČÍTAŤ ===== #}
 <div class="pv-section avoid-break">
