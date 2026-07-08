@@ -208,7 +208,10 @@ class RuleBasedEMS:
                     and self.bat.soc_kwh < self.bat.soc_max_kwh * self.bat.soh
                     and free_rk > 0.1
                     and allow_extra_cycles):
-                charge_grid = self.bat.charge(min(free_rk, self.bat.bess.power_kw_ac * dt_h), dt_h)
+                # audit: PV→BAT (P2b) a grid→BAT bežali ako dve nezávislé volania — PCS vedel
+                # v jednej hodine nabíjať 2× menovitým výkonom; grid charge dostane len zvyšok výkonu
+                _pcs_left_kwh = max(0.0, self.bat.bess.power_kw_ac * dt_h - pv_to_bat)
+                charge_grid = self.bat.charge(min(free_rk, _pcs_left_kwh), dt_h)
                 grid_to_bat = charge_grid.actual_charge_kwh
                 action = DispatchAction.CHARGE_GRID
 
@@ -386,8 +389,17 @@ class RuleBasedEMS:
         # MRK sa fakturuje z mesacneho 15-min maxima; baterka ho znizuje. Nie 200h pausal.
         _mrk_eur_kw_mes = float(self.tariff.mrk_kapacita_eur_mw_mes) / 1000.0
         _peak_sav = 0.0
+        # audit V: kapacitný poplatok sa platí zo ZAZMLUVNENEJ MRK — zníženie maxima, ktoré aj tak
+        # ostáva pod MRK, faktúru nezníži. Kredituj len redukciu NAD zazmluvnenú MRK (prekročenia),
+        # zvyšok prínosu vyžaduje zníženie zazmluvnenej MRK (obchodné rozhodnutie, nie automatická úspora).
+        _mrk_contract = float(getattr(self.site, "rk_kw", 0) or 0)  # rk_kw = zazmluvnený IMPORT (mrk_kw je v modeli export limit)
         for _m in _mon_max_load:
-            _red = max(0.0, _mon_max_load[_m] - _mon_max_net.get(_m, _mon_max_load[_m]))
+            _ml = _mon_max_load[_m]
+            _mn = _mon_max_net.get(_m, _ml)
+            if _mrk_contract > 0:
+                _red = max(0.0, _ml - max(_mn, _mrk_contract))
+            else:
+                _red = max(0.0, _ml - _mn)
             _peak_sav += _red * _mrk_eur_kw_mes
         summary.sav_peak_shaving_eur = _peak_sav
 
@@ -459,8 +471,10 @@ class RuleBasedEMS:
         eur_per_kwh_peak = (self.tariff.mrk_kapacita_eur_mw_mes * 12 / 1000) / peak_hours_per_year
         sav_peak = bat_to_load_peak_kwh * eur_per_kwh_peak
 
-        # 6) MRK export penalty avoidance (nová SK 2026)
-        sav_mrk_avoid = mrk_overflow_kwh * self.tariff.mrk_export_penalty_eur_kwh
+        # 6) MRK export penalty avoidance — audit V: clipnutá energia sa NIKDY neexportovala,
+        # takže žiadna pokuta nehrozila a "vyhnutá pokuta" je fantómový kredit; energia je len
+        # stratená (eviduje sa v mrk_overflow/curtailed bilancii). Žiadna úspora.
+        sav_mrk_avoid = 0.0
 
         return {
             "sav_solar_self_cons_eur": sav_solar,

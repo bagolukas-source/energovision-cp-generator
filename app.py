@@ -7247,7 +7247,8 @@ def webhook_aom_custom_variant():
             sb, aid, custom_input["name"], custom_input["fve_kwp"],
             custom_input["bess_kwh"], custom_input["bess_kw"],
             capex_per_kwp=custom_input.get("capex_per_kwp"),
-            capex_per_kwh_bess=custom_input.get("capex_per_kwh_bess"))
+            capex_per_kwh_bess=custom_input.get("capex_per_kwh_bess"),
+            capex_source="manual")  # audit: inak custom variant re-run zmaže
         if not result.get("ok"):
             return jsonify(result), 400
         return jsonify(result)

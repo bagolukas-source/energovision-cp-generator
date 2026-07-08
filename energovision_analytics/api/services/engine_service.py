@@ -25,6 +25,38 @@ from energovision_analytics.variants import VariantGenerator, pick_top_variants
 log = get_logger(__name__)
 
 
+def _calendar_align(load_kw, spot, ts, n_max: int = 8760):
+    """Zarovná load na kalendárny rok pred POZIČNÝM párovaním s PV a spotom.
+
+    PV sa simuluje vždy od 1. januára a spot CSV začína 1. januárom, ale nameraný
+    profil si drží reálny začiatok (distribučné exporty sú bežne rolling 12 mesiacov,
+    napr. jún→máj). Bez preusporiadania sa januárová výroba a januárové ceny lepia
+    na letnú spotrebu a celá ekonomika variantov je sezónne pomiešaná (audit K1).
+    Preusporiada load podľa (mesiac, deň, hodina) a index prepíše na generický
+    kalendárny rok — ročné sumy sa nemenia, mení sa len zarovnanie sezón.
+    """
+    n = min(len(load_kw), len(spot), n_max)
+    load_kw = np.asarray(load_kw)[:n]
+    spot = np.asarray(spot)[:n]
+    ts = ts[:n] if len(ts) > n else ts
+    if n < 8000:
+        # audit: kratšie CSV sa doteraz ticho anualizovalo bez stopy v logu
+        log.warning("[pipeline] load profil má len %d hodín (<8000) — výsledky sú extrapolácia, over vstupné CSV", n)
+    try:
+        _ts = pd.DatetimeIndex(ts)
+        if len(_ts) == n and n > 0:
+            if not (_ts[0].month == 1 and _ts[0].day == 1):
+                perm = np.lexsort((_ts.hour.to_numpy(), _ts.day.to_numpy(), _ts.month.to_numpy()))
+                load_kw = load_kw[perm]
+                log.warning("[pipeline] load profil začína %s (nie 1.1.) — preusporiadaný do kalendárneho poradia", _ts[0])
+            ts = pd.date_range("2025-01-01 00:00", periods=n, freq="1h")
+    except Exception:
+        log.exception("[pipeline] kalendárne zarovnanie load profilu zlyhalo — pokračujem pozične")
+        if len(ts) < n:
+            ts = pd.date_range("2025-01-01 00:00", periods=n, freq="1h")
+    return load_kw, spot, ts
+
+
 import os
 # engine/api/services/engine_service.py → engine/ je parents[2]
 ENGINE_ROOT = Path(__file__).resolve().parents[2]
@@ -158,12 +190,7 @@ def run_variants_pipeline(request_dict: dict, progress_cb=None) -> dict:
             if tariff_overrides.get("mrk_kapacita_eur_mw_mes") is not None:
                 ty.mrk_kapacita_eur_mw_mes = float(tariff_overrides["mrk_kapacita_eur_mw_mes"])
 
-    n = min(len(load_kw), len(spot), 8760)
-    load_kw = load_kw[:n]
-    spot = spot[:n]
-    ts = ts[:n] if len(ts) > n else ts
-    if len(ts) < n:
-        ts = pd.date_range("2025-01-01 00:00", periods=n, freq="1h")
+    load_kw, spot, ts = _calendar_align(load_kw, spot, ts)
     load_df = pd.DataFrame({"load_kw": load_kw}, index=ts)
 
     # 4. VariantGenerator
@@ -511,27 +538,39 @@ def export_variant_intervals(request_dict: dict, pv_kwp: float, bess_kwh: float,
                 _h = float(tov["ostatne_eur_mwh"]) / 2; ty.spotrebna_dan_eur_mwh = _h; ty.tss_eur_mwh = _h
             if tov.get("mrk_kapacita_eur_mw_mes") is not None: ty.mrk_kapacita_eur_mw_mes = float(tov["mrk_kapacita_eur_mw_mes"])
 
-    n = min(len(load_kw), len(spot), 8760)
-    load_kw = load_kw[:n]; spot = spot[:n]
-    ts = ts[:n] if len(ts) > n else ts
-    if len(ts) < n:
-        ts = pd.date_range("2025-01-01 00:00", periods=n, freq="1h")
+    load_kw, spot, ts = _calendar_align(load_kw, spot, ts)
     load_df = pd.DataFrame({"load_kw": load_kw}, index=ts)
     capex = request_dict.get("capex", {}); fin = request_dict.get("financial", {})
 
+    # audit: intervaly bežali s INOU konfiguráciou než matica (capex defaulty 800/480 vs 574/38000/318,
+    # chýbal bess_c_rate, ems_config, merchant, bess_mode) — dispatch v grafoch nesedel s variantom.
+    v = request_dict["variants"]
     gen = VariantGenerator(
         site=site, load_df=load_df, spot_eur_mwh=spot, timestamps=ts, tariff_engine=tariff_engine,
         pv_kwp_options=[pv_kwp], bess_kwh_options=[bess_kwh], ems_strategies=[ems_strategy],
-        pv_sklon=request_dict["variants"].get("pv_sklon", 25),
-        pv_azimut=request_dict["variants"].get("pv_azimut", 180),
-        pv_konfiguracia=request_dict["variants"].get("pv_konfiguracia", "2xP"),
-        capex_pv_eur_per_kwp=capex.get("capex_pv_eur_per_kwp", 800),
-        capex_bess_eur_per_kwh=capex.get("capex_bess_eur_per_kwh", 480),
+        pv_sklon=v.get("pv_sklon", 25),
+        pv_azimut=v.get("pv_azimut", 180),
+        pv_konfiguracia=v.get("pv_konfiguracia", "2xP"),
+        bess_c_rate=float(v.get("bess_c_rate", 0.5)),
+        capex_pv_eur_per_kwp=capex.get("capex_pv_eur_per_kwp", 574),
+        capex_pv_fixed_eur=capex.get("capex_pv_fixed_eur", 38000),
+        capex_bess_eur_per_kwh=capex.get("capex_bess_eur_per_kwh", 318),
         dppo_pct=fin.get("dppo_pct", 0.21), discount_rate=fin.get("discount_rate", 0.06),
         horizon_years=fin.get("horizon_years", 20), depr_years=fin.get("depr_years", 6),
+        count_battery_replacement=bool(fin.get("count_battery_replacement", False)),
         price_escalation_pct=fin.get("price_escalation_pct", 0.0), savings_coefficient=fin.get("savings_coefficient", 1.0),
         has_sufficient_profit=fin.get("has_sufficient_profit", True),
         export_price_eur_kwh=float(request_dict.get("export_price_eur_kwh") or 0.06),
+        merchant_mode=bool(v.get("merchant_mode", False)),
+        merchant_organizer_fee_pct=float(v.get("merchant_organizer_fee_pct", 15.0)),
+        merchant_imbalance_eur_mwh=float(v.get("merchant_imbalance_eur_mwh", 0.0)),
+        merchant_degradation_eur_mwh=float(v.get("merchant_degradation_eur_mwh", 0.0)),
+        merchant_revenue_share_pct=float(v.get("merchant_revenue_share_pct", 1.0)),
+        bess_mode=str(v.get("bess_mode", "SITE_SUPPORT_ONLY")),
+        ems_max_efc_per_year=(request_dict.get("ems_config") or {}).get("max_efc_per_year"),
+        ems_arb_min_spread_eur_mwh=(request_dict.get("ems_config") or {}).get("arb_min_spread_eur_mwh"),
+        ems_arb_band_pct=(request_dict.get("ems_config") or {}).get("arb_band_pct"),
+        pv_inverter_kw=v.get("pv_inverter_kw"),
     )
     r = gen.run_single(pv_kwp, bess_kwh, ems_strategy, keep_intervals=True)
 

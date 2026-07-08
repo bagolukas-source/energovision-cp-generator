@@ -285,9 +285,12 @@ def _build_request_from_analyza(analyza: dict, measured_block: dict = None) -> d
             "alebo v pripojovacej zmluve. Doplň ju v záložke Nastavenia (expert) → pole MRK, "
             "a potom spusti analýzu znova."
         )
-    sk_export_kw = float(analyza["max_export_kw"]) if analyza.get("max_export_kw") else sk_import_kw
+    # audit V: max_export_kw = 0 je legitímny stav (export zakázaný) — falsy check ho menil na import MRK
+    # a max(export, import) posúval export clip na zlú úroveň. Engine model už mrk>=rk nevynucuje.
+    _exp_raw = analyza.get("max_export_kw")
+    sk_export_kw = float(_exp_raw) if _exp_raw is not None else sk_import_kw
     engine_rk_kw = sk_import_kw
-    engine_mrk_kw = max(sk_export_kw, sk_import_kw)  # engine validates mrk >= rk
+    engine_mrk_kw = sk_export_kw  # v engine modeli mrk_kw = export limit
 
     req = {
         "site": {
@@ -461,45 +464,58 @@ Píš ako energetik radí klientovi pri káve, nie ako AI. Konkrétne čísla. E
         return {"error": str(e)[:200], "scenario_type": analyza.get("scenario_type")}
 
 
-def _bess_retrofit_delta(req_base: dict, fve_kwp: float, bess_kwh: float, bess_kw, capex_bess_total: float, baseline_cache: dict = None):
-    """Delta ekonomika retrofitu BESS k EXISTUJÚCEJ FVE (scenár pridanie_bess).
+def _retrofit_delta(req_base: dict, pv_a: float, bess_a: float, bess_kw_a, pv_b: float, bess_b: float,
+                    capex_pv_new: float, capex_bess_new: float, baseline_cache: dict = None):
+    """Delta ekonomika retrofitu: A = cieľový systém (CAPEX = len NOVÁ investícia),
+    B = existujúci systém (CAPEX 0). Metriky z rozdielového cashflowu A−B — existujúcim
+    aktívam sa nepripisujú ani náklady, ani úspory. Pokrýva pridanie_bess (B = FVE bez
+    batérie) aj rozsirenie_fve (B = existujúca FVE + existujúca BESS).
 
-    Dva behy engine: A = FVE+BESS (CAPEX = len batéria), B = FVE bez batérie (CAPEX 0).
-    Metriky z rozdielového cashflowu A−B — úspory existujúcej FVE sa investícii do batérie
-    NEpripisujú (predtým variant pripísal batérii NPV/úspory celého systému).
-    baseline_cache: dict na reuse behu B medzi variantmi s rovnakou FVE.
+    Dotácia je v OBOCH behoch vypnutá — schémy sú definované pre nové FVE/FVE+BESS
+    projekty a apply_dotacia by retrofitu fantómovo priznala Zelenú podnikom /
+    Modernizačný fond z capexu novej časti (audit V-dotácie).
+    Payback sa počíta z kumulatívneho delta cashflowu (konzistentné s NPV/IRR),
+    None ak sa investícia v horizonte nevráti.
+    baseline_cache: reuse behu B medzi variantmi s rovnakým (pv_b, bess_b).
     Vracia (variant_A_dict | None, metrics | None).
     """
     import copy as _copy
     from energovision_analytics.api.services.engine_service import run_variants_pipeline, build_run_variants_response
     from energovision_analytics.financial.metrics import compute_npv, compute_irr_robust
 
-    def _run_single(pv, bess, c_rate, cpb):
+    def _run_single(pv, bess, c_rate, cpk, cpb):
         rq = _copy.deepcopy(req_base)
         rq["variants"]["pv_kwp_options"] = [pv]
         rq["variants"]["bess_kwh_options"] = [bess]
         if c_rate:
             rq["variants"]["bess_c_rate"] = float(c_rate)
-        # existujúca FVE = nulová investícia; celý CAPEX nesie batéria cez €/kWh sadzbu
-        rq["capex"]["capex_pv_eur_per_kwp"] = 0.0
+        rq["capex"]["capex_pv_eur_per_kwp"] = float(cpk)
         rq["capex"]["capex_pv_fixed_eur"] = 0.0
         rq["capex"]["capex_bess_eur_per_kwh"] = float(cpb)
+        rq["dotacia"] = {"enabled": False}
         out = build_run_variants_response(run_variants_pipeline(rq))
         vs = out.get("variants") or []
         return vs[0] if vs else None
 
-    if bess_kwh <= 0:
+    if pv_a <= 0:
         return None, None
-    cpb = float(capex_bess_total) / bess_kwh
-    c_rate = (float(bess_kw) / bess_kwh) if bess_kw else None
-    vA = _run_single(fve_kwp, bess_kwh, c_rate, cpb)
-    _bkey = round(float(fve_kwp), 2)
+    # rozklad novej investície do engine sadzieb tak, aby capex_total_eur == presne nová investícia
+    cpk_a = (float(capex_pv_new) / pv_a) if pv_a > 0 else 0.0
+    cpb_a = (float(capex_bess_new) / bess_a) if bess_a > 0 else 0.0
+    c_rate = (float(bess_kw_a) / bess_a) if (bess_kw_a and bess_a > 0) else None
+    vA = _run_single(pv_a, bess_a, c_rate, cpk_a, cpb_a)
+    _bkey = (round(float(pv_b), 2), round(float(bess_b), 2))
     vB = (baseline_cache or {}).get(_bkey)
     if vB is None:
-        vB = _run_single(fve_kwp, 0.0, None, 0.0)
+        if pv_b > 0:
+            vB = _run_single(pv_b, bess_b, None, 0.0, 0.0)
+        else:
+            # žiadny existujúci systém → baseline je čistý odber zo siete: nulový variant
+            vB = {"cashflow_array": [], "saving_y1_eur": 0.0, "energy_flow": None, "value_streams": None,
+                  "grid_import_kwh": None, "pv_total_kwh": 0.0, "samospotreba_pct": 0.0}
         if baseline_cache is not None and vB is not None:
             baseline_cache[_bkey] = vB
-    if not vA or not vB:
+    if not vA or vB is None:
         return vA, None
     cfA = [float(x) for x in (vA.get("cashflow_array") or [])]
     cfB = [float(x) for x in (vB.get("cashflow_array") or [])]
@@ -511,12 +527,21 @@ def _bess_retrofit_delta(req_base: dict, fve_kwp: float, bess_kwh: float, bess_k
     delta_cf = [a - b for a, b in zip(cfA, cfB)]
     disc = float(((req_base.get("financial") or {}).get("discount_rate")) or 0.06)
     sav_delta = float(vA.get("saving_y1_eur") or 0) - float(vB.get("saving_y1_eur") or 0)
-    net_capex = float(vA.get("net_capex_eur") or capex_bess_total)
     _irr = compute_irr_robust(delta_cf)
+    # payback z kumulatívneho delta cashflowu — rovnaká báza ako NPV/IRR; predtým
+    # net_capex/sav_delta dávalo 0.0 pri zápornom prínose (vyzeralo ako okamžitá návratnosť)
+    payback = None
+    _cum = 0.0
+    for _y, _cf in enumerate(delta_cf):
+        _prev = _cum
+        _cum += _cf
+        if _y > 0 and _prev < 0 <= _cum and _cf > 0:
+            payback = (_y - 1) + (-_prev / _cf)
+            break
     return vA, {
         "npv_eur": float(compute_npv(delta_cf, disc)),
-        "irr_pct": float(_irr) * 100.0 if _irr is not None else 0.0,
-        "payback_y": (net_capex / sav_delta) if sav_delta > 0 else 0.0,
+        "irr_pct": float(_irr) * 100.0 if _irr is not None else None,
+        "payback_y": payback,
         "saving_y1_delta_eur": sav_delta,
         # pre patch full_response: UI grafy (cashflow, Účet, value streams) musia dostať delta pohľad
         "delta_cf": delta_cf,
@@ -529,6 +554,58 @@ def _bess_retrofit_delta(req_base: dict, fve_kwp: float, bess_kwh: float, bess_k
             "samospotreba_pct": vB.get("samospotreba_pct"),
         },
     }
+
+
+def _monthly_delta_scale(monthly: list, vs_full: dict, vs_delta: dict) -> list:
+    """Preškáluj mesačné € v monthly_summary na delta pohľad (audit: mesačný graf
+    ostával celosystémový v rozpore s delta value_streams). Energetické kWh polia
+    nechávam — fyzika systému sa retrofitom mení len cez batériu, € patria investícii."""
+    if not monthly or not vs_full or not vs_delta:
+        return monthly
+    def _ratio(k):
+        a = float(vs_full.get(k) or 0)
+        d = float(vs_delta.get(k) or 0)
+        return (d / a) if a else 0.0
+    r_s2l = _ratio("solar_self_consumption_eur")
+    r_exp = _ratio("solar_export_eur")
+    r_arb = _ratio("arbitrage_eur")
+    r_ps = _ratio("peak_shaving_eur")
+    out = []
+    for mm in monthly:
+        s2l = float(mm.get("solar_to_load_eur") or 0) * r_s2l
+        sexp = float(mm.get("solar_export_eur") or 0) * r_exp
+        arb = float(mm.get("arbitrage_eur") or 0) * r_arb
+        ps = float(mm.get("peak_shaving_eur") or 0) * r_ps
+        out.append({**mm, "solar_to_load_eur": s2l, "solar_export_eur": sexp,
+                    "arbitrage_eur": arb, "peak_shaving_eur": ps, "total_eur": s2l + sexp + arb + ps})
+    return out
+
+
+def _rebuild_top_picks(variants: list) -> list:
+    """Top picks z (delta-patchnutých) variantov — pôvodné top_picks sa počítali PRED
+    delta prepočtom a niesli celosystémové NPV (audit: econ_results.top_picks pred-delta)."""
+    val = [v for v in variants if v.get("npv_eur") is not None]
+    picks = []
+    if not val:
+        return picks
+    b = max(val, key=lambda v: float(v.get("npv_eur") or -1e18))
+    picks.append({"label": "Najvyššie NPV", "variant_id": b.get("variant_id"), "npv_eur": b.get("npv_eur")})
+    _irr = [v for v in val if v.get("irr_pct")]
+    if _irr:
+        b = max(_irr, key=lambda v: float(v.get("irr_pct") or -1e18))
+        picks.append({"label": "Najvyššie IRR", "variant_id": b.get("variant_id"), "npv_eur": b.get("npv_eur")})
+    _pb = [v for v in val if v.get("payback_simple_y") and 0 < float(v["payback_simple_y"]) < 99]
+    if _pb:
+        b = min(_pb, key=lambda v: float(v["payback_simple_y"]))
+        picks.append({"label": "Najrýchlejšia návratnosť", "variant_id": b.get("variant_id"), "npv_eur": b.get("npv_eur")})
+    return picks
+
+
+def _bess_retrofit_delta(req_base: dict, fve_kwp: float, bess_kwh: float, bess_kw, capex_bess_total: float, baseline_cache: dict = None):
+    """Spätná kompatibilita: delta pre pridanie_bess = _retrofit_delta s B = FVE bez batérie."""
+    if bess_kwh <= 0:
+        return None, None
+    return _retrofit_delta(req_base, fve_kwp, bess_kwh, bess_kw, fve_kwp, 0.0, 0.0, capex_bess_total, baseline_cache)
 
 
 def insert_variant_via_engine(sb, analyza_id: str, name: str, fve_kwp, bess_kwh, bess_kw=None, capex_per_kwp=None, capex_per_kwh_bess=None, capex_source: str = "engine_v095_quick", inverter_kw=None) -> dict:
@@ -547,13 +624,33 @@ def insert_variant_via_engine(sb, analyza_id: str, name: str, fve_kwp, bess_kwh,
         return {"ok": False, "error": "Variant cez engine vyžaduje FVE > 0 kWp"}
     req = _build_request_from_analyza(analyza, _measured_load_profile_block(sb, analyza))
     _scen = (analyza.get("scenario_type") or "").lower()
-    if _scen == "pridanie_bess" and bess_kwh > 0:
-        # Retrofit: zadaný CAPEX je LEN batéria; FVE existuje. Delta ekonomika A−B.
+    _exist_pv = float(analyza.get("existing_fve_kwp") or 0)
+    _exist_bess = float(analyza.get("existing_bess_kwh") or 0)
+    _rate_pv = float((req.get("capex") or {}).get("capex_pv_eur_per_kwp") or 574.0)
+    _rate_bess = float((req.get("capex") or {}).get("capex_bess_eur_per_kwh") or 318.0)
+    _is_retrofit = (_scen == "pridanie_bess" and bess_kwh > 0) or \
+                   (_scen == "rozsirenie_fve" and _exist_pv > 0 and (fve_kwp > _exist_pv or bess_kwh > _exist_bess))
+    if _is_retrofit:
+        # Retrofit: zadaný CAPEX je LEN nová investícia; existujúci systém tvorí baseline B.
         _cap_total = (float(capex_per_kwp) if capex_per_kwp else 0.0) * fve_kwp \
                      + (float(capex_per_kwh_bess) if capex_per_kwh_bess else 0.0) * bess_kwh
-        if _cap_total <= 0:
-            _cap_total = 318.0 * bess_kwh  # BESS solo all-in sadzba (viď _cp_capex)
-        vA, m = _bess_retrofit_delta(req, fve_kwp, bess_kwh, bess_kw, _cap_total)
+        if _scen == "pridanie_bess":
+            _pv_b, _bess_b = fve_kwp, 0.0
+            _cap_pv_new, _cap_b_new = 0.0, (_cap_total if _cap_total > 0 else _rate_bess * bess_kwh)
+        else:
+            _d_pv = max(0.0, fve_kwp - _exist_pv)
+            _d_bk = max(0.0, bess_kwh - _exist_bess)
+            _pv_b, _bess_b = _exist_pv, _exist_bess
+            # rozklad zadaného CAPEX na PV/BESS časť proporčne k referenčným sadzbám
+            _est_pv, _est_b = _rate_pv * _d_pv, _rate_bess * _d_bk
+            _est = _est_pv + _est_b
+            if _cap_total > 0 and _est > 0:
+                _cap_pv_new = _cap_total * (_est_pv / _est)
+                _cap_b_new = _cap_total * (_est_b / _est)
+            else:
+                _cap_pv_new, _cap_b_new = _est_pv, _est_b
+        vA, m = _retrofit_delta(req, fve_kwp, bess_kwh, bess_kw, _pv_b, _bess_b, _cap_pv_new, _cap_b_new)
+        _cap_total = _cap_pv_new + _cap_b_new
         if vA and m:
             tp = _topology_params(analyza)
             pos_res = sb.table("analyza_om_variants").select("position").eq("analyza_id", analyza_id).order("position", desc=True).limit(1).execute()
@@ -563,14 +660,14 @@ def insert_variant_via_engine(sb, analyza_id: str, name: str, fve_kwp, bess_kwh,
                 "fve_kwp": vA.get("pv_kwp", fve_kwp), "fve_tilt_deg": int(tp[0]), "fve_azimuth_deg": int(tp[1]),
                 "fve_topology": (analyza.get("fve_topology") or "south"),
                 "bess_kwh": vA.get("bess_kwh", bess_kwh), "bess_kw": (float(bess_kw) if bess_kw else vA.get("bess_kw", bess_kwh * 0.5)),
-                "bess_arbitrage_enabled": True,
+                "bess_arbitrage_enabled": bess_kwh > 0,
                 "capex_eur": vA.get("capex_total_eur", _cap_total), "capex_source": capex_source,
                 "result_samosp_pct": vA.get("samospotreba_pct", 0), "result_samostat_pct": vA.get("samostatnost_pct", 0),
                 "result_export_mwh": (vA.get("energy_flow", {}) or {}).get("grid_export_mwh", 0) or 0,
                 "result_import_mwh": (vA.get("grid_import_kwh", 0) or 0) / 1000,
                 "result_vyroba_mwh": (vA.get("pv_total_kwh", 0) or 0) / 1000,
                 "result_npv_eur_base": m["npv_eur"], "result_irr_pct_base": m["irr_pct"],
-                "result_payback_y_base": m["payback_y"], "result_dotacia_eur": vA.get("dotacia_eur", 0),
+                "result_payback_y_base": m["payback_y"], "result_dotacia_eur": 0,
             }
             if inverter_kw:
                 row["inverter_kw"] = float(inverter_kw)
@@ -709,26 +806,45 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
                 "result_payback_y_base": v.get("payback_simple_y", 0),
                 "result_dotacia_eur": v.get("dotacia_eur", 0),
             })
-        # Scenár pridanie_bess: matica má existujúcu FVE — ekonomiku riadkov nahraď DELTOU
-        # (CAPEX len batéria @318 €/kWh all-in, prínos = rozdiel oproti FVE bez batérie).
-        # Bez toho riadky účtujú CAPEX aj úspory celého systému, hoci FVE už stojí na streche.
-        if (analyza.get("scenario_type") or "").lower() == "pridanie_bess":
+        # Retrofit scenáre (pridanie_bess, rozsirenie_fve): ekonomiku riadkov nahraď DELTOU —
+        # CAPEX = len NOVÁ investícia, prínos = rozdiel oproti existujúcemu systému.
+        # Bez toho riadky účtujú CAPEX aj úspory celého systému, hoci (časť) už stojí na streche.
+        _scen = (analyza.get("scenario_type") or "").lower()
+        if _scen in ("pridanie_bess", "rozsirenie_fve"):
             _bl_cache: dict = {}
+            _exist_pv = float(analyza.get("existing_fve_kwp") or 0)
+            _exist_bess = float(analyza.get("existing_bess_kwh") or 0)
+            # sadzby z requestu (kalibrácia z CP / chat override), nie hardcode
+            _rate_pv = float((request_dict.get("capex") or {}).get("capex_pv_eur_per_kwp") or 574.0)
+            _rate_bess = float((request_dict.get("capex") or {}).get("capex_bess_eur_per_kwh") or 318.0)
             for _idx, _row in enumerate(rows):
                 try:
-                    _bk = float(_row.get("bess_kwh") or 0)
-                    if _bk <= 0:
-                        continue
                     _pv = float(_row.get("fve_kwp") or 0)
-                    _cap_b = 318.0 * _bk
-                    _vA, _m = _bess_retrofit_delta(request_dict, _pv, _bk, _row.get("bess_kw"), _cap_b, _bl_cache)
+                    _bk = float(_row.get("bess_kwh") or 0)
+                    if _scen == "pridanie_bess":
+                        if _bk <= 0:
+                            continue
+                        _pv_b, _bess_b = _pv, 0.0
+                        _cap_pv_new, _cap_b_new = 0.0, _rate_bess * _bk
+                    else:  # rozsirenie_fve
+                        if _exist_pv <= 0:
+                            continue  # bez existujúcej FVE nie je voči čomu robiť deltu
+                        _d_pv = max(0.0, _pv - _exist_pv)
+                        _d_bk = max(0.0, _bk - _exist_bess)
+                        if _d_pv <= 0 and _d_bk <= 0:
+                            continue
+                        _pv_b, _bess_b = _exist_pv, _exist_bess
+                        _cap_pv_new, _cap_b_new = _rate_pv * _d_pv, _rate_bess * _d_bk
+                    _vA, _m = _retrofit_delta(request_dict, _pv, _bk, _row.get("bess_kw"),
+                                              _pv_b, _bess_b, _cap_pv_new, _cap_b_new, _bl_cache)
                     if _m:
-                        _row["capex_eur"] = (_vA or {}).get("capex_total_eur", _cap_b)
+                        _cap_new = _cap_pv_new + _cap_b_new
+                        _row["capex_eur"] = (_vA or {}).get("capex_total_eur", _cap_new)
                         _row["capex_source"] = "engine_v095_delta_bess"
                         _row["result_npv_eur_base"] = _m["npv_eur"]
                         _row["result_irr_pct_base"] = _m["irr_pct"]
                         _row["result_payback_y_base"] = _m["payback_y"]
-                        _row["result_dotacia_eur"] = (_vA or {}).get("dotacia_eur", 0)
+                        _row["result_dotacia_eur"] = 0  # dotácia sa v delta režime neráta (schémy sú pre nové projekty)
                         # Patch aj full_response variant (index zarovnaný s rows) — grafy, Účet a
                         # value streams v UI čítajú full_response; bez patchu ukazujú celosystémové
                         # čísla (FVE CAPEX 51k, úspora 7,6k) v rozpore s delta hlavičkou (28,6k / 2,9k).
@@ -738,23 +854,30 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
                         _v["irr_pct"] = _m["irr_pct"]
                         _v["payback_simple_y"] = _m["payback_y"]
                         _v["saving_y1_eur"] = _m["saving_y1_delta_eur"]
-                        _v["capex_pv_eur"] = 0.0  # FVE existuje — nie je súčasť investície
-                        _v["capex_bess_eur"] = (_vA or {}).get("capex_total_eur", _cap_b)
-                        _v["capex_total_eur"] = (_vA or {}).get("capex_total_eur", _cap_b)
-                        _v["net_capex_eur"] = (_vA or {}).get("net_capex_eur", _cap_b)
-                        _v["dotacia_eur"] = (_vA or {}).get("dotacia_eur", 0)
+                        _v["capex_pv_eur"] = _cap_pv_new   # len nová PV časť (0 pri pridanie_bess)
+                        _v["capex_bess_eur"] = _cap_b_new
+                        _v["capex_total_eur"] = (_vA or {}).get("capex_total_eur", _cap_new)
+                        _v["net_capex_eur"] = (_vA or {}).get("net_capex_eur", _cap_new)
+                        _v["dotacia_eur"] = 0
                         if (_vA or {}).get("energy_flow"):
                             _v["energy_flow"] = _vA["energy_flow"]
-                        # value streams: batérii patrí len rozdiel A−B (solar zložky ostávajú existujúcej FVE;
-                        # záporný solar_export = ušlý export, lebo prebytky idú do batérie)
+                        # value streams: novej investícii patrí len rozdiel A−B (solar zložky existujúcej
+                        # FVE ostávajú jej; záporný solar_export = ušlý export, lebo prebytky idú do batérie)
                         _vsA = (_vA or {}).get("value_streams") or {}
                         _vsB = ((_m.get("baseline") or {}).get("value_streams")) or {}
                         if _vsA:
                             _v["value_streams"] = {k: float(_vsA.get(k) or 0) - float(_vsB.get(k) or 0)
                                                    for k in _vsA.keys() if isinstance(_vsA.get(k), (int, float))}
+                            # mesačné € preškáluj na delta pohľad (graf inak ukazoval celosystémové úspory)
+                            _v["monthly_summary"] = _monthly_delta_scale(_v.get("monthly_summary"), _vsA, _v["value_streams"])
                         _v["retrofit_baseline"] = _m.get("baseline")
                 except Exception:
-                    log.exception("[aom-v2] delta prepočet matice (pridanie_bess) zlyhal")
+                    log.exception("[aom-v2] delta prepočet matice (%s) zlyhal", _scen)
+            # top_picks sa počítali PRED deltou (celosystémové NPV) — prepočítaj z patched variantov
+            try:
+                result["top_picks"] = _rebuild_top_picks(variants)
+            except Exception:
+                log.exception("[aom-v2] rebuild top_picks po delte zlyhal")
 
         _ins = sb.table("analyza_om_variants").insert(rows).execute()
 
@@ -784,10 +907,21 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
                 log.exception("[aom-v2] prepočet ručného variantu zlyhal")
         # selected_variant_id remap: delete+insert by nechal selection visieť na neexistujúcom UUID.
         # Premapuj podľa (kwp,bess) na nový riadok; ak sa rovnaký variant už negeneroval -> NULL (treba vybrať znova).
+        # audit V: hľadá sa vo VŠETKÝCH nových riadkoch (matica aj reinsertnuté manuálne cez
+        # insert_variant_via_engine), nie len v _ins.data — akceptovaný manuálny variant strácal výber.
         if _old_sel:
             _new_sel = None
             if _old_sel_key:
-                for r in (_ins.data or []):
+                _cand = list(_ins.data or [])
+                try:
+                    _allv = sb.table("analyza_om_variants").select("id,fve_kwp,bess_kwh,capex_source").eq("analyza_id", analyza_id).execute()
+                    if _allv.data:
+                        _cand = _allv.data
+                except Exception:
+                    pass
+                # preferuj manuálne riadky — presnejšia zhoda s tým, čo si používateľ reálne vybral
+                _cand.sort(key=lambda r: 0 if (r.get("capex_source") == "manual") else 1)
+                for r in _cand:
                     try:
                         if abs(float(r.get("fve_kwp") or 0) - _old_sel_key[0]) < 0.51 and abs(float(r.get("bess_kwh") or 0) - _old_sel_key[1]) < 1.01:
                             _new_sel = r.get("id")
@@ -1203,11 +1337,25 @@ def _construction_str(analyza: dict) -> str:
     return f"Juh {tilt or 13}°"
 
 
-def build_orkestra_context(analyza: dict, variants: list, analyza_id: str = "") -> dict:
+
+def _fetch_selected_row(sb, analyza: dict):
+    """DB riadok akceptovaného variantu pre build_orkestra_context (audit K3)."""
+    sel_id = analyza.get("selected_variant_id")
+    if not sel_id:
+        return None
+    try:
+        r = sb.table("analyza_om_variants").select("*").eq("id", sel_id).maybe_single().execute()
+        return r.data if r else None
+    except Exception:
+        return None
+
+def build_orkestra_context(analyza: dict, variants: list, analyza_id: str = "", selected_row: dict = None) -> dict:
     """Cista funkcia: zo zaznamu analyzy + variantov postavi kontext pre Orkestra sablonu.
     Ziadne sb / AI / PDF side-effecty -> lokalne testovatelne (harness).
     Mapuje PRIORITNE engine vystupy (energy_flow, carbon, cashflow_array, monthly_summary,
-    value_streams, solar_consumption_pct); fallback na aproximacie len ked engine pole chyba."""
+    value_streams, solar_consumption_pct); fallback na aproximacie len ked engine pole chyba.
+    selected_row: DB riadok akceptovaného variantu (analyza_om_variants) — full_response
+    varianty NEMAJÚ tabuľkové UUID, takže bez neho sa výber nikdy nematchol (audit K3)."""
     # Selected variant
     selected_id = analyza.get("selected_variant_id")
     selected = None
@@ -1216,7 +1364,42 @@ def build_orkestra_context(analyza: dict, variants: list, analyza_id: str = "") 
             if v.get("variant_id") == selected_id or v.get("id") == selected_id:
                 selected = v
                 break
+        # audit K3: match podľa konfigurácie vybraného DB riadku (tolerancia zaokrúhlenia)
+        if not selected and selected_row:
+            try:
+                tk = float(selected_row.get("fve_kwp") or 0)
+                tb = float(selected_row.get("bess_kwh") or 0)
+                tol = max(10.0, 0.05 * (tk + tb))
+                best, bd = None, None
+                for v in variants:
+                    d = abs(float(v.get("pv_kwp") or 0) - tk) + abs(float(v.get("bess_kwh") or 0) - tb)
+                    if bd is None or d < bd:
+                        bd, best = d, v
+                if best is not None and bd <= tol:
+                    selected = best
+                else:
+                    # vybraný (typicky manuálny) variant vo full_response nie je — postav ho
+                    # z DB riadku, nech posudok ukazuje AKCEPTOVANÉ čísla; bohaté grafy si
+                    # kontext dopočíta fallbackmi z analýzy
+                    selected = {
+                        "id": selected_row.get("id"), "label": selected_row.get("name") or "Vybraný variant",
+                        "pv_kwp": tk, "bess_kwh": tb, "bess_kw": float(selected_row.get("bess_kw") or 0),
+                        "capex_total_eur": float(selected_row.get("capex_eur") or 0),
+                        "dotacia_eur": float(selected_row.get("result_dotacia_eur") or 0),
+                        "npv_eur": float(selected_row.get("result_npv_eur_base") or 0),
+                        "irr_pct": float(selected_row.get("result_irr_pct_base") or 0),
+                        "payback_simple_y": float(selected_row.get("result_payback_y_base") or 0),
+                        "samospotreba_pct": float(selected_row.get("result_samosp_pct") or 0),
+                        "samostatnost_pct": float(selected_row.get("result_samostat_pct") or 0),
+                        "import_mwh": float(selected_row.get("result_import_mwh") or 0),
+                        "export_mwh": float(selected_row.get("result_export_mwh") or 0),
+                    }
+                    log.warning("[orkestra] vybraný variant %s nie je vo full_response — posudok stavaný z DB riadku", selected_id)
+            except Exception:
+                log.exception("[orkestra] match vybraného variantu zlyhal — fallback max NPV")
     if not selected:
+        if selected_id:
+            log.warning("[orkestra] selected_variant_id=%s sa nepodarilo namapovať — použitý variant s max NPV", selected_id)
         selected = max(variants, key=lambda v: v.get("npv_eur", 0))
 
     # Customer name
@@ -1348,13 +1531,21 @@ def build_orkestra_context(analyza: dict, variants: list, analyza_id: str = "") 
     barrels_oil = int(carbon.get("barrels_oil_avoided") or (co2_avoided_tonnes * 2.32))
 
     # === 3 cenové scenáre ===
+    # audit V: scenáre boli NEdiskontované súčty vedľa diskontovanej (engine) bázy — defenzívny
+    # scenár vychádzal lepšie než báza. Scenár = engine NPV + DISKONTOVANÁ delta úspor, takže
+    # báza aj scenáre stoja na tej istej metodike (daňový štít a opex sa deltou nemenia).
+    DISCOUNT_RATE = 0.06
+    def _npv_scenario(saving_scenario: float) -> float:
+        delta_pv = sum((saving_scenario - saving_y1) * ((1 - PV_DEGRADATION) ** (y - 1)) / ((1 + DISCOUNT_RATE) ** y)
+                       for y in range(1, 21))
+        return npv + delta_pv
     saving_low = saving_y1 * 0.75
-    npv_low = sum(saving_low * ((1 - PV_DEGRADATION) ** (y - 1)) - annual_opex for y in range(1, 21)) - net_capex
+    npv_low = _npv_scenario(saving_low)
     payback_low = (net_capex / saving_low) if saving_low > 0 else 99
     irr_low = max(0, irr - 5)
     arb_uplift = 0.10 if bess_kwh > 0 else 0
     saving_arb = saving_y1 * (1 + arb_uplift)
-    npv_arb = sum(saving_arb * ((1 - PV_DEGRADATION) ** (y - 1)) - annual_opex for y in range(1, 21)) - net_capex
+    npv_arb = _npv_scenario(saving_arb)
     payback_arb = (net_capex / saving_arb) if saving_arb > 0 else 99
     irr_arb = irr + (arb_uplift * 100 * 0.5)
 
@@ -1395,11 +1586,10 @@ def build_orkestra_context(analyza: dict, variants: list, analyza_id: str = "") 
     ]
 
     # === Vplyv dotácie (porovnanie s/bez) ===
+    # audit V: „bez dotácie“ bol nediskontovaný súčet bez daňového štítu — prínos dotácie
+    # vychádzal záporný. Dotácia je príjem roku 0 (diskont 1,0), takže NPV bez nej = NPV − dotácia.
     if dotacia > 0:
-        cf_no_dot = [-capex_total]
-        for y in range(1, 21):
-            cf_no_dot.append(saving_y1 * ((1 - PV_DEGRADATION) ** (y - 1)) - annual_opex)
-        npv_without_dotacia = sum(cf_no_dot)
+        npv_without_dotacia = npv - dotacia
         payback_without_dotacia = (capex_total / saving_y1) if saving_y1 > 0 else 99
         irr_without_dotacia = max(0, irr - 4)
     else:
@@ -1568,7 +1758,7 @@ def render_posudok_orkestra(sb, analyza_id: str) -> dict:
     if not variants:
         raise ValueError("No variants — run simulation first")
 
-    context = build_orkestra_context(analyza, variants, analyza_id)
+    context = build_orkestra_context(analyza, variants, analyza_id, selected_row=_fetch_selected_row(sb, analyza))
     context["_validation_warnings"] = _validate_orkestra(context)
 
     # === Generate AI Expert commentary (Claude Sonnet 4.5) ===
@@ -2424,7 +2614,11 @@ def _generate_chocosuc_ai(ctx: dict) -> dict:
     """Celý posudok píše AI po sekciách, PRÍSNE grounded (len engine čísla).
     Vráti dict s HTML per sekcia + recommendations. Fail-safe -> deterministické narativy."""
     import json
-    S = ctx["scenarios3"]; full = S[-1]; bza = S[0]; pm = ctx.get("profile_metrics", {})
+    # audit V: AI naratív dostával "ekonomiku" z Optimistického scenára (S[-1]), kým cover a
+    # tabuľky ukazujú odporúčaný (default Báza) — čísla v texte nesedeli so zvyškom posudku.
+    S = ctx["scenarios3"]
+    full = next((s for s in S if s.get("recommended")), S[0])
+    bza = S[0]; pm = ctx.get("profile_metrics", {})
     comp = ctx.get("components", {}) or {}
     facts = {
         "klient": ctx.get("client_name"),
@@ -2658,7 +2852,7 @@ def render_posudok_chocosuc(sb, analyza_id: str) -> dict:
         logging.warning("chocosuc hourly load failed: %s", _e)
         hourly = None
 
-    ctx = build_chocosuc_context(analyza, variants, hourly=hourly)
+    ctx = build_chocosuc_context(analyza, variants, hourly=hourly, selected_row=_fetch_selected_row(sb, analyza))
     ai = _generate_chocosuc_ai(ctx)
     # AI píše všetky sekcie (grounded); ak niektorá chýba, deterministický ctx fallback ostáva
     ctx["ai_summary_html"] = ai.get("summary") or ""
@@ -2864,7 +3058,7 @@ def aom_chat(sb, analyza_id: str, message: str, history=None) -> dict:
 
         results = []
         for nm, cpk in runs:
-            r = insert_variant_via_engine(sb, analyza_id, nm, kwp, bess, capex_per_kwp=cpk, inverter_kw=(float(ac_kw) if ac_kw else None))
+            r = insert_variant_via_engine(sb, analyza_id, nm, kwp, bess, capex_per_kwp=cpk, inverter_kw=(float(ac_kw) if ac_kw else None), capex_source="manual")  # audit: inak re-run variant zmaže
             if not r.get("ok"):
                 return {"ok": True, "intent": "exact_variant", "rerender": False,
                         "reply": f"Variant „{nm}“ sa nepodarilo spočítať: {r.get('error')}"}
@@ -3037,7 +3231,7 @@ def render_posudok_web(sb, analyza_id: str) -> dict:
                 "saving_y1_eur": float(v.get("result_saving_y1_eur") or 0)})
     if not variants:
         raise ValueError("Ziadne varianty — spusti simulaciu")
-    ctx = build_orkestra_context(a, variants, analyza_id)
+    ctx = build_orkestra_context(a, variants, analyza_id, selected_row=_fetch_selected_row(sb, a))
     cust = a.get("customers") or {}
     client = cust.get("company_name") or (((cust.get("first_name") or "") + " " + (cust.get("last_name") or "")).strip()) or a.get("name") or "Klient"
     html = _pw.build_web_posudok_html(ctx, {"client_name": client})

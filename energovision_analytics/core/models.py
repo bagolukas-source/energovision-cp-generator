@@ -114,8 +114,8 @@ class SiteInput(EnergoBase):
     sadzba: Sadzba = Field(..., description="Napäťová úroveň pripojenia")
     rk_kw: float = Field(..., gt=0, le=80000,
                           description="Rezervovaná kapacita (max free import zo siete) v kW")
-    mrk_kw: float = Field(..., gt=0, le=80000,
-                           description="Maximálna rezervovaná kapacita (max free export do siete) v kW")
+    mrk_kw: float = Field(..., ge=0, le=80000,
+                           description="Maximálna rezervovaná kapacita (max free export do siete) v kW; 0 = export nepovolený")
     typ_tarify: TypTarify = Field(..., description="Typ dodávateľského kontraktu")
     bilancna_skupina: str = Field("Energie2", max_length=100,
                                    description="Bilančná skupina pre prebytky FVE")
@@ -132,8 +132,9 @@ class SiteInput(EnergoBase):
 
     @model_validator(mode="after")
     def mrk_geq_rk(self) -> "SiteInput":
-        if self.mrk_kw < self.rk_kw:
-            raise ValueError("MRK musí byť >= RK (max export >= max import)")
+        # audit: export limit < RK (aj 0) je legitímny zmluvný stav — tvrdý raise nútil builder
+        # posielať mrk = max(import, export) a export sa clipoval na zlej úrovni. Soft warning
+        # rieši validation/validator.py.
         return self
 
 

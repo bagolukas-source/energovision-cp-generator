@@ -263,7 +263,8 @@ def generate_smart_variants(sb, analyza: dict, profile: dict, capex_overrides: d
                           "price_escalation_pct": float((capex_overrides or {}).get("price_escalation_pct") or 0.0),
                           "savings_coefficient": float((capex_overrides or {}).get("savings_coefficient") or 1.0),
                           "has_sufficient_profit": bool(analyza.get("ma_danovy_zaklad", True))},
-            "dotacia": {"enabled": True, "scheme_id": "zelena_podnikom"},
+            "dotacia": {"enabled": bool(analyza.get("dotacia_enabled", False)),
+                        "scheme_id": analyza.get("dotacia_scheme") or "zelena_podnikom"},  # audit: bolo natvrdo True
             "async_mode": False,
         }
         
@@ -878,7 +879,8 @@ def accept_variant(sb, analyza_id: str, variant_label: str) -> dict:
     import analyza_om_v2 as _v2
     res = _v2.insert_variant_via_engine(
         sb, analyza_id, target["label"], target.get("fve_kwp", 0),
-        target.get("bess_kwh", 0), target.get("bess_kwh", 0) * 0.5)
+        target.get("bess_kwh", 0), target.get("bess_kwh", 0) * 0.5,
+        capex_source="manual")  # audit: inak akceptovaný AI variant re-run zmaže
     if res.get("ok"):
         res["variant_label"] = variant_label
     return res

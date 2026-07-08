@@ -143,7 +143,9 @@ class BatteryPack:
             return result
 
         t = temp_c if temp_c is not None else self.bess.avg_ambient_temp_c
-        c_rate = requested_kwh / dt_hours / self.bess.nominal_kwh
+        # audit: c_rate z POŽADOVANÉHO množstva skresľoval RTE krivku a nafukoval cyklovú
+        # degradáciu (EMS bežne žiada viac, než PCS pustí) — počítaj z výkonovo orezaného
+        c_rate = min(requested_kwh, self.bess.power_kw_ac * dt_hours) / dt_hours / self.bess.nominal_kwh
 
         # Dynamic RTE
         rte = (
@@ -192,7 +194,8 @@ class BatteryPack:
             return result
 
         t = temp_c if temp_c is not None else self.bess.avg_ambient_temp_c
-        c_rate = requested_kwh / dt_hours / self.bess.nominal_kwh
+        # audit: rovnaké orezanie c_rate ako pri charge (RTE + degradácia z reálneho výkonu)
+        c_rate = min(requested_kwh, self.bess.power_kw_ac * dt_hours) / dt_hours / self.bess.nominal_kwh
         rte = (
             rte_curve(self.soc_pct, c_rate, t, self.bess.rte_ac_ac)
             if self.use_dynamic_rte else self.bess.rte_ac_ac

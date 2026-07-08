@@ -33,9 +33,9 @@ def _irr(save_total, capex, opex, annual_tax):
         else: hi=m
     return m*100
 
-def build_chocosuc_context(analyza: dict, variants: list, hourly=None) -> dict:
+def build_chocosuc_context(analyza: dict, variants: list, hourly=None, selected_row: dict = None) -> dict:
     from analyza_om_v2 import build_orkestra_context
-    base=build_orkestra_context(analyza, variants, str(analyza.get("id","")))
+    base=build_orkestra_context(analyza, variants, str(analyza.get("id","")), selected_row=selected_row)
 
     capex=float(base.get("capex_total_eur") or 0)
     dotacia=float(base.get("dotacia_eur") or 0)
@@ -94,8 +94,9 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None) -> dict:
     # --- ekonomika: VŠETKY zložky z ENGINE value_streams (z dispatchu). Žiadne heuristiky,
     #     žiadne dvojité započítanie — base_saving UŽ obsahuje samospotrebu/export/batériu/arbitráž/peak. ---
     vs = base.get("value_streams") or {}
-    save_self   = float(vs.get("solar_self_consumption_eur") or (self_mwh*1000*p_avoided))
-    save_export = float(vs.get("solar_export_eur") or (export_mwh*1000*p_sell))
+    # audit V: `or` fallback prepisoval legitímnu 0.0 (delta retrofit) celosystémovým odhadom
+    save_self   = float(vs["solar_self_consumption_eur"]) if vs.get("solar_self_consumption_eur") is not None else float(self_mwh*1000*p_avoided)
+    save_export = float(vs["solar_export_eur"]) if vs.get("solar_export_eur") is not None else float(export_mwh*1000*p_sell)
     save_bess   = float(vs.get("bess_self_consumption_eur") or 0)
     save_arb    = float(vs.get("arbitrage_eur") or 0)
     save_merchant = float(vs.get("merchant_eur") or 0)  # BOD 11: obchodovanie batérie v bilančnej skupine (merchant mode)
@@ -122,6 +123,8 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None) -> dict:
         arbitrage_reason = "spread nedosiahol prah rentability (≥ 30 €/MWh) — arbitráž 0 €"
     base_saving = float(base.get("saving_y1_eur") or vs.get("total_eur") or (save_self+save_export+save_bess+save_arb+save_peak+save_merchant))
     annual_tax  = net_capex/ODPIS*DPPO
+    # retrofit BESS (pridanie_bess): CAPEX v posudku je LEN batéria, FVE je existujúca
+    _retrofit_bess = ((analyza.get("scenario_type") or "").lower() == "pridanie_bess") and bess_kwh > 0
 
     # Báza ukotvená na ENGINE (validované), scenáre odvodené od nej (žiadny druhý NPV systém)
     eng_npv = float(base.get("npv_eur") or 0)
@@ -237,13 +240,18 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None) -> dict:
             "extrapolated":"15-min tvar z časti roka, extrapolovaný na celý rok",
             "synthesized":"modelovaný profil z faktúry (orientačný)",
         }.get(analyza.get("consumption_strategy"), ("skutočné 15-min dáta" if analyza.get("consumption_15min_path") else "modelovaný profil")),
-        "variant_title":f"Navrhnutý variant — FVE {base.get('pv_kwp',0):.0f} kWp" + (f" + BESS {bess_kwh:.0f} kWh" if bess_kwh else ""),
+        "variant_title":(f"Navrhnutý variant — batériové úložisko {bess_kwh:.0f} kWh k existujúcej FVE {base.get('pv_kwp',0):.0f} kWp"
+                         if _retrofit_bess else
+                         f"Navrhnutý variant — FVE {base.get('pv_kwp',0):.0f} kWp" + (f" + BESS {bess_kwh:.0f} kWh" if bess_kwh else "")),
         "summary_headline":"Audit odberu: investícia je ekonomicky výhodná vo všetkých scenároch",
         "recommendation_line":f"Realizovať — návratnosť {opti['payback']:.1f}–{S[0]['payback']:.1f} r, NPV {full['npv']:,.0f} € (báza); aj v pesimistickom scenári P10 zostáva NPV kladné ({P(0.10):,.0f} €).".replace(","," "),
         "cover_subtitle":"Analýza odberu, simulácia výroby a dispatch, ekonomické posúdenie v 3 scenároch s rizikovou analýzou.",
         "podklady":({"measured":"15-min profil · ","extrapolated":"15-min profil (časť roka) · ","synthesized":"profil z faktúry · "}.get(analyza.get("consumption_strategy"), "15-min profil · " if analyza.get("consumption_15min_path") else ""))+"PVGIS · OKTE 2025"+(" · faktúra" if tarif_real else ""),
         "zaver_headline":"Odporúčanie pre klienta",
-        "zaver_text":f"Investícia {capex:,.0f} € do FVE {base.get('pv_kwp',0):.0f} kWp".replace(","," ")+(f" + BESS {bess_kwh:.0f} kWh" if bess_kwh else "")+f" prinesie ročné úspory {S[0]['save_total']:,.0f} € (báza) až {opti['save_total']:,.0f} € (optimistický scenár). Návratnosť {opti['payback']:.1f}–{S[0]['payback']:.1f} r, NPV 20 r. {full['npv']:,.0f} € (báza), IRR {full['irr']:.1f} %.".replace(","," "),
+        "zaver_text":((f"Investícia {capex:,.0f} € do batériového úložiska {bess_kwh:.0f} kWh k existujúcej FVE {base.get('pv_kwp',0):.0f} kWp".replace(","," "))
+                      if _retrofit_bess else
+                      (f"Investícia {capex:,.0f} € do FVE {base.get('pv_kwp',0):.0f} kWp".replace(","," ")+(f" + BESS {bess_kwh:.0f} kWh" if bess_kwh else "")))
+                     +f" prinesie ročné úspory {S[0]['save_total']:,.0f} € (báza) až {opti['save_total']:,.0f} € (optimistický scenár). Návratnosť {opti['payback']:.1f}–{S[0]['payback']:.1f} r, NPV 20 r. {full['npv']:,.0f} € (báza), IRR {full['irr']:.1f} %.".replace(","," "),
         "recommendations":[],  # doplní AI/deterministic neskôr
     }
     _build_deterministic_narratives(ctx, S, full, prof, pm)
