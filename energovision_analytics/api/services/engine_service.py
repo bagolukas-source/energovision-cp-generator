@@ -173,6 +173,7 @@ def run_variants_pipeline(request_dict: dict, progress_cb=None) -> dict:
         pv_sklon=v.get("pv_sklon", 25),
         pv_azimut=v.get("pv_azimut", 180),
         pv_konfiguracia=v.get("pv_konfiguracia", "2xP"),
+        bess_c_rate=float(v.get("bess_c_rate", 0.5)),
         capex_pv_eur_per_kwp=capex.get("capex_pv_eur_per_kwp", 574),
         capex_pv_fixed_eur=capex.get("capex_pv_fixed_eur", 38000),
         capex_bess_eur_per_kwh=capex.get("capex_bess_eur_per_kwh", 318),

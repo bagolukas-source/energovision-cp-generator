@@ -476,9 +476,14 @@ def insert_variant_via_engine(sb, analyza_id: str, name: str, fve_kwp, bess_kwh,
     req = _build_request_from_analyza(analyza, _measured_load_profile_block(sb, analyza))
     req["variants"]["pv_kwp_options"] = [fve_kwp]
     req["variants"]["bess_kwh_options"] = [bess_kwh]
-    if capex_per_kwp:
+    if bess_kw and bess_kwh > 0:
+        # BESS výkon zo zadania — inak simulácia aj uložený riadok skĺznu na default 0.5C
+        req["variants"]["bess_c_rate"] = float(bess_kw) / bess_kwh
+    if capex_per_kwp is not None:
         # Používateľ zadal CENU DIELA €/kWp — presne podľa zadania, žiadny fixný prídavok
         # (default engine fix ~38k € by cenu skreslil; kWp×rate = celé dielo).
+        # `is not None`, nie truthy: 0.0 je legitímna hodnota (celý CAPEX v BESS zložke);
+        # truthy check ju zahodil a engine dosadil default €/kWp → manuálny CAPEX 41,9k€ vyšiel 135,7k€.
         req["capex"]["capex_pv_eur_per_kwp"] = float(capex_per_kwp)
         req["capex"]["capex_pv_fixed_eur"] = 0.0
     if capex_per_kwh_bess is not None:
@@ -497,7 +502,8 @@ def insert_variant_via_engine(sb, analyza_id: str, name: str, fve_kwp, bess_kwh,
         "analyza_id": analyza_id, "name": name or "Vlastný variant", "position": pos,
         "fve_kwp": v.get("pv_kwp", fve_kwp), "fve_tilt_deg": int(tp[0]), "fve_azimuth_deg": int(tp[1]),
         "fve_topology": (analyza.get("fve_topology") or "south"),
-        "bess_kwh": v.get("bess_kwh", bess_kwh), "bess_kw": v.get("bess_kw", bess_kw or bess_kwh * 0.5),
+        # bess_kw: zadanie má prednosť pred engine odvodením (v["bess_kw"] = kwh×c_rate)
+        "bess_kwh": v.get("bess_kwh", bess_kwh), "bess_kw": (float(bess_kw) if bess_kw else v.get("bess_kw", bess_kwh * 0.5)),
         "bess_arbitrage_enabled": (v.get("bess_kwh", 0) or 0) > 0,
         "capex_eur": v.get("capex_total_eur", 0), "capex_source": capex_source,
         "result_samosp_pct": v.get("samospotreba_pct", 0), "result_samostat_pct": v.get("samostatnost_pct", 0),
@@ -609,8 +615,10 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
                 _cpb = None
                 if _cap > 0:
                     if _bk > 0:
-                        _cpb = 480.0
-                        _cpk = max(0.0, _cap - _bk * 480.0) / _fk
+                        # rozklad musí dať presne _cap: pri malom CAPEX (< 480×kWh) stlač BESS zložku,
+                        # nie PV na 0 — inak engine total nesedí so zadaním používateľa
+                        _cpb = min(480.0, _cap / _bk)
+                        _cpk = max(0.0, _cap - _bk * _cpb) / _fk
                     else:
                         _cpk = _cap / _fk
                 insert_variant_via_engine(sb, analyza_id, _mv.get("name") or "Vlastný variant",
