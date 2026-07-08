@@ -4449,6 +4449,7 @@ def _generate_pdf_supabase_impl():
         return jsonify({"error": "missing flat_props"}), 400
 
     log.info(f"Generate PDF (Supabase) variant {variant}, klient {flat_props.get('Zákazník', '?')}")
+    log.info(f"[generate-pdf-supabase] body keys: {sorted(body.keys())} | bom items: {len(body.get('bom') or [])}")
 
     # Reuse — lead_from_notion berie flat dict + variant (NIE Notion page)
     from generate_from_notion import lead_from_notion
@@ -4518,6 +4519,7 @@ def _generate_pdf_supabase_impl():
         if bom_items:
             from generate_cp_html import priprav_bom_rozpis
             bom_rozpis = priprav_bom_rozpis(bom_items, ceny["cena_bez_dph"], ceny["cena_s_dph"])
+            log.info(f"[generate-pdf-supabase] BOM rozpis: {'OK, ' + str(len(bom_items)) + ' položiek' if bom_rozpis else 'PRESKOČENÝ (prázdny výsledok)'}")
     except Exception as _bom_e:
         log.warning(f"[generate-pdf-supabase] BOM rozpis preskočený: {_bom_e}")
 
