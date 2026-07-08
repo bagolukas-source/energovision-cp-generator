@@ -313,7 +313,7 @@ class VariantGenerator:
             from energovision_analytics.financial.merchant_arbitrage import compute_merchant_arbitrage
             _power_kw = bess_kwh * self.bess_c_rate
             _rk_kw = float(self.site.rk_kw or 0.0)
-            _export_kw = float(self.site.mrk_kw or self.site.rk_kw or 0.0)
+            _export_kw = float(self.site.mrk_kw if self.site.mrk_kw is not None else (self.site.rk_kw or 0.0))  # 0 = export nepovolený (nie fallback na rk)
             # RK/MRK nezadané (0/None) → merchant arbitráž by potichu vyšla 0 € (limit prietoku 0 kW).
             # Fallback: predpokladaj, že prípojka zvládne aspoň výkon batérie — inak batéria „zmizne" z posudku.
             if _rk_kw <= 0:

@@ -263,7 +263,8 @@ def chart_soc_profile(ctx):
 def chart_waterfall(ctx):
     """Orkestra-style NPV most — bridge ktorý sa SČÍTA PRESNE na engine NPV (žiadny druhý NPV systém).
     Prevádzkové úspory = reziduum (npv + net_capex - daň. štít - zostatok), aby bilancia sedela."""
-    full=ctx["scenarios3"][-1]
+    # audit V: most sa sčítaval na Optimistický scenár (S[-1]) — headline posudku je odporúčaný (Báza)
+    full=next((x for x in ctx["scenarios3"] if x.get("recommended")), ctx["scenarios3"][0])
     npv=float(full.get("npv") or 0)
     net=float(ctx.get("net_capex_eur") or 0)
     capex_gross=float(ctx.get("capex_total_eur") or net); dot=max(0.0,capex_gross-net)
