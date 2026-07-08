@@ -216,7 +216,13 @@ def load_profile_from_csv(
         value_col = candidates[0]
 
     # Parse timestamps
-    df[timestamp_col] = pd.to_datetime(df[timestamp_col], dayfirst=True, errors="coerce")
+    # AUDIT N1(econ): dayfirst na ISO timestampoch ticho korumpoval dáta (NaN diery → 28 % chyba NPV).
+    # Skús najprv striktné ISO8601; ak nesadne (SK formát dd.mm.yyyy), fallback dayfirst.
+    _ts_iso = pd.to_datetime(df[timestamp_col], format="ISO8601", errors="coerce")
+    if _ts_iso.notna().mean() >= 0.95:
+        df[timestamp_col] = _ts_iso
+    else:
+        df[timestamp_col] = pd.to_datetime(df[timestamp_col], dayfirst=True, errors="coerce")
     df = df.dropna(subset=[timestamp_col, value_col]).sort_values(timestamp_col).reset_index(drop=True)
 
     # Konverzia kWh → kW

@@ -262,7 +262,8 @@ class VariantGenerator:
         # BOD 11 FIX: v merchant móde batéria neslúži OM → site KPI/summary = PV-only
         # (samospotreba/samostatnosť odrážajú LEN PV; batéria zarába zvlášť ako merchant).
         if bess and not self.merchant_mode:
-            battery = BatteryPack(bess, initial_soc_pct=0.5)
+            # AUDIT: štart na SoC min — polovičný štart kreditoval ~0,5×kapacita energie „zadarmo"
+            battery = BatteryPack(bess, initial_soc_pct=float(getattr(bess, "soc_min_pct", 0.08) or 0.08))
             ems = RuleBasedEMS(
                 battery, self.site, tariff, retail,
                 EMSConfig(
@@ -380,6 +381,9 @@ class VariantGenerator:
             saving_decomp_y1=saving_decomp,
             annual_degradation_pct=0.5,
             annual_bess_discharge_kwh=_bess_throughput_kwh,
+            # AUDIT N8: bez annual_pv_kwh bol LCOE vždy None; LCOS bežal bez nákladov nabíjania
+            annual_pv_kwh=float(getattr(summary, "pv_total_kwh", 0.0) or 0.0),
+            annual_bess_charge_cost_eur=float(getattr(summary, "grid_charge_cost_eur", 0.0) or 0.0),
         )
         financial = builder.build(dotacia_eur=0.0, **_cf_kwargs)
 
@@ -408,6 +412,24 @@ class VariantGenerator:
         pv_to_load = np.minimum(pv_kw, load_kw)
         pv_to_grid = np.maximum(pv_kw - load_kw, 0)
         grid_import = np.maximum(load_kw - pv_kw, 0)
+        # AUDIT (property test S5): BESS vetva pri zápornom spote export curtailuje (AOM-FIX-31),
+        # PV-only baseline exportoval za plný výkup → batéria v porovnaní variantov vyzerala
+        # horšie, než je (až ~1 700 €/r pri veľkej FVE). Rovnaké pravidlo pre obe vetvy.
+        _curtailed = 0.0
+        try:
+            _spot_arr = np.asarray(self.spot, dtype=float)[: len(pv_to_grid)]
+            _neg = _spot_arr < 0
+            _curtailed = float(pv_to_grid[_neg].sum())
+            pv_to_grid = pv_to_grid.copy()
+            pv_to_grid[_neg] = 0.0
+            # parita aj pre MRK clip exportu (BESS vetva clipuje na mrk_kw — baseline musí tiež)
+            _mrk_lim = float(self.site.mrk_kw or 0.0)
+            if _mrk_lim > 0:
+                _over = np.maximum(pv_to_grid - _mrk_lim, 0.0)
+                _curtailed += float(_over.sum())
+                pv_to_grid = np.minimum(pv_to_grid, _mrk_lim)
+        except Exception:
+            pass
 
         s.load_total_kwh = float(load_kw.sum())
         s.pv_total_kwh = float(pv_kw.sum())
@@ -415,6 +437,7 @@ class VariantGenerator:
         s.pv_to_grid_kwh = float(pv_to_grid.sum())
         s.grid_import_kwh = float(grid_import.sum())
         s.grid_export_kwh = s.pv_to_grid_kwh
+        s.pv_curtailed_kwh = _curtailed
 
         if s.pv_total_kwh > 0:
             s.samospotreba_pct = s.pv_to_load_kwh / s.pv_total_kwh * 100

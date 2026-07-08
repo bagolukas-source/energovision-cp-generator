@@ -68,6 +68,16 @@ def _decode_csv_to_load_kw(csv_b64: str, granularity_min: int, expected_kwh: flo
             tmp, granularity_min=granularity_min, expected_annual_kwh=expected_kwh
         )
         hourly = df["load_kw"].resample("1h").mean()
+        # AUDIT N1(econ): diery po resample (zlé timestampy) sa šírili ako NaN až do NPV.
+        # Krátke diery interpoluj, väčšie = tvrdá chyba namiesto tichej korupcie výsledkov.
+        _na = int(hourly.isna().sum())
+        if _na:
+            hourly = hourly.interpolate(limit=6)
+        if hourly.isna().any():
+            raise ValueError(
+                f"Profil má {int(hourly.isna().sum())} dier po prevode na hodinové dáta — "
+                "skontroluj formát timestampov v CSV (ISO alebo dd.mm.yyyy)."
+            )
         return hourly.to_numpy(), hourly.index
     finally:
         tmp.unlink(missing_ok=True)

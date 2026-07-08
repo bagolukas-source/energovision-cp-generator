@@ -102,11 +102,15 @@ class RuleBasedEMS:
         _disch_retail = 0.0      # vybitie @ retail (pre PV samospotrebu)
         _grid_charge_kwh = 0.0
         # Per-interval cost-basis oceňovanie batérie (PRESNÝ arbitrážny spread — opravuje grid_frac priemer)
-        _pv_bucket = float(self.bat.soc_kwh)   # počiatočný SoC = PV-báza (neutrálne)
+        # AUDIT N7: počiatočný SoC NIE JE energia zadarmo — ide do grid-vedra s nákladovou bázou
+        # retailu prvej hodiny (predtým _pv_bucket=SoC kreditoval štartovnú energiu plným retailom).
+        _init_soc_kwh = max(0.0, float(self.bat.soc_kwh) - float(self.bat.soc_min_kwh))  # len využiteľná časť nad minimom
+        _pv_bucket = 0.0
         _grid_bucket = 0.0
         _grid_cost = 0.0
         _bess_self_acc = 0.0
         _arbitrage_acc = 0.0
+        _grid_charge_cost_total = 0.0   # celkový náklad grid nabíjania (pre LCOS)
         _pv_via_bat_acc = 0.0   # kWh PV reálne dodané z batérie do loadu (po RTE)
         _monthly = {m: {"pv": 0.0, "pv_to_load": 0.0, "export": 0.0, "import": 0.0, "load": 0.0} for m in range(1, 13)}
         _mon_max_load = {}   # mesiac -> max load kW
@@ -144,59 +148,62 @@ class RuleBasedEMS:
             allow_extra_cycles = cycle_budget_left_pct > 0.1  # zostáva > 10 % budgetu
 
             # === STEP 3: Dispatch logika ===
+            # AUDIT N1: od P1 nižšie sa počíta VÝHRADNE v kWh za krok — pôvodný kód miešal
+            # kW a kWh (remaining_load -= bat_kwh; charge(kW ako kWh)), čo bolo korektné len
+            # pri dt=60 min; pri 15-min kroku vznikala/zanikala fantómová energia.
             # Priorita 1: PV → load priame (vždy)
-            pv_to_load = min(pv, load)
-            remaining_pv = pv - pv_to_load
-            remaining_load = load - pv_to_load
+            pv_to_load = min(pv, load)                      # kW
+            remaining_pv_kwh = (pv - pv_to_load) * dt_h
+            remaining_load_kwh = (load - pv_to_load) * dt_h
 
-            # Priorita 2a: Peak shaving (ak load_15min > MRK target)
+            # Priorita 2a: Peak shaving (prah mrk_target je v kW → porovnávaj výkon)
             action = DispatchAction.NORMAL
             bat_to_load_peak = 0.0
             if (self.config.peak_shave_enabled
-                    and remaining_load > mrk_target
+                    and remaining_load_kwh / dt_h > mrk_target
                     and self.bat.soc_kwh > self.bat.soc_min_kwh * self.bat.soh):
                 # Vyber dostatok BAT power na peak shave
-                shave_needed = remaining_load - mrk_target
-                discharge = self.bat.discharge(shave_needed, dt_h)
+                shave_needed_kwh = (remaining_load_kwh / dt_h - mrk_target) * dt_h
+                discharge = self.bat.discharge(shave_needed_kwh, dt_h)
                 bat_to_load_peak = discharge.actual_discharge_kwh
-                remaining_load -= bat_to_load_peak
+                remaining_load_kwh -= bat_to_load_peak
                 action = DispatchAction.PEAK_SHAVE
 
             # Priorita 2b: PV → BAT charge (ak surplus PV a BAT má miesto)
             pv_to_bat = 0.0
-            if remaining_pv > 0 and self.bat.soc_kwh < self.bat.soc_max_kwh * self.bat.soh:
-                if allow_extra_cycles:  # respektuj cycle budget
-                    charge_result = self.bat.charge(remaining_pv, dt_h)
+            if remaining_pv_kwh > 0 and self.bat.soc_kwh < self.bat.soc_max_kwh * self.bat.soh:
+                if allow_extra_cycles:  # respektuj cycle budget (len NABÍJANIE — viď AUDIT N4)
+                    charge_result = self.bat.charge(remaining_pv_kwh, dt_h)
                     pv_to_bat = charge_result.actual_charge_kwh
-                    remaining_pv -= pv_to_bat
+                    remaining_pv_kwh -= pv_to_bat
 
             # Priorita 3a: BAT arbitráž discharge (drahá hodina + ešte ostal load)
+            # AUDIT N4: vybíjanie NEgatovať cycle budgetom — EFC sa čerpá len nabíjaním;
+            # blokovanie discharge nešetrilo cykly, len väznilo už nabitú (zaplatenú) energiu.
             bat_to_load_arb = 0.0
             if (action != DispatchAction.PEAK_SHAVE
                     and is_expensive_now
-                    and remaining_load > 0
-                    and self.bat.soc_kwh > self.bat.soc_min_kwh * self.bat.soh
-                    and allow_extra_cycles):
-                discharge_arb = self.bat.discharge(remaining_load, dt_h)
+                    and remaining_load_kwh > 0
+                    and self.bat.soc_kwh > self.bat.soc_min_kwh * self.bat.soh):
+                discharge_arb = self.bat.discharge(remaining_load_kwh, dt_h)
                 bat_to_load_arb = discharge_arb.actual_discharge_kwh
-                remaining_load -= bat_to_load_arb
+                remaining_load_kwh -= bat_to_load_arb
                 action = DispatchAction.DISCHARGE_BAT
 
             # Priorita 3b: BESS self-consumption (ak deficit a stale je SoC > min)
             bat_to_load_self = 0.0
             if (self.config.enable_bess_self_cons
-                    and remaining_load > 0
+                    and remaining_load_kwh > 0
                     and self.bat.soc_kwh > self.bat.soc_min_kwh * self.bat.soh
                     and not is_cheap_now  # nevybíjaj keď je lacné teraz
-                    and allow_extra_cycles
                     and action == DispatchAction.NORMAL):
-                discharge_self = self.bat.discharge(remaining_load, dt_h)
+                discharge_self = self.bat.discharge(remaining_load_kwh, dt_h)
                 bat_to_load_self = discharge_self.actual_discharge_kwh
-                remaining_load -= bat_to_load_self
+                remaining_load_kwh -= bat_to_load_self
 
             # Priorita 4: Grid → BAT charge (lacná hodina, BAT má miesto, RK voľná)
             grid_to_bat = 0.0
-            free_rk = max(0.0, self.site.rk_kw - remaining_load) * dt_h  # kWh voľné na grid charge
+            free_rk = max(0.0, self.site.rk_kw - remaining_load_kwh / dt_h) * dt_h  # kWh voľné na grid charge
             if (is_cheap_now
                     and self.bat.soc_kwh < self.bat.soc_max_kwh * self.bat.soh
                     and free_rk > 0.1
@@ -206,20 +213,23 @@ class RuleBasedEMS:
                 action = DispatchAction.CHARGE_GRID
 
             # Priorita 5: PV → grid export (zvyšok PV)
-            pv_to_grid = max(0.0, remaining_pv * dt_h)
+            pv_to_grid = max(0.0, remaining_pv_kwh)
             # AOM-FIX-31: Curtail pri zápornom spote — nevyplatí sa exportovať pod 0 €/MWh
             # (klient platí distribučný poplatok aj pri zápornej cene). Default ON.
+            # AUDIT N2: curtailnutá energia sa eviduje (pv_curtailed_kwh), nemizne z bilancie.
+            pv_curtailed_kwh = 0.0
             if getattr(self.config, "negative_spot_curtail", True) and spot < 0:
+                pv_curtailed_kwh = pv_to_grid
                 pv_to_grid = 0.0
             # Clip na MRK
             mrk_export_limit_kwh = self.site.mrk_kw * dt_h
             pv_to_grid_clipped = min(pv_to_grid, mrk_export_limit_kwh)
             mrk_overflow_kwh = max(0.0, pv_to_grid - pv_to_grid_clipped)
 
-            # Konverzia kW na kWh per timestep (väčšina už je v kWh)
+            # Toky v kWh za timestep
             pv_to_load_kwh = pv_to_load * dt_h
             bat_to_load_kwh = (bat_to_load_peak + bat_to_load_arb + bat_to_load_self)  # už kWh
-            grid_to_load_kwh = remaining_load * dt_h
+            grid_to_load_kwh = remaining_load_kwh
             pv_to_bat_kwh = pv_to_bat  # už kWh
             grid_to_bat_kwh = grid_to_bat  # už kWh
 
@@ -227,11 +237,17 @@ class RuleBasedEMS:
             # Dve vedrá energie: PV-zdrojová (lacná) + grid-zdrojová (nabitá @ retail v lacnej hodine).
             # Vybitie ocenené retailom AKTUÁLNEJ hodiny; grid-zdrojová mínus jej nákladová báza
             # → arbitráž = spot_vybitia − spot_nabitia (poplatky sa vyrušia), presne kde sa to využíva.
+            if i == 0 and _init_soc_kwh > 0:
+                _grid_bucket += _init_soc_kwh
+                _grid_cost += _init_soc_kwh * tarif_buy
             if pv_to_bat_kwh > 0:
                 _pv_bucket += pv_to_bat_kwh
             if grid_to_bat_kwh > 0:
                 _grid_bucket += grid_to_bat_kwh
                 _grid_cost += grid_to_bat_kwh * tarif_buy
+                _grid_charge_cost_total += grid_to_bat_kwh * tarif_buy
+            _self_acc_before = _bess_self_acc
+            _arb_acc_before = _arbitrage_acc
             if bat_to_load_kwh > 0:
                 _tot_b = _pv_bucket + _grid_bucket
                 if _tot_b > 1e-9:
@@ -255,7 +271,7 @@ class RuleBasedEMS:
                 else:
                     _bess_self_acc += bat_to_load_kwh * tarif_buy
 
-            # SAVING decomposition
+            # SAVING decomposition (solar/export/mrk zložky per-interval)
             sav = self._compute_savings(
                 pv_to_load_kwh=pv_to_load_kwh,
                 pv_to_grid_kwh=pv_to_grid_clipped,
@@ -267,6 +283,12 @@ class RuleBasedEMS:
                 tarif_buy=tarif_buy,
                 spot_eur_mwh=spot,
             )
+            # AUDIT N3: bess_self/arbitráž per-interval = delty cost-basis akumulátorov,
+            # aby Σ intervalov sedela so summary (starý per-interval vzorec dával iné čísla
+            # než summary — grafy z intervalov klamali). Náklad grid nabíjania sa účtuje
+            # pri VYBITÍ (cost basis), nie v hodine nabitia.
+            sav["sav_bess_self_cons_eur"] = _bess_self_acc - _self_acc_before
+            sav["sav_arbitrage_eur"] = _arbitrage_acc - _arb_acc_before
 
             # SoC po dispatchu (battery už updated cez .charge/.discharge calls)
             soc_after = self.bat.soc_kwh
@@ -297,7 +319,7 @@ class RuleBasedEMS:
                 pv_to_load_kwh=pv_to_load_kwh,
                 pv_to_bat_kwh=pv_to_bat_kwh,
                 pv_to_grid_kwh=pv_to_grid_clipped,
-                pv_clipped_kwh=0.0,  # inverter clipping je už v PV simulátore
+                pv_clipped_kwh=pv_curtailed_kwh + mrk_overflow_kwh,  # curtail @ záporný spot + MRK clip (AUDIT N2)
                 grid_to_load_kwh=grid_to_load_kwh,
                 grid_to_bat_kwh=grid_to_bat_kwh,
                 bat_to_load_kwh=bat_to_load_kwh,
@@ -318,6 +340,7 @@ class RuleBasedEMS:
             summary.pv_to_load_kwh += pv_to_load_kwh
             summary.pv_to_bat_kwh += pv_to_bat_kwh
             summary.pv_to_grid_kwh += pv_to_grid_clipped
+            summary.pv_curtailed_kwh = getattr(summary, "pv_curtailed_kwh", 0.0) + pv_curtailed_kwh + mrk_overflow_kwh
             summary.bat_charge_total_kwh += pv_to_bat_kwh + grid_to_bat_kwh
             summary.bat_discharge_total_kwh += bat_to_load_kwh
             summary.grid_import_kwh += grid_import_kwh
@@ -355,6 +378,9 @@ class RuleBasedEMS:
         summary.monthly_flows = _monthly   # reálne mesačné toky (MWh po /1000) pre posudok
         summary.sav_bess_self_cons_eur = _bess_self_acc
         summary.sav_arbitrage_eur = _arbitrage_acc
+        # AUDIT N4(econ): zostatková energia vo vedre má zaplatený náklad, ale je to aktívum
+        # (vybije sa ďalší rok) — neodpisujeme, len reportujeme pre diagnostiku/identitu účtov.
+        summary.grid_bucket_leftover_cost_eur = max(0.0, _grid_cost)
 
         # === Peak shaving — REALNA redukcia mesacneho maxima x MRK kapacitny poplatok ===
         # MRK sa fakturuje z mesacneho 15-min maxima; baterka ho znizuje. Nie 200h pausal.
@@ -371,6 +397,7 @@ class RuleBasedEMS:
             + summary.sav_bess_self_cons_eur + summary.sav_arbitrage_eur
             + summary.sav_peak_shaving_eur + summary.sav_mrk_penalty_avoided_eur
         )
+        summary.grid_charge_cost_eur = _grid_charge_cost_total
         summary.bat_efc = self.efc_used_this_year
         summary.bat_soh_end = self.bat.soh
         summary.n_replacements = self.bat.degradation.n_replacements
@@ -384,8 +411,9 @@ class RuleBasedEMS:
             summary.samostatnost_pct = (summary.pv_to_load_kwh + _pv_via_bat_acc) / summary.load_total_kwh * 100
 
         # CO2 (SK grid mix)
+        # AUDIT N9: CO2 len z PV energie (priama + PV cez batériu po RTE) — grid→bat→load emisie nešetrí
         summary.co2_avoided_t = (
-            summary.pv_to_load_kwh + summary.bat_discharge_total_kwh + summary.pv_to_grid_kwh
+            summary.pv_to_load_kwh + _pv_via_bat_acc + summary.pv_to_grid_kwh
         ) * self.co2_factor / 1000
 
         return intervals, summary
