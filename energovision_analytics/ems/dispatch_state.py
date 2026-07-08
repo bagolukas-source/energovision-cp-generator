@@ -35,6 +35,10 @@ class EMSConfig:
     # Arbitráž triggery
     lookahead_hours: int = 12             # 12h okno → zachytí intra-day sedlá/špičky (2 cykly/deň); pôvodne 24
     arb_min_spread_eur_mwh: float = 30.0  # Min ekonomický spread (po RTE straty)
+    # Šírka obchodného pásma v okne: 0 = len absolútny extrém ±5 € (default — meraním
+    # overené, že širšie pásmo kanibalizuje samospotrebu a CELKOVO zarába menej;
+    # test 2026-07-08: band 0/0.25/0.40 → 1285/1043/866 €/r). Laditeľné cez ems_config.
+    arb_band_pct: float = 0.0
     arb_threshold_charge_eur_mwh: float = 50.0   # Charge len pod touto cenou
     arb_threshold_discharge_eur_mwh: float = 120.0  # Discharge len nad touto
 
