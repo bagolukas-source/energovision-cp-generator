@@ -207,6 +207,7 @@ def run_variants_pipeline(request_dict: dict, progress_cb=None) -> dict:
         ems_max_efc_per_year=(request_dict.get("ems_config") or {}).get("max_efc_per_year"),
         ems_arb_min_spread_eur_mwh=(request_dict.get("ems_config") or {}).get("arb_min_spread_eur_mwh"),
         ems_arb_band_pct=(request_dict.get("ems_config") or {}).get("arb_band_pct"),
+        pv_inverter_kw=v.get("pv_inverter_kw"),
     )
     log.info("Running %d variants", len(v["pv_kwp_options"]) * len(v["bess_kwh_options"]))
     results = gen.run_all(parallel=True)

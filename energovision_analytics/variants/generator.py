@@ -129,6 +129,7 @@ class VariantGenerator:
         ems_max_efc_per_year: float | None = None,   # override cyklov/rok z UI (inak warranty/horizon)
         ems_arb_min_spread_eur_mwh: float | None = None,  # override min spreadu arbitráže z UI
         ems_arb_band_pct: float | None = None,           # šírka obchodného pásma okna (0=extrémy, 0.25=štvrtina)
+        pv_inverter_kw: float | None = None,             # ZADANÝ AC výkon meniča (inak kwp/ratio) — clipping v PV sim
         merchant_revenue_share_pct: float = 1.0,   # R2 #6: podiel klienta z čistého merchant výnosu
     ) -> None:
         # Lazy import aby sa rieš cyklický import
@@ -185,6 +186,7 @@ class VariantGenerator:
         self.ems_max_efc_per_year = ems_max_efc_per_year
         self.ems_arb_min_spread_eur_mwh = ems_arb_min_spread_eur_mwh
         self.ems_arb_band_pct = ems_arb_band_pct
+        self.pv_inverter_kw = pv_inverter_kw
         self.merchant_mode = bool(merchant_mode) or self.bess_mode == "BALANCE_GROUP_MERCHANT_100"
         self.merchant_organizer_fee_pct = float(merchant_organizer_fee_pct)
         self.merchant_imbalance_eur_mwh = float(merchant_imbalance_eur_mwh or 0.0)
@@ -199,7 +201,8 @@ class VariantGenerator:
         n_modules = max(1, int(round(kwp * 1000 / self.pv_modul_wp)))
         # Re-adjust kwp aby sedelo s modules
         adjusted_kwp = n_modules * self.pv_modul_wp / 1000
-        inverter_kw = adjusted_kwp / self.pv_inverter_ratio
+        # Zadaný výkon meniča má prednosť pred odvodením z pomeru (audit: chýbalo pole AC výkonu)
+        inverter_kw = float(self.pv_inverter_kw) if self.pv_inverter_kw else adjusted_kwp / self.pv_inverter_ratio
         return PVInput(
             instalovany_kwp=adjusted_kwp,
             modul_typ=ModulTyp(self.pv_modul_typ),

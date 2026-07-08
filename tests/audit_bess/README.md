@@ -21,3 +21,6 @@ Známe dokumentované limity (NIE chyby účtovania):
 - greedy dispatch: P2b (PV→bat) neporovnáva cenu s neskorším grid-charge oknom
   → suboptimalita ohraničená ~1,25 % hodnoty batérie
 - výkup exportu flat (export_price), nepoužíva spot formuly bilančných skupín
+- PV model: hodinová špička ~0,65 kW/kWp (vyhladená) — ročný výnos kalibrovaný na PVGIS
+  je OK, ale AC clipping meniča sa pri realistickom DC/AC 1,1–1,35 neprejaví; skutočné
+  15-min špičky sú vyššie. Relevantné až pri extrémnom podsadení meniča.
