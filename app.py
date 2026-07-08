@@ -4177,11 +4177,44 @@ def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchod
 
     typ_ponuky: "Indikatívna" (bez obhliadky, default) alebo "Exaktná" (po obhliadke)
     ma_rozlozenie: True ak v emaily je priložené aj rozlozenie panelov
+
+    ceny[v]: buď holé číslo (legacy Notion tok = cena s DPH), alebo dict
+    {cena_s_dph, dotacia, cena_po_dotacii, navratnost_rokov} zo Supabase toku —
+    čísla musia sedieť s PDF, preto ich počíta rovnaký engine.
     """
-    cena_a = ceny.get("A") or 0
-    cena_b = ceny.get("B") or 0
-    cena_c = ceny.get("C") or 0
-    cena_d = ceny.get("D") or 0
+    def _var(v):
+        d = ceny.get(v)
+        if isinstance(d, dict):
+            return d
+        return {"cena_s_dph": float(d or 0), "dotacia": None, "cena_po_dotacii": None, "navratnost_rokov": None}
+
+    def _cena_li(v, label="Investícia"):
+        """<li> riadky s cenou — s dotáciou ak ju poznáme, inak len cena s DPH."""
+        d = _var(v)
+        if d["cena_po_dotacii"] is not None and (d["dotacia"] or 0) > 0:
+            return (f"<li><strong>Cena s DPH:</strong> {_eur(d['cena_s_dph'])}</li>"
+                    f"<li><strong>Dotácia Zelená domácnostiam:</strong> − {_eur(d['dotacia'])}</li>"
+                    f"<li><strong>{label} po dotácii:</strong> {_eur(d['cena_po_dotacii'])} s DPH</li>")
+        return f"<li><strong>{label}:</strong> {_eur(d['cena_s_dph'])} s DPH</li>"
+
+    def _nav_li(v, fallback):
+        """<li> návratnosť — presná z enginu (zhodná s PDF), inak konzervatívny rozsah."""
+        d = _var(v)
+        r = d.get("navratnost_rokov")
+        if r:
+            r_txt = f"{r:.1f}".replace(".", ",")
+            return f"<li><strong>Návratnosť:</strong> ~{r_txt} roka pri dnešnej cene elektriny 0,16 €/kWh</li>"
+        return f"<li><strong>Návratnosť:</strong> {fallback}</li>"
+
+    def _nav_short(v, fallback):
+        d = _var(v)
+        r = d.get("navratnost_rokov")
+        return ("~" + f"{r:.1f}".replace(".", ",") + " r.") if r else fallback
+
+    cena_a = _var("A")["cena_s_dph"]
+    cena_b = _var("B")["cena_s_dph"]
+    cena_c = _var("C")["cena_s_dph"]
+    cena_d = _var("D")["cena_s_dph"]
 
     # === INTRO — 2 verzie podla typu ponuky ===
     n_var = len(variants)
@@ -4229,9 +4262,9 @@ def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchod
         — typicky pokryje 60-70 % Vašej dennej spotreby. Ideálne ak doma cez deň žije rodina, sušiete
         bielizeň, varíte alebo používate tepelné čerpadlo na ohrev TÚV.</p>
         <ul>
-          <li><strong>Investícia po dotácii Zelená domácnostiam:</strong> {_eur(cena_a)} s DPH</li>
-          <li><strong>Návratnosť:</strong> 6–8 rokov pri dnešnej cene elektriny 0,16 €/kWh</li>
-          <li><strong>Záruka:</strong> 30 rokov na panely, 10 rokov na menič</li>
+          {_cena_li("A", "Investícia")}
+          {_nav_li("A", "6–8 rokov pri dnešnej cene elektriny 0,16 €/kWh")}
+          <li><strong>Záruka:</strong> 25 rokov na výkon panelov (12 rokov produktová), 10 rokov na menič</li>
           <li><strong>Inštalácia:</strong> 1–2 dni, bez stavebných úprav</li>
         </ul>
         <p style="background:#F0F8F4;padding:12px;border-left:4px solid #1B5E3F;font-size:14px;">
@@ -4242,16 +4275,16 @@ def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchod
 
     # === BLOCK B — FVE + BESS ===
     if "B" in variants:
-        bat_str = _fmt_bateria_kwh(bateria_kwh)
+        bat_str = _fmt_bateria_kwh(_var("B").get("bateria_kwh") or bateria_kwh)
         blocks.append(f"""
         <h3 style="color:#1B5E3F;margin-top:24px;">Varianta B — fotovoltika {kwp} kWp + batéria {bat_str}</h3>
         <p>Energetická nezávislosť — slnko ukladáte do batérie a používate večer/v noci/keď je zamračené.
         Pri zlepšujúcich sa zľavách na komponenty je toto pre Slovákov dnes najatraktívnejšia voľba,
         najmä pre rodiny ktoré sú doma <strong>predovšetkým ráno a večer</strong>.</p>
         <ul>
-          <li><strong>Investícia po dotácii:</strong> {_eur(cena_b)} s DPH</li>
+          {_cena_li("B", "Investícia")}
           <li><strong>Pokrytie spotreby:</strong> 85–95 % pri správnom dimenzovaní</li>
-          <li><strong>Návratnosť:</strong> 8–11 rokov</li>
+          {_nav_li("B", "8–11 rokov")}
           <li><strong>Backup:</strong> pri výpadku siete batéria automaticky prepne dom na ostrov (voliteľne)</li>
           <li><strong>Záruka batérie:</strong> 10 rokov / 6 000 cyklov</li>
         </ul>
@@ -4264,14 +4297,14 @@ def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchod
 
     # === BLOCK C — FVE + BESS + Wallbox ===
     if "C" in variants:
-        bat_str = _fmt_bateria_kwh(bateria_kwh)
+        bat_str = _fmt_bateria_kwh(_var("C").get("bateria_kwh") or bateria_kwh)
         blocks.append(f"""
         <h3 style="color:#1B5E3F;margin-top:24px;">Varianta C — kompletné riešenie + wallbox pre elektromobil</h3>
         <p>FVE {kwp} kWp + batéria {bat_str} + smart wallbox. Vaše auto sa nabíja zo slnka — zadarmo —
         a wallbox automaticky reaguje na prebytky FVE. Riešenie pre rodiny s elektromobilom alebo plánom kúpiť
         EV v najbližších rokoch.</p>
         <ul>
-          <li><strong>Investícia:</strong> {_eur(cena_c)} s DPH</li>
+          {_cena_li("C", "Investícia")}
           <li><strong>Úspora paliva:</strong> ~ 1 200 € ročne pri 15 000 km/rok namiesto benzínu</li>
           <li><strong>Plná energetická nezávislosť:</strong> spotreba domu + auto z vlastnej elektriny</li>
           <li><strong>Smart logika:</strong> wallbox sa zapne keď FVE má nadbytok, nezasahuje do siete</li>
@@ -4291,8 +4324,8 @@ def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchod
         Wallbox automaticky reaguje na prebytky FVE a využíva ich na nabíjanie EV. Optimálne riešenie ak doma cez deň
         bývate menej a hlavnou prioritou je nabíjanie auta zo slnka.</p>
         <ul>
-          <li><strong>Investícia po dotácii:</strong> {_eur(cena_d)} s DPH</li>
-          <li><strong>Návratnosť:</strong> 7–9 rokov pri kombinácii FVE + EV nabíjanie</li>
+          {_cena_li("D", "Investícia")}
+          {_nav_li("D", "7–9 rokov pri kombinácii FVE + EV nabíjanie")}
           <li><strong>Výhoda:</strong> nižšia investícia ako varianta C, ale stále plné EV nabíjanie zo slnka</li>
           <li><strong>Hybridný menič:</strong> možnosť doplnenia batérie neskôr bez prerábania systému</li>
         </ul>
@@ -4307,11 +4340,11 @@ def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchod
     if len(variants) > 1:
         rows = []
         if "A" in variants:
-            rows.append(f"<tr><td>A — iba FVE</td><td style='text-align:right;'>{_eur(cena_a)}</td><td>~7 rokov</td><td>Šetríš cez deň</td></tr>")
+            rows.append(f"<tr><td>A — iba FVE</td><td style='text-align:right;'>{_eur(cena_a)}</td><td>{_nav_short('A', '~7 rokov')}</td><td>Šetríš cez deň</td></tr>")
         if "B" in variants:
-            rows.append(f"<tr><td>B — FVE + batéria</td><td style='text-align:right;'>{_eur(cena_b)}</td><td>~9 rokov</td><td>Plná denná + nočná nezávislosť</td></tr>")
+            rows.append(f"<tr><td>B — FVE + batéria</td><td style='text-align:right;'>{_eur(cena_b)}</td><td>{_nav_short('B', '~9 rokov')}</td><td>Plná denná + nočná nezávislosť</td></tr>")
         if "C" in variants:
-            rows.append(f"<tr><td>C — komplet + wallbox</td><td style='text-align:right;'>{_eur(cena_c)}</td><td>~11 rokov</td><td>+ EV nabíjanie zadarmo</td></tr>")
+            rows.append(f"<tr><td>C — komplet + wallbox</td><td style='text-align:right;'>{_eur(cena_c)}</td><td>{_nav_short('C', '~11 rokov')}</td><td>+ EV nabíjanie zadarmo</td></tr>")
 
         comparison = f"""
         <h3 style="color:#1B5E3F;margin-top:24px;">Krátke porovnanie</h3>
@@ -4571,12 +4604,57 @@ def _email_template_supabase_impl():
     vykon_kwp = lead_a.get("vykon_kwp", 0)
     bateria_kwh = float(flat_props.get("Batéria výkon") or 0)
 
-    ceny = {
-        "A": flat_props.get("Cena A s DPH") or flat_props.get("Cena A"),
-        "B": flat_props.get("Cena B s DPH") or flat_props.get("Cena B"),
-        "C": flat_props.get("Cena C s DPH") or flat_props.get("Cena C"),
-        "D": flat_props.get("Cena D s DPH") or flat_props.get("Cena D"),
-    }
+    # === Per-variant čísla ROVNAKÝM enginom ako PDF ===
+    # Bug 2026-07-08: email tvrdil "Investícia po dotácii: 8 367 €" pri PDF cene
+    # po dotácii 6 867 € + hardcoded návratnosť "6–8 rokov" vs. 4,7 r. v PDF.
+    # Email si teraz dotáciu aj návratnosť ráta z engine + CRM cenový override,
+    # takže nemôže protirečiť PDF. Pri zlyhaní enginu fallback na holú CRM cenu.
+    cennik = load_cennik()
+    ceny = {}
+    for v in variants:
+        crm_cena = None
+        for key in (f"Cena {v} s DPH", f"Cena {v}"):
+            try:
+                val = float(flat_props.get(key) or 0)
+                if val > 0:
+                    crm_cena = val
+                    break
+            except (TypeError, ValueError):
+                continue
+        try:
+            # Per-variant batéria/wallbox — CRM ich posiela ako "Batéria B (typ)",
+            # "Wallbox C (typ)" atď., lebo jeden email pokrýva viac variantov naraz.
+            # Bez nich by návratnosť B/C rátala default batériu (nesedela by s PDF).
+            fp_v = dict(flat_props)
+            if v in ("B", "C"):
+                if flat_props.get(f"Batéria {v} (typ)"):
+                    fp_v["Batéria (typ)"] = flat_props[f"Batéria {v} (typ)"]
+                if flat_props.get(f"Batéria {v} počet"):
+                    fp_v["Batéria počet"] = flat_props[f"Batéria {v} počet"]
+            if v in ("C", "D"):
+                if flat_props.get(f"Wallbox {v} (typ)"):
+                    fp_v["Wallbox (typ)"] = flat_props[f"Wallbox {v} (typ)"]
+            lead_v = lead_from_notion(fp_v, v)
+            konfig_v = vyrataj_konfig(lead_v, cennik)
+            ceny_v = vyrataj_ceny(konfig_v, lead_v)
+            if crm_cena:
+                # CRM override — rovnaká logika ako /webhook/generate-pdf-supabase
+                dotacia = ceny_v.get("dotacia", 0) if lead_v.get("dotacia", True) else 0
+                ceny_v = {**ceny_v, "cena_s_dph": crm_cena, "cena_bez_dph": crm_cena / 1.23,
+                          "dotacia": dotacia, "cena_po_dotacii": crm_cena - dotacia,
+                          "cena_finalna": crm_cena - dotacia}
+            nav_v = vyrataj_navratnost(konfig_v, ceny_v, lead_v)
+            ceny[v] = {
+                "cena_s_dph": ceny_v["cena_s_dph"],
+                "dotacia": ceny_v.get("dotacia", 0),
+                "cena_po_dotacii": ceny_v.get("cena_finalna", ceny_v["cena_s_dph"]),
+                "navratnost_rokov": nav_v.get("navratnost_rokov"),
+                "bateria_kwh": konfig_v.get("bateria_kwh") if konfig_v.get("ma_bateriu") else None,
+            }
+        except Exception as _ve:
+            log.warning(f"[email-template] engine čísla pre variant {v} zlyhali: {_ve}")
+            ceny[v] = {"cena_s_dph": crm_cena or 0, "dotacia": None,
+                       "cena_po_dotacii": None, "navratnost_rokov": None, "bateria_kwh": None}
 
     subject = build_subject(priezvisko, mesto, variants, typ_ponuky=typ_ponuky)
     body_html = build_email_body(
