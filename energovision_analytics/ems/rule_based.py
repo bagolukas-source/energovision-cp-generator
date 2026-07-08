@@ -128,10 +128,15 @@ class RuleBasedEMS:
             la_min = float(la_spots.min()) if len(la_spots) else spot
             la_max = float(la_spots.max()) if len(la_spots) else spot
 
+            # Obchodné pásmo okna: band=0 → staré správanie (extrém ±5 €); band>0 → spodná/vrchná
+            # časť rozpätia cien okna. Spread podmienka (min ekonomika po RTE) platí vždy.
+            _band = max(0.0, float(getattr(self.config, "arb_band_pct", 0.0))) * (la_max - la_min)
+            _cheap_lim = la_min + max(5.0, _band)
+            _exp_lim = la_max - max(5.0, _band)
             # Je toto lacná hodina v lookahead? (na grid charge)
-            is_cheap_now = spot <= la_min + 5 and (la_max - spot) >= self.config.arb_min_spread_eur_mwh
+            is_cheap_now = spot <= _cheap_lim and (la_max - spot) >= self.config.arb_min_spread_eur_mwh
             # Je toto drahá hodina? (na discharge arbitráž)
-            is_expensive_now = spot >= la_max - 5 and (spot - la_min) >= self.config.arb_min_spread_eur_mwh
+            is_expensive_now = spot >= _exp_lim and (spot - la_min) >= self.config.arb_min_spread_eur_mwh
 
             # === STEP 2: Cycle budget check (limit max_efc_per_year) ===
             cycle_budget_left = max_efc - self.efc_used_this_year
