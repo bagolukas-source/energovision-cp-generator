@@ -398,20 +398,63 @@ def inspect(files: list[dict], unit_override: str | None = None,
         flags.insert(0, {"level": "info", "text": f"Výstup premapovaný na kalendárny rok {year} (1.1.–31.12.). Zdroj: {src_from} – {src_to}."})
     stats["source_period"] = f"{src_from} – {src_to}"
 
+    # ── Dopočet CELÉHO ROKA pri neúplnom pokrytí ──────────────────────────
+    # Doteraz šiel do CSV/PV*SOL txt len nameraný úsek (pvsol_txt zvyšok roka
+    # ffill-ol poslednou hodnotou → 95 % roka bol nezmysel bez varovania).
+    # Teraz: namerané intervaly ostávajú REÁLNE, zvyšok roka = typický týždeň
+    # z nameraných dát × sezónne váhy (intake_agent._extrapolate_to_year),
+    # hladina kotvená na ročnú spotrebu z faktúry, ak je zadaná.
+    final_out = final
+    extrapolated = False
+    cov_frac = len(final) / float(FULL_YEAR_15MIN)
+    if cov_frac < 0.95:
+        try:
+            from ingestion.intake_agent import _extrapolate_to_year
+            ext, emeta = _extrapolate_to_year(final, invoice_annual_kwh, year)
+            common = final.index.intersection(ext.index)
+            if len(common):
+                ext.loc[common] = final.loc[common]  # namerané dáta majú prednosť
+            final_out = ext
+            extrapolated = True
+            flags.insert(0, {"level": "info", "text": (
+                f"🧩 Dopočítaný CELÝ ROK 1.1.–31.12.{year}: namerané obdobie ({stats['period_from']} – {stats['period_to']}, "
+                f"pokrytie {cov_frac*100:.0f} %) ostáva reálne, zvyšok = typický týždeň z nameraných dát × sezónnosť. "
+                f"Hladina: {emeta.get('level_basis')} (~{emeta.get('target_annual_kwh', 0)/1000:.1f} MWh/rok). "
+                "CSV aj PV*SOL txt obsahujú plných 35 040 intervalov; grafy ukazujú dopočítaný rok.")})
+            if not (invoice_annual_kwh and invoice_annual_kwh > 0):
+                flags.insert(1, {"level": "warn", "text": (
+                    "Ročná hladina je len odhad z nameraných mesiacov — zadaj Ročnú spotrebu z faktúry "
+                    "a dopočet sa na ňu presne nakalibruje.")})
+            stats["annual_mwh_measured"] = stats["annual_mwh"]
+            stats["annual_mwh"] = round(float(final_out.sum()), 1)
+            # sanity: namerané obdobie anualizované vs faktúra — rádový nesúlad = zlá jednotka/parser
+            if invoice_annual_kwh and invoice_annual_kwh > 0 and cov_frac > 0:
+                _annualized = float(final.sum()) / max(cov_frac, 1e-6) * 1000.0  # kWh
+                _dev = _annualized / invoice_annual_kwh - 1
+                if abs(_dev) > 0.30:
+                    flags.insert(1, {"level": "warn", "text": (
+                        f"Namerané dáta anualizované ({_annualized/1000:.0f} MWh) sa nezhodujú s faktúrou "
+                        f"({invoice_annual_kwh/1000:.0f} MWh, {_dev*100:+.0f} %) — over jednotku/parser, dopočet môže byť mimo.")})
+            stats["peak_kw"] = round(float(final_out.max()) * 4000.0, 0)
+            stats["avg_kw"] = round(float(final_out.mean()) * 4000.0, 0)
+            stats["extrapolated"] = True
+        except Exception:
+            flags.insert(0, {"level": "warn", "text": "Dopočet celého roka zlyhal — výstupy obsahujú len namerané obdobie."})
+
     charts = {}
     for name, fnc in (("heatmap", _svg_heatmap), ("monthly", _svg_monthly),
                       ("load_duration", _svg_load_duration), ("typical", _svg_typical)):
         try:
-            charts[name] = fnc(final)
+            charts[name] = fnc(final_out)
         except Exception:
             charts[name] = ""
 
-    csv_bytes = canonical_csv(final)
-    txt_bytes = pvsol_txt(final, year)
+    csv_bytes = canonical_csv(final_out)
+    txt_bytes = pvsol_txt(final_out, year)
     return {"ok": True, "verdict": verdict, "stats": stats, "flags": flags,
             "charts": charts, "per_file": per_file,
             "csv_base64": base64.b64encode(csv_bytes).decode("ascii"),
-            "csv_filename": "spotreba_15min_ocistene.csv",
+            "csv_filename": "spotreba_15min_ocistene.csv" if not extrapolated else "spotreba_15min_full_rok.csv",
             "txt_base64": base64.b64encode(txt_bytes).decode("ascii"),
             "txt_filename": "spotreba_15min_PVSOL.txt",
             "detected_unit": (per_file[-1].get("unit") if per_file else None)}

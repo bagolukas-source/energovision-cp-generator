@@ -126,6 +126,10 @@ class VariantGenerator:
         merchant_imbalance_eur_mwh: float = 0.0,   # BOD 3: odchýlka per MWh obchodu
         merchant_degradation_eur_mwh: float = 0.0, # BOD 3: cyklová degradačná rezerva per MWh
         bess_mode: str = "SITE_SUPPORT_ONLY",     # BOD 1: SITE_SUPPORT_ONLY | BALANCE_GROUP_MERCHANT_100
+        ems_max_efc_per_year: float | None = None,   # override cyklov/rok z UI (inak warranty/horizon)
+        ems_arb_min_spread_eur_mwh: float | None = None,  # override min spreadu arbitráže z UI
+        ems_arb_band_pct: float | None = None,           # šírka obchodného pásma okna (0=extrémy, 0.25=štvrtina)
+        pv_inverter_kw: float | None = None,             # ZADANÝ AC výkon meniča (inak kwp/ratio) — clipping v PV sim
         merchant_revenue_share_pct: float = 1.0,   # R2 #6: podiel klienta z čistého merchant výnosu
     ) -> None:
         # Lazy import aby sa rieš cyklický import
@@ -179,6 +183,10 @@ class VariantGenerator:
         # plnou paľbou, nie samospotreba). Default OFF → normálne varianty bez zmeny.
         # BOD 1: explicitný režim batérie. BALANCE_GROUP_MERCHANT_100 = merchant; mapuje sa na merchant_mode
         self.bess_mode = str(bess_mode or "SITE_SUPPORT_ONLY")
+        self.ems_max_efc_per_year = ems_max_efc_per_year
+        self.ems_arb_min_spread_eur_mwh = ems_arb_min_spread_eur_mwh
+        self.ems_arb_band_pct = ems_arb_band_pct
+        self.pv_inverter_kw = pv_inverter_kw
         self.merchant_mode = bool(merchant_mode) or self.bess_mode == "BALANCE_GROUP_MERCHANT_100"
         self.merchant_organizer_fee_pct = float(merchant_organizer_fee_pct)
         self.merchant_imbalance_eur_mwh = float(merchant_imbalance_eur_mwh or 0.0)
@@ -193,7 +201,8 @@ class VariantGenerator:
         n_modules = max(1, int(round(kwp * 1000 / self.pv_modul_wp)))
         # Re-adjust kwp aby sedelo s modules
         adjusted_kwp = n_modules * self.pv_modul_wp / 1000
-        inverter_kw = adjusted_kwp / self.pv_inverter_ratio
+        # Zadaný výkon meniča má prednosť pred odvodením z pomeru (audit: chýbalo pole AC výkonu)
+        inverter_kw = float(self.pv_inverter_kw) if self.pv_inverter_kw else adjusted_kwp / self.pv_inverter_ratio
         return PVInput(
             instalovany_kwp=adjusted_kwp,
             modul_typ=ModulTyp(self.pv_modul_typ),
@@ -256,11 +265,17 @@ class VariantGenerator:
         # BOD 11 FIX: v merchant móde batéria neslúži OM → site KPI/summary = PV-only
         # (samospotreba/samostatnosť odrážajú LEN PV; batéria zarába zvlášť ako merchant).
         if bess and not self.merchant_mode:
-            battery = BatteryPack(bess, initial_soc_pct=0.5)
+            # AUDIT: štart na SoC min — polovičný štart kreditoval ~0,5×kapacita energie „zadarmo"
+            battery = BatteryPack(bess, initial_soc_pct=float(getattr(bess, "soc_min_pct", 0.08) or 0.08))
             ems = RuleBasedEMS(
                 battery, self.site, tariff, retail,
                 EMSConfig(
-                    max_efc_per_year=int(bess.warranty_cycles / self.horizon_years),
+                    # UI override (analyza_om.max_efc_per_year) má prednosť; default = warranty/horizont
+                    max_efc_per_year=int(self.ems_max_efc_per_year or (bess.warranty_cycles / self.horizon_years)),
+                    **({"arb_min_spread_eur_mwh": float(self.ems_arb_min_spread_eur_mwh)}
+                       if self.ems_arb_min_spread_eur_mwh else {}),
+                    **({"arb_band_pct": float(self.ems_arb_band_pct)}
+                       if self.ems_arb_band_pct is not None else {}),
                     peak_shave_enabled=(self.site.sadzba.value == "VN"),
                 ),
                 export_price_eur_kwh=self.export_price,
@@ -369,6 +384,9 @@ class VariantGenerator:
             saving_decomp_y1=saving_decomp,
             annual_degradation_pct=0.5,
             annual_bess_discharge_kwh=_bess_throughput_kwh,
+            # AUDIT N8: bez annual_pv_kwh bol LCOE vždy None; LCOS bežal bez nákladov nabíjania
+            annual_pv_kwh=float(getattr(summary, "pv_total_kwh", 0.0) or 0.0),
+            annual_bess_charge_cost_eur=float(getattr(summary, "grid_charge_cost_eur", 0.0) or 0.0),
         )
         financial = builder.build(dotacia_eur=0.0, **_cf_kwargs)
 
@@ -397,6 +415,24 @@ class VariantGenerator:
         pv_to_load = np.minimum(pv_kw, load_kw)
         pv_to_grid = np.maximum(pv_kw - load_kw, 0)
         grid_import = np.maximum(load_kw - pv_kw, 0)
+        # AUDIT (property test S5): BESS vetva pri zápornom spote export curtailuje (AOM-FIX-31),
+        # PV-only baseline exportoval za plný výkup → batéria v porovnaní variantov vyzerala
+        # horšie, než je (až ~1 700 €/r pri veľkej FVE). Rovnaké pravidlo pre obe vetvy.
+        _curtailed = 0.0
+        try:
+            _spot_arr = np.asarray(self.spot, dtype=float)[: len(pv_to_grid)]
+            _neg = _spot_arr < 0
+            _curtailed = float(pv_to_grid[_neg].sum())
+            pv_to_grid = pv_to_grid.copy()
+            pv_to_grid[_neg] = 0.0
+            # parita aj pre MRK clip exportu (BESS vetva clipuje na mrk_kw — baseline musí tiež)
+            _mrk_lim = float(self.site.mrk_kw or 0.0)
+            if _mrk_lim > 0:
+                _over = np.maximum(pv_to_grid - _mrk_lim, 0.0)
+                _curtailed += float(_over.sum())
+                pv_to_grid = np.minimum(pv_to_grid, _mrk_lim)
+        except Exception:
+            pass
 
         s.load_total_kwh = float(load_kw.sum())
         s.pv_total_kwh = float(pv_kw.sum())
@@ -404,6 +440,7 @@ class VariantGenerator:
         s.pv_to_grid_kwh = float(pv_to_grid.sum())
         s.grid_import_kwh = float(grid_import.sum())
         s.grid_export_kwh = s.pv_to_grid_kwh
+        s.pv_curtailed_kwh = _curtailed
 
         if s.pv_total_kwh > 0:
             s.samospotreba_pct = s.pv_to_load_kwh / s.pv_total_kwh * 100

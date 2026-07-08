@@ -476,6 +476,9 @@ def insert_variant_via_engine(sb, analyza_id: str, name: str, fve_kwp, bess_kwh,
     req = _build_request_from_analyza(analyza, _measured_load_profile_block(sb, analyza))
     req["variants"]["pv_kwp_options"] = [fve_kwp]
     req["variants"]["bess_kwh_options"] = [bess_kwh]
+    if inverter_kw:
+        # zadaný výkon meniča → reálny AC clipping v PV simulácii (nie 0,9×kWp dopočet)
+        req["variants"]["pv_inverter_kw"] = float(inverter_kw)
     if bess_kw and bess_kwh > 0:
         # BESS výkon zo zadania — inak simulácia aj uložený riadok skĺznu na default 0.5C
         req["variants"]["bess_c_rate"] = float(bess_kw) / bess_kwh
