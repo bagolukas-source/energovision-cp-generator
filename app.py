@@ -4275,7 +4275,7 @@ def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchod
 
     # === BLOCK B — FVE + BESS ===
     if "B" in variants:
-        bat_str = _fmt_bateria_kwh(bateria_kwh)
+        bat_str = _fmt_bateria_kwh(_var("B").get("bateria_kwh") or bateria_kwh)
         blocks.append(f"""
         <h3 style="color:#1B5E3F;margin-top:24px;">Varianta B — fotovoltika {kwp} kWp + batéria {bat_str}</h3>
         <p>Energetická nezávislosť — slnko ukladáte do batérie a používate večer/v noci/keď je zamračené.
@@ -4297,7 +4297,7 @@ def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchod
 
     # === BLOCK C — FVE + BESS + Wallbox ===
     if "C" in variants:
-        bat_str = _fmt_bateria_kwh(bateria_kwh)
+        bat_str = _fmt_bateria_kwh(_var("C").get("bateria_kwh") or bateria_kwh)
         blocks.append(f"""
         <h3 style="color:#1B5E3F;margin-top:24px;">Varianta C — kompletné riešenie + wallbox pre elektromobil</h3>
         <p>FVE {kwp} kWp + batéria {bat_str} + smart wallbox. Vaše auto sa nabíja zo slnka — zadarmo —
@@ -4622,7 +4622,19 @@ def _email_template_supabase_impl():
             except (TypeError, ValueError):
                 continue
         try:
-            lead_v = lead_from_notion(flat_props, v)
+            # Per-variant batéria/wallbox — CRM ich posiela ako "Batéria B (typ)",
+            # "Wallbox C (typ)" atď., lebo jeden email pokrýva viac variantov naraz.
+            # Bez nich by návratnosť B/C rátala default batériu (nesedela by s PDF).
+            fp_v = dict(flat_props)
+            if v in ("B", "C"):
+                if flat_props.get(f"Batéria {v} (typ)"):
+                    fp_v["Batéria (typ)"] = flat_props[f"Batéria {v} (typ)"]
+                if flat_props.get(f"Batéria {v} počet"):
+                    fp_v["Batéria počet"] = flat_props[f"Batéria {v} počet"]
+            if v in ("C", "D"):
+                if flat_props.get(f"Wallbox {v} (typ)"):
+                    fp_v["Wallbox (typ)"] = flat_props[f"Wallbox {v} (typ)"]
+            lead_v = lead_from_notion(fp_v, v)
             konfig_v = vyrataj_konfig(lead_v, cennik)
             ceny_v = vyrataj_ceny(konfig_v, lead_v)
             if crm_cena:
@@ -4637,11 +4649,12 @@ def _email_template_supabase_impl():
                 "dotacia": ceny_v.get("dotacia", 0),
                 "cena_po_dotacii": ceny_v.get("cena_finalna", ceny_v["cena_s_dph"]),
                 "navratnost_rokov": nav_v.get("navratnost_rokov"),
+                "bateria_kwh": konfig_v.get("bateria_kwh") if konfig_v.get("ma_bateriu") else None,
             }
         except Exception as _ve:
             log.warning(f"[email-template] engine čísla pre variant {v} zlyhali: {_ve}")
             ceny[v] = {"cena_s_dph": crm_cena or 0, "dotacia": None,
-                       "cena_po_dotacii": None, "navratnost_rokov": None}
+                       "cena_po_dotacii": None, "navratnost_rokov": None, "bateria_kwh": None}
 
     subject = build_subject(priezvisko, mesto, variants, typ_ponuky=typ_ponuky)
     body_html = build_email_body(
