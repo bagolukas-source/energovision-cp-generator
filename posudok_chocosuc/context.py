@@ -98,6 +98,7 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None) -> dict:
     save_export = float(vs.get("solar_export_eur") or (export_mwh*1000*p_sell))
     save_bess   = float(vs.get("bess_self_consumption_eur") or 0)
     save_arb    = float(vs.get("arbitrage_eur") or 0)
+    save_merchant = float(vs.get("merchant_eur") or 0)  # BOD 11: obchodovanie batérie v bilančnej skupine (merchant mode)
     # BUG 3 FIX: efektívna avoided sadzba = engine hodnota samospotreby / priama kWh
     # (engine oceňuje plným retailom; p_avoided=silová+distrib bola len časť → nesedelo s úsporou)
     _pv_direct_mwh = float(base.get("pv_to_load_mwh") or 0)
@@ -111,13 +112,15 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None) -> dict:
         arbitrage_reason = "bez batérie — arbitráž sa neuplatňuje"
     elif abs(save_arb) > 1:
         arbitrage_reason = "spotová arbitráž z hodinového EMS (nabíjanie v lacných hodinách, vybíjanie v drahých)"
+    elif save_merchant > 1:
+        arbitrage_reason = "batéria obchoduje v merchant režime bilančnej skupiny — výnos v riadku Obchodovanie BS"
     elif not _is_spot:
         arbitrage_reason = "klient nie je na spotovej tarife — arbitráž sa nepočíta (0 €)"
     elif not _has_ems:
         arbitrage_reason = "chýba hodinový spotový výpočet (EMS) — arbitráž nevyčíslená (0 €)"
     else:
         arbitrage_reason = "spread nedosiahol prah rentability (≥ 30 €/MWh) — arbitráž 0 €"
-    base_saving = float(base.get("saving_y1_eur") or vs.get("total_eur") or (save_self+save_export+save_bess+save_arb+save_peak))
+    base_saving = float(base.get("saving_y1_eur") or vs.get("total_eur") or (save_self+save_export+save_bess+save_arb+save_peak+save_merchant))
     annual_tax  = net_capex/ODPIS*DPPO
 
     # Báza ukotvená na ENGINE (validované), scenáre odvodené od nej (žiadny druhý NPV systém)
@@ -186,9 +189,10 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None) -> dict:
                   ("FVE export prebytkov",f"{export_mwh:.0f} MWh do siete",save_export)]
     if save_bess>0: benefit_rows.append(("Batéria — posun PV do odberu",f"{_pv_via_bat_mwh:.0f} MWh PV uskladnené a využité neskôr",save_bess))
     if abs(save_arb)>1: benefit_rows.append(("BESS arbitráž (spot v BS)","nabíjanie lacno / vybíjanie draho",save_arb))
+    if save_merchant>1: benefit_rows.append(("BESS obchodovanie v BS (merchant)","spotové obchodovanie batérie cez bilančnú skupinu",save_merchant))
     if save_peak>0: benefit_rows.append(("Peak shaving (zníženie RK)","redukcia mesačného 15-min maxima",save_peak))
     benefit_parts=[("Samospotreba",save_self,"#16A34A"),("Export",save_export,"#A7D08C"),
-                   ("Batéria",save_bess,"#5B7CFA"),("Arbitráž",max(save_arb,0.0),"#8B5CF6"),
+                   ("Batéria",save_bess,"#5B7CFA"),("Arbitráž",max(save_arb,0.0)+max(save_merchant,0.0),"#8B5CF6"),
                    ("Daňový štít",annual_tax,"#F59E0B")]
 
     ctx={

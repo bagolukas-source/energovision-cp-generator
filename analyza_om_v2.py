@@ -461,7 +461,7 @@ Píš ako energetik radí klientovi pri káve, nie ako AI. Konkrétne čísla. E
         return {"error": str(e)[:200], "scenario_type": analyza.get("scenario_type")}
 
 
-def insert_variant_via_engine(sb, analyza_id: str, name: str, fve_kwp, bess_kwh, bess_kw=None, capex_per_kwp=None, capex_per_kwh_bess=None, capex_source: str = "engine_v095_quick") -> dict:
+def insert_variant_via_engine(sb, analyza_id: str, name: str, fve_kwp, bess_kwh, bess_kw=None, capex_per_kwp=None, capex_per_kwh_bess=None, capex_source: str = "engine_v095_quick", inverter_kw=None) -> dict:
     """Spočíta JEDEN variant cez REÁLNY engine (rovnaký pipeline ako matica) a uloží do analyza_om_variants.
     Nahrádza fallback ekonomiku z aom_ai_strategist → konzistentné CAPEX / dotácia / dispatch.
     capex_per_kwp: voliteľný override ceny diela €/kWp (napr. zadanie s/bez optimizérov)."""
@@ -505,6 +505,9 @@ def insert_variant_via_engine(sb, analyza_id: str, name: str, fve_kwp, bess_kwh,
         "result_npv_eur_base": v.get("npv_eur", 0), "result_irr_pct_base": v.get("irr_pct", 0),
         "result_payback_y_base": v.get("payback_simple_y", 0), "result_dotacia_eur": v.get("dotacia_eur", 0),
     }
+    if inverter_kw:
+        # výkon meniča zo zadania (chat ac_kw / manuálny variant) — bez neho posudok dopočíta 0,9×kWp
+        row["inverter_kw"] = float(inverter_kw)
     sb.table("analyza_om_variants").insert(row).execute()
     return {"ok": True, "position": pos, "capex_eur": row["capex_eur"],
             "npv_eur": row["result_npv_eur_base"], "irr_pct": row["result_irr_pct_base"],
@@ -559,7 +562,7 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
         # aby ich Re-run nezmazal a mali reálnu ekonomiku (predtým ostali ako "—").
         _manual_keep = []
         try:
-            _mk = sb.table("analyza_om_variants").select("name,fve_kwp,bess_kwh,bess_kw,capex_eur").eq("analyza_id", analyza_id).eq("capex_source", "manual").execute()
+            _mk = sb.table("analyza_om_variants").select("name,fve_kwp,bess_kwh,bess_kw,capex_eur,inverter_kw").eq("analyza_id", analyza_id).eq("capex_source", "manual").execute()
             _manual_keep = _mk.data or []
         except Exception:
             _manual_keep = []
@@ -613,7 +616,7 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
                 insert_variant_via_engine(sb, analyza_id, _mv.get("name") or "Vlastný variant",
                                           _fk, _bk, _mv.get("bess_kw"),
                                           capex_per_kwp=_cpk, capex_per_kwh_bess=_cpb,
-                                          capex_source="manual")
+                                          capex_source="manual", inverter_kw=_mv.get("inverter_kw"))
             except Exception:
                 log.exception("[aom-v2] prepočet ručného variantu zlyhal")
         # selected_variant_id remap: delete+insert by nechal selection visieť na neexistujúcom UUID.
@@ -2698,7 +2701,7 @@ def aom_chat(sb, analyza_id: str, message: str, history=None) -> dict:
 
         results = []
         for nm, cpk in runs:
-            r = insert_variant_via_engine(sb, analyza_id, nm, kwp, bess, capex_per_kwp=cpk)
+            r = insert_variant_via_engine(sb, analyza_id, nm, kwp, bess, capex_per_kwp=cpk, inverter_kw=(float(ac_kw) if ac_kw else None))
             if not r.get("ok"):
                 return {"ok": True, "intent": "exact_variant", "rerender": False,
                         "reply": f"Variant „{nm}“ sa nepodarilo spočítať: {r.get('error')}"}

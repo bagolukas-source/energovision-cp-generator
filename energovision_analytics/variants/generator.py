@@ -299,6 +299,12 @@ class VariantGenerator:
             _power_kw = bess_kwh * self.bess_c_rate
             _rk_kw = float(self.site.rk_kw or 0.0)
             _export_kw = float(self.site.mrk_kw or self.site.rk_kw or 0.0)
+            # RK/MRK nezadané (0/None) → merchant arbitráž by potichu vyšla 0 € (limit prietoku 0 kW).
+            # Fallback: predpokladaj, že prípojka zvládne aspoň výkon batérie — inak batéria „zmizne" z posudku.
+            if _rk_kw <= 0:
+                _rk_kw = _power_kw
+            if _export_kw <= 0:
+                _export_kw = _power_kw
             _dt_h = 1.0
             try:
                 _dt_h = float((self.timestamps[1] - self.timestamps[0]).total_seconds()) / 3600.0
