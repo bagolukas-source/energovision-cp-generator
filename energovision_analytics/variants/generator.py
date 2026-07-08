@@ -126,6 +126,8 @@ class VariantGenerator:
         merchant_imbalance_eur_mwh: float = 0.0,   # BOD 3: odchýlka per MWh obchodu
         merchant_degradation_eur_mwh: float = 0.0, # BOD 3: cyklová degradačná rezerva per MWh
         bess_mode: str = "SITE_SUPPORT_ONLY",     # BOD 1: SITE_SUPPORT_ONLY | BALANCE_GROUP_MERCHANT_100
+        ems_max_efc_per_year: float | None = None,   # override cyklov/rok z UI (inak warranty/horizon)
+        ems_arb_min_spread_eur_mwh: float | None = None,  # override min spreadu arbitráže z UI
         merchant_revenue_share_pct: float = 1.0,   # R2 #6: podiel klienta z čistého merchant výnosu
     ) -> None:
         # Lazy import aby sa rieš cyklický import
@@ -179,6 +181,8 @@ class VariantGenerator:
         # plnou paľbou, nie samospotreba). Default OFF → normálne varianty bez zmeny.
         # BOD 1: explicitný režim batérie. BALANCE_GROUP_MERCHANT_100 = merchant; mapuje sa na merchant_mode
         self.bess_mode = str(bess_mode or "SITE_SUPPORT_ONLY")
+        self.ems_max_efc_per_year = ems_max_efc_per_year
+        self.ems_arb_min_spread_eur_mwh = ems_arb_min_spread_eur_mwh
         self.merchant_mode = bool(merchant_mode) or self.bess_mode == "BALANCE_GROUP_MERCHANT_100"
         self.merchant_organizer_fee_pct = float(merchant_organizer_fee_pct)
         self.merchant_imbalance_eur_mwh = float(merchant_imbalance_eur_mwh or 0.0)
@@ -260,7 +264,10 @@ class VariantGenerator:
             ems = RuleBasedEMS(
                 battery, self.site, tariff, retail,
                 EMSConfig(
-                    max_efc_per_year=int(bess.warranty_cycles / self.horizon_years),
+                    # UI override (analyza_om.max_efc_per_year) má prednosť; default = warranty/horizont
+                    max_efc_per_year=int(self.ems_max_efc_per_year or (bess.warranty_cycles / self.horizon_years)),
+                    **({"arb_min_spread_eur_mwh": float(self.ems_arb_min_spread_eur_mwh)}
+                       if self.ems_arb_min_spread_eur_mwh else {}),
                     peak_shave_enabled=(self.site.sadzba.value == "VN"),
                 ),
                 export_price_eur_kwh=self.export_price,

@@ -191,6 +191,10 @@ def run_variants_pipeline(request_dict: dict, progress_cb=None) -> dict:
         merchant_degradation_eur_mwh=float(v.get("merchant_degradation_eur_mwh", 0.0)),
         merchant_revenue_share_pct=float(v.get("merchant_revenue_share_pct", 1.0)),
         bess_mode=str(v.get("bess_mode", "SITE_SUPPORT_ONLY")),
+        # UI nastavenia arbitráže (analyza_om.max_efc_per_year / arb_min_spread_eur_mwh) —
+        # doteraz sa request["ems_config"] potichu zahadzoval a platil hardcoded warranty/horizont
+        ems_max_efc_per_year=(request_dict.get("ems_config") or {}).get("max_efc_per_year"),
+        ems_arb_min_spread_eur_mwh=(request_dict.get("ems_config") or {}).get("arb_min_spread_eur_mwh"),
     )
     log.info("Running %d variants", len(v["pv_kwp_options"]) * len(v["bess_kwh_options"]))
     results = gen.run_all(parallel=True)
