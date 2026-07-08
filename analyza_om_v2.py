@@ -518,6 +518,16 @@ def _bess_retrofit_delta(req_base: dict, fve_kwp: float, bess_kwh: float, bess_k
         "irr_pct": float(_irr) * 100.0 if _irr is not None else 0.0,
         "payback_y": (net_capex / sav_delta) if sav_delta > 0 else 0.0,
         "saving_y1_delta_eur": sav_delta,
+        # pre patch full_response: UI grafy (cashflow, Účet, value streams) musia dostať delta pohľad
+        "delta_cf": delta_cf,
+        "baseline": {
+            "energy_flow": vB.get("energy_flow"),
+            "value_streams": vB.get("value_streams"),
+            "saving_y1_eur": vB.get("saving_y1_eur"),
+            "grid_import_kwh": vB.get("grid_import_kwh"),
+            "pv_total_kwh": vB.get("pv_total_kwh"),
+            "samospotreba_pct": vB.get("samospotreba_pct"),
+        },
     }
 
 
@@ -704,7 +714,7 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
         # Bez toho riadky účtujú CAPEX aj úspory celého systému, hoci FVE už stojí na streche.
         if (analyza.get("scenario_type") or "").lower() == "pridanie_bess":
             _bl_cache: dict = {}
-            for _row in rows:
+            for _idx, _row in enumerate(rows):
                 try:
                     _bk = float(_row.get("bess_kwh") or 0)
                     if _bk <= 0:
@@ -719,6 +729,30 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
                         _row["result_irr_pct_base"] = _m["irr_pct"]
                         _row["result_payback_y_base"] = _m["payback_y"]
                         _row["result_dotacia_eur"] = (_vA or {}).get("dotacia_eur", 0)
+                        # Patch aj full_response variant (index zarovnaný s rows) — grafy, Účet a
+                        # value streams v UI čítajú full_response; bez patchu ukazujú celosystémové
+                        # čísla (FVE CAPEX 51k, úspora 7,6k) v rozpore s delta hlavičkou (28,6k / 2,9k).
+                        _v = variants[_idx]
+                        _v["cashflow_array"] = _m["delta_cf"]
+                        _v["npv_eur"] = _m["npv_eur"]
+                        _v["irr_pct"] = _m["irr_pct"]
+                        _v["payback_simple_y"] = _m["payback_y"]
+                        _v["saving_y1_eur"] = _m["saving_y1_delta_eur"]
+                        _v["capex_pv_eur"] = 0.0  # FVE existuje — nie je súčasť investície
+                        _v["capex_bess_eur"] = (_vA or {}).get("capex_total_eur", _cap_b)
+                        _v["capex_total_eur"] = (_vA or {}).get("capex_total_eur", _cap_b)
+                        _v["net_capex_eur"] = (_vA or {}).get("net_capex_eur", _cap_b)
+                        _v["dotacia_eur"] = (_vA or {}).get("dotacia_eur", 0)
+                        if (_vA or {}).get("energy_flow"):
+                            _v["energy_flow"] = _vA["energy_flow"]
+                        # value streams: batérii patrí len rozdiel A−B (solar zložky ostávajú existujúcej FVE;
+                        # záporný solar_export = ušlý export, lebo prebytky idú do batérie)
+                        _vsA = (_vA or {}).get("value_streams") or {}
+                        _vsB = ((_m.get("baseline") or {}).get("value_streams")) or {}
+                        if _vsA:
+                            _v["value_streams"] = {k: float(_vsA.get(k) or 0) - float(_vsB.get(k) or 0)
+                                                   for k in _vsA.keys() if isinstance(_vsA.get(k), (int, float))}
+                        _v["retrofit_baseline"] = _m.get("baseline")
                 except Exception:
                     log.exception("[aom-v2] delta prepočet matice (pridanie_bess) zlyhal")
 
