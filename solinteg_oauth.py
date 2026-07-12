@@ -346,6 +346,15 @@ def send_command(device_sn: str, command_type: str, params: Optional[Dict] = Non
         "set_battery_mode_grid_charge": [{"settingCode": "hybridWorkMode", "value": "3#3"}],
     }
     items = SETTINGS_MAP.get(command_type)
+    # Zmluvný grid limit: NORMAL nesmie vypnúť anti-backflow — namiesto toho limit v % z ac_kw.
+    if command_type == "disable_zero_export" and params.get("grid_export_limit_kw") is not None:
+        limit_kw = float(params["grid_export_limit_kw"])
+        ac_kw = float(params.get("ac_kw") or 0)
+        pct = min(100.0, max(0.0, (limit_kw / ac_kw) * 100.0)) if ac_kw > 0 else 0.0
+        items = [
+            {"settingCode": "antiCounterCurrentStartStop", "value": "1"},
+            {"settingCode": "antiReverseCurrentPowerSetting", "value": str(int(round(pct)))},
+        ]
     if items is None and command_type == "set_active_power_limit":
         pct = float(params.get("limit_pct") or params.get("pct") or 100)
         items = [{"settingCode": "antiReverseCurrentPowerSetting", "value": str(pct)}]

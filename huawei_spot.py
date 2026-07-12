@@ -440,22 +440,53 @@ def huawei_send_command(station_code: str, command_type: str, params: Dict[str, 
             }]
         }
     elif command_type in ("disable_zero_export", "normal_export"):
-        # Active Power Control: unlimited
+        # Active Power Control: návrat do normálu.
+        # POZOR: controlMode "0" (unlimited) by prepísal zmluvný feed-in limit z pripojovacej
+        # zmluvy — pri stanici s grid_export_limit_kw preto posielame limited feed-in na limit.
         url = f"{api_base}/rest/openapi/pvms/nbi/v2/control/active-power-control/async-task"
-        payload = {
-            "tasks": [{
-                "plantCode": station_code,
-                "controlMode": "0",
-            }]
-        }
+        grid_limit_kw = params.get("grid_export_limit_kw")
+        if grid_limit_kw is not None and float(grid_limit_kw) >= 0:
+            payload = {
+                "tasks": [{
+                    "plantCode": station_code,
+                    "controlMode": "6",
+                    "controlInfo": {
+                        "maxGridFeedInPower": float(grid_limit_kw),
+                        "limitationMode": "0",
+                    },
+                }]
+            }
+        else:
+            payload = {
+                "tasks": [{
+                    "plantCode": station_code,
+                    "controlMode": "0",
+                }]
+            }
     elif command_type == "set_active_power_limit":
         limit_pct = float(params.get("limit_pct", 100))
         url = f"{api_base}/rest/openapi/pvms/nbi/v2/control/active-power-control/async-task"
+        grid_limit_kw = params.get("grid_export_limit_kw")
         if limit_pct >= 100:
-            payload = {"tasks": [{"plantCode": station_code, "controlMode": "0"}]}
+            if grid_limit_kw is not None and float(grid_limit_kw) >= 0:
+                # 100 % ≠ unlimited pri stanici so zmluvným limitom
+                payload = {
+                    "tasks": [{
+                        "plantCode": station_code,
+                        "controlMode": "6",
+                        "controlInfo": {
+                            "maxGridFeedInPower": float(grid_limit_kw),
+                            "limitationMode": "0",
+                        },
+                    }]
+                }
+            else:
+                payload = {"tasks": [{"plantCode": station_code, "controlMode": "0"}]}
         else:
             ac_kw_cap = float(params.get("ac_kw_cap", 9.68))
             power_kw = (limit_pct / 100.0) * ac_kw_cap
+            if grid_limit_kw is not None and float(grid_limit_kw) >= 0:
+                power_kw = min(power_kw, float(grid_limit_kw))
             payload = {
                 "tasks": [{
                     "plantCode": station_code,
@@ -650,12 +681,20 @@ def execute_transition(site: Dict[str, Any], from_state: str, to_state: str, spo
     has_bess = float(site.get("bess_kwh") or 0) > 0
     grid_charge = bool(site.get("spot_bess_grid_charge_enabled")) and has_bess
 
+    # Zmluvný max. export do siete (kW) — NORMAL nesmie znamenať unlimited pri stanici s limitom.
+    grid_limit_kw = site.get("grid_export_limit_kw")
+    normal_params: Dict[str, Any] = {}
+    if grid_limit_kw is not None:
+        normal_params["grid_export_limit_kw"] = float(grid_limit_kw)
+        if site.get("ac_kw"):
+            normal_params["ac_kw"] = float(site["ac_kw"])  # Solinteg prepočítava limit na %
+
     # POZOR: enable/disable_zero_export aj set_active_power_limit mapujú na TEN ISTÝ Huawei
     # endpoint (active-power-control) — posledný príkaz vyhráva. Preto na grid limit posielame
     # vždy len JEDEN príkaz; set_active_power_limit(100) po enable_zero_export by zero export zrušil.
     commands = []
     if to_state == "NORMAL":
-        commands.append({"type": "disable_zero_export", "params": {}, "critical": True})
+        commands.append({"type": "disable_zero_export", "params": normal_params, "critical": True})
         if has_bess:
             commands.append({"type": "set_battery_mode_self", "params": {}})
     elif to_state == "ZERO_EXPORT_ONLY":
@@ -731,7 +770,7 @@ def spot_reactor(dry_run_override: Optional[bool] = None) -> Dict[str, Any]:
         return {"ok": False, "error": "No current SPOT price (run okte_ingest first)"}
 
     sites = sb_get("inverter_sites", {
-        "select": "id,site_name,vendor,vendor_station_id,vendor_plant_code,bess_kwh,spot_control_enabled,spot_distribution_fee_eur_mwh,spot_threshold_zero_export,spot_threshold_full_shutdown,spot_hysteresis_eur,spot_current_state,spot_bess_grid_charge_enabled,spot_dry_run,spot_customer_revenue_share_pct,spot_manual_override_state,spot_manual_override_until,spot_last_transition_at,spot_min_dwell_minutes",
+        "select": "id,site_name,vendor,vendor_station_id,vendor_plant_code,bess_kwh,ac_kw,grid_export_limit_kw,spot_control_enabled,spot_distribution_fee_eur_mwh,spot_threshold_zero_export,spot_threshold_full_shutdown,spot_hysteresis_eur,spot_current_state,spot_bess_grid_charge_enabled,spot_dry_run,spot_customer_revenue_share_pct,spot_manual_override_state,spot_manual_override_until,spot_last_transition_at,spot_min_dwell_minutes",
         "spot_control_enabled": "eq.true",
     })
 
@@ -882,7 +921,7 @@ def manual_force_state(site_id: str, target_state: str, issued_by: str = "manual
         return {"ok": False, "error": f"invalid target_state: {target_state}"}
 
     sites = sb_get("inverter_sites", {
-        "select": "id,site_name,vendor,vendor_station_id,vendor_plant_code,bess_kwh,spot_current_state,spot_dry_run,spot_bess_grid_charge_enabled",
+        "select": "id,site_name,vendor,vendor_station_id,vendor_plant_code,bess_kwh,ac_kw,grid_export_limit_kw,spot_current_state,spot_dry_run,spot_bess_grid_charge_enabled",
         "id": f"eq.{site_id}",
     })
     if not sites:
@@ -961,6 +1000,41 @@ def manual_force_state(site_id: str, target_state: str, issued_by: str = "manual
         "commands_issued": result["commands_issued"],
         "command_id": cmd_id,
     }
+
+
+def apply_grid_limits(site_ids: Optional[list] = None) -> Dict[str, Any]:
+    """
+    Okamžite pretlačí zmluvný grid_export_limit_kw na stanice, ktoré sú v stave NORMAL
+    (t.j. mohli byť prepnuté na unlimited pred zavedením limitov). Ignoruje
+    spot_control_enabled — limit treba vrátiť aj stanici s už vypnutým spot controlom.
+    """
+    params = {
+        "select": "id,site_name,vendor,vendor_station_id,vendor_plant_code,bess_kwh,ac_kw,grid_export_limit_kw,spot_current_state,spot_dry_run,spot_bess_grid_charge_enabled",
+        "grid_export_limit_kw": "not.is.null",
+    }
+    if site_ids:
+        params["id"] = f"in.({','.join(site_ids)})"
+    sites = sb_get("inverter_sites", params) or []
+
+    results = []
+    for site in sites:
+        state = site.get("spot_current_state")
+        if state != "NORMAL" and not site_ids:
+            results.append({"site_id": site["id"], "site_name": site.get("site_name"),
+                            "skipped": f"state={state} — limit sa uplatní pri najbližšom prechode do NORMAL"})
+            continue
+        dry_run = bool(site.get("spot_dry_run"))
+        res = execute_transition(site, state or "NORMAL", "NORMAL", get_current_spot() or 0.0, dry_run)
+        ok = bool(res.get("any_ok"))
+        results.append({"site_id": site["id"], "site_name": site.get("site_name"),
+                        "grid_export_limit_kw": site.get("grid_export_limit_kw"),
+                        "dry_run": dry_run, "ok": ok, "fail_msgs": res.get("fail_msgs")})
+        if ok and not dry_run:
+            slack_notify(
+                f":shield: GRID LIMIT uplatnený `{site.get('site_name')}` — limited feed-in "
+                f"{site.get('grid_export_limit_kw')} kW (namiesto unlimited)"
+            )
+    return {"ok": True, "checked": len(sites), "results": results}
 
 
 # ---------------- Sync stations from Huawei ----------------

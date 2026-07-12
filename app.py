@@ -6039,6 +6039,25 @@ def webhook_spot_manual_command():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/webhook/spot-apply-grid-limits", methods=["POST"])
+def webhook_spot_apply_grid_limits():
+    """
+    Okamžite pretlačí zmluvný grid_export_limit_kw na stanice v stave NORMAL
+    (remediation po tom, čo disable_zero_export posielal unlimited).
+    POST { "site_ids": ["..."] } — voliteľné; bez site_ids vezme všetky s limitom v NORMAL.
+    """
+    if not _hs_auth_ok(request):
+        return jsonify({"error": "unauthorized"}), 401
+    if _hs is None:
+        return jsonify({"ok": False, "error": "huawei_spot module not available"}), 500
+    body = request.get_json(silent=True) or {}
+    try:
+        return jsonify(_hs.apply_grid_limits(site_ids=body.get("site_ids")))
+    except Exception as e:
+        log.exception("[spot-apply-grid-limits] failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/webhook/huawei-sync-stations", methods=["POST", "GET"])
 def webhook_huawei_sync_stations():
     """Pull station list from Huawei → upsert do inverter_sites. Pre prípad keď kolega nainštaluje novú FVE."""
