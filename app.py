@@ -580,6 +580,51 @@ ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-5-20250929"
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://uzwajrpebblafuhrtuwn.supabase.co")
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "") or os.environ.get("SUPABASE_SERVICE_KEY", "")
 
+
+def _storage_bytes(url_or_path, default_bucket="documents"):
+    """Stiahne súbor zo Supabase Storage cez service-role kľúč.
+    Prijme buď plnú public/authenticated URL, alebo 'bucket/path', alebo holý path.
+    Vráti (bytes, content_type) alebo (None, None)."""
+    if not url_or_path:
+        return None, None
+    from urllib.parse import quote, urlparse
+    raw = str(url_or_path)
+    bucket, path = default_bucket, raw
+    if raw.startswith("http"):
+        p = urlparse(raw).path  # /storage/v1/object/public/<bucket>/<path> alebo .../object/<bucket>/<path>
+        for marker in ("/object/public/", "/object/authenticated/", "/object/"):
+            i = p.find(marker)
+            if i != -1:
+                rest = p[i + len(marker):]
+                parts = rest.split("/", 1)
+                if len(parts) == 2:
+                    bucket, path = parts[0], parts[1]
+                break
+    elif "/" in raw and raw.split("/", 1)[0] in ("documents", "signatures", "photos", "b2b-documents", "ticket-attachments", "marketing", "attachments"):
+        bucket, path = raw.split("/", 1)
+    try:
+        from urllib.parse import unquote
+        path = unquote(path)
+        u = f"{SUPABASE_URL}/storage/v1/object/{bucket}/{quote(path, safe='/')}"
+        r = requests.get(u, headers={"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"}, timeout=30)
+        if r.status_code == 200:
+            return r.content, r.headers.get("Content-Type", "application/octet-stream")
+    except Exception as _e:
+        pass
+    return None, None
+
+
+def _storage_datauri(url_or_path, default_bucket="documents"):
+    """Ako _storage_bytes, ale vráti 'data:<mime>;base64,...' pre priame vloženie do <img src>. Pri zlyhaní vráti pôvodný vstup (fallback, kým je bucket ešte public)."""
+    b, ct = _storage_bytes(url_or_path, default_bucket)
+    if b is None:
+        return url_or_path
+    import base64 as _b64
+    if not ct or not ct.startswith("image"):
+        ct = "image/png"
+    return f"data:{ct};base64," + _b64.b64encode(b).decode()
+
+
 # Default spotreba ak nezadaná zákazníkom (priemer SK domácnosti)
 DEFAULT_SPOTREBA_KWH = 8000
 
@@ -1998,10 +2043,10 @@ def pvprj_3d_supabase():
     try:
         import base64 as _b64
         import pvprj_3d
-        r = requests.get(pvprj_url, timeout=90)
-        if not r.ok:
-            return jsonify({"success": False, "error": f"download zlyhal: {r.status_code}"}), 400
-        res = pvprj_3d.build_pvprj_3d(r.content, title=title)
+        _pvprj_bytes, _pvprj_ct = _storage_bytes(pvprj_url, "documents")
+        if _pvprj_bytes is None:
+            return jsonify({"success": False, "error": "download zlyhal"}), 400
+        res = pvprj_3d.build_pvprj_3d(_pvprj_bytes, title=title)
         html_b64 = _b64.b64encode(res["html"].encode("utf-8")).decode("ascii")
         render_b64 = _b64.b64encode(res["render"]).decode("ascii") if res.get("render") else ""
         log.info(f"[pvprj-3d] hotovo: {res['n_tables']} stolov, {len(res['html'])//1024} KB, render={bool(res.get('render'))}")
@@ -2832,8 +2877,10 @@ def generuj_pd_crm():
     se_url = body.get("solaredge_pdf_url") or lead_data.get("solaredge_pdf_url")
     if se_url:
         try:
-            r = requests.get(se_url, timeout=60); r.raise_for_status()
-            solaredge_pdf_bytes = r.content
+            _b, _ct = _storage_bytes(se_url, "documents")
+            if _b is None:
+                raise Exception("storage_fetch_failed")
+            solaredge_pdf_bytes = _b
             log.info("[generuj-pd-crm] SolarEdge PDF (%d B)", len(solaredge_pdf_bytes))
         except Exception as e:
             log.warning("[generuj-pd-crm] SolarEdge raw nedostupný: %s", e)
@@ -4106,10 +4153,11 @@ def _email_template_impl():
                 fname_clean = safe_filename(fname.rsplit(".", 1)[0])
                 fext = fname.rsplit(".", 1)[-1] if "." in fname else "pdf"
                 final_name = f"Rozlozenie_panelov_{priezvisko_clean}.{fext}"
-                # Stiahni cez requests + base64
-                r_dl = requests.get(furl, timeout=60)
-                r_dl.raise_for_status()
-                pdf_b64_rozl = base64.b64encode(r_dl.content).decode("ascii")
+                # Stiahni cez service-role kľúč + base64
+                _rozl_bytes, _rozl_ct = _storage_bytes(furl, "documents")
+                if _rozl_bytes is None:
+                    raise Exception("storage_fetch_failed")
+                pdf_b64_rozl = base64.b64encode(_rozl_bytes).decode("ascii")
                 _evid_root_r = (lead_a.get("cislo_ponuky") or "EV-XX-001-A")
                 _evid_root_r = _evid_root_r[:-2] if len(_evid_root_r) >= 2 and _evid_root_r[-2] == "-" and _evid_root_r[-1] in "ABC" else _evid_root_r
                 _folder_r = f"{_evid_root_r}_{priezvisko_clean}"
@@ -4119,7 +4167,7 @@ def _email_template_impl():
                     "data": pdf_b64_rozl,
                 })
                 rozlozenie_attached = True
-                log.info(f"Rozlozenie panelov pridane: {final_name} ({len(r_dl.content)} bajtov)")
+                log.info(f"Rozlozenie panelov pridane: {final_name} ({len(_rozl_bytes)} bajtov)")
             except Exception as e:
                 log.warning(f"Stiahnut rozlozenie panelov zlyhalo: {e}")
 
@@ -4177,44 +4225,11 @@ def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchod
 
     typ_ponuky: "Indikatívna" (bez obhliadky, default) alebo "Exaktná" (po obhliadke)
     ma_rozlozenie: True ak v emaily je priložené aj rozlozenie panelov
-
-    ceny[v]: buď holé číslo (legacy Notion tok = cena s DPH), alebo dict
-    {cena_s_dph, dotacia, cena_po_dotacii, navratnost_rokov} zo Supabase toku —
-    čísla musia sedieť s PDF, preto ich počíta rovnaký engine.
     """
-    def _var(v):
-        d = ceny.get(v)
-        if isinstance(d, dict):
-            return d
-        return {"cena_s_dph": float(d or 0), "dotacia": None, "cena_po_dotacii": None, "navratnost_rokov": None}
-
-    def _cena_li(v, label="Investícia"):
-        """<li> riadky s cenou — s dotáciou ak ju poznáme, inak len cena s DPH."""
-        d = _var(v)
-        if d["cena_po_dotacii"] is not None and (d["dotacia"] or 0) > 0:
-            return (f"<li><strong>Cena s DPH:</strong> {_eur(d['cena_s_dph'])}</li>"
-                    f"<li><strong>Dotácia Zelená domácnostiam:</strong> − {_eur(d['dotacia'])}</li>"
-                    f"<li><strong>{label} po dotácii:</strong> {_eur(d['cena_po_dotacii'])} s DPH</li>")
-        return f"<li><strong>{label}:</strong> {_eur(d['cena_s_dph'])} s DPH</li>"
-
-    def _nav_li(v, fallback):
-        """<li> návratnosť — presná z enginu (zhodná s PDF), inak konzervatívny rozsah."""
-        d = _var(v)
-        r = d.get("navratnost_rokov")
-        if r:
-            r_txt = f"{r:.1f}".replace(".", ",")
-            return f"<li><strong>Návratnosť:</strong> ~{r_txt} roka pri dnešnej cene elektriny 0,16 €/kWh</li>"
-        return f"<li><strong>Návratnosť:</strong> {fallback}</li>"
-
-    def _nav_short(v, fallback):
-        d = _var(v)
-        r = d.get("navratnost_rokov")
-        return ("~" + f"{r:.1f}".replace(".", ",") + " r.") if r else fallback
-
-    cena_a = _var("A")["cena_s_dph"]
-    cena_b = _var("B")["cena_s_dph"]
-    cena_c = _var("C")["cena_s_dph"]
-    cena_d = _var("D")["cena_s_dph"]
+    cena_a = ceny.get("A") or 0
+    cena_b = ceny.get("B") or 0
+    cena_c = ceny.get("C") or 0
+    cena_d = ceny.get("D") or 0
 
     # === INTRO — 2 verzie podla typu ponuky ===
     n_var = len(variants)
@@ -4262,9 +4277,9 @@ def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchod
         — typicky pokryje 60-70 % Vašej dennej spotreby. Ideálne ak doma cez deň žije rodina, sušiete
         bielizeň, varíte alebo používate tepelné čerpadlo na ohrev TÚV.</p>
         <ul>
-          {_cena_li("A", "Investícia")}
-          {_nav_li("A", "6–8 rokov pri dnešnej cene elektriny 0,16 €/kWh")}
-          <li><strong>Záruka:</strong> 25 rokov na výkon panelov (12 rokov produktová), 10 rokov na menič</li>
+          <li><strong>Investícia po dotácii Zelená domácnostiam:</strong> {_eur(cena_a)} s DPH</li>
+          <li><strong>Návratnosť:</strong> 6–8 rokov pri dnešnej cene elektriny 0,16 €/kWh</li>
+          <li><strong>Záruka:</strong> 30 rokov na panely, 10 rokov na menič</li>
           <li><strong>Inštalácia:</strong> 1–2 dni, bez stavebných úprav</li>
         </ul>
         <p style="background:#F0F8F4;padding:12px;border-left:4px solid #1B5E3F;font-size:14px;">
@@ -4275,16 +4290,16 @@ def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchod
 
     # === BLOCK B — FVE + BESS ===
     if "B" in variants:
-        bat_str = _fmt_bateria_kwh(_var("B").get("bateria_kwh") or bateria_kwh)
+        bat_str = _fmt_bateria_kwh(bateria_kwh)
         blocks.append(f"""
         <h3 style="color:#1B5E3F;margin-top:24px;">Varianta B — fotovoltika {kwp} kWp + batéria {bat_str}</h3>
         <p>Energetická nezávislosť — slnko ukladáte do batérie a používate večer/v noci/keď je zamračené.
         Pri zlepšujúcich sa zľavách na komponenty je toto pre Slovákov dnes najatraktívnejšia voľba,
         najmä pre rodiny ktoré sú doma <strong>predovšetkým ráno a večer</strong>.</p>
         <ul>
-          {_cena_li("B", "Investícia")}
+          <li><strong>Investícia po dotácii:</strong> {_eur(cena_b)} s DPH</li>
           <li><strong>Pokrytie spotreby:</strong> 85–95 % pri správnom dimenzovaní</li>
-          {_nav_li("B", "8–11 rokov")}
+          <li><strong>Návratnosť:</strong> 8–11 rokov</li>
           <li><strong>Backup:</strong> pri výpadku siete batéria automaticky prepne dom na ostrov (voliteľne)</li>
           <li><strong>Záruka batérie:</strong> 10 rokov / 6 000 cyklov</li>
         </ul>
@@ -4297,14 +4312,14 @@ def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchod
 
     # === BLOCK C — FVE + BESS + Wallbox ===
     if "C" in variants:
-        bat_str = _fmt_bateria_kwh(_var("C").get("bateria_kwh") or bateria_kwh)
+        bat_str = _fmt_bateria_kwh(bateria_kwh)
         blocks.append(f"""
         <h3 style="color:#1B5E3F;margin-top:24px;">Varianta C — kompletné riešenie + wallbox pre elektromobil</h3>
         <p>FVE {kwp} kWp + batéria {bat_str} + smart wallbox. Vaše auto sa nabíja zo slnka — zadarmo —
         a wallbox automaticky reaguje na prebytky FVE. Riešenie pre rodiny s elektromobilom alebo plánom kúpiť
         EV v najbližších rokoch.</p>
         <ul>
-          {_cena_li("C", "Investícia")}
+          <li><strong>Investícia:</strong> {_eur(cena_c)} s DPH</li>
           <li><strong>Úspora paliva:</strong> ~ 1 200 € ročne pri 15 000 km/rok namiesto benzínu</li>
           <li><strong>Plná energetická nezávislosť:</strong> spotreba domu + auto z vlastnej elektriny</li>
           <li><strong>Smart logika:</strong> wallbox sa zapne keď FVE má nadbytok, nezasahuje do siete</li>
@@ -4324,8 +4339,8 @@ def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchod
         Wallbox automaticky reaguje na prebytky FVE a využíva ich na nabíjanie EV. Optimálne riešenie ak doma cez deň
         bývate menej a hlavnou prioritou je nabíjanie auta zo slnka.</p>
         <ul>
-          {_cena_li("D", "Investícia")}
-          {_nav_li("D", "7–9 rokov pri kombinácii FVE + EV nabíjanie")}
+          <li><strong>Investícia po dotácii:</strong> {_eur(cena_d)} s DPH</li>
+          <li><strong>Návratnosť:</strong> 7–9 rokov pri kombinácii FVE + EV nabíjanie</li>
           <li><strong>Výhoda:</strong> nižšia investícia ako varianta C, ale stále plné EV nabíjanie zo slnka</li>
           <li><strong>Hybridný menič:</strong> možnosť doplnenia batérie neskôr bez prerábania systému</li>
         </ul>
@@ -4340,11 +4355,11 @@ def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchod
     if len(variants) > 1:
         rows = []
         if "A" in variants:
-            rows.append(f"<tr><td>A — iba FVE</td><td style='text-align:right;'>{_eur(cena_a)}</td><td>{_nav_short('A', '~7 rokov')}</td><td>Šetríš cez deň</td></tr>")
+            rows.append(f"<tr><td>A — iba FVE</td><td style='text-align:right;'>{_eur(cena_a)}</td><td>~7 rokov</td><td>Šetríš cez deň</td></tr>")
         if "B" in variants:
-            rows.append(f"<tr><td>B — FVE + batéria</td><td style='text-align:right;'>{_eur(cena_b)}</td><td>{_nav_short('B', '~9 rokov')}</td><td>Plná denná + nočná nezávislosť</td></tr>")
+            rows.append(f"<tr><td>B — FVE + batéria</td><td style='text-align:right;'>{_eur(cena_b)}</td><td>~9 rokov</td><td>Plná denná + nočná nezávislosť</td></tr>")
         if "C" in variants:
-            rows.append(f"<tr><td>C — komplet + wallbox</td><td style='text-align:right;'>{_eur(cena_c)}</td><td>{_nav_short('C', '~11 rokov')}</td><td>+ EV nabíjanie zadarmo</td></tr>")
+            rows.append(f"<tr><td>C — komplet + wallbox</td><td style='text-align:right;'>{_eur(cena_c)}</td><td>~11 rokov</td><td>+ EV nabíjanie zadarmo</td></tr>")
 
         comparison = f"""
         <h3 style="color:#1B5E3F;margin-top:24px;">Krátke porovnanie</h3>
@@ -4449,7 +4464,6 @@ def _generate_pdf_supabase_impl():
         return jsonify({"error": "missing flat_props"}), 400
 
     log.info(f"Generate PDF (Supabase) variant {variant}, klient {flat_props.get('Zákazník', '?')}")
-    log.info(f"[generate-pdf-supabase] body keys: {sorted(body.keys())} | bom items: {len(body.get('bom') or [])}")
 
     # Reuse — lead_from_notion berie flat dict + variant (NIE Notion page)
     from generate_from_notion import lead_from_notion
@@ -4510,19 +4524,6 @@ def _generate_pdf_supabase_impl():
 
     navratnost = vyrataj_navratnost(konfig, ceny, lead)
 
-    # === BOM ROZPIS (transparentná ponuka, feedback klientov 2026-07) ===
-    # CRM posiela sanitizovaný BOM (predajné ceny) → PDF dostane stranu
-    # "Detailný rozpis materiálu a prác". Bez BOM sa strana nevyrenderuje.
-    bom_rozpis = None
-    try:
-        bom_items = body.get("bom") or []
-        if bom_items:
-            from generate_cp_html import priprav_bom_rozpis
-            bom_rozpis = priprav_bom_rozpis(bom_items, ceny["cena_bez_dph"], ceny["cena_s_dph"])
-            log.info(f"[generate-pdf-supabase] BOM rozpis: {'OK, ' + str(len(bom_items)) + ' položiek' if bom_rozpis else 'PRESKOČENÝ (prázdny výsledok)'}")
-    except Exception as _bom_e:
-        log.warning(f"[generate-pdf-supabase] BOM rozpis preskočený: {_bom_e}")
-
     with tempfile.TemporaryDirectory() as tmpdir:
         priezvisko = safe_filename(lead["meno"].split()[-1])
         ev_id = lead.get("cislo_ponuky", f"EV-XX-001-{variant}")
@@ -4532,7 +4533,7 @@ def _generate_pdf_supabase_impl():
 
         grafy = vyrob_grafy(navratnost, lead, tmpdir, base)
         pdf_path = os.path.join(tmpdir, f"{base}.pdf")
-        vyrob_html_pdf(lead, konfig, ceny, navratnost, grafy, pdf_path, bom_rozpis=bom_rozpis)
+        vyrob_html_pdf(lead, konfig, ceny, navratnost, grafy, pdf_path)
         pdf_size = os.path.getsize(pdf_path)
 
         import base64
@@ -4606,57 +4607,12 @@ def _email_template_supabase_impl():
     vykon_kwp = lead_a.get("vykon_kwp", 0)
     bateria_kwh = float(flat_props.get("Batéria výkon") or 0)
 
-    # === Per-variant čísla ROVNAKÝM enginom ako PDF ===
-    # Bug 2026-07-08: email tvrdil "Investícia po dotácii: 8 367 €" pri PDF cene
-    # po dotácii 6 867 € + hardcoded návratnosť "6–8 rokov" vs. 4,7 r. v PDF.
-    # Email si teraz dotáciu aj návratnosť ráta z engine + CRM cenový override,
-    # takže nemôže protirečiť PDF. Pri zlyhaní enginu fallback na holú CRM cenu.
-    cennik = load_cennik()
-    ceny = {}
-    for v in variants:
-        crm_cena = None
-        for key in (f"Cena {v} s DPH", f"Cena {v}"):
-            try:
-                val = float(flat_props.get(key) or 0)
-                if val > 0:
-                    crm_cena = val
-                    break
-            except (TypeError, ValueError):
-                continue
-        try:
-            # Per-variant batéria/wallbox — CRM ich posiela ako "Batéria B (typ)",
-            # "Wallbox C (typ)" atď., lebo jeden email pokrýva viac variantov naraz.
-            # Bez nich by návratnosť B/C rátala default batériu (nesedela by s PDF).
-            fp_v = dict(flat_props)
-            if v in ("B", "C"):
-                if flat_props.get(f"Batéria {v} (typ)"):
-                    fp_v["Batéria (typ)"] = flat_props[f"Batéria {v} (typ)"]
-                if flat_props.get(f"Batéria {v} počet"):
-                    fp_v["Batéria počet"] = flat_props[f"Batéria {v} počet"]
-            if v in ("C", "D"):
-                if flat_props.get(f"Wallbox {v} (typ)"):
-                    fp_v["Wallbox (typ)"] = flat_props[f"Wallbox {v} (typ)"]
-            lead_v = lead_from_notion(fp_v, v)
-            konfig_v = vyrataj_konfig(lead_v, cennik)
-            ceny_v = vyrataj_ceny(konfig_v, lead_v)
-            if crm_cena:
-                # CRM override — rovnaká logika ako /webhook/generate-pdf-supabase
-                dotacia = ceny_v.get("dotacia", 0) if lead_v.get("dotacia", True) else 0
-                ceny_v = {**ceny_v, "cena_s_dph": crm_cena, "cena_bez_dph": crm_cena / 1.23,
-                          "dotacia": dotacia, "cena_po_dotacii": crm_cena - dotacia,
-                          "cena_finalna": crm_cena - dotacia}
-            nav_v = vyrataj_navratnost(konfig_v, ceny_v, lead_v)
-            ceny[v] = {
-                "cena_s_dph": ceny_v["cena_s_dph"],
-                "dotacia": ceny_v.get("dotacia", 0),
-                "cena_po_dotacii": ceny_v.get("cena_finalna", ceny_v["cena_s_dph"]),
-                "navratnost_rokov": nav_v.get("navratnost_rokov"),
-                "bateria_kwh": konfig_v.get("bateria_kwh") if konfig_v.get("ma_bateriu") else None,
-            }
-        except Exception as _ve:
-            log.warning(f"[email-template] engine čísla pre variant {v} zlyhali: {_ve}")
-            ceny[v] = {"cena_s_dph": crm_cena or 0, "dotacia": None,
-                       "cena_po_dotacii": None, "navratnost_rokov": None, "bateria_kwh": None}
+    ceny = {
+        "A": flat_props.get("Cena A s DPH") or flat_props.get("Cena A"),
+        "B": flat_props.get("Cena B s DPH") or flat_props.get("Cena B"),
+        "C": flat_props.get("Cena C s DPH") or flat_props.get("Cena C"),
+        "D": flat_props.get("Cena D s DPH") or flat_props.get("Cena D"),
+    }
 
     subject = build_subject(priezvisko, mesto, variants, typ_ponuky=typ_ponuky)
     body_html = build_email_body(
@@ -5307,7 +5263,7 @@ def generuj_protokol():
                 params={"inspection_id": f"eq.{entity_id}", "kind": "eq.photo", "select": "storage_url"},
                 headers=headers, timeout=10
             )
-            photo_urls = [d.get("storage_url") for d in (r2.json() or []) if d.get("storage_url")]
+            photo_urls = [_storage_datauri(d.get("storage_url"), "documents") for d in (r2.json() or []) if d.get("storage_url")]
 
             checklist_data = ins.get("checklist_data") or {}
             CL_LABELS = {
@@ -5351,7 +5307,7 @@ def generuj_protokol():
                 "checklist": checklist,
                 "notes": ins.get("notes"),
                 "photo_urls": photo_urls,
-                "customer_signature_url": ins.get("customer_signature_url"),
+                "customer_signature_url": _storage_datauri(ins.get("customer_signature_url"), "signatures"),
                 "technician_signature_url": None,
                 "generated_at": datetime.now().strftime("%d.%m.%Y %H:%M"),
             }
@@ -5373,7 +5329,7 @@ def generuj_protokol():
                 params={"order_id": f"eq.{order.get('id','none')}", "kind": "eq.photo", "select": "storage_url"},
                 headers=headers, timeout=10
             )
-            photo_urls = [d.get("storage_url") for d in (r2.json() or []) if d.get("storage_url")]
+            photo_urls = [_storage_datauri(d.get("storage_url"), "documents") for d in (r2.json() or []) if d.get("storage_url")]
 
             checks = h.get("checklist_data") or {}
             FVE_LABELS = {
@@ -5416,8 +5372,8 @@ def generuj_protokol():
                 "checklist": checklist,
                 "notes": h.get("notes"),
                 "photo_urls": photo_urls,
-                "customer_signature_url": h.get("customer_signature_url"),
-                "technician_signature_url": h.get("technician_signature_url"),
+                "customer_signature_url": _storage_datauri(h.get("customer_signature_url"), "signatures"),
+                "technician_signature_url": _storage_datauri(h.get("technician_signature_url"), "signatures"),
                 "generated_at": datetime.now().strftime("%d.%m.%Y %H:%M"),
             }
 
@@ -5452,8 +5408,8 @@ def generuj_protokol():
                 ],
                 "notes": t.get("resolution") or t.get("description"),
                 "photo_urls": [],
-                "customer_signature_url": t.get("customer_signature_url"),
-                "technician_signature_url": t.get("technician_signature_url"),
+                "customer_signature_url": _storage_datauri(t.get("customer_signature_url"), "signatures"),
+                "technician_signature_url": _storage_datauri(t.get("technician_signature_url"), "signatures"),
                 "generated_at": datetime.now().strftime("%d.%m.%Y %H:%M"),
             }
         else:
@@ -6491,11 +6447,8 @@ def webhook_draft_email():
             body.get("target_type", "lead"),
             body["target_id"],
             body.get("purpose", "kontakt s klientom"),
-            # bez mena podpisuje neutrálne "Energovision s.r.o." (žiadny hardcoded človek)
-            employee_name=body.get("employee_name") or "",
-            incoming_email=body.get("incoming_email"),
-            reply_to=body.get("reply_to"),
-            reply_to_name=body.get("reply_to_name"),
+            body.get("employee_name", "Dominik Galaba"),
+            body.get("incoming_email"),
         )
         return jsonify({"status": "ok", **result})
     except Exception as e:
@@ -7059,26 +7012,6 @@ def webhook_aom_render_chocosuc():
     return jsonify({"ok": True, "pending": True, "message": "Posudok sa generuje na pozadí (~1-2 min)."})
 
 
-@app.route("/webhook/analyza-om-porovnanie", methods=["POST"])
-def webhook_aom_porovnanie():
-    """Porovnávací súhrn viacerých ponúk pre jedného klienta — branded PDF (WeasyPrint),
-    žiadny nový engine beh, len formátovanie existujúcich analyza_om_variants riadkov.
-    Body: { analyza_id, variant_ids?: [uuid, ...] } — bez variant_ids porovná všetky."""
-    if not _aom_v2:
-        return jsonify({"ok": False, "error": "analyza_om_v2 not loaded"}), 500
-    body = request.get_json(silent=True) or {}
-    aid = body.get("analyza_id")
-    if not aid:
-        return jsonify({"ok": False, "error": "analyza_id required"}), 400
-    variant_ids = body.get("variant_ids") or []
-    try:
-        result = _aom_v2.render_porovnanie(_sb(), aid, variant_ids)
-        return jsonify(result)
-    except Exception as e:
-        log.exception("[aom-porovnanie] failed")
-        return jsonify({"ok": False, "error": str(e)[:500]}), 500
-
-
 @app.route("/webhook/analyza-om-render-web", methods=["POST"])
 def analyza_om_render_web():
     """Pekny HTML posudok (Chart.js) -> verejny link + Chromium PDF."""
@@ -7247,8 +7180,7 @@ def webhook_aom_custom_variant():
             sb, aid, custom_input["name"], custom_input["fve_kwp"],
             custom_input["bess_kwh"], custom_input["bess_kw"],
             capex_per_kwp=custom_input.get("capex_per_kwp"),
-            capex_per_kwh_bess=custom_input.get("capex_per_kwh_bess"),
-            capex_source="manual")  # audit: inak custom variant re-run zmaže
+            capex_per_kwh_bess=custom_input.get("capex_per_kwh_bess"))
         if not result.get("ok"):
             return jsonify(result), 400
         return jsonify(result)
