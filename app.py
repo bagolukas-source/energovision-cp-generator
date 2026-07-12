@@ -14528,7 +14528,10 @@ def solinteg_save_credentials():
     
     POZOR: pre teraz ukladá do shared inverter_vendor_credentials (master).
     Per-customer Solinteg auth treba separate table (solinteg_customer_credentials).
+    Secret-guarded — prepisuje master credentials.
     """
+    if not _hs_auth_ok(request):
+        return jsonify({"error": "unauthorized"}), 401
     try:
         body = request.get_json(force=True) or {}
         email = body.get("email", "").strip()
@@ -14859,7 +14862,9 @@ def solinteg_refresh_station(device_sn):
 
 @app.route("/api/solinteg/v1/command/<device_sn>", methods=["POST"])
 def solinteg_command(device_sn):
-    """Vendor-agnostic command pre Solinteg (analog Huawei sendCommand)."""
+    """Vendor-agnostic command pre Solinteg (analog Huawei sendCommand). Secret-guarded."""
+    if not _hs_auth_ok(request):
+        return jsonify({"error": "unauthorized"}), 401
     try:
         from solinteg_oauth import send_command
         body = request.get_json(silent=True) or {}
@@ -14876,7 +14881,9 @@ def solinteg_command(device_sn):
 
 @app.route("/api/solinteg/v1/mqtt/start", methods=["POST", "GET"])
 def solinteg_mqtt_start():
-    """Spusti MQTT subscriber thread (real-time push z Solinteg cloud)."""
+    """Spusti MQTT subscriber thread (real-time push z Solinteg cloud). Secret-guarded."""
+    if not _hs_auth_ok(request):
+        return jsonify({"error": "unauthorized"}), 401
     try:
         from solinteg_mqtt import start_worker, get_status
         started = start_worker()
