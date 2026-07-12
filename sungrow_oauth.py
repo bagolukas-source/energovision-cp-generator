@@ -587,6 +587,21 @@ def _param_setting(uuids: List[str], param_list: List[Dict]) -> Tuple[bool, Dict
 def send_command(ps_id: str, command_type: str, params: Optional[Dict] = None) -> Tuple[bool, Dict]:
     """Vendor router adapter — rovnaké command_type ako Huawei (volané z huawei_spot.vendor_send_command)."""
     params = params or {}
+
+    # TVRDÝ INVARIANT: stanica so zmluvným grid_export_limit_kw nesmie dostať unlimited
+    # feed-in. Sungrow adaptér preklad limitu na ratio % zatiaľ nemá (vendor case na
+    # vynucovanie zápisov) — export príkazy preto radšej odmietame, kým sa nedoimplementuje.
+    if command_type in ("disable_zero_export", "set_active_power_limit"):
+        try:
+            from huawei_spot import _db_grid_limit
+            lookup_ok, db_limit = _db_grid_limit(str(ps_id))
+            if not lookup_ok:
+                return False, {"error": "grid limit lookup zlyhal — export príkaz odmietnutý (fail-closed)"}
+            if db_limit is not None:
+                return False, {"error": f"stanica má zmluvný grid limit {db_limit} kW — Sungrow adaptér preklad na feed-in ratio nemá implementovaný, príkaz odmietnutý"}
+        except ImportError:
+            return False, {"error": "grid limit check nedostupný — export príkaz odmietnutý (fail-closed)"}
+
     info = _get_site_control_info(str(ps_id))
     uuids = info["uuids"]
     logger_uuid = info["logger_uuid"]

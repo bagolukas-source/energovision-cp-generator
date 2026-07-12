@@ -310,8 +310,31 @@ def send_command(device_sn: str, command_type: str, params: Optional[Dict] = Non
     token = get_valid_token()
     if not token:
         return False, {"error": "no token"}
-    params = params or {}
+    params = dict(params or {})
     base = _base()
+
+    # TVRDÝ INVARIANT: zmluvný grid limit sa číta VŽDY z DB — params od volajúceho
+    # ho nemôžu prebiť. Pri zlyhaní lookupu export príkaz odmietame (fail-closed).
+    if command_type in ("disable_zero_export", "set_active_power_limit"):
+        try:
+            rows = []
+            for col in ("vendor_station_id", "vendor_plant_code"):
+                r = requests.get(f"{SUPABASE_URL}/rest/v1/inverter_sites", headers=_sb_headers(),
+                                 params={"select": "grid_export_limit_kw,ac_kw",
+                                         col: f"eq.{device_sn}", "limit": "1"}, timeout=10)
+                if not r.ok:
+                    return False, {"error": f"grid limit lookup zlyhal (HTTP {r.status_code}) — export príkaz odmietnutý (fail-closed)"}
+                rows = r.json()
+                if rows:
+                    break
+            if rows and rows[0].get("grid_export_limit_kw") is not None:
+                params["grid_export_limit_kw"] = float(rows[0]["grid_export_limit_kw"])
+                if rows[0].get("ac_kw"):
+                    params["ac_kw"] = float(rows[0]["ac_kw"])
+            else:
+                params.pop("grid_export_limit_kw", None)
+        except Exception as e:
+            return False, {"error": f"grid limit lookup zlyhal — export príkaz odmietnutý (fail-closed): {str(e)[:200]}"}
 
     # Direct cmd endpoints (start/stop/restart) per docs §deviceControl/StartAndTimeCalibration
     direct = {
@@ -357,6 +380,10 @@ def send_command(device_sn: str, command_type: str, params: Optional[Dict] = Non
         ]
     if items is None and command_type == "set_active_power_limit":
         pct = float(params.get("limit_pct") or params.get("pct") or 100)
+        if params.get("grid_export_limit_kw") is not None:
+            ac = float(params.get("ac_kw") or 0)
+            cap_pct = (float(params["grid_export_limit_kw"]) / ac * 100.0) if ac > 0 else 0.0
+            pct = min(pct, max(0.0, cap_pct))
         items = [{"settingCode": "antiReverseCurrentPowerSetting", "value": str(pct)}]
     if items is None:
         return False, {"error": f"unknown command_type: {command_type}"}

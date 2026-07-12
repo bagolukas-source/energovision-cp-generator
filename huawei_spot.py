@@ -375,6 +375,28 @@ def huawei_login(force: bool = False) -> Optional[str]:
         return None
 
 
+def _db_grid_limit(station_code: str) -> Tuple[bool, Optional[float]]:
+    """
+    Zmluvný max. export (kW) pre stanicu podľa vendor kódu — zdroj pravdy pre adaptéry.
+    Vráti (lookup_ok, limit_kw|None). lookup_ok=False = DB nedostupná (volajúci má odmietnuť príkaz).
+    """
+    try:
+        # Dva samostatné eq dotazy — or=(...) filter sa láme na hodnotách s '=' (Huawei NE=...)
+        for col in ("vendor_station_id", "vendor_plant_code"):
+            rows = sb_get("inverter_sites", {
+                "select": "grid_export_limit_kw",
+                col: f"eq.{station_code}",
+                "limit": "1",
+            })
+            if rows:
+                lim = rows[0].get("grid_export_limit_kw")
+                return True, (float(lim) if lim is not None else None)
+        return True, None  # neznáma stanica → bez limitu
+    except Exception as e:
+        log.error("[_db_grid_limit] lookup failed pre %s: %s", station_code, e)
+        return False, None
+
+
 def huawei_send_command(station_code: str, command_type: str, params: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
     """
     OAuth Service Provider control commands (SmartPVMS 25.4.0 sekcie 5.2.1, 5.2.3, 5.2.7).
@@ -411,6 +433,22 @@ def huawei_send_command(station_code: str, command_type: str, params: Dict[str, 
             "auth_method": "oauth_bearer",
         }
     
+    # TVRDÝ INVARIANT: zmluvný grid limit sa číta VŽDY z DB priamo tu — params od
+    # volajúceho ho nemôžu prebiť ani vynechať. Pri zlyhaní lookupu príkaz odmietame
+    # (fail-closed), aby nikdy neodišiel unlimited na stanicu s limitom.
+    if command_type in ("disable_zero_export", "normal_export", "set_active_power_limit"):
+        lookup_ok, db_limit = _db_grid_limit(station_code)
+        if not lookup_ok:
+            return False, {
+                "error": "grid_export_limit_kw DB lookup zlyhal — export príkaz odmietnutý (fail-closed)",
+                "fix": "over dostupnosť Supabase; príkaz zopakuj",
+            }
+        params = dict(params or {})
+        if db_limit is not None:
+            params["grid_export_limit_kw"] = db_limit
+        else:
+            params.pop("grid_export_limit_kw", None)
+
     # Base URL pre OpenAPI control endpoints (NIE /thirdData)
     api_base = "https://intl.fusionsolar.huawei.com"
     headers = {
