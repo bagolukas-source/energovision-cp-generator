@@ -14667,7 +14667,11 @@ def solinteg_alarms(device_sn):
 
 @app.route("/api/solinteg/v1/verify-sn", methods=["POST"])
 def solinteg_verify_sn_route():
-    """Overit deviceSn + checkCode pred bind (onboarding wizard krok 2)."""
+    """Overit deviceSn + checkCode pred bind (onboarding wizard krok 2).
+
+    Volane z CRM cez Vercel proxy /api/solinteg/verify-sn (X-Webhook-Secret)."""
+    if not _hs_auth_ok(request):
+        return jsonify({"success": False, "error": "unauthorized"}), 401
     try:
         from solinteg_oauth import verify_sn
         body = request.get_json(silent=True) or {}
@@ -14684,7 +14688,11 @@ def solinteg_verify_sn_route():
 
 @app.route("/api/solinteg/v1/bind", methods=["POST"])
 def solinteg_bind_route():
-    """Pridat device do Energovision uctu (onboarding wizard krok 3)."""
+    """Pridat device do Energovision uctu (onboarding wizard krok 3).
+
+    Write operacia — volane z CRM cez Vercel proxy /api/solinteg/bind (X-Webhook-Secret)."""
+    if not _hs_auth_ok(request):
+        return jsonify({"success": False, "error": "unauthorized"}), 401
     try:
         from solinteg_oauth import bind_device
         body = request.get_json(silent=True) or {}
