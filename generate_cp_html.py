@@ -301,9 +301,24 @@ def priprav_bom_rozpis(items, cena_bez_dph, cena_s_dph):
 
     praca = [i for i in clean if i["sku"].startswith("PRC")]
     material = [i for i in clean if not i["sku"].startswith("PRC")]
+
+    def _praca_rows(subset):
+        # Klientovi inštalačný/montážny balík ukazujeme len ako "Práca" — bez
+        # dodávateľskej značky (Solar Services).
+        rows = []
+        for i in subset:
+            nm = i["name"]
+            low = nm.lower()
+            if "solar services" in low or low.startswith("balík inštalácie") or low.startswith("balik instalacie"):
+                nm = "Práca"
+            else:
+                nm = nm.split(" (Solar Services)")[0].strip()
+            rows.append({"name": nm, "qty_txt": _qty_txt(i), "total_eur": fmt_eur(i["total"])})
+        return rows
+
     return {
         "material": _rows(material),
-        "praca": _rows(praca),
+        "praca": _praca_rows(praca),
         "material_spolu_eur": fmt_eur(sum(i["total"] for i in material)),
         "praca_spolu_eur": fmt_eur(sum(i["total"] for i in praca)),
         "cena_bez_dph_eur": fmt_eur(cena_bez_dph),
