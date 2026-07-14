@@ -4533,7 +4533,19 @@ def _generate_pdf_supabase_impl():
 
         grafy = vyrob_grafy(navratnost, lead, tmpdir, base)
         pdf_path = os.path.join(tmpdir, f"{base}.pdf")
-        vyrob_html_pdf(lead, konfig, ceny, navratnost, grafy, pdf_path)
+        # Rozpis materiálu a prác (feedback klientov 2026-07): z CRM BOM v payloade.
+        # Omylom odstránené commitom af38aa9 (12.7. storage fix) → strana "detailný rozpis"
+        # zmizla z B2C cenoviek. Vrátené späť (best-effort, nesmie zhodiť generovanie).
+        bom_rozpis = None
+        try:
+            bom_items = body.get("bom") or []
+            if bom_items:
+                from generate_cp_html import priprav_bom_rozpis
+                bom_rozpis = priprav_bom_rozpis(bom_items, ceny["cena_bez_dph"], ceny["cena_s_dph"])
+                log.info(f"[generate-pdf-supabase] BOM rozpis: {'OK, ' + str(len(bom_items)) + ' poloziek' if bom_rozpis else 'PRESKOCENY (prazdny vysledok)'}")
+        except Exception as _bom_e:
+            log.warning(f"[generate-pdf-supabase] BOM rozpis zlyhal (best-effort): {_bom_e}")
+        vyrob_html_pdf(lead, konfig, ceny, navratnost, grafy, pdf_path, bom_rozpis=bom_rozpis)
         pdf_size = os.path.getsize(pdf_path)
 
         import base64
