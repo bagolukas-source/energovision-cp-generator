@@ -4533,7 +4533,19 @@ def _generate_pdf_supabase_impl():
 
         grafy = vyrob_grafy(navratnost, lead, tmpdir, base)
         pdf_path = os.path.join(tmpdir, f"{base}.pdf")
-        vyrob_html_pdf(lead, konfig, ceny, navratnost, grafy, pdf_path)
+        # Rozpis materiálu a prác (feedback klientov 2026-07): z CRM BOM v payloade.
+        # Omylom odstránené commitom af38aa9 (12.7. storage fix) → strana "detailný rozpis"
+        # zmizla z B2C cenoviek. Vrátené späť (best-effort, nesmie zhodiť generovanie).
+        bom_rozpis = None
+        try:
+            bom_items = body.get("bom") or []
+            if bom_items:
+                from generate_cp_html import priprav_bom_rozpis
+                bom_rozpis = priprav_bom_rozpis(bom_items, ceny["cena_bez_dph"], ceny["cena_s_dph"])
+                log.info(f"[generate-pdf-supabase] BOM rozpis: {'OK, ' + str(len(bom_items)) + ' poloziek' if bom_rozpis else 'PRESKOCENY (prazdny vysledok)'}")
+        except Exception as _bom_e:
+            log.warning(f"[generate-pdf-supabase] BOM rozpis zlyhal (best-effort): {_bom_e}")
+        vyrob_html_pdf(lead, konfig, ceny, navratnost, grafy, pdf_path, bom_rozpis=bom_rozpis)
         pdf_size = os.path.getsize(pdf_path)
 
         import base64
@@ -14667,7 +14679,11 @@ def solinteg_alarms(device_sn):
 
 @app.route("/api/solinteg/v1/verify-sn", methods=["POST"])
 def solinteg_verify_sn_route():
-    """Overit deviceSn + checkCode pred bind (onboarding wizard krok 2)."""
+    """Overit deviceSn + checkCode pred bind (onboarding wizard krok 2).
+
+    Volane z CRM cez Vercel proxy /api/solinteg/verify-sn (X-Webhook-Secret)."""
+    if not _hs_auth_ok(request):
+        return jsonify({"success": False, "error": "unauthorized"}), 401
     try:
         from solinteg_oauth import verify_sn
         body = request.get_json(silent=True) or {}
@@ -14684,7 +14700,11 @@ def solinteg_verify_sn_route():
 
 @app.route("/api/solinteg/v1/bind", methods=["POST"])
 def solinteg_bind_route():
-    """Pridat device do Energovision uctu (onboarding wizard krok 3)."""
+    """Pridat device do Energovision uctu (onboarding wizard krok 3).
+
+    Write operacia — volane z CRM cez Vercel proxy /api/solinteg/bind (X-Webhook-Secret)."""
+    if not _hs_auth_ok(request):
+        return jsonify({"success": False, "error": "unauthorized"}), 401
     try:
         from solinteg_oauth import bind_device
         body = request.get_json(silent=True) or {}
