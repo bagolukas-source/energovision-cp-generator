@@ -819,7 +819,13 @@
       <tr><td>{{ i.name }}</td><td class="num">{{ i.qty_txt }}</td><td class="num">{{ i.total_eur }}</td></tr>
       {% endfor %}
       <tr class="subtotal"><td colspan="2">Práca a služby spolu</td><td class="num">{{ bom_rozpis.praca_spolu_eur }}</td></tr>
-
+    </tbody>
+    <!-- DELTA 2026-07-23 (Lukáš: "zalomenie ponuky cenovej je zle a škaredé"): súhrnné riadky
+         (Cena bez DPH / DPH / Cena s DPH) boli v tom istom tbody ako celý rozpis, takže WeasyPrint
+         ich vedel roztrhnúť medzi stranami — "Cena bez DPH" zostala na jednej strane a "DPH"+"Cena
+         s DPH" sa odtrhli na ďalšiu, s duplicitne zopakovanou hlavičkou tabuľky. Samostatný tbody
+         s break-inside:avoid drží tieto 3 riadky vždy pohromade na jednej strane. -->
+    <tbody style="page-break-inside:avoid; break-inside:avoid;">
       <tr class="total"><td colspan="2">Cena bez DPH</td><td class="num">{{ bom_rozpis.cena_bez_dph_eur }}</td></tr>
       <tr><td colspan="2" style="border-bottom:none;">DPH 23 %</td><td class="num" style="border-bottom:none;">{{ bom_rozpis.dph_eur }}</td></tr>
       <tr class="total final"><td colspan="2">Cena s DPH</td><td class="num">{{ bom_rozpis.cena_s_dph_eur }}</td></tr>
