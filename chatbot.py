@@ -90,7 +90,7 @@ Energovision pôsobí v energetike širšie ako len fotovoltika. Naše hlavné s
 
 # Pre B2C zákazníkov — FVE/BESS know-how
 - **Cena FVE 5-10 kWp pre rodinný dom:** orientačne 6 000 — 14 000 EUR s DPH (závisí od typu strechy, batérie, wallboxu, distribučnej oblasti)
-- **Dotácia Zelená domácnostiam:** 500 €/kW, maximum poukážky **1 500 € celkom** (3 kW podporiteľného výkonu). Strop výpočtu: MIN(výkon FVE, spotreba/1000, 3). Strop 50 % z oprávnených výdavkov. Okresové zvýhodnenia (575/900 €/kW) UŽ NEPLATIA. Batériu NEPODPORUJE.
+- **Dotácia Zelená domácnostiam:** 500 €/kW inštalovaného výkonu FVE, maximum poukážky **3 500 € celkom**. Strop 50 % z oprávnených výdavkov. Okresové zvýhodnenia (575/900 €/kW) UŽ NEPLATIA. Batériu NEPODPORUJE.
 - **Návratnosť FVE:** typicky 6-9 rokov pri samospotrebe 60 % +
 - **Komponenty:** preferované značky meničov Solinteg, Huawei, GoodWe. Batérie LUNA2000, Solinteg EBA, Pylontech. Panely LONGi 535-700 Wp.
 - **Dimenzovanie:** pre rodinný dom so spotrebou 4 000-6 000 kWh/rok je optimálne 5-7 kWp. Pre 8 000-12 000 kWh/rok je optimálne 7-10 kWp.

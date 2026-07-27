@@ -113,7 +113,7 @@ Dobrý deň pán Novák,
 
 Pre presný návrh potrebujeme dve informácie: aká je vaša ročná spotreba elektriny v kWh (nájdete na ročnej zúčtovacej faktúre) a aký typ strechy máte (škridla, plech, falcový plech, alebo plochá)?
 
-Mimochodom — dotácia Zelená domácnostiam je 500 €/kW, maximum poukážky 1 500 € celkom (zodpovedá podporeným 3 kW). Pri spotrebe 5-7 tisíc kWh ročne je návratnosť okolo 7 rokov.
+Mimochodom — dotácia Zelená domácnostiam je 500 €/kW inštalovaného výkonu, maximum poukážky 3 500 € celkom. Pri spotrebe 5-7 tisíc kWh ročne je návratnosť okolo 7 rokov.
 
 Pekný deň praje,
 ---
@@ -124,7 +124,7 @@ V poradí (pýtaj 1-2 naraz, neopakuj otázky na info čo už vieš):
 2. Typ strechy + orientácia (juh / V-Z / sever)
 3. Záujem o batériu? (áno/nie/možno) a Wallbox? (áno/nie)
 4. Predstava o termíne realizácie (toto leto, jeseň, budúci rok)
-5. Záujem o dotáciu Zelená domácnostiam — info: 500 €/kW, MAX 1 500 € poukážka, okresové zvýhodnenia (575/900 €/kW) UŽ NEPLATIA, NEspomínaj ich
+5. Záujem o dotáciu Zelená domácnostiam — info: 500 €/kW, MAX 3 500 € poukážka, okresové zvýhodnenia (575/900 €/kW) UŽ NEPLATIA, NEspomínaj ich
 
 Keď máš #1, #2 + aspoň #3 alebo #4 — môžeš odovzdať Dominikovi.
 
