@@ -1559,3 +1559,177 @@ def naplnit_ts_zmluvu(ctx, output_path):
         # Tabulky sa nepodarili — log a pokračujeme s aspoň textovou náhradou
         import traceback
         traceback.print_exc()
+
+
+# ============================================================
+# SERVISNÁ ZMLUVA FVZ (B2B / B2C)
+# ============================================================
+
+def naplnit_servis_zmluvu(ctx, output_path):
+    """
+    Vyplní šablónu servisnej zmluvy FVZ — B2B alebo B2C podľa ctx["contract_type"].
+
+    Mechanika je 1:1 zrkadlenie naplnit_ts_zmluvu: najprv regex substitúcia {key}
+    tokenov v celom word/document.xml (Príloha č. 1 — identifikácia, súhrn cien,
+    trvanie/fakturácia, kontakt, dátum), potom cez python-docx doplnenie
+    variabilne dlhých zoznamov (meniče, doplnkové služby) do tabuliek po indexoch,
+    vyhľadaných podľa substringu v hlavičkovom riadku (rovnaký vzor ako TS
+    ts_rows/cena_rows).
+
+    ctx = {
+        # Objednávateľ — POZOR: v tejto šablóne (na rozdiel od TS) NEMAJÚ tieto polia
+        # vyhradené miesto v Prílohe č. 1 (sú len v tele zmluvy, ktoré sa podľa zadania
+        # nesmie meniť). Substitúcia sa napriek tomu pokúsi tokeny nahradiť — ak v
+        # dokumente neexistujú, ide o bezpečný no-op.
+        "companyName": "...", "companyRegNumber": "...", "companyTaxNumber": "...",
+        "companyStreet": "...", "companyCity": "...", "companyZipCode": "...",
+        "createdAtDate": "09.08.2026",
+        # Kontaktná osoba pre servis — má vyhradené miesto v Prílohe č. 1 LEN v B2B
+        # šablóne (B2C nemá samostatnú "kontaktná osoba" položku, Objednávateľ v tele
+        # zmluvy JE kontaktom); pre B2C ide tiež o bezpečný no-op.
+        "contact_name": "...", "contact_phone": "...", "contact_email": "...",
+        # Príloha č. 1 — A. identifikácia FVZ
+        "installation_address": "...", "installed_kwp": "9,90",
+        "monitoring_platform": "FusionSolar",
+        "commissioning_date": "15.03.2026",
+        # Príloha č. 1 — B. balík
+        "package_label": "STANDARD", "rate_eur_kwp": "17,00", "annual_fee_eur": "168,30",
+        # Príloha č. 1 — D. trvanie/fakturácia
+        "term_label": "24 mesiacov", "commitment_discount_pct": "5",
+        "billing_label": "štvrťročne",
+        # Príloha č. 1 — súhrn cien
+        "annual_fee_after_discount_eur": "159,89", "addons_total_eur": "120,00",
+        "total_year_excl_vat_eur": "279,89",
+        # Zoznam meničov — B2B: samostatná tabuľka (max 5 riadkov, po indexoch).
+        # B2C: šablóna má miesto len pre JEDEN riadok ("Typ a sériové číslo striedača"
+        # v identifikačnej tabuľke) — vyplní sa spojeným textom zo všetkých položiek.
+        "inverters": [
+            {"position": 1, "type": "Huawei SUN2000-10KTL", "power_kw": 10,
+             "serial_number": "SN123456", "service_number": "SC-001"},
+        ],
+        # Doplnkové služby — spoločná tabuľka (max 5 riadkov, po indexoch) v oboch šablónach.
+        "addons": [
+            {"type_label": "Čistenie FV panelov navyše", "qty_per_year": 1,
+             "price_eur_year": 120, "note": ""},
+        ],
+        "contract_type": "b2b",  # alebo "b2c"
+    }
+    """
+    contract_type = (ctx.get("contract_type") or "b2b").strip().lower()
+    template_name = (
+        "Zmluva_servis_FVZ_B2C_template.docx"
+        if contract_type == "b2c"
+        else "Zmluva_servis_FVZ_B2B_template.docx"
+    )
+    template = TEMPLATES_DIR / template_name
+    shutil.copy(template, output_path)
+
+    with zipfile.ZipFile(output_path, 'r') as z:
+        members = {n: z.read(n) for n in z.namelist()}
+    xml = members['word/document.xml'].decode('utf-8')
+
+    def esc(v):
+        if v is None:
+            return ""
+        s = str(v)
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    # Najprv replace všetkých {key} placeholderov (neznáme kľúče ostanú netknuté)
+    def repl(m):
+        key = m.group(1)
+        return esc(ctx.get(key, m.group(0)))
+
+    new_xml = re.sub(r'\{([a-zA-Z_][a-zA-Z0-9_]*)\}', repl, xml)
+
+    members['word/document.xml'] = new_xml.encode('utf-8')
+    with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as z:
+        for name, data in members.items():
+            z.writestr(name, data)
+
+    inverters = ctx.get("inverters") or []
+    addons = ctx.get("addons") or []
+
+    def _fmt_num(v):
+        """Robustné číselné formátovanie pre bunky tabuliek (SK desatinná čiarka,
+        celé čísla bez zbytočnej '.0'). Akceptuje float/int/str, pri nečíselnom
+        vstupe vráti pôvodnú hodnotu ako string (rovnaké fallback správanie ako TS)."""
+        if v is None or v == "":
+            return ""
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return str(v)
+        if f == int(f):
+            return str(int(f))
+        return f"{f:.2f}".replace(".", ",")
+
+    # Teraz cez python-docx doplníme variabilne dlhé zoznamy do tabuliek
+    try:
+        from docx import Document
+        doc = Document(output_path)
+
+        for table in doc.tables:
+            if not table.rows:
+                continue
+            header_cells = [c.text.strip() for c in table.rows[0].cells]
+            header_join = " | ".join(header_cells)
+
+            # B2B: tabuľka meničov — P.č. | Typ striedača | Výkon (kW) | Sériové číslo | Servisné číslo
+            if "Typ striedača" in header_join and "Sériové číslo" in header_join:
+                for i, inv in enumerate(inverters[:5]):
+                    if i + 1 >= len(table.rows):
+                        break
+                    row = table.rows[i + 1]
+                    if len(row.cells) >= 5:
+                        row.cells[0].text = str(inv.get("position", i + 1))
+                        row.cells[1].text = str(inv.get("type", ""))
+                        row.cells[2].text = _fmt_num(inv.get("power_kw", ""))
+                        row.cells[3].text = str(inv.get("serial_number", ""))
+                        row.cells[4].text = str(inv.get("service_number", ""))
+                continue
+
+            # B2B + B2C: tabuľka doplnkových služieb — [] | Služba | Rozsah | Cena ... / rok
+            if "Služba" in header_join and "Rozsah" in header_join:
+                for i, addon in enumerate(addons[:5]):
+                    if i + 1 >= len(table.rows):
+                        break
+                    row = table.rows[i + 1]
+                    if len(row.cells) >= 4:
+                        label = str(addon.get("type_label", ""))
+                        note = addon.get("note")
+                        if note:
+                            label = f"{label} ({note})"
+                        qty = addon.get("qty_per_year")
+                        rozsah = f"{_fmt_num(qty)}× ročne" if qty not in (None, "", 0) else ""
+                        price = addon.get("price_eur_year")
+                        price_txt = f"{_fmt_num(price)} €" if price not in (None, "") else ""
+                        row.cells[0].text = "☒"
+                        row.cells[1].text = label
+                        row.cells[2].text = rozsah
+                        row.cells[3].text = price_txt
+                continue
+
+            # B2C: identifikačná tabuľka má pre menič len JEDEN riadok (bez samostatnej
+            # tabuľky) — nájdeme ho podľa textu prvej bunky.
+            for row in table.rows:
+                if len(row.cells) >= 2 and "Typ a sériové číslo striedača" in row.cells[0].text:
+                    if inverters:
+                        parts = []
+                        for inv in inverters:
+                            bits = [str(inv.get("type", ""))]
+                            if inv.get("power_kw") not in (None, ""):
+                                bits.append(f"{_fmt_num(inv.get('power_kw'))} kW")
+                            sn = inv.get("serial_number")
+                            if sn:
+                                bits.append(f"SČ: {sn}")
+                            svc = inv.get("service_number")
+                            if svc:
+                                bits.append(f"servisné č.: {svc}")
+                            parts.append(" ".join(b for b in bits if b))
+                        row.cells[1].text = "; ".join(parts)
+
+        doc.save(output_path)
+    except Exception as _e:
+        # Tabuľky sa nepodarili — log a pokračujeme aspoň s textovou náhradou
+        import traceback
+        traceback.print_exc()
