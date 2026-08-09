@@ -13267,9 +13267,11 @@ def servis_contract_generate():
         low = s.lower()
         if low in ("neurcita", "neurčitá", "unlimited", "indefinite", "0"):
             return "doba neurčitá"
-        # číselná hodnota (počet mesiacov) -> "24 mesiacov"
+        # DB hodnota je napr. "24m"/"36m" (service_specifications.term) -> "24 mesiacov"
+        if low.endswith("m"):
+            low = low[:-1]
         try:
-            months = int(float(s))
+            months = int(float(low))
             return f"{months} mesiacov"
         except (TypeError, ValueError):
             return s
