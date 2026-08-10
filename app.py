@@ -16726,3 +16726,63 @@ def webhook_render_html_pdf():
     except Exception as e:
         log.exception("render-html-pdf failed")
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# ── Kataster: vektorové parcely registra C (ESKN VRM parcels_c_view) ────────────
+# ESKN REST query má CORS allowlist (len *.skgeodesy.sk) a Vercel egress ESKN
+# blokuje — Render je jediné miesto, odkiaľ vieme vektor stiahnuť. Volá to
+# fve-os /api/kataster-parcely (server-to-server, key=WEBHOOK_SECRET) pre DXF
+# export v PV planneri: hranice parciel ako polyčiary + čísla parciel ako TEXT.
+ESKN_PARCELS_QUERY = "https://kataster.skgeodesy.sk/eskn/rest/services/VRM/parcels_c_view/MapServer/0/query"
+
+@app.route("/webhook/kataster-parcely", methods=["GET"])
+def kataster_parcely():
+    """GET ?bbox=minx,miny,maxx,maxy (EPSG:3857) & key=WEBHOOK_SECRET
+    → {ok, parcels:[{n:"1234/5", rings:[[[x,y],…],…]}], count, truncated}"""
+    args = request.args
+    if WEBHOOK_SECRET and args.get("key") != WEBHOOK_SECRET and request.headers.get("X-Webhook-Secret") != WEBHOOK_SECRET:
+        return jsonify({"ok": False, "error": "unauthorized (key)"}), 401
+    try:
+        bbox = [float(x) for x in (args.get("bbox") or "").split(",")]
+        assert len(bbox) == 4
+    except Exception:
+        return jsonify({"ok": False, "error": "bbox_invalid"}), 400
+    dx, dy = abs(bbox[2] - bbox[0]), abs(bbox[3] - bbox[1])
+    if dx <= 0 or dy <= 0 or dx > 8000 or dy > 8000:
+        return jsonify({"ok": False, "error": "bbox_out_of_range"}), 400
+
+    geom = json.dumps({"xmin": bbox[0], "ymin": bbox[1], "xmax": bbox[2], "ymax": bbox[3],
+                       "spatialReference": {"wkid": 102100}})
+    parcels, offset, truncated = [], 0, False
+    for _page in range(4):  # max 4×1000 parciel — viac na jeden výkres nedáva zmysel
+        try:
+            r = requests.get(ESKN_PARCELS_QUERY, params={
+                "f": "json", "geometry": geom, "geometryType": "esriGeometryEnvelope",
+                "inSR": 102100, "spatialRel": "esriSpatialRelIntersects",
+                "outFields": "PARCEL_NUMBER_LABEL,PARCEL_NUMBER",
+                "returnGeometry": "true", "outSR": 102100, "geometryPrecision": 2,
+                "resultOffset": offset, "resultRecordCount": 1000,
+            }, timeout=25)
+            r.raise_for_status()
+            d = r.json()
+        except Exception as e:
+            if parcels:
+                truncated = True
+                break
+            return jsonify({"ok": False, "error": "eskn: " + str(e)[:200]}), 502
+        if "error" in d:
+            return jsonify({"ok": False, "error": "eskn: " + str(d["error"])[:200]}), 502
+        feats = d.get("features") or []
+        for f in feats:
+            a = f.get("attributes") or {}
+            g = f.get("geometry") or {}
+            n = a.get("PARCEL_NUMBER_LABEL") or a.get("PARCEL_NUMBER") or ""
+            rings = g.get("rings") or []
+            if rings:
+                parcels.append({"n": str(n), "rings": rings})
+        offset += len(feats)
+        if not d.get("exceededTransferLimit") or not feats:
+            break
+    else:
+        truncated = True
+    return jsonify({"ok": True, "parcels": parcels, "count": len(parcels), "truncated": truncated})
