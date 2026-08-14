@@ -5449,7 +5449,14 @@ def generuj_protokol():
         import base64
         b64 = base64.b64encode(pdf_bytes).decode("ascii")
         sha = hashlib.sha256(pdf_bytes).hexdigest()
-        filename = f"{ctx['doc_id'].replace('/','-')}.pdf"
+        import unicodedata as _ud
+        def _safe(x):
+            x = _ud.normalize("NFKD", str(x or "")).encode("ascii", "ignore").decode("ascii")
+            return "".join(c if c.isalnum() else "_" for c in x).strip("_") or "dokument"
+        _titles = {"inspection": "Protokol_z_obhliadky", "handover": "Preberaci_protokol", "service": "Servisny_protokol"}
+        _who = _safe(ctx.get("customer_name", ""))
+        _date = datetime.now().strftime("%d-%m-%Y")
+        filename = f"{_titles.get(kind, 'Protokol')}_{_who}_{_date}.pdf" if _who != "dokument" else f"{ctx['doc_id'].replace('/','-')}.pdf"
         return jsonify({"ok": True, "pdf_base64": b64, "sha256": sha, "filename": filename, "doc_id": ctx["doc_id"]})
     except Exception as e:
         log.exception("generuj-protokol failed")
