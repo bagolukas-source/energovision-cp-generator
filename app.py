@@ -5153,12 +5153,12 @@ PROTOKOL_HTML = """
 <html lang="sk"><head><meta charset="utf-8"/><style>
 @page { size: A4; margin: 18mm 15mm; }
 body { font-family: 'Helvetica', sans-serif; font-size: 10pt; color: #1e293b; line-height: 1.4; }
-.brand { background: #1F4E78; color: white; padding: 14px 18px; margin: -18mm -15mm 14px -15mm; }
+.brand { background: #6FB022; color: white; padding: 14px 18px; margin: -18mm -15mm 14px -15mm; }
 .brand h1 { margin: 0; font-size: 18pt; font-weight: bold; }
 .brand .sub { font-size: 9pt; opacity: 0.85; margin-top: 3px; }
 .meta { display: flex; justify-content: space-between; background: #f1f5f9; padding: 8px 12px; border-radius: 6px; margin-bottom: 14px; font-size: 9pt; }
-h2 { background: #fef3c7; border-left: 4px solid #f59e0b; padding: 4px 10px; font-size: 12pt; margin: 18px 0 8px 0; }
-h3 { color: #1F4E78; margin: 14px 0 6px 0; font-size: 11pt; }
+h2 { background: #F5FBEC; border-left: 4px solid #6FB022; padding: 4px 10px; font-size: 12pt; margin: 18px 0 8px 0; }
+h3 { color: #4C8016; margin: 14px 0 6px 0; font-size: 11pt; }
 .row { display: flex; gap: 14px; margin: 6px 0; }
 .row .label { font-weight: bold; min-width: 140px; color: #475569; }
 .checklist li { list-style: none; margin: 3px 0; padding: 4px 8px; border-radius: 4px; }
@@ -5167,8 +5167,9 @@ h3 { color: #1F4E78; margin: 14px 0 6px 0; font-size: 11pt; }
 .checklist li .icon { font-weight: bold; margin-right: 8px; }
 .photos { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-top: 10px; }
 .photos img { width: 100%; height: 80px; object-fit: cover; border: 1px solid #e2e8f0; border-radius: 4px; }
-.notes { background: #fef9e7; border: 1px solid #fde68a; padding: 10px 12px; border-radius: 6px; font-style: italic; }
-.signature { margin-top: 20px; padding-top: 14px; border-top: 2px solid #1F4E78; display: flex; justify-content: space-between; }
+.notes { background: #F5FBEC; border: 1px solid #C9E5A2; padding: 10px 12px; border-radius: 6px; }
+.agreements { background: #fff; border: 1.5px solid #6FB022; padding: 10px 12px; border-radius: 6px; }
+.signature { margin-top: 20px; padding-top: 14px; border-top: 2px solid #6FB022; display: flex; justify-content: space-between; }
 .signature .sig { width: 45%; }
 .signature img { max-width: 180px; max-height: 80px; }
 .footer { position: fixed; bottom: 8mm; left: 15mm; right: 15mm; text-align: center; font-size: 8pt; color: #94a3b8; }
@@ -5195,9 +5196,14 @@ h3 { color: #1F4E78; margin: 14px 0 6px 0; font-size: 11pt; }
 {% if checklist %}
 <ul class="checklist">
 {% for item in checklist %}
-  <li class="{{ 'done' if item.done else 'todo' }}"><span class="icon">{{ '✓' if item.done else '✗' }}</span>{{ item.label }}</li>
+  <li class="{{ 'done' if item.done else 'todo' }}"><span class="icon">{{ '✓' if item.done else '✗' }}</span>{{ item.label }}{% if item.value %} — <strong>{{ item.value }}</strong>{% endif %}</li>
 {% endfor %}
 </ul>
+{% endif %}
+
+{% if agreements %}
+<h3>Dohody so zákazníkom</h3>
+<div class="agreements">{{ agreements }}</div>
 {% endif %}
 
 {% if notes %}
@@ -5277,7 +5283,7 @@ def generuj_protokol():
             )
             photo_urls = [_storage_datauri(d.get("storage_url"), "documents") for d in (r2.json() or []) if d.get("storage_url")]
 
-            checklist_data = ins.get("checklist_data") or {}
+            checklist_data = {k: v for k, v in (ins.get("checklist_data") or {}).items() if not k.endswith("_hodnota")}
             CL_LABELS = {
                 "strecha_typ": "Typ strechy zaznamenaný",
                 "strecha_orientacia": "Orientácia a sklon strechy zmerané",
@@ -5294,14 +5300,24 @@ def generuj_protokol():
                 "suhlas_susedy": "Súhlas susedov",
                 "klient_pripravoval_dotacie": "Klient pripravuje dotácie",
             }
-            checklist = [{"label": CL_LABELS.get(k, k), "done": bool(v)} for k, v in checklist_data.items()]
-            checklist += [{"label": CL_LABELS[k], "done": False} for k in CL_LABELS if k not in checklist_data]
+            # Preferuj pripravený checklist z CRM (jednotné labely + hodnoty — lib/obhliadka-checklist);
+            # fallback: rekonštrukcia z checklist_data bez *_hodnota kľúčov (tie nie sú checkbox položky).
+            body_checklist = data.get("checklist")
+            if isinstance(body_checklist, list) and body_checklist:
+                checklist = [{"label": str(i.get("label", "")), "done": bool(i.get("done")), "value": i.get("value") or None} for i in body_checklist]
+            else:
+                raw = ins.get("checklist_data") or {}
+                checklist = [{"label": CL_LABELS.get(k, k.replace("_", " ")), "done": bool(v), "value": raw.get(f"{k}_hodnota") or None} for k, v in checklist_data.items()]
+                checklist += [{"label": CL_LABELS[k], "done": False, "value": None} for k in CL_LABELS if k not in checklist_data]
 
             # Adresa inštalácie (3-address logic)
+            def _addr(street, psc, city):
+                parts = [p for p in [street, " ".join(x for x in [psc, city] if x)] if p]
+                return ", ".join(parts)
             if cust.get("installation_same_as_billing") is False and cust.get("installation_street"):
-                inst_addr = f"{cust.get('installation_street','')}, {cust.get('installation_postal_code','')} {cust.get('installation_city','')}".strip(", ")
+                inst_addr = _addr(cust.get("installation_street"), cust.get("installation_postal_code"), cust.get("installation_city"))
             else:
-                inst_addr = f"{cust.get('street','')}, {cust.get('postal_code','')} {cust.get('city','')}".strip(", ")
+                inst_addr = _addr(cust.get("street"), cust.get("postal_code"), cust.get("city"))
 
             doc_id = f"OBH-{datetime.now().strftime('%Y-%m')}-{entity_id[:8]}"
             ctx = {
@@ -5317,6 +5333,7 @@ def generuj_protokol():
                 "installation_address": inst_addr or "—",
                 "gps": f"{ins['gps_lat']:.5f}, {ins['gps_lng']:.5f}" if ins.get("gps_lat") else None,
                 "checklist": checklist,
+                "agreements": data.get("agreements") or ins.get("agreements"),
                 "notes": ins.get("notes"),
                 "photo_urls": photo_urls,
                 "customer_signature_url": _storage_datauri(ins.get("customer_signature_url"), "signatures"),
