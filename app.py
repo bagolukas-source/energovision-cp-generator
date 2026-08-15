@@ -5151,54 +5151,69 @@ import hashlib
 PROTOKOL_HTML = """
 <!DOCTYPE html>
 <html lang="sk"><head><meta charset="utf-8"/><style>
-@page { size: A4; margin: 18mm 15mm; }
-body { font-family: 'Helvetica', sans-serif; font-size: 10pt; color: #1e293b; line-height: 1.4; }
-.brand { background: #6FB022; color: white; padding: 14px 18px; margin: -18mm -15mm 14px -15mm; }
-.brand h1 { margin: 0; font-size: 18pt; font-weight: bold; }
-.brand .sub { font-size: 9pt; opacity: 0.85; margin-top: 3px; }
-.meta { display: flex; justify-content: space-between; background: #f1f5f9; padding: 8px 12px; border-radius: 6px; margin-bottom: 14px; font-size: 9pt; }
-h2 { background: #F5FBEC; border-left: 4px solid #6FB022; padding: 4px 10px; font-size: 12pt; margin: 18px 0 8px 0; }
-h3 { color: #4C8016; margin: 14px 0 6px 0; font-size: 11pt; }
-.row { display: flex; gap: 14px; margin: 6px 0; }
-.row .label { font-weight: bold; min-width: 140px; color: #475569; }
-.checklist li { list-style: none; margin: 3px 0; padding: 4px 8px; border-radius: 4px; }
-.checklist li.done { background: #d1fae5; color: #065f46; }
-.checklist li.todo { background: #fef2f2; color: #991b1b; }
-.checklist li .icon { font-weight: bold; margin-right: 8px; }
-.photos { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-top: 10px; }
-.photos img { width: 100%; height: 80px; object-fit: cover; border: 1px solid #e2e8f0; border-radius: 4px; }
-.notes { background: #F5FBEC; border: 1px solid #C9E5A2; padding: 10px 12px; border-radius: 6px; }
-.agreements { background: #fff; border: 1.5px solid #6FB022; padding: 10px 12px; border-radius: 6px; }
-.signature { margin-top: 20px; padding-top: 14px; border-top: 2px solid #6FB022; display: flex; justify-content: space-between; }
+@page { size: A4; margin: 16mm 15mm 18mm 15mm; }
+body { font-family: 'Helvetica', sans-serif; font-size: 9.5pt; color: #1a1a1a; line-height: 1.45; }
+.head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6mm; }
+.badge { font-size: 8pt; color: #6FB022; font-weight: bold; letter-spacing: 2px; text-transform: uppercase; }
+.docmeta { text-align: right; font-size: 8pt; color: #6b6b6b; line-height: 1.5; }
+h1 { font-size: 20pt; font-weight: bold; color: #1a1a1a; margin: 2mm 0 1mm 0; line-height: 1.15; }
+.sub { font-size: 9.5pt; color: #6b6b6b; margin-bottom: 6mm; }
+.card { background: #fff; border: 1px solid #d4d4d4; border-radius: 8px; padding: 10px 14px; margin-bottom: 5mm; }
+.irow { display: flex; padding: 3px 0; border-bottom: 0.5px solid #ececec; }
+.irow:last-child { border-bottom: none; }
+.ilabel { font-size: 7.5pt; color: #6b6b6b; letter-spacing: 1px; text-transform: uppercase; width: 120px; padding-top: 2px; }
+.ival { font-size: 9.5pt; font-weight: bold; flex: 1; }
+h3 { font-size: 9.5pt; color: #6FB022; text-transform: uppercase; letter-spacing: 0.8px; border-bottom: 1px solid #6FB022; padding-bottom: 2px; margin: 6mm 0 3mm 0; font-weight: bold; }
+.cl { width: 100%; border-collapse: collapse; }
+.cl td { padding: 3.5px 4px; border-bottom: 0.5px solid #ececec; vertical-align: top; }
+.cl .ic { width: 16px; color: #6FB022; font-weight: bold; }
+.cl .ic.no { color: #b9b9b9; }
+.cl .lbl { color: #1a1a1a; }
+.cl .lbl.no { color: #9a9a9a; }
+.cl .val { text-align: right; font-weight: bold; white-space: nowrap; padding-left: 10px; }
+.agreements { border: 1.5px solid #6FB022; border-radius: 8px; padding: 9px 12px; }
+.notes { background: #F5FBEC; border-radius: 8px; padding: 9px 12px; }
+.photos { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-top: 2mm; }
+.photos img { width: 100%; height: 88px; object-fit: cover; border: 1px solid #d4d4d4; border-radius: 6px; }
+.morephotos { font-size: 8pt; color: #6b6b6b; margin-top: 4px; }
+.signature { margin-top: 8mm; padding-top: 5mm; border-top: 1px solid #d4d4d4; display: flex; justify-content: space-between; }
 .signature .sig { width: 45%; }
-.signature img { max-width: 180px; max-height: 80px; }
-.footer { position: fixed; bottom: 8mm; left: 15mm; right: 15mm; text-align: center; font-size: 8pt; color: #94a3b8; }
+.signature .siglabel { font-size: 7.5pt; color: #6b6b6b; letter-spacing: 1px; text-transform: uppercase; }
+.signature img { max-width: 170px; max-height: 70px; margin-top: 4px; }
+.signature .sigline { border-top: 1px solid #9a9a9a; margin-top: 8px; padding-top: 3px; font-size: 9pt; font-weight: bold; }
+.footer { position: fixed; bottom: 6mm; left: 15mm; right: 15mm; text-align: center; font-size: 7.5pt; color: #9a9a9a; border-top: 0.5px solid #ececec; padding-top: 6px; }
 </style></head><body>
-<div class="brand">
-  <h1>{{ title }}</h1>
-  <div class="sub">{{ subtitle }}</div>
+
+<div class="head">
+  <div>
+    <div class="badge">{{ title }}</div>
+  </div>
+  <div class="docmeta">{{ doc_id }}<br/>{{ date_str }}</div>
 </div>
 
-<div class="meta">
-  <div><strong>ID:</strong> {{ doc_id }}</div>
-  <div><strong>Dátum:</strong> {{ date_str }}</div>
-  <div><strong>Technik:</strong> {{ technician }}</div>
+<h1>{{ customer_name }}</h1>
+<div class="sub">{{ subtitle }}</div>
+
+<div class="card">
+  <div class="irow"><span class="ilabel">Miesto inštalácie</span><span class="ival">{{ installation_address }}</span></div>
+  {% if customer_phone %}<div class="irow"><span class="ilabel">Telefón</span><span class="ival">{{ customer_phone }}</span></div>{% endif %}
+  {% if customer_email %}<div class="irow"><span class="ilabel">E-mail</span><span class="ival">{{ customer_email }}</span></div>{% endif %}
+  <div class="irow"><span class="ilabel">Termín</span><span class="ival">{{ date_str }}</span></div>
+  <div class="irow"><span class="ilabel">Technik</span><span class="ival">{{ technician }}</span></div>
+  {% if gps %}<div class="irow"><span class="ilabel">GPS</span><span class="ival">{{ gps }}</span></div>{% endif %}
 </div>
 
-<h3>Zákazník</h3>
-<div class="row"><span class="label">Meno / firma:</span> {{ customer_name }}</div>
-{% if customer_phone %}<div class="row"><span class="label">Telefón:</span> {{ customer_phone }}</div>{% endif %}
-{% if customer_email %}<div class="row"><span class="label">E-mail:</span> {{ customer_email }}</div>{% endif %}
-<div class="row"><span class="label">Miesto inštalácie:</span> {{ installation_address }}</div>
-{% if gps %}<div class="row"><span class="label">GPS:</span> {{ gps }}</div>{% endif %}
-
-<h2>{{ section_title }}</h2>
 {% if checklist %}
-<ul class="checklist">
+<h3>{{ section_title }}</h3>
+<table class="cl">
 {% for item in checklist %}
-  <li class="{{ 'done' if item.done else 'todo' }}"><span class="icon">{{ '✓' if item.done else '✗' }}</span>{{ item.label }}{% if item.value %} — <strong>{{ item.value }}</strong>{% endif %}</li>
+  <tr>
+    <td class="ic {{ '' if item.done else 'no' }}">{{ '✓' if item.done else '○' }}</td>
+    <td class="lbl {{ '' if item.done else 'no' }}">{{ item.label }}</td>
+    <td class="val">{% if item.value %}{{ item.value }}{% endif %}</td>
+  </tr>
 {% endfor %}
-</ul>
+</table>
 {% endif %}
 
 {% if agreements %}
@@ -5212,30 +5227,30 @@ h3 { color: #4C8016; margin: 14px 0 6px 0; font-size: 11pt; }
 {% endif %}
 
 {% if photo_urls %}
-<h3>Fotodokumentácia ({{ photo_urls|length }} fotiek)</h3>
+<h3>Fotodokumentácia ({{ photo_urls|length }})</h3>
 <div class="photos">
 {% for url in photo_urls[:9] %}
   <img src="{{ url }}" />
 {% endfor %}
 </div>
-{% if photo_urls|length > 9 %}<p style="font-size:8pt;color:#64748b;margin-top:6px;">+ ďalších {{ photo_urls|length - 9 }} fotiek v digitálnom archíve.</p>{% endif %}
+{% if photo_urls|length > 9 %}<div class="morephotos">+ ďalších {{ photo_urls|length - 9 }} fotografií v digitálnom archíve Energovision.</div>{% endif %}
 {% endif %}
 
 <div class="signature">
   <div class="sig">
-    <strong>Klient — podpis:</strong><br/>
-    {% if customer_signature_url %}<img src="{{ customer_signature_url }}" />{% else %}<em style="color:#94a3b8">(nepodpísané)</em>{% endif %}
-    <div style="border-top:1px solid #94a3b8;margin-top:6px;padding-top:3px;font-size:9pt;">{{ customer_name }}</div>
+    <div class="siglabel">Zákazník</div>
+    {% if customer_signature_url %}<img src="{{ customer_signature_url }}" />{% endif %}
+    <div class="sigline">{{ customer_name }}</div>
   </div>
   <div class="sig">
-    <strong>Technik — podpis:</strong><br/>
-    {% if technician_signature_url %}<img src="{{ technician_signature_url }}" />{% else %}<em style="color:#94a3b8">(elektronický záznam {{ doc_id }})</em>{% endif %}
-    <div style="border-top:1px solid #94a3b8;margin-top:6px;padding-top:3px;font-size:9pt;">{{ technician }}</div>
+    <div class="siglabel">Za Energovision</div>
+    {% if technician_signature_url %}<img src="{{ technician_signature_url }}" />{% else %}<div style="height:70px;"></div>{% endif %}
+    <div class="sigline">{{ technician }}</div>
   </div>
 </div>
 
 <div class="footer">
-  Energovision s.r.o. · IČO 53 036 280 · www.energovision.sk · {{ doc_id }} · vygenerované {{ generated_at }}
+  Energovision, s.r.o. · IČO 53 036 280 · www.energovision.sk · {{ doc_id }} · vygenerované {{ generated_at }}
 </div>
 </body></html>
 """
@@ -5322,7 +5337,7 @@ def generuj_protokol():
             doc_id = f"OBH-{datetime.now().strftime('%Y-%m')}-{entity_id[:8]}"
             ctx = {
                 "title": "Protokol z obhliadky",
-                "subtitle": "Záznam o technickej obhliadke pre fotovoltickú elektráreň",
+                "subtitle": "Záznam z technickej obhliadky pred inštaláciou fotovoltickej elektrárne",
                 "section_title": "Kontrolný zoznam obhliadky",
                 "doc_id": doc_id,
                 "date_str": datetime.fromisoformat((ins.get("scheduled_at") or ins.get("created_at")).replace("Z","+00:00")).strftime("%d.%m.%Y %H:%M") if ins.get("scheduled_at") else datetime.now().strftime("%d.%m.%Y"),
