@@ -46,6 +46,7 @@ class VariantResult:
     summary: DispatchSummary
     financial: FinancialResult
     intervals: Optional[list[DispatchInterval]] = field(default=None, repr=False)
+    merchant_detail: Optional[dict] = field(default=None, repr=False)  # plný merchant výstup (throughput/cykly/buy/sell/gross/fee/net)
     # Pre konzistentný rebuild financií s korektnou dotáciou (B1 fix) — neserializuje sa
     _cf_builder: object = field(default=None, repr=False, compare=False)
     _cf_kwargs: Optional[dict] = field(default=None, repr=False, compare=False)
@@ -303,6 +304,7 @@ class VariantGenerator:
 
         # Throughput batérie pre kalkuláciu výmeny článkov (default = EMS výboj)
         _bess_throughput_kwh = summary.bat_discharge_total_kwh
+        _merchant_detail = None
 
         # ── MERCHANT MÓD (podpora bilančnej skupiny) ─────────────────────────────
         # Batéria nerobí samospotrebu/peak — ide grid-to-grid arbitráž PLNOU PAĽBOU
@@ -344,6 +346,7 @@ class VariantGenerator:
             saving_decomp["sav_arbitrage_eur"] = 0.0
             saving_decomp["sav_peak_shaving_eur"] = 0.0
             saving_decomp["sav_merchant_eur"] = float(_m["annual_profit_eur"])
+            _merchant_detail = _m  # plný merchant výstup pre posudok
             # Throughput z merchantu (plná paľba → rýchlejšia degradácia/výmena)
             _bess_throughput_kwh = float(_m["throughput_mwh"]) * 1000.0
 
@@ -401,6 +404,7 @@ class VariantGenerator:
             capex_total_eur=total_capex,
             dotacia_eur=0.0,  # finálnu dotáciu nastaví pipeline (rebuild)
             merchant_eur=float(saving_decomp.get("sav_merchant_eur", 0.0)),
+            merchant_detail=_merchant_detail,
             summary=summary,
             financial=financial,
             intervals=intervals if keep_intervals else None,

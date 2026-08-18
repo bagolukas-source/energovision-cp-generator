@@ -46,6 +46,7 @@ def _energy_flow_svg(ctx):
     pv_load = n("pv_to_load_mwh") or max(0.0, pv - exp)
     bat_out = n("bat_to_load_mwh")
     bat_chg = n("pv_to_bat_mwh") + n("grid_to_bat_mwh")
+    merch = n("merchant_throughput_mwh"); merch_cyc = n("merchant_cycles")  # merchant: obchod batérie do siete
     def f(x):
         return ("%0.0f" % round(x)).replace(",", " ")
     def circ(cx, cy, r, fill, border, title, big, sub):
@@ -57,11 +58,13 @@ def _energy_flow_svg(ctx):
         w = 18 + len(t)*8
         return (f'<rect x="{x-w/2}" y="{y-13}" width="{w}" height="26" rx="7" fill="#fff" stroke="#E5E7EB"/>'
                 f'<text x="{x}" y="{y+5}" text-anchor="middle" font-size="13" font-weight="700" fill="{col}">{t}</text>')
-    AMBER="#F59E0B"; BLUE="#60A5FA"
+    AMBER="#F59E0B"; BLUE="#60A5FA"; GREENM="#5E8E2A"
     parts = []
     parts.append('<defs>'
         '<marker id="ah-a" markerWidth="9" markerHeight="9" refX="6" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="'+AMBER+'"/></marker>'
         '<marker id="ah-b" markerWidth="9" markerHeight="9" refX="6" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="'+BLUE+'"/></marker>'
+        '<marker id="ah-g" markerWidth="9" markerHeight="9" refX="6" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="'+GREENM+'"/></marker>'
+        '<marker id="ah-g0" markerWidth="9" markerHeight="9" refX="3" refY="4.5" orient="auto"><path d="M9,0 L0,4.5 L9,9 z" fill="'+GREENM+'"/></marker>'
         '</defs>')
     # toky (kreslíme pred kruhmi)
     parts.append(f'<path d="M720,78 L720,52 L230,52 L230,225" fill="none" stroke="{AMBER}" stroke-width="4" marker-end="url(#ah-a)" opacity="0.9"/>')
@@ -71,14 +74,48 @@ def _energy_flow_svg(ctx):
     parts.append(circ(720,150,72,"#FEF3C7","#FCD34D","Solar PV",f(pv),"MWh generácia"))
     parts.append(circ(230,300,72,"#DBEAFE","#93C5FD","Sieť",f(grid_imp),f"MWh · export {f(exp)}"))
     parts.append(circ(470,300,72,"#F3E8FF","#D8B4FE","Spotreba",f(load),"MWh spotreba"))
-    parts.append(circ(720,352,56,"#DCFCE7","#86EFAC","Batéria",f(bat_out),(f"MWh von · {f(bat_chg)} nabité" if bat_chg>0.5 else "MWh výstup")))
+    if merch>0.5:
+        parts.append(circ(720,352,56,"#DCFCE7","#86EFAC","Batéria",f(merch),f"MWh obchod · {f(merch_cyc)} cyklov"))
+    else:
+        parts.append(circ(720,352,56,"#DCFCE7","#86EFAC","Batéria",f(bat_out),(f"MWh von · {f(bat_chg)} nabité" if bat_chg>0.5 else "MWh výstup")))
     # labely tokov
     parts.append(lbl(475,52,f(exp),AMBER))
     parts.append(lbl(600,243,f(pv_load),AMBER))
     parts.append(lbl(350,300,f(grid_imp),BLUE))
-    return ('<div class="flowsvg"><svg viewBox="0 0 920 440" width="100%" style="max-height:380px" '
+    if merch>0.5:
+        # Batéria v merchant režime: obojsmerné obchodovanie so sieťou (nabíja lacno / predáva draho)
+        parts.append(f'<path d="M672,392 C520,452 380,452 286,352" fill="none" stroke="{GREENM}" '
+                     f'stroke-width="4.5" marker-start="url(#ah-g0)" marker-end="url(#ah-g)" opacity="0.9"/>')
+        parts.append(lbl(470,442,f"{f(merch)} MWh obchod",GREENM))
+    return ('<div class="flowsvg"><svg viewBox="0 0 920 472" width="100%" style="max-height:400px" '
             'xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI,Arial,sans-serif">'
             + "".join(parts) + '</svg></div>')
+
+
+def _merchant_block(ctx):
+    """Dátová pasáž o obchodovaní batérie v bilančnej skupine (len ak merchant režim beží)."""
+    def _n(k):
+        try: return float(ctx.get(k) or 0)
+        except Exception: return 0.0
+    mt = _n("merchant_throughput_mwh")
+    if _n("merchant_revenue_eur") <= 1 or mt <= 0.5:
+        return ""
+    cyc = _n("merchant_cycles")
+    rows = (trow(["Ukazovateľ obchodovania","Hodnota","Poznámka"],head=True,align=['l','r','l'])
+        + trow(["Obchodovaný objem do siete", num(mt)+" MWh/rok","AC dodávka do siete"],em="em")
+        + trow(["Ekvivalentné cykly batérie", num(cyc)+" cyklov/rok","~"+num(cyc/365.0,2)+"/deň"])
+        + trow(["Nákup (lacné hodiny)", eur(_n('merchant_buy_eur')),"odber zo siete"])
+        + trow(["Predaj (drahé hodiny)", eur(_n('merchant_sell_eur')),"dodávka do siete"])
+        + trow(["Hrubý rozdiel", eur(_n('merchant_gross_eur')),"predaj − nákup"])
+        + trow(["Marža organizátora BS ("+num(_n('merchant_fee_pct'))+" %)","−"+eur(_n('merchant_fee_eur')),"správa bilančnej skupiny"])
+        + trow(["Čistý výnos pre klienta", eur(_n('merchant_net_eur')),"vstupuje do ekonomiky projektu"],em="em")
+        + trow(["Priemerný využitý spread", num(_n('merchant_spread_eur_mwh'),1)+" €/MWh","hrubý zisk / objem"]))
+    return ('<div class="kick" style="margin-top:12px;">Podpora bilančnej skupiny — obchodovanie batérie</div>'
+        '<p class="narr">V tomto variante batéria neslúži samospotrebe odberného miesta, ale obchoduje komoditu '
+        'cez bilančnú skupinu: v najlacnejších hodinách sa nabíja zo siete a v najdrahších dodáva späť do siete '
+        '(plnou paľbou; rozdiel nad rámec spotreby vyrovnáva bilančná skupina). Hodnota = spotový spread znížený '
+        'o maržu organizátora. Nižšie je, koľko energie takto ročne pretečie a aký výnos to prináša.</p>'
+        '<table>' + rows + '</table>')
 
 
 def _chartjs_init(ctx):
@@ -330,6 +367,7 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
   </table>
   <div class="kick" style="margin-top:10px;">Tok energie a využitie výroby</div>
   <div class="nobreak">{gsvg(_energy_flow_svg(ctx), "Ročný tok energie — výroba FVE, priama samospotreba, batéria a sieť (MWh/rok).")}</div>
+  {_merchant_block(ctx)}
   <div class="kick" style="margin-top:12px;">Využitie vyrobenej energie</div>
   <div class="nobreak two" style="align-items:center; margin-top:4px;">
     <div class="chartwrap" style="height:230px"><canvas id="cDonut"></canvas></div>

@@ -100,6 +100,17 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None, selected_
     save_bess   = float(vs.get("bess_self_consumption_eur") or 0)
     save_arb    = float(vs.get("arbitrage_eur") or 0)
     save_merchant = float(vs.get("merchant_eur") or 0)  # BOD 11: obchodovanie batérie v bilančnej skupine (merchant mode)
+    # Merchant detail (throughput/cykly/buy/sell/gross/fee/net) — pre bublinku a dátovú pasáž o BS
+    _mdet = base.get("merchant_detail") or {}
+    merch_throughput_mwh = float(_mdet.get("throughput_mwh") or 0)
+    merch_cycles = float(_mdet.get("equiv_cycles") or 0)
+    merch_buy_eur = float(_mdet.get("buy_eur") or 0)
+    merch_sell_eur = float(_mdet.get("sell_eur") or 0)
+    merch_gross_eur = float(_mdet.get("gross_eur") or 0)
+    merch_fee_eur = float(_mdet.get("organizer_fee_eur") or 0)
+    merch_fee_pct = float(_mdet.get("fee_pct") or 15.0)
+    merch_net_eur = float(_mdet.get("merchant_net_eur") or save_merchant)
+    merch_spread_eur_mwh = (merch_gross_eur / merch_throughput_mwh) if merch_throughput_mwh > 0 else 0.0
     # BUG 3 FIX: efektívna avoided sadzba = engine hodnota samospotreby / priama kWh
     # (engine oceňuje plným retailom; p_avoided=silová+distrib bola len časť → nesedelo s úsporou)
     _pv_direct_mwh = float(base.get("pv_to_load_mwh") or 0)
@@ -213,6 +224,11 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None, selected_
         "loss_pct":(max(0.0,float(base.get("pv_total_mwh") or 0)-pv_self_mwh-export_mwh)/float(base.get("pv_total_mwh") or 1)*100),
         "grid_import_mwh":base.get("grid_import_mwh"),"samosp_pct":(pv_self_mwh/float(base.get("pv_total_mwh") or 1)*100),"coverage_pct":base.get("samostatnost_pct"),
         "arbitrage_eur":save_arb,"arbitrage_reason":arbitrage_reason,"arbitrage_shown":(bess_kwh>0),
+        "merchant_revenue_eur":save_merchant,"merchant_mode":(save_merchant>1),
+        "merchant_throughput_mwh":merch_throughput_mwh,"merchant_cycles":merch_cycles,
+        "merchant_buy_eur":merch_buy_eur,"merchant_sell_eur":merch_sell_eur,"merchant_gross_eur":merch_gross_eur,
+        "merchant_fee_eur":merch_fee_eur,"merchant_fee_pct":merch_fee_pct,"merchant_net_eur":merch_net_eur,
+        "merchant_spread_eur_mwh":merch_spread_eur_mwh,
         "year_mwh":base.get("load_total_mwh"),"max15_kw":peak_kw,"peak_estimated":peak_estimated,"capex_total_eur":capex,"net_capex_eur":net_capex,"save_peak_eur":save_peak,
         "capex_pv_eur":float(base.get("capex_pv_eur") or 0),"capex_bess_eur":float(base.get("capex_bess_eur") or 0),
         "co2_avoided_tonnes":base.get("co2_avoided_tonnes"),

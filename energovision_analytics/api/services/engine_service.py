@@ -475,6 +475,7 @@ def build_run_variants_response(
             "energy_flow": energy_flow,
             "solar_consumption_pct": solar_consumption_pct,
             "carbon": carbon,
+            "merchant_detail": (getattr(r, "merchant_detail", None) or {}),
         })
 
     return {
