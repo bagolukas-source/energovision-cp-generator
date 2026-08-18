@@ -672,8 +672,14 @@ def insert_variant_via_engine(sb, analyza_id: str, name: str, fve_kwp, bess_kwh,
             if inverter_kw:
                 row["inverter_kw"] = float(inverter_kw)
             sb.table("analyza_om_variants").insert(row).execute()
+            _rich = dict(vA) if isinstance(vA, dict) else {}
+            _rich["label"] = name or "Vlastný variant"
+            _rich["pv_kwp"] = row["fve_kwp"]; _rich["bess_kwh"] = row["bess_kwh"]; _rich["bess_kw"] = row["bess_kw"]
+            _rich["npv_eur"] = m["npv_eur"]; _rich["irr_pct"] = m["irr_pct"]; _rich["payback_simple_y"] = m["payback_y"]
+            _rich["capex_total_eur"] = row["capex_eur"]; _rich["dotacia_eur"] = 0
+            if m.get("delta_cf"): _rich["cashflow_array"] = m["delta_cf"]
             return {"ok": True, "position": pos, "capex_eur": row["capex_eur"], "delta_mode": True,
-                    "npv_eur": m["npv_eur"], "irr_pct": m["irr_pct"], "payback_y": m["payback_y"]}
+                    "npv_eur": m["npv_eur"], "irr_pct": m["irr_pct"], "payback_y": m["payback_y"], "rich_variant": _rich}
         # delta zlyhala → pokračuj štandardnou cestou nižšie (celosystémová ekonomika)
         log.warning("[aom-v2] retrofit delta zlyhala pre %s — fallback na celosystémovú ekonomiku", analyza_id)
     req["variants"]["pv_kwp_options"] = [fve_kwp]
@@ -720,9 +726,13 @@ def insert_variant_via_engine(sb, analyza_id: str, name: str, fve_kwp, bess_kwh,
         # výkon meniča zo zadania (chat ac_kw / manuálny variant) — bez neho posudok dopočíta 0,9×kWp
         row["inverter_kw"] = float(inverter_kw)
     sb.table("analyza_om_variants").insert(row).execute()
+    # rich_variant: rovnaká schéma ako matica -> pridá sa do full_response.variants, nech ho UI/posudok nájde
+    _rich = dict(v)
+    _rich["label"] = name or v.get("label") or "Vlastný variant"
+    _rich["pv_kwp"] = row["fve_kwp"]; _rich["bess_kwh"] = row["bess_kwh"]; _rich["bess_kw"] = row["bess_kw"]
     return {"ok": True, "position": pos, "capex_eur": row["capex_eur"],
             "npv_eur": row["result_npv_eur_base"], "irr_pct": row["result_irr_pct_base"],
-            "payback_y": row["result_payback_y_base"]}
+            "payback_y": row["result_payback_y_base"], "rich_variant": _rich}
 
 
 def run_variants_premium(sb, analyza_id: str) -> dict:
@@ -882,6 +892,9 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
         _ins = sb.table("analyza_om_variants").insert(rows).execute()
 
         # Prepočítaj a znovu vlož ručné varianty (zachovaj marker 'manual' + daj im reálnu ekonomiku).
+        # Ich rich výsledok pridáme aj do full_response.variants, aby ich posudok/UI našiel — inak
+        # "variant nie je súčasťou posledného behu" a Re-run to NIKDY nevyrieši (matica ich negeneruje).
+        _manual_rich = []
         for _mv in _manual_keep:
             try:
                 _fk = float(_mv.get("fve_kwp") or 0)
@@ -899,12 +912,17 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
                         _cpk = max(0.0, _cap - _bk * _cpb) / _fk
                     else:
                         _cpk = _cap / _fk
-                insert_variant_via_engine(sb, analyza_id, _mv.get("name") or "Vlastný variant",
+                _mres = insert_variant_via_engine(sb, analyza_id, _mv.get("name") or "Vlastný variant",
                                           _fk, _bk, _mv.get("bess_kw"),
                                           capex_per_kwp=_cpk, capex_per_kwh_bess=_cpb,
                                           capex_source="manual", inverter_kw=_mv.get("inverter_kw"))
+                if _mres and _mres.get("rich_variant"):
+                    _manual_rich.append(_mres["rich_variant"])
             except Exception:
                 log.exception("[aom-v2] prepočet ručného variantu zlyhal")
+        # Pridaj rich ručné varianty do full_response -> UI/posudok ich nájde (koniec slučky bannera).
+        if _manual_rich:
+            result.setdefault("variants", []).extend(_manual_rich)
         # selected_variant_id remap: delete+insert by nechal selection visieť na neexistujúcom UUID.
         # Premapuj podľa (kwp,bess) na nový riadok; ak sa rovnaký variant už negeneroval -> NULL (treba vybrať znova).
         # audit V: hľadá sa vo VŠETKÝCH nových riadkoch (matica aj reinsertnuté manuálne cez
