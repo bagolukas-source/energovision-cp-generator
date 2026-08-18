@@ -65,8 +65,10 @@ def compute_merchant_arbitrage(
             continue
         # zostav nabíjacie a vybíjacie kandidátne hodiny (oddelené množiny — extrémy)
         order = np.argsort(w)                                     # rastúco podľa ceny
-        # nabíjanie: najlacnejšie hodiny (cena ≥ 0); vybíjanie: najdrahšie hodiny
-        charge_cand = [(float(w[k]), chg_dc_per) for k in order if w[k] >= 0]
+        # nabíjanie: najlacnejšie hodiny VRÁTANE záporného spotu (pri cene < 0 grid platí za
+        # odber → náklad je záporné číslo, znižuje buy_eur); vybíjanie: najdrahšie hodiny.
+        # Nezisk. páry aj tak zastaví profitability-break v cykle nižšie.
+        charge_cand = [(float(w[k]), chg_dc_per) for k in order]
         discharge_cand = [(float(w[k]), dis_dc_per) for k in order[::-1]]
 
         ci = 0; di = 0
