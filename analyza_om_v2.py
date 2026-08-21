@@ -1713,6 +1713,7 @@ def build_orkestra_context(analyza: dict, variants: list, analyza_id: str = "", 
         "n_variants_run": len(variants),
         "spot_avg_eur_mwh": 103,
         "value_streams": selected.get("value_streams") or {},
+        "merchant_detail": selected.get("merchant_detail") or {},  # merchant/bilančka detail (throughput/cykly/buy/sell) pre bublinku + dátovú pasáž
         "inaction_flat_20y": inaction_flat_20y,
         "inaction_infl3_20y": inaction_infl3_20y,
         "annual_grid_value_y1": annual_grid_value_y1,
