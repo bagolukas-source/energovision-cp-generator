@@ -408,13 +408,10 @@ class VariantGenerator:
         # Výmena článkov batérie — OPCIA (default OFF). Default = bez výmeny (batéria
         # predpokladaná na celý horizont). Ak ZAPNUTÉ → výmena pri dosiahnutí warranty cyklov
         # (reálny ročný throughput, nie podhodnotené EFC), náklad 40 % BESS capexu, periodicky.
-        # Obchodovanie batériu opotrebúva — ak arbitrážny zisk počítame, musíme počítať aj
-        # výmenu článkov, inak si tú istú kapacitu započítame dvakrát. Rozhoduje REÁLNY
-        # throughput, nie to, či je zapnuté „bez limitu": rovnaké cyklovanie musí dať
-        # rovnaký plán výmeny bez ohľadu na to, ktorým prepínačom k nemu používateľ prišiel.
-        _force_repl = bool(self.merchant_mode)
+        # Výmena článkov sa NEPOČÍTA automaticky (rozhodnutie Lukáš 24.8.) — ani pri
+        # merchant obchodovaní. Ostáva výhradne opt-in cez count_battery_replacement.
         _cells_repl_interval = None
-        if bess and (getattr(self, "count_battery_replacement", False) or _force_repl):
+        if bess and getattr(self, "count_battery_replacement", False):
             _usable = (bess.usable_kwh or (bess_kwh * 0.9))
             _ann_cycles = (_bess_throughput_kwh / _usable) if _usable > 0 else 0.0
             _warranty = self.bess_warranty_cycles or bess.warranty_cycles
