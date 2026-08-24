@@ -245,6 +245,9 @@ def run_variants_pipeline(request_dict: dict, progress_cb=None) -> dict:
         ems_arb_min_spread_eur_mwh=(request_dict.get("ems_config") or {}).get("arb_min_spread_eur_mwh"),
         ems_arb_band_pct=(request_dict.get("ems_config") or {}).get("arb_band_pct"),
         pv_inverter_kw=v.get("pv_inverter_kw"),
+        merchant_unlimited_cycles=bool(v.get("merchant_unlimited_cycles", False)),
+        bess_kw_ac=v.get("bess_kw_ac"),
+        bess_warranty_cycles=v.get("bess_warranty_cycles"),
     )
     log.info("Running %d variants", len(v["pv_kwp_options"]) * len(v["bess_kwh_options"]))
     results = gen.run_all(parallel=True)
@@ -586,6 +589,9 @@ def export_variant_intervals(request_dict: dict, pv_kwp: float, bess_kwh: float,
         ems_arb_min_spread_eur_mwh=(request_dict.get("ems_config") or {}).get("arb_min_spread_eur_mwh"),
         ems_arb_band_pct=(request_dict.get("ems_config") or {}).get("arb_band_pct"),
         pv_inverter_kw=v.get("pv_inverter_kw"),
+        merchant_unlimited_cycles=bool(v.get("merchant_unlimited_cycles", False)),
+        bess_kw_ac=v.get("bess_kw_ac"),
+        bess_warranty_cycles=v.get("bess_warranty_cycles"),
     )
     r = gen.run_single(pv_kwp, bess_kwh, ems_strategy, keep_intervals=True)
 

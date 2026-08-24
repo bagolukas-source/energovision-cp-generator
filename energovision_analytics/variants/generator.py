@@ -131,6 +131,9 @@ class VariantGenerator:
         merchant_degradation_eur_mwh: float = 0.0, # BOD 3: cyklová degradačná rezerva per MWh
         bess_mode: str = "SITE_SUPPORT_ONLY",     # BOD 1: SITE_SUPPORT_ONLY | BALANCE_GROUP_MERCHANT_100
         ems_max_efc_per_year: float | None = None,   # override cyklov/rok z UI (inak warranty/horizon)
+        merchant_unlimited_cycles: bool = False,     # merchant: bez stropu cyklov (limit = výkon/RK/export)
+        bess_kw_ac: float | None = None,             # skutočný výkon meniča batérie z katalógu (kW)
+        bess_warranty_cycles: int | None = None,     # warranty cyklov z katalógu/zmluvy (napr. 20 000)
         ems_arb_min_spread_eur_mwh: float | None = None,  # override min spreadu arbitráže z UI
         ems_arb_band_pct: float | None = None,           # šírka obchodného pásma okna (0=extrémy, 0.25=štvrtina)
         pv_inverter_kw: float | None = None,             # ZADANÝ AC výkon meniča (inak kwp/ratio) — clipping v PV sim
@@ -193,6 +196,11 @@ class VariantGenerator:
         # BOD 1: explicitný režim batérie. BALANCE_GROUP_MERCHANT_100 = merchant; mapuje sa na merchant_mode
         self.bess_mode = str(bess_mode or "SITE_SUPPORT_ONLY")
         self.ems_max_efc_per_year = ems_max_efc_per_year
+        self.merchant_unlimited_cycles = bool(merchant_unlimited_cycles)
+        # Výkon batérie: ak ho poznáme z katalógu, má prednosť pred odhadom kWh × C-rate
+        # (napr. LUNA 482 kWh má 206 kW, nie 241 kW ako by vyšlo z 0,5C).
+        self.bess_kw_ac = float(bess_kw_ac) if bess_kw_ac else None
+        self.bess_warranty_cycles = int(bess_warranty_cycles) if bess_warranty_cycles else None
         self.ems_arb_min_spread_eur_mwh = ems_arb_min_spread_eur_mwh
         self.ems_arb_band_pct = ems_arb_band_pct
         self.pv_inverter_kw = pv_inverter_kw
@@ -221,6 +229,12 @@ class VariantGenerator:
         scale = min(1.0, float(pv_kwp) / self.CAPEX_FIX_FULL_KWP)
         return self.capex_pv_fixed * scale
 
+    def _bess_power_kw(self, bess_kwh: float) -> float:
+        """Výkon meniča batérie v kW — z katalógu, inak odhad kWh × C-rate."""
+        if self.bess_kw_ac and self.bess_kw_ac > 0:
+            return self.bess_kw_ac
+        return bess_kwh * self.bess_c_rate
+
     def _make_pv(self, kwp: float) -> PVInput:
         """Postaví PVInput pre danú kWp."""
         if kwp <= 0:
@@ -245,7 +259,7 @@ class VariantGenerator:
         """Postaví BESSInput pre danú kWh."""
         if kwh <= 0:
             return None
-        bess_kw = kwh * self.bess_c_rate
+        bess_kw = self._bess_power_kw(kwh)
         # Solinteg/Huawei default: 8-98% SoC window
         usable = kwh * 0.90
         return BESSInput(
@@ -342,7 +356,7 @@ class VariantGenerator:
         # + výkon/SoC batérie, NIE spotreba. PV samospotreba/export zostávajú.
         if self.merchant_mode and bess:
             from energovision_analytics.financial.merchant_arbitrage import compute_merchant_arbitrage
-            _power_kw = bess_kwh * self.bess_c_rate
+            _power_kw = self._bess_power_kw(bess_kwh)
             _rk_kw = float(self.site.rk_kw or 0.0)
             _export_kw = float(self.site.mrk_kw if self.site.mrk_kw is not None else (self.site.rk_kw or 0.0))  # 0 = export nepovolený (nie fallback na rk)
             # RK/MRK nezadané (0/None) → merchant arbitráž by potichu vyšla 0 € (limit prietoku 0 kW).
@@ -357,6 +371,15 @@ class VariantGenerator:
             except Exception:
                 _dt_h = 1.0
             _window = max(4, int(round(24.0 / _dt_h)))
+            # Koľko cyklov denne smie merchant odobchodovať. Doteraz bola v module
+            # natvrdo 1 (jeden pár nabitie/vybitie za okno) a limit z UI sa ignoroval —
+            # batéria, ktorá sa nabije za 2 h, tak obchodovala raz denne.
+            if self.merchant_unlimited_cycles:
+                _max_cyklov_denne = None                       # strop dá len výkon, RK a export
+            elif self.ems_max_efc_per_year:
+                _max_cyklov_denne = max(0.1, float(self.ems_max_efc_per_year) / 365.0)
+            else:
+                _max_cyklov_denne = 1.0
             _m = compute_merchant_arbitrage(
                 spot_eur_mwh=self.spot,
                 dt_h=_dt_h,
@@ -369,6 +392,7 @@ class VariantGenerator:
                 degradation_cost_eur_mwh=self.merchant_degradation_eur_mwh,
                 revenue_share_pct=self.merchant_revenue_share_pct,
                 window=_window,
+                max_cycles_per_day=_max_cyklov_denne,
             )
             # Batéria neslúži záťaži → vynuluj jej samospotrebné/arbitráž/peak streamy
             saving_decomp["sav_bess_self_cons_eur"] = 0.0
@@ -376,18 +400,26 @@ class VariantGenerator:
             saving_decomp["sav_peak_shaving_eur"] = 0.0
             saving_decomp["sav_merchant_eur"] = float(_m["annual_profit_eur"])
             _merchant_detail = _m  # plný merchant výstup pre posudok
-            # Throughput z merchantu (plná paľba → rýchlejšia degradácia/výmena)
-            _bess_throughput_kwh = float(_m["throughput_mwh"]) * 1000.0
+            # Throughput z merchantu → degradácia a plán výmeny článkov.
+            # DC throughput (energia reálne prehnaná článkami) je správny podklad;
+            # AC export je už po stratách, teda podhodnotený.
+            _bess_throughput_kwh = float(_m.get("dc_throughput_mwh") or _m["throughput_mwh"]) * 1000.0
 
         # Výmena článkov batérie — OPCIA (default OFF). Default = bez výmeny (batéria
         # predpokladaná na celý horizont). Ak ZAPNUTÉ → výmena pri dosiahnutí warranty cyklov
         # (reálny ročný throughput, nie podhodnotené EFC), náklad 40 % BESS capexu, periodicky.
+        # Obchodovanie batériu opotrebúva — ak arbitrážny zisk počítame, musíme počítať aj
+        # výmenu článkov, inak si tú istú kapacitu započítame dvakrát. Rozhoduje REÁLNY
+        # throughput, nie to, či je zapnuté „bez limitu": rovnaké cyklovanie musí dať
+        # rovnaký plán výmeny bez ohľadu na to, ktorým prepínačom k nemu používateľ prišiel.
+        _force_repl = bool(self.merchant_mode)
         _cells_repl_interval = None
-        if bess and getattr(self, "count_battery_replacement", False):
+        if bess and (getattr(self, "count_battery_replacement", False) or _force_repl):
             _usable = (bess.usable_kwh or (bess_kwh * 0.9))
             _ann_cycles = (_bess_throughput_kwh / _usable) if _usable > 0 else 0.0
+            _warranty = self.bess_warranty_cycles or bess.warranty_cycles
             if _ann_cycles > 0:
-                _life = bess.warranty_cycles / _ann_cycles
+                _life = _warranty / _ann_cycles
                 if _life < self.horizon_years:
                     _cells_repl_interval = max(4, int(round(_life)))
 
@@ -426,7 +458,7 @@ class VariantGenerator:
             variant_id=variant_id,
             pv_kwp=pv_kwp,
             bess_kwh=bess_kwh,
-            bess_kw=bess_kwh * self.bess_c_rate,
+            bess_kw=self._bess_power_kw(bess_kwh),
             ems_strategy=ems_strategy,
             capex_pv_eur_per_kwp=self.capex_pv,
             capex_bess_eur_per_kwh=self.capex_bess,

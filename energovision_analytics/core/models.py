@@ -221,7 +221,9 @@ class BESSInput(EnergoBase):
     initial_soh: float = Field(1.0, ge=0.5, le=1.0,
                                 description="Initial State of Health (1.0 = nová)")
     warranty_years: int = Field(10, ge=1, le=25)
-    warranty_cycles: int = Field(6000, ge=500, le=15000)
+    # Strop zvýšený na 25 000 — moderné LFP články (CATL/EVE) majú warranty 15–20 tis.
+    # cyklov a pri merchant obchodovaní je to kľúčový vstup pre plán výmeny.
+    warranty_cycles: int = Field(6000, ge=500, le=25000)
     warranty_eol_soh: float = Field(0.80, ge=0.50, le=0.95,
                                      description="End-of-life SoH (warranty čerpá pri poklese pod túto)")
     container_hvac: bool = Field(True, description="Má container HVAC (cooling)?")
