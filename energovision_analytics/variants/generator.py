@@ -203,6 +203,24 @@ class VariantGenerator:
         self.merchant_revenue_share_pct = float(merchant_revenue_share_pct if merchant_revenue_share_pct is not None else 1.0)
 
     # ------------------------------------------------------------------ Build inputs
+    # Veľkosť, od ktorej platí plná fixná zložka. Fix (projekt, pripojenie, NN
+    # rozvádzač, réžia) je kalibrovaný na referenčnú ponuku ~230 kWp; pri 10 kWp
+    # by paušálnych 38 000 € znamenalo 4 374 €/kWp a návratnosť 99 rokov, čo je
+    # nezmysel a kazilo to porovnávacie tabuľky v posudkoch.
+    CAPEX_FIX_FULL_KWP = 150.0
+
+    def _capex_pv_fixed_for(self, pv_kwp: float) -> float:
+        """Fixná zložka FVE CAPEXu škálovaná podľa veľkosti inštalácie.
+
+        Do 150 kWp nabieha lineárne (malý projekt = menší rozvádzač, jednoduchšie
+        pripojenie, menej projektovej práce), nad 150 kWp plná výška — tam ostáva
+        kalibrácia na reálne ponuky nedotknutá.
+        """
+        if pv_kwp <= 0:
+            return 0.0
+        scale = min(1.0, float(pv_kwp) / self.CAPEX_FIX_FULL_KWP)
+        return self.capex_pv_fixed * scale
+
     def _make_pv(self, kwp: float) -> PVInput:
         """Postaví PVInput pre danú kWp."""
         if kwp <= 0:
@@ -300,7 +318,7 @@ class VariantGenerator:
 
         # Financial
         # Reálny CAPEX FVE: FIXNÁ zložka (projekt/základ) + MARGINÁLNA €/kWp (úspory z rozsahu)
-        capex_pv_total = (self.capex_pv_fixed + pv_kwp * self.capex_pv) if pv else 0
+        capex_pv_total = (self._capex_pv_fixed_for(pv_kwp) + pv_kwp * self.capex_pv) if pv else 0
         capex_bess_total = bess_kwh * self.capex_bess if bess else 0
         total_capex = capex_pv_total + capex_bess_total
 

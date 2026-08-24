@@ -147,6 +147,8 @@ def run_variants_pipeline(request_dict: dict, progress_cb=None) -> dict:
         typ_tarify=site_req.get("typ_tarify", "spot"),
         bilancna_skupina=site_req.get("bilancna_skupina", "Energie2"),
         eic_kod=site_req.get("eic_kod"),
+        sadzba=site_req.get("sadzba"),
+        distribuutor=site_req.get("distribuutor"),
     )
     if progress_cb: progress_cb(10)
 
@@ -526,6 +528,7 @@ def export_variant_intervals(request_dict: dict, pv_kwp: float, bess_kwh: float,
         rocna_spotreba_kwh=site_req["rocna_spotreba_kwh"], rk_kw=site_req["rk_kw"],
         mrk_kw=site_req.get("mrk_kw"), typ_tarify=site_req.get("typ_tarify", "spot"),
         bilancna_skupina=site_req.get("bilancna_skupina", "Energie2"), eic_kod=site_req.get("eic_kod"),
+        sadzba=site_req.get("sadzba"), distribuutor=site_req.get("distribuutor"),
     )
     lp = request_dict["load_profile"]
     if lp["source"] == "csv_base64":
@@ -585,6 +588,11 @@ def export_variant_intervals(request_dict: dict, pv_kwp: float, bess_kwh: float,
         pv_inverter_kw=v.get("pv_inverter_kw"),
     )
     r = gen.run_single(pv_kwp, bess_kwh, ems_strategy, keep_intervals=True)
+
+    # Počet intervalov spoločný pre load/spot/timestamps — fallback vetva nižšie ho
+    # používa, ale doteraz nebol nikde definovaný (NameError pri variantoch bez
+    # uložených intervalov).
+    n = min(len(load_kw), len(spot), len(ts))
 
     load_before, after, pv_out, batt, soc_kwh, spot_out = [], [], [], [], [], []
     if r.intervals:

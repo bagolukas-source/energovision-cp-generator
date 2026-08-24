@@ -90,30 +90,68 @@ def _measured_load_profile_block(sb, analyza):
 
 def _cp_capex(analyza: dict) -> dict:
     """CAPEX pre engine — REÁLNE jednotkové ceny z ponúk Energovision (2026).
-    Model FVE = FIXNÁ zložka (projekt/základ) + MARGINÁLNA €/kWp → zachytí úspory z rozsahu.
-    Reálne ceny (KraussMaffei PON-25): FVE 230 kWp samostatne 740 €/kWp = fix 38k + marginál 574;
-    rozšírenie 574 €/kWp (marginál pri škále). BESS solo 1035 kWh / 328 932 € = 318 €/kWh.
-    (Predtým: rozbitá rekonštrukcia BESS@330 → FVE nafúknuté na 942 €/kWp — opravené 2026-06-07.)
-    Ak existuje CP, fixnú zložku kalibruje tak, aby CP konfigurácia sedela na cenu ponuky;
-    inak default fix 38k. BESS rate je all-in (vrátane VN pripojenia batérie z BESS solo ponuky).
+
+    Model FVE = FIXNÁ zložka (projekt, pripojenie, NN rozvádzač, réžia)
+    + MARGINÁLNA €/kWp → zachytí úspory z rozsahu.
+    Referencia: KraussMaffei PON-25 — FVE 230 kWp za 740 €/kWp = fix 38k + marginál 574.
+    BESS solo 1035 kWh / 328 932 € = 318 €/kWh (all-in vrátane VN pripojenia batérie).
+
+    Ak má analýza naviazanú cenovú ponuku (cp_price_eur + cp_kwp), fixná zložka sa
+    DOPOČÍTA tak, aby konfigurácia z ponuky vyšla presne na cenu ponuky. Predtým sa
+    táto vetva síce vyhodnotila, ale vracala identický dict ako fallback — cenová
+    ponuka sa teda nikdy nepoužila a engine počítal generickou cenou (odchýlka
+    oproti reálnym ponukám -2 až -23 %).
     """
     PV_MARG = 574.0
     PV_FIXED_DEFAULT = 38000.0
     BESS_RATE = 318.0
+    # Kalibrovaná fixná zložka musí ostať v rozumnom pásme — inak by jedna atypická
+    # ponuka (napr. s VN prípojkou alebo pozemnou konštrukciou) skreslila všetky varianty.
+    FIX_MIN, FIX_MAX = 10000.0, 150000.0
+
     try:
         cpP = float(analyza.get("cp_price_eur") or 0)
         cpK = float(analyza.get("cp_kwp") or 0)
         cpB = float(analyza.get("cp_bess_kwh") or 0)
         if cpP > 0 and cpK > 0:
-            # Pozn.: BESS rate 318 je ALL-IN (vrátane VN pripojenia batérie z BESS solo ponuky),
-            # preto fix = LEN projekt FVE (~38k), nekalibrujeme ho z drahej exaktnej CP (inak by
-            # VN pripojenie batérie nesprávne preplácalo aj malé/FVE-only varianty).
-            return {"mode": "real", "capex_pv_eur_per_kwp": PV_MARG,
-                    "capex_pv_fixed_eur": PV_FIXED_DEFAULT, "capex_bess_eur_per_kwh": BESS_RATE}
-    except Exception:
+            fix = cpP - cpK * PV_MARG - cpB * BESS_RATE
+            if FIX_MIN <= fix <= FIX_MAX:
+                return {"mode": "cp_kalibrovany", "capex_pv_eur_per_kwp": PV_MARG,
+                        "capex_pv_fixed_eur": round(fix, 2),
+                        "capex_bess_eur_per_kwh": BESS_RATE}
+            # Fix mimo pásma → ponuka má inú štruktúru (pozemná stavba, VN prípojka,
+            # veľkoobjemová zľava). Prepočítame marginál pri štandardnom fixe.
+            marg = (cpP - PV_FIXED_DEFAULT - cpB * BESS_RATE) / cpK
+            if 300.0 <= marg <= 1500.0:
+                return {"mode": "cp_kalibrovany_marginal",
+                        "capex_pv_eur_per_kwp": round(marg, 2),
+                        "capex_pv_fixed_eur": PV_FIXED_DEFAULT,
+                        "capex_bess_eur_per_kwh": BESS_RATE}
+    except (TypeError, ValueError):
         pass
     return {"mode": "real", "capex_pv_eur_per_kwp": PV_MARG,
             "capex_pv_fixed_eur": PV_FIXED_DEFAULT, "capex_bess_eur_per_kwh": BESS_RATE}
+
+
+def _om_sadzba(analyza: dict) -> str:
+    """Napäťová úroveň odberu (NN/VN) — povinná, nehádame ju.
+
+    Regulované zložky sa medzi NN a VN líšia o ~38 €/MWh (ZSD 2026: NN 79,94,
+    VN 42,27). Pri 200 MWh samospotreby je to ~7 600 €/rok a návratnosť sa
+    posunie o vyše roka, takže odhad podľa MRK (pôvodné správanie enginu) je
+    pri obchodnej ponuke neprijateľný.
+    """
+    raw = (analyza.get("om_sadzba") or "").strip().upper()
+    if raw in ("NN", "VN"):
+        return raw
+    raise ValueError(
+        "Chýba napäťová úroveň odberu (NN/VN) pre toto odberné miesto. "
+        "Nájdeš ju na faktúre za distribúciu — VN znamená odber na vysokom napätí "
+        "cez vlastnú trafostanicu, NN je odber z nízkeho napätia. "
+        "Doplň ju v záložke Nastavenia (expert) → pole Sadzba, a spusti analýzu znova. "
+        "Rozdiel medzi NN a VN je v regulovaných poplatkoch takmer 38 €/MWh, "
+        "takže bez tohto údaja by bola návratnosť nesprávna."
+    )
 
 
 def _export_config(analyza: dict) -> dict:
@@ -319,6 +357,12 @@ def _build_request_from_analyza(analyza: dict, measured_block: dict = None) -> d
             "rk_kw": engine_rk_kw,
             "mrk_kw": engine_mrk_kw,
             "typ_tarify": (analyza.get("om_tarif_typ") or "spot"),  # FIX/SPOT podľa kontraktu klienta
+            # Sadzba je POVINNÁ (validované vyššie) — rozdiel NN vs VN je ~38 €/MWh
+            # v regulovaných zložkách, teda aj ~1,5 roka návratnosti. Engine ju
+            # predtým hádal podľa MRK a takmer všetci klienti dostali VN.
+            "sadzba": _om_sadzba(analyza),
+            # Distribútor je územný monopol → ak nie je zadaný, engine ho odvodí z PSČ.
+            "distribuutor": (analyza.get("om_distributor") or "").strip().upper() or None,
             "bilancna_skupina": "Energie2",
             "eic_kod": None,
         },

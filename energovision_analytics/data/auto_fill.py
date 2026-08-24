@@ -127,10 +127,16 @@ def auto_fill_site(
     typ_tarify: str = "spot",
     bilancna_skupina: str = "Energie2",
     eic_kod: Optional[str] = None,
+    sadzba: Optional[str] = None,
+    distribuutor: Optional[str] = None,
 ) -> SiteInput:
     """Vyrobí SiteInput z minimálneho vstupu (PSČ + spotreba + RK).
 
-    Auto-detekuje:
+    Sadzba a distribútor sa preberajú zo vstupu (z CRM). Odhad z PSČ/MRK je len
+    záloha pre volania, ktoré ich neposielajú — rozdiel NN vs VN je v regulovaných
+    zložkách ~38 €/MWh, čo posúva návratnosť aj o 1,5 roka, takže hádať sa neoplatí.
+
+    Auto-detekuje (len ak nie sú zadané):
         - Distribútor podľa PSČ
         - Sadzba (NN/VN) podľa MRK
         - GPS súradnice (najbližšie referenčné mesto)
@@ -139,8 +145,9 @@ def auto_fill_site(
     if mrk_kw is None:
         mrk_kw = rk_kw * 1.2
 
-    distribuutor = psc_to_distribuutor(psc)
-    sadzba = psc_to_sadzba(psc, mrk_kw)
+    distribuutor = (Distribuutor(distribuutor) if distribuutor
+                    else psc_to_distribuutor(psc))
+    sadzba = Sadzba(sadzba) if sadzba else psc_to_sadzba(psc, mrk_kw)
     lat, lon, _ = psc_to_gps(psc)
 
     return SiteInput(
