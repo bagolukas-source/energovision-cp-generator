@@ -323,9 +323,16 @@ class TariffYearInput(EnergoBase):
         description="Penalty pri exporte > MRK v 15-min agregáte (SSD od 1.1.2026)",
     )
 
-    # Obchodník
-    obchodnik_aditiv_eur_mwh: float = Field(20.0, ge=0, le=100)
-    obchodnik_prirazka_eur_mwh: float = Field(5.0, ge=0, le=50)
+    # Obchodník — marža dodávateľa k spotovej cene.
+    # POZOR (oprava 17.8.2026): pôvodne tu boli dve čísla, 20 + 5 = 25 €/MWh, ktoré sa
+    # aj tak vždy len sčítali. Reálna prirážka k spotu je 2–12 €/MWh, takže engine
+    # nadhodnocoval nákupnú cenu a s ňou aj úsporu zo samospotreby. „Aditív" navyše
+    # koncepčne patrí na VÝKUPNÚ stranu (spot − diskont), nie do nákupu.
+    # Ponechané dve polia kvôli spätnej kompatibilite YAML; prirážka je default 0.
+    obchodnik_aditiv_eur_mwh: float = Field(8.0, ge=0, le=100,
+                                            description="Marža dodávateľa k spotu (€/MWh)")
+    obchodnik_prirazka_eur_mwh: float = Field(0.0, ge=0, le=50,
+                                              description="Doplnková prirážka (default 0)")
 
     # Fix base (pre FIX kontrakty)
     fix_silova_eur_mwh: float = Field(114.0, ge=0, le=500,
