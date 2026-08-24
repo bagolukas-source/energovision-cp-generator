@@ -29,8 +29,8 @@ distribuutori:
       rk_kapacita_eur_mw_mes: 0
       mrk_export_penalty_eur_kwh: 0.0  # NN nemá export penalty (zatiaľ)
       fix_silova_eur_mwh: 124.0      # priemer fix kontraktov pre NN 2026
-      obchodnik_aditiv_eur_mwh: 22.0
-      obchodnik_prirazka_eur_mwh: 6.0
+      obchodnik_aditiv_eur_mwh: 8.0
+      obchodnik_prirazka_eur_mwh: 0.0
     VN:
       tps_eur_mwh: 11.90              # najnižšie pásmo TPS pre veľkých odberateľov
       distrib_eur_mwh: 12.30
@@ -43,8 +43,8 @@ distribuutori:
       # NOVÉ od 1.1.2026 — SSD spoplatňuje prekročenie MRK pri dodávke do DS
       mrk_export_penalty_eur_kwh: 0.0125  # 12.5 €/MWh nad MRK v 15-min agregáte
       fix_silova_eur_mwh: 114.0
-      obchodnik_aditiv_eur_mwh: 20.0
-      obchodnik_prirazka_eur_mwh: 5.0
+      obchodnik_aditiv_eur_mwh: 8.0
+      obchodnik_prirazka_eur_mwh: 0.0
 
   ZSD:
     nazov: "Západoslovenská distribučná, a.s."
@@ -60,8 +60,8 @@ distribuutori:
       rk_kapacita_eur_mw_mes: 0
       mrk_export_penalty_eur_kwh: 0.0
       fix_silova_eur_mwh: 122.0
-      obchodnik_aditiv_eur_mwh: 22.0
-      obchodnik_prirazka_eur_mwh: 6.0
+      obchodnik_aditiv_eur_mwh: 8.0
+      obchodnik_prirazka_eur_mwh: 0.0
     VN:
       tps_eur_mwh: 11.90
       distrib_eur_mwh: 11.80
@@ -73,8 +73,8 @@ distribuutori:
       rk_kapacita_eur_mw_mes: 0
       mrk_export_penalty_eur_kwh: 0.0    # ZSD zatiaľ neaplikuje (potvrdiť 2026)
       fix_silova_eur_mwh: 114.0
-      obchodnik_aditiv_eur_mwh: 20.0
-      obchodnik_prirazka_eur_mwh: 5.0
+      obchodnik_aditiv_eur_mwh: 8.0
+      obchodnik_prirazka_eur_mwh: 0.0
 
   VSD:
     nazov: "Východoslovenská distribučná, a.s."
@@ -90,8 +90,8 @@ distribuutori:
       rk_kapacita_eur_mw_mes: 0
       mrk_export_penalty_eur_kwh: 0.0
       fix_silova_eur_mwh: 123.0
-      obchodnik_aditiv_eur_mwh: 22.0
-      obchodnik_prirazka_eur_mwh: 6.0
+      obchodnik_aditiv_eur_mwh: 8.0
+      obchodnik_prirazka_eur_mwh: 0.0
     VN:
       tps_eur_mwh: 11.90
       distrib_eur_mwh: 12.10
@@ -103,8 +103,8 @@ distribuutori:
       rk_kapacita_eur_mw_mes: 0
       mrk_export_penalty_eur_kwh: 0.0    # VSD zatiaľ neaplikuje (potvrdiť 2026)
       fix_silova_eur_mwh: 114.0
-      obchodnik_aditiv_eur_mwh: 20.0
-      obchodnik_prirazka_eur_mwh: 5.0
+      obchodnik_aditiv_eur_mwh: 8.0
+      obchodnik_prirazka_eur_mwh: 0.0
 
 # Bilančné skupiny — výkupné modely pre prebytky FVE
 bilancne_skupiny:

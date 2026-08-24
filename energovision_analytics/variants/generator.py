@@ -122,6 +122,9 @@ class VariantGenerator:
         savings_coefficient: float = 1.0,
         has_sufficient_profit: bool = True,
         export_price_eur_kwh: float = 0.06,
+        export_mode: str = "fix",
+        export_spot_diskont_eur_mwh: float = 10.0,
+        spot_koeficient: float = 1.0,
         merchant_mode: bool = False,
         merchant_organizer_fee_pct: float = 15.0,
         merchant_imbalance_eur_mwh: float = 0.0,   # BOD 3: odchýlka per MWh obchodu
@@ -180,6 +183,11 @@ class VariantGenerator:
         self.savings_coefficient = savings_coefficient if (savings_coefficient and savings_coefficient > 0) else 1.0
         self.has_sufficient_profit = bool(has_sufficient_profit)
         self.export_price = float(export_price_eur_kwh) if export_price_eur_kwh else 0.06
+        # Výkup prebytkov: "fix" = pevná cena vyššie, "spot_minus" = max(0, spot − diskont)
+        self.export_mode = str(export_mode or "fix")
+        self.export_spot_diskont = float(export_spot_diskont_eur_mwh or 0.0)
+        # Indexácia spotu v kontrakte (typicky 1,0; niektoré zmluvy majú napr. 1,05)
+        self.spot_koeficient = float(spot_koeficient or 1.0)
         # Merchant mód: batéria slúži ako podpora bilančnej skupiny (grid-to-grid arbitráž
         # plnou paľbou, nie samospotreba). Default OFF → normálne varianty bez zmeny.
         # BOD 1: explicitný režim batérie. BALANCE_GROUP_MERCHANT_100 = merchant; mapuje sa na merchant_mode
@@ -261,7 +269,8 @@ class VariantGenerator:
 
         # Tariff
         tariff = self.tariff_engine.get(self.site.distribuutor, self.site.sadzba)
-        retail = RetailCalculator(tariff, typ_tarify=self.site.typ_tarify)
+        retail = RetailCalculator(tariff, typ_tarify=self.site.typ_tarify,
+                                  spot_koeficient=self.spot_koeficient)
 
         # BOD 11 FIX: v merchant móde batéria neslúži OM → site KPI/summary = PV-only
         # (samospotreba/samostatnosť odrážajú LEN PV; batéria zarába zvlášť ako merchant).
@@ -280,6 +289,8 @@ class VariantGenerator:
                     peak_shave_enabled=(self.site.sadzba.value == "VN"),
                 ),
                 export_price_eur_kwh=self.export_price,
+                export_mode=self.export_mode,
+                export_spot_diskont_eur_mwh=self.export_spot_diskont,
             )
             intervals, summary = ems.run_year(load_kw, pv_kw, self.spot, self.timestamps, 60)
         else:
@@ -465,7 +476,20 @@ class VariantGenerator:
             # fallback: priemerný tarif z retail (FIX) ak spot nedostupný
             _avg = retail.retail_buy_eur_kwh(None) if retail.typ_tarify.value == "fix" else 0.146
             s.sav_solar_self_cons_eur = s.pv_to_load_kwh * _avg
-        s.sav_solar_export_eur = s.pv_to_grid_kwh * self.export_price
+        # Export: pri modeli spot_minus oceň každú hodinu zvlášť (max(0, spot − diskont)),
+        # inak pevnou cenou. Predtým sa aj tu používala jedna pevná cena na celý rok.
+        if self.export_mode == "spot_minus":
+            try:
+                _sp = self.spot
+                _n3 = min(len(pv_to_grid), len(_sp))
+                _exp = 0.0
+                for _i in range(_n3):
+                    _exp += float(pv_to_grid[_i]) * max(0.0, float(_sp[_i]) - self.export_spot_diskont) / 1000.0
+                s.sav_solar_export_eur = _exp
+            except Exception:
+                s.sav_solar_export_eur = s.pv_to_grid_kwh * self.export_price
+        else:
+            s.sav_solar_export_eur = s.pv_to_grid_kwh * self.export_price
         s.sav_total_eur = s.sav_solar_self_cons_eur + s.sav_solar_export_eur
         s.co2_avoided_t = (s.pv_to_load_kwh + s.pv_to_grid_kwh) * 0.25 / 1000
         s.n_state_normal = n

@@ -116,6 +116,25 @@ def _cp_capex(analyza: dict) -> dict:
             "capex_pv_fixed_eur": PV_FIXED_DEFAULT, "capex_bess_eur_per_kwh": BESS_RATE}
 
 
+def _export_config(analyza: dict) -> dict:
+    """Model výkupu prebytkov.
+
+    fix        = pevná výkupná cena (tarif_sell, €/kWh)
+    spot_minus = hodinový spot mínus diskont obchodníka (€/MWh), typicky 10 €/MWh
+
+    Ak používateľ model nezvolil, odvodíme ho z typu tarify: pri spotovom
+    kontrakte je výkup prakticky vždy „spot mínus", pri fixe pevná cena.
+    """
+    mode = (analyza.get("vykup_model") or "").strip().lower()
+    if mode not in ("fix", "spot_minus"):
+        mode = "spot_minus" if (analyza.get("om_tarif_typ") or "spot").lower() == "spot" else "fix"
+    try:
+        disk = float(analyza.get("vykup_spot_diskont_eur_mwh") or 10.0)
+    except (TypeError, ValueError):
+        disk = 10.0
+    return {"mode": mode, "spot_diskont_eur_mwh": max(0.0, disk)}
+
+
 def _build_request_from_analyza(analyza: dict, measured_block: dict = None) -> dict:
     """Konvertuje DB záznam analyza_om na engine RunVariantsRequest dict.
 
@@ -343,7 +362,10 @@ def _build_request_from_analyza(analyza: dict, measured_block: dict = None) -> d
             "mrk_export_penalty_eur_kwh": float(analyza.get("mrk_export_penalty_eur_kwh") or 0.03),
         },
         "export_price_eur_kwh": float(analyza.get("tarif_sell") or 0.06),
+        "export_config": _export_config(analyza),
         "tariff_overrides": {
+            "obchodnik_eur_mwh": analyza.get("tarif_obchodnik_eur_mwh"),
+            "spot_koeficient": analyza.get("tarif_spot_koeficient"),
             "silova_eur_mwh": analyza.get("tarif_silova_eur_mwh"),
             "distribucia_eur_mwh": analyza.get("tarif_distribucia_eur_mwh"),
             "tps_eur_mwh": analyza.get("tarif_tps_eur_mwh"),

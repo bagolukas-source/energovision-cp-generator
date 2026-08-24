@@ -176,6 +176,11 @@ def run_variants_pipeline(request_dict: dict, progress_cb=None) -> dict:
         for ty in tariff_engine._tariffs.values():
             if tariff_overrides.get("silova_eur_mwh") is not None:
                 ty.fix_silova_eur_mwh = float(tariff_overrides["silova_eur_mwh"])
+            # Marža obchodníka k spotu (€/MWh) — jedno číslo, engine ho drží v dvoch
+            # poliach kvôli spätnej kompatibilite, tak prirážku vynulujeme.
+            if tariff_overrides.get("obchodnik_eur_mwh") is not None:
+                ty.obchodnik_aditiv_eur_mwh = float(tariff_overrides["obchodnik_eur_mwh"])
+                ty.obchodnik_prirazka_eur_mwh = 0.0
             if tariff_overrides.get("distribucia_eur_mwh") is not None:
                 ty.distrib_eur_mwh = float(tariff_overrides["distribucia_eur_mwh"])
             if tariff_overrides.get("tps_eur_mwh") is not None:
@@ -223,6 +228,9 @@ def run_variants_pipeline(request_dict: dict, progress_cb=None) -> dict:
         savings_coefficient=fin.get("savings_coefficient", 1.0),
         has_sufficient_profit=fin.get("has_sufficient_profit", True),
         export_price_eur_kwh=float(request_dict.get("export_price_eur_kwh") or 0.06),
+        export_mode=str((request_dict.get("export_config") or {}).get("mode") or "fix"),
+        export_spot_diskont_eur_mwh=float((request_dict.get("export_config") or {}).get("spot_diskont_eur_mwh") or 10.0),
+        spot_koeficient=float((request_dict.get("tariff_overrides") or {}).get("spot_koeficient") or 1.0),
         merchant_mode=bool(v.get("merchant_mode", False)),
         merchant_organizer_fee_pct=float(v.get("merchant_organizer_fee_pct", 15.0)),
         merchant_imbalance_eur_mwh=float(v.get("merchant_imbalance_eur_mwh", 0.0)),
@@ -562,6 +570,9 @@ def export_variant_intervals(request_dict: dict, pv_kwp: float, bess_kwh: float,
         price_escalation_pct=fin.get("price_escalation_pct", 0.0), savings_coefficient=fin.get("savings_coefficient", 1.0),
         has_sufficient_profit=fin.get("has_sufficient_profit", True),
         export_price_eur_kwh=float(request_dict.get("export_price_eur_kwh") or 0.06),
+        export_mode=str((request_dict.get("export_config") or {}).get("mode") or "fix"),
+        export_spot_diskont_eur_mwh=float((request_dict.get("export_config") or {}).get("spot_diskont_eur_mwh") or 10.0),
+        spot_koeficient=float((request_dict.get("tariff_overrides") or {}).get("spot_koeficient") or 1.0),
         merchant_mode=bool(v.get("merchant_mode", False)),
         merchant_organizer_fee_pct=float(v.get("merchant_organizer_fee_pct", 15.0)),
         merchant_imbalance_eur_mwh=float(v.get("merchant_imbalance_eur_mwh", 0.0)),

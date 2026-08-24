@@ -43,6 +43,8 @@ class RuleBasedEMS:
         config: Optional[EMSConfig] = None,
         export_price_eur_kwh: float = 0.06,
         sk_grid_co2_kg_per_kwh: float = 0.25,
+        export_mode: str = "fix",
+        export_spot_diskont_eur_mwh: float = 10.0,
     ) -> None:
         self.bat = battery
         self.site = site
@@ -51,6 +53,17 @@ class RuleBasedEMS:
         self.config = config or EMSConfig()
         self.export_price = export_price_eur_kwh
         self.co2_factor = sk_grid_co2_kg_per_kwh
+        # Výkup prebytkov (oprava 17.8.2026): doteraz sa každá exportovaná kWh oceňovala
+        # rovnakou pevnou cenou — aj v poludňajšej špičke, aj v hodine so záporným spotom.
+        # Model "spot_minus" oceňuje export hodinovo: max(0, spot − diskont).
+        self.export_mode = export_mode
+        self.export_spot_diskont = float(export_spot_diskont_eur_mwh or 0.0)
+
+    def export_price_for(self, spot_eur_mwh: float) -> float:
+        """Výkupná cena za 1 kWh pri danom hodinovom spote (€/kWh)."""
+        if self.export_mode == "spot_minus":
+            return max(0.0, float(spot_eur_mwh) - self.export_spot_diskont) / 1000.0
+        return self.export_price
 
         # Annual cycle budget tracker
         self.efc_used_this_year = 0.0
@@ -447,8 +460,8 @@ class RuleBasedEMS:
         # 1) PV self-consumption (ušetríš plnú retail cenu)
         sav_solar = pv_to_load_kwh * tarif_buy
 
-        # 2) PV export (dostaneš výkupnú cenu)
-        sav_export = pv_to_grid_kwh * self.export_price
+        # 2) PV export (dostaneš výkupnú cenu — pri modeli spot_minus podľa hodinového spotu)
+        sav_export = pv_to_grid_kwh * self.export_price_for(spot_eur_mwh)
 
         # 3) BAT self-cons — vybitie energie (z PV zadarmo) ušetrí PLNÚ retail cenu.
         #    Nabíjací náklad z gridu sa účtuje v arbitráži (#4), tu žiadny paušál.
