@@ -133,6 +133,24 @@ def _cp_capex(analyza: dict) -> dict:
             "capex_pv_fixed_eur": PV_FIXED_DEFAULT, "capex_bess_eur_per_kwh": BESS_RATE}
 
 
+def _om_psc(analyza: dict) -> str:
+    """PSČ odberného miesta — povinné, nehádame ho.
+
+    Z PSČ sa odvodzuje poloha pre výpočet výroby FVE aj distribútor. Doteraz sa pri
+    prázdnom PSČ dosadila Žilina ("010 01"), čo pri odbernom mieste na juhu znamená
+    ~8 % rozdiel vo výrobe (Nitra 282,7 vs Žilina 259,3 MWh pri 250 kWp) a k tomu
+    nesprávneho distribútora.
+    """
+    raw = (analyza.get("om_psc") or "").strip()
+    if raw:
+        return raw
+    raise ValueError(
+        "Chýba PSČ odberného miesta. Určuje polohu pre výpočet výroby FVE aj "
+        "distribútora — bez neho by sa počítala Žilina, čo je pri inej lokalite "
+        "rozdiel aj 8 % vo výrobe. Doplň ho v záložke Nastavenia (expert) → pole PSČ."
+    )
+
+
 def _om_sadzba(analyza: dict) -> str:
     """Napäťová úroveň odberu (NN/VN) — povinná, nehádame ju.
 
@@ -352,7 +370,7 @@ def _build_request_from_analyza(analyza: dict, measured_block: dict = None) -> d
     req = {
         "site": {
             "nazov": analyza.get("name", "OM"),
-            "psc": analyza.get("om_psc") or "010 01",
+            "psc": _om_psc(analyza),
             "rocna_spotreba_kwh": annual_kwh,
             "rk_kw": engine_rk_kw,
             "mrk_kw": engine_mrk_kw,
@@ -382,6 +400,17 @@ def _build_request_from_analyza(analyza: dict, measured_block: dict = None) -> d
             # plnou paľbou, nie samospotreba). Default OFF.
             "merchant_mode": bool(analyza.get("merchant_mode", False)),
             "merchant_organizer_fee_pct": float(analyza.get("merchant_organizer_fee_pct") or 15.0),
+            # Bez stropu cyklov: batéria obchoduje koľko zvládne výkon, RK a max export.
+            # Predtým bol v merchant module natvrdo 1 cyklus denne a limit z UI sa ignoroval.
+            "merchant_unlimited_cycles": bool(analyza.get("merchant_unlimited_cycles", False)),
+            # Náklad odchýlky (na obchodovanú MWh) a cyklová degradačná rezerva (na DC throughput).
+            # Pri 700+ MWh obchodovaného objemu má každé €/MWh cenu vyše 700 €/rok.
+            "merchant_imbalance_eur_mwh": float(analyza.get("merchant_imbalance_eur_mwh") or 0.0),
+            "merchant_degradation_eur_mwh": float(analyza.get("merchant_degradation_eur_mwh") or 0.0),
+            # Skutočný výkon meniča batérie z katalógu (kW) — má prednosť pred kWh × C-rate
+            "bess_kw_ac": analyza.get("bess_kw_ac"),
+            # Warranty cyklov z katalógu/zmluvy — určuje, kedy padne výmena článkov
+            "bess_warranty_cycles": analyza.get("bess_warranty_cycles"),
         },
         "capex": _cp_capex(analyza),
         "financial": {

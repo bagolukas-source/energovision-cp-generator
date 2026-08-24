@@ -11,6 +11,11 @@ Dispatch: po DENNÝCH blokoch (window intervalov). V rámci dňa páruje NAJLACN
 Tým je zisk monotónny v export/RK/výkon limitoch (viac kapacity = viac zisku) a zodpovedá
 tomu, ako reálny operátor vyberá najlepšie hodiny. Batéria sa každý deň vyprázdni (denný cyklus).
 
+Počet cyklov za deň riadi max_cycles_per_day: 1.0 = konzervatívne (jedno nabitie/vybitie),
+vyššia hodnota = viac obchodovaných dvojíc, None = bez limitu (obmedzí len výkon a sieť).
+Volajúci si musí zvýšené cyklovanie premietnuť do degradácie a výmeny článkov — inak by
+sa tá istá kapacita započítala dvakrát.
+
 Energetická bilancia (DC = energia v batérii):
   - uloženie e_dc → AC odber z gridu = e_dc / sqrt(rte)   (strata pri nabíjaní)
   - dodávka z e_dc → AC export do gridu = e_dc * sqrt(rte) (strata pri vybíjaní)
@@ -35,10 +40,12 @@ def compute_merchant_arbitrage(
     soc_min_frac: float = 0.05,
     soc_max_frac: float = 0.95,
     window: int = 96,        # dĺžka denného bloku (intervalov); 96=15-min, 24=hodinové
+    max_cycles_per_day: float | None = 1.0,  # koľko plných cyklov denne; None = bez limitu
 ) -> dict:
     spot = np.asarray(spot_eur_mwh, dtype=float)
     n = len(spot)
-    empty = {"annual_profit_eur": 0.0, "throughput_mwh": 0.0, "equiv_cycles": 0.0,
+    empty = {"annual_profit_eur": 0.0, "throughput_mwh": 0.0, "dc_throughput_mwh": 0.0,
+             "max_cycles_per_day": max_cycles_per_day, "equiv_cycles": 0.0,
              "sell_eur": 0.0, "buy_eur": 0.0, "fee_pct": organizer_fee_pct, "gross_eur": 0.0,
              "organizer_fee_eur": 0.0, "imbalance_eur": 0.0, "degradation_eur": 0.0,
              "merchant_net_eur": 0.0, "revenue_share_pct": revenue_share_pct}
@@ -72,7 +79,14 @@ def compute_merchant_arbitrage(
         discharge_cand = [(float(w[k]), dis_dc_per) for k in order[::-1]]
 
         ci = 0; di = 0
-        rem_usable = usable
+        # Denný energetický strop. Doteraz bol natvrdo 1 cyklus (rem_usable = usable),
+        # takže batéria 482 kWh/206 kW, ktorá sa nabije za 2,3 h, obchodovala raz denne
+        # a limit cyklov zadaný v UI sa úplne ignoroval.
+        # None = bez limitu → strop dá už len výkon meniča, RK a max export.
+        if max_cycles_per_day is None:
+            rem_usable = dis_dc_per * len(w)
+        else:
+            rem_usable = usable * float(max_cycles_per_day)
         chg_left = charge_cand[ci][1] if charge_cand else 0.0
         dis_left = discharge_cand[di][1] if discharge_cand else 0.0
         while ci < len(charge_cand) and di < len(discharge_cand) and rem_usable > 1e-9:
@@ -106,8 +120,12 @@ def compute_merchant_arbitrage(
     merchant_net = gross - organizer_fee - imbalance - degradation      # čistý merchant výnos
     client_value = merchant_net * float(revenue_share_pct)              # podiel klienta (default 1.0=celé)
     equiv_cycles = (dc_throughput / bess_kwh) if bess_kwh > 0 else 0.0
+    # DC throughput je podklad pre degradáciu a plán výmeny článkov
+    dc_throughput_mwh = dc_throughput / 1000.0
     return {"annual_profit_eur": round(client_value, 0),
             "throughput_mwh": round(ac_export_total / 1000.0, 1),
+            "dc_throughput_mwh": round(dc_throughput_mwh, 1),
+            "max_cycles_per_day": max_cycles_per_day,
             "equiv_cycles": round(equiv_cycles, 0),
             "sell_eur": round(sell_eur, 0), "buy_eur": round(buy_eur, 0),
             "fee_pct": organizer_fee_pct, "gross_eur": round(gross, 0),
