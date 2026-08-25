@@ -99,7 +99,7 @@
       <dl class="eq-details">
         <dt>MRK</dt><dd>{{ mrk_kw|round|int }} kW</dd>
         <dt>Ročná spotreba</dt><dd>{{ annual_kwh|format_kwh }}</dd>
-        <dt>Tarif</dt><dd>{{ tarif_typ }}</dd>
+        <dt>Tarif</dt><dd>{% if tarif_typ == "fix" %}fixná zmluva{% elif tarif_typ == "hybrid" %}hybridná zmluva{% else %}spotová zmluva{% endif %}</dd>
       </dl>
     </div>
   </div>
@@ -301,7 +301,7 @@
 {% if scenarios and scenarios|length > 0 %}
 <section class="page">
   <h2 class="page-title">Tri cenové scenáre</h2>
-  <p class="page-subtitle">Citlivosť ekonomiky na tarif a arbitráž BS — vybraný variant</p>
+  <p class="page-subtitle">Citlivosť ekonomiky na {% if tarif_typ == "fix" %}výkupnú cenu a prípadný prechod na spot{% else %}tarif a arbitráž BS{% endif %} — vybraný variant</p>
 
   <table class="scenarios-table">
     <thead>
@@ -334,9 +334,13 @@
   </table>
 
   <div class="scenarios-explainer">
-    <p><strong>Báza</strong> — predpokladaná ÚRSO 2026 tarifa nákupu, výkup prebytkov za 60 €/MWh.</p>
-    <p><strong>Nízky výkup</strong> — defenzívny scenár, výkupné prebytkov zníženy o 50 % (~30 €/MWh) ak ZA-cena spotu klesne.</p>
+    <p><strong>Báza</strong> — {% if tarif_typ == "fix" %}fixná cena komodity zo zmluvy klienta{% else %}hodinové spotové ceny OKTE 2025 + marža obchodníka{% endif %} a regulované zložky ÚRSO 2026.</p>
+    <p><strong>Nízky výkup</strong> — defenzívny scenár, výkupná cena prebytkov znížená o 50 %.</p>
+    {% if tarif_typ == "fix" %}
+    <p><strong>Prechod na spot + arbitráž BS</strong> — alternatíva, ak by klient prešiel zo fixnej zmluvy na spotovú a batéria by obchodovala v bilančnej skupine. Iný cenový režim než báza, nie zlepšenie tej istej zmluvy.</p>
+    {% else %}
     <p><strong>Spot s arbitrážou BS</strong> — proaktívna stratégia v bilančnej skupine, vyššie príjmy z dispatch BESS v drahých hodinách OKTE DAM (110–140 €/MWh spread × cykly).</p>
+    {% endif %}
   </div>
 </section>
 {% endif %}
@@ -564,7 +568,7 @@
     {% else %}
       <li>
         <strong>Tarif za nákup a výkup elektriny</strong>
-        <div class="oq-detail">Posudok pracuje s odhadom tarifu (ÚRSO 2026 + spotová cena ~{{ spot_avg_eur_mwh|round|int }} €/MWh). Reálnu zmluvu s dodávateľom prosíme priložiť — citlivosť posudku je významná (viď scenáre).</div>
+        <div class="oq-detail">Posudok pracuje s {% if tarif_typ == "fix" %}fixnou cenou komodity zo zmluvy klienta a regulovanými zložkami ÚRSO 2026{% else %}hodinovými spotovými cenami OKTE 2025 (priemer {{ spot_avg_eur_mwh|round|int }} €/MWh) a regulovanými zložkami ÚRSO 2026{% endif %}. Reálnu zmluvu s dodávateľom prosíme priložiť — citlivosť posudku je významná (viď scenáre).</div>
       </li>
       <li>
         <strong>Maximálna rezervovaná kapacita (MRK) a možnosť navýšenia</strong>
@@ -604,7 +608,8 @@
     <p><strong>FVE produkcia</strong> — PVGIS-kalibrovaný analytický model pre GPS lokáciu klienta.</p>
     <p><strong>BESS</strong> — Naumann-Schimpe degradačný model LFP (kalibrovaný 2026-05-24), warranty constraint.</p>
     <p><strong>EMS</strong> — rule-based dispatch s multi-cycle stratégiou (samospotreba + arbitráž BS + peak shaving).</p>
-    <p><strong>Spot ceny</strong> — OKTE DAM 2025 hodinové (priemer {{ spot_avg_eur_mwh|round|int }} €/MWh).</p>
+    <p><strong>Spot ceny</strong> — OKTE DAM 2025 hodinové (priemer {{ spot_avg_eur_mwh|round|int }} €/MWh).
+      {% if tarif_typ == "fix" %}Klient má fixnú zmluvu, takže spot neurčuje jeho nákupnú cenu — vstupuje len do ocenenia výkupu prebytkov.{% endif %}</p>
     <p><strong>Tarify</strong> — ÚRSO 2026 (distribúcia + TPS + nájomné + straty).</p>
     <p><strong>Ekonomika</strong> — NPV {{ analysis_years }} r., diskont 6 %, OPEX 1.5–2.0 % CAPEX/rok, degradácia FVE 0.5 %/rok, BESS 2 %/rok.</p>
     <p><strong>Daňový odpis</strong> — lineárny 6 r. pri DPPO 21 % (štandard do 5 mil. € obratu).</p>
@@ -622,7 +627,7 @@
       <tr><td style="padding:5px 8px;">Diskontná sadzba</td><td style="padding:5px 8px; text-align:right;">{{ discount_rate_pct }} %</td><td style="padding:5px 8px;">Interný WACC predpoklad</td></tr>
       <tr><td style="padding:5px 8px;">Horizont hodnotenia</td><td style="padding:5px 8px; text-align:right;">{{ analysis_years }} rokov</td><td style="padding:5px 8px;">Životnosť FVE</td></tr>
       <tr><td style="padding:5px 8px;">Degradácia FVE</td><td style="padding:5px 8px; text-align:right;">0,5 %/rok</td><td style="padding:5px 8px;">Výrobca panelov</td></tr>
-      <tr><td style="padding:5px 8px;">Priemerná spotová cena</td><td style="padding:5px 8px; text-align:right;">{{ spot_avg_eur_mwh|round|int }} €/MWh</td><td style="padding:5px 8px;">OKTE DAM 2025</td></tr>
+      <tr><td style="padding:5px 8px;">Priemerná spotová cena</td><td style="padding:5px 8px; text-align:right;">{{ spot_avg_eur_mwh|round|int }} €/MWh</td><td style="padding:5px 8px;">OKTE DAM 2025{% if tarif_typ == "fix" %} — len pre ocenenie výkupu{% endif %}</td></tr>
       <tr><td style="padding:5px 8px;">Distribučné tarify</td><td style="padding:5px 8px; text-align:right;">ÚRSO 2026</td><td style="padding:5px 8px;">Cenové rozhodnutie ÚRSO</td></tr>
       <tr><td style="padding:5px 8px;">Daňový odpis (štít)</td><td style="padding:5px 8px; text-align:right;">6 r. · {{ tax_shield_annual_eur|format_currency }}/rok</td><td style="padding:5px 8px;">Zákon o dani z príjmov</td></tr>
       <tr><td style="padding:5px 8px;">DPPO sadzba</td><td style="padding:5px 8px; text-align:right;">{{ dppo_pct|default(21) }} %</td><td style="padding:5px 8px;">do 5 mil. € obratu</td></tr>

@@ -1607,8 +1607,24 @@ def build_orkestra_context(analyza: dict, variants: list, analyza_id: str = "", 
 
     # === Monthly summary (12 mesiacov) — PVGIS koeficienty pre SK ===
     PV_MONTHLY = [0.038, 0.057, 0.084, 0.107, 0.115, 0.116, 0.119, 0.107, 0.090, 0.067, 0.045, 0.055]
-    TARIF_BUY_EUR_MWH = 120.0
-    TARIF_SELL_EUR_MWH = 65.0
+    # Ceny do posudku sa ODVODZUJÚ z reálneho výpočtu, nie z paušálu. Predtým tu boli
+    # natvrdo 120 / 65 €/MWh — posudok tak ukazoval spotové čísla aj klientovi s fixnou
+    # zmluvou a scenáre stáli na cene, ktorú engine vôbec nepoužil.
+    # 1. voľba: efektívna cena z engine (koľko €/MWh reálne vyšlo na samospotrebu a výkup)
+    # 2. voľba: tarif zadaný obchodníkom v analýze
+    # 3. voľba: paušál (len ak nemáme nič)
+    _vs = selected.get("value_streams") or {}
+    _sav_self = float(_vs.get("sav_solar_self_cons_eur") or 0)
+    _sav_exp = float(_vs.get("sav_solar_export_eur") or 0)
+    TARIF_BUY_EUR_MWH = (
+        (_sav_self / pv_to_load_mwh) if (_sav_self > 0 and pv_to_load_mwh > 0)
+        else (float(analyza.get("tarif_buy") or 0) * 1000) or 120.0
+    )
+    TARIF_SELL_EUR_MWH = (
+        (_sav_exp / pv_to_grid_mwh) if (_sav_exp > 0 and pv_to_grid_mwh > 0)
+        else (float(analyza.get("tarif_sell") or 0) * 1000) or 65.0
+    )
+    _je_spot = str(analyza.get("om_tarif_typ") or "spot").lower() == "spot"
     _ms = selected.get("monthly_summary")
     if _ms and len(_ms) == 12:
         monthly_solar_to_load = [float(m.get("solar_to_load_eur") or 0) for m in _ms]
@@ -1672,7 +1688,9 @@ def build_orkestra_context(analyza: dict, variants: list, analyza_id: str = "", 
             "payback_years": payback,
             "npv_eur": npv,
             "irr_pct": irr,
-            "note": "Štandardná ÚRSO 2026 cena + priemer spotových cien OKTE 2025.",
+            "note": ("Spotová zmluva — cena podľa hodinových cien OKTE 2025 + marža obchodníka a regulované zložky."
+                     if _je_spot else
+                     "Fixná zmluva — pevná cena komodity podľa zmluvy klienta + regulované zložky ÚRSO 2026."),
         },
         {
             "name": "Nízky výkup (defenzívny)",
@@ -1686,7 +1704,7 @@ def build_orkestra_context(analyza: dict, variants: list, analyza_id: str = "", 
             "note": "Konzervatívny scenár — výkup elektriny iba 50 % bázy. Citlivosť na PPA podmienky.",
         },
         {
-            "name": "Spot s arbitrážou BS",
+            "name": ("Spot s arbitrážou BS" if _je_spot else "Prechod na spot + arbitráž BS"),
             "is_base": False,
             "tarif_buy_eur_kwh": TARIF_BUY_EUR_MWH / 1000,
             "tarif_sell_eur_kwh": TARIF_SELL_EUR_MWH / 1000,
@@ -1694,7 +1712,14 @@ def build_orkestra_context(analyza: dict, variants: list, analyza_id: str = "", 
             "payback_years": payback_arb,
             "npv_eur": npv_arb,
             "irr_pct": irr_arb,
-            "note": ("BESS arbitráž — nákup pri nízkych spotových cenách, predaj pri špičke. +10 % savings." if bess_kwh > 0 else "Bez BESS — variant nedosahuje arbitráž potenciál. Identické s bázou."),
+            "note": (
+                ("BESS arbitráž — nákup pri nízkych spotových cenách, predaj pri špičke. +10 % savings."
+                 if _je_spot else
+                 "Ak by klient prešiel zo fixnej zmluvy na spot a batéria by obchodovala. Iný cenový režim než báza.")
+                if bess_kwh > 0 else
+                ("Bez BESS — variant nedosahuje arbitráž potenciál. Identické s bázou."
+                 if _je_spot else
+                 "Bez BESS a s fixnou zmluvou tento scenár nemá čo pridať — identické s bázou.")),
         },
     ]
 
