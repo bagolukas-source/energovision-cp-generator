@@ -47,6 +47,7 @@ class VariantResult:
     financial: FinancialResult
     intervals: Optional[list[DispatchInterval]] = field(default=None, repr=False)
     merchant_detail: Optional[dict] = field(default=None, repr=False)  # plný merchant výstup (throughput/cykly/buy/sell/gross/fee/net)
+    inverter_kw: Optional[float] = field(default=None, repr=False)  # skutočný AC výkon meniča (zadaný alebo dopočet) — pre posudok
     # Pre konzistentný rebuild financií s korektnou dotáciou (B1 fix) — neserializuje sa
     _cf_builder: object = field(default=None, repr=False, compare=False)
     _cf_kwargs: Optional[dict] = field(default=None, repr=False, compare=False)
@@ -463,6 +464,7 @@ class VariantGenerator:
             dotacia_eur=0.0,  # finálnu dotáciu nastaví pipeline (rebuild)
             merchant_eur=float(saving_decomp.get("sav_merchant_eur", 0.0)),
             merchant_detail=_merchant_detail,
+            inverter_kw=(float(getattr(pv, "inverter_kw_ac", 0)) if pv else None),
             summary=summary,
             financial=financial,
             intervals=intervals if keep_intervals else None,

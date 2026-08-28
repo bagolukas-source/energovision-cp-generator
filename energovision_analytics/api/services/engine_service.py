@@ -489,6 +489,7 @@ def build_run_variants_response(
             "solar_consumption_pct": solar_consumption_pct,
             "carbon": carbon,
             "merchant_detail": (getattr(r, "merchant_detail", None) or {}),
+            "inverter_kw": float(getattr(r, "inverter_kw", None) or round(r.pv_kwp * 0.9, 1)),
         })
 
     return {
