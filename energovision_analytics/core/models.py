@@ -144,7 +144,7 @@ class SiteInput(EnergoBase):
 class PVInput(EnergoBase):
     """FVE inštalácia — geometria + technické parametre pre pvlib simuláciu."""
 
-    instalovany_kwp: float = Field(..., gt=0, le=10000,
+    instalovany_kwp: float = Field(..., gt=0, le=500000,
                                     description="Inštalovaný výkon FVE v kWp (DC)")
     modul_typ: ModulTyp = Field(..., description="Typ FV modulu (ovplyvňuje degradáciu)")
     modul_vyrobca: str = Field("Trina", max_length=100, description="Výrobca modulu")
@@ -155,7 +155,7 @@ class PVInput(EnergoBase):
     pocet_modulov: int = Field(..., gt=0)
     inverter_vyrobca: str = Field("Huawei", max_length=100)
     inverter_model: str = Field("SUN2000-100KTL-M2", max_length=100)
-    inverter_kw_ac: float = Field(..., gt=0, le=10000,
+    inverter_kw_ac: float = Field(..., gt=0, le=500000,
                                    description="AC výkon invertora")
     inverter_eff_nom: float = Field(0.985, ge=0.90, le=0.995,
                                      description="Nominálna účinnosť invertora (EU eff)")
@@ -204,7 +204,7 @@ class BESSInput(EnergoBase):
     typ: str = Field(..., min_length=3, max_length=100,
                       description="Konkrétny model (napr. 'LUNA2000-215')")
     chemie: Chemia = Field(Chemia.LFP, description="Chémia článkov")
-    nominal_kwh: float = Field(..., gt=0, le=10000,
+    nominal_kwh: float = Field(..., gt=0, le=500000,
                                 description="Nominálna kapacita podľa datasheetu")
     usable_kwh: float = Field(..., gt=0,
                                description="Použiteľná kapacita (nominal × (soc_max - soc_min))")
