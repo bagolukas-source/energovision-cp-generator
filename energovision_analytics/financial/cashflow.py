@@ -106,6 +106,30 @@ class FinancialResult:
     total_lifetime_revenue_eur: float = 0.0
 
 
+def _interpoluj_streamy(po_rokoch: dict, rok: int) -> dict:
+    """Lineárna interpolácia rozpadu úspor medzi kotviacimi rokmi.
+
+    Dispatch sa pri raste spotreby neprepočítava pre všetkých 20 rokov (drahé), ale len
+    pre pár kotviacich (napr. 1, 10, 20). Medzi nimi interpolujeme — priebeh samospotreby
+    voči rastúcej záťaži je hladký, takže lineárna interpolácia stačí.
+    """
+    roky = sorted(int(k) for k in po_rokoch.keys())
+    if not roky:
+        return {}
+    if rok <= roky[0]:
+        return po_rokoch[roky[0]]
+    if rok >= roky[-1]:
+        return po_rokoch[roky[-1]]
+    for i in range(len(roky) - 1):
+        r0, r1 = roky[i], roky[i + 1]
+        if r0 <= rok <= r1:
+            d0, d1 = po_rokoch[r0], po_rokoch[r1]
+            w = (rok - r0) / (r1 - r0) if r1 > r0 else 0.0
+            return {k: float(d0.get(k, 0)) + w * (float(d1.get(k, 0)) - float(d0.get(k, 0)))
+                    for k in set(d0) | set(d1)}
+    return po_rokoch[roky[-1]]
+
+
 class CashflowBuilder:
     """Stavebnik cashflow z dispatch summary + SK ekonomických parametrov."""
 
@@ -166,6 +190,7 @@ class CashflowBuilder:
         annual_pv_kwh: float = 0.0,
         annual_bess_discharge_kwh: float = 0.0,
         annual_bess_charge_cost_eur: float = 0.0,
+        saving_decomp_by_year: dict | None = None,
     ) -> FinancialResult:
         """Postaví ročný cashflow + spočíta NPV/IRR/Payback/LCOS/LCOE."""
         gross = self.capex_solar + self.capex_bess
@@ -216,14 +241,18 @@ class CashflowBuilder:
             kf_pv = deg_pv * esc * self.savings_coefficient
             kf_bess = deg_bess * esc * self.savings_coefficient
             cy = CashflowYear(year=y, bess_soh=deg_bess, pv_capacity_factor=deg_pv)
+            # Rast spotreby klienta: ak volajúci dodal streamy pre viac rokov (dispatch bol
+            # prepočítaný pri rastúcej záťaži), použijeme interpolovaný rozpad pre daný rok.
+            # Inak platí rok 1 pre celý horizont — rast spotreby sa nikde neprejaví.
+            _dec = _interpoluj_streamy(saving_decomp_by_year, y) if saving_decomp_by_year else saving_decomp_y1
             # Revenue — FVE streamy degradujú pomaly (panely), batériové rýchlejšie (články)
-            cy.rev_solar_self_cons = saving_decomp_y1.get("sav_solar_self_cons_eur", 0) * kf_pv
-            cy.rev_solar_export = saving_decomp_y1.get("sav_solar_export_eur", 0) * kf_pv
-            cy.rev_bess_self_cons = saving_decomp_y1.get("sav_bess_self_cons_eur", 0) * kf_bess
-            cy.rev_arbitrage = saving_decomp_y1.get("sav_arbitrage_eur", 0) * kf_bess
-            cy.rev_peak_shaving = saving_decomp_y1.get("sav_peak_shaving_eur", 0) * kf_bess
-            cy.rev_mrk_penalty_avoided = saving_decomp_y1.get("sav_mrk_penalty_avoided_eur", 0) * kf_bess
-            cy.rev_merchant = saving_decomp_y1.get("sav_merchant_eur", 0) * kf_bess
+            cy.rev_solar_self_cons = _dec.get("sav_solar_self_cons_eur", 0) * kf_pv
+            cy.rev_solar_export = _dec.get("sav_solar_export_eur", 0) * kf_pv
+            cy.rev_bess_self_cons = _dec.get("sav_bess_self_cons_eur", 0) * kf_bess
+            cy.rev_arbitrage = _dec.get("sav_arbitrage_eur", 0) * kf_bess
+            cy.rev_peak_shaving = _dec.get("sav_peak_shaving_eur", 0) * kf_bess
+            cy.rev_mrk_penalty_avoided = _dec.get("sav_mrk_penalty_avoided_eur", 0) * kf_bess
+            cy.rev_merchant = _dec.get("sav_merchant_eur", 0) * kf_bess
 
             # OPEX
             cy.cost_solar_opex = self.capex_solar * self.opex_solar_pct

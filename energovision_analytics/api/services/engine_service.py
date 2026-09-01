@@ -248,6 +248,7 @@ def run_variants_pipeline(request_dict: dict, progress_cb=None) -> dict:
         merchant_unlimited_cycles=bool(v.get("merchant_unlimited_cycles", False)),
         bess_kw_ac=v.get("bess_kw_ac"),
         bess_warranty_cycles=v.get("bess_warranty_cycles"),
+        load_growth_pct_y=float(v.get("load_growth_pct_y") or 0.0),
     )
     log.info("Running %d variants", len(v["pv_kwp_options"]) * len(v["bess_kwh_options"]))
     results = gen.run_all(parallel=True)
@@ -593,6 +594,7 @@ def export_variant_intervals(request_dict: dict, pv_kwp: float, bess_kwh: float,
         merchant_unlimited_cycles=bool(v.get("merchant_unlimited_cycles", False)),
         bess_kw_ac=v.get("bess_kw_ac"),
         bess_warranty_cycles=v.get("bess_warranty_cycles"),
+        load_growth_pct_y=float(v.get("load_growth_pct_y") or 0.0),
     )
     r = gen.run_single(pv_kwp, bess_kwh, ems_strategy, keep_intervals=True)
 
