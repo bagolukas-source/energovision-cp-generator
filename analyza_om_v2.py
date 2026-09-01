@@ -411,6 +411,8 @@ def _build_request_from_analyza(analyza: dict, measured_block: dict = None) -> d
             "bess_kw_ac": analyza.get("bess_kw_ac"),
             # Warranty cyklov z katalógu/zmluvy — určuje, kedy padne výmena článkov
             "bess_warranty_cycles": analyza.get("bess_warranty_cycles"),
+            # Ročný rast spotreby klienta v % — dispatch sa prepočíta pre kotviace roky
+            "load_growth_pct_y": float(analyza.get("load_growth_pct_y") or 0.0),
         },
         "capex": _cp_capex(analyza),
         "financial": {

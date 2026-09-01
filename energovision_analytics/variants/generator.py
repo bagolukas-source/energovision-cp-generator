@@ -135,6 +135,7 @@ class VariantGenerator:
         merchant_unlimited_cycles: bool = False,     # merchant: bez stropu cyklov (limit = výkon/RK/export)
         bess_kw_ac: float | None = None,             # skutočný výkon meniča batérie z katalógu (kW)
         bess_warranty_cycles: int | None = None,     # warranty cyklov z katalógu/zmluvy (napr. 20 000)
+        load_growth_pct_y: float = 0.0,              # ročný rast spotreby klienta v % (napr. 6)
         ems_arb_min_spread_eur_mwh: float | None = None,  # override min spreadu arbitráže z UI
         ems_arb_band_pct: float | None = None,           # šírka obchodného pásma okna (0=extrémy, 0.25=štvrtina)
         pv_inverter_kw: float | None = None,             # ZADANÝ AC výkon meniča (inak kwp/ratio) — clipping v PV sim
@@ -202,6 +203,10 @@ class VariantGenerator:
         # (napr. LUNA 482 kWh má 206 kW, nie 241 kW ako by vyšlo z 0,5C).
         self.bess_kw_ac = float(bess_kw_ac) if bess_kw_ac else None
         self.bess_warranty_cycles = int(bess_warranty_cycles) if bess_warranty_cycles else None
+        # Rast spotreby: klient plánuje rozšírenie výroby / nové linky. Nestačí naškálovať
+        # výslednú úsporu — rast mení POMER samospotreby a exportu, a ten rozdiel je ~50 €/MWh.
+        # Preto sa dispatch prepočíta pre kotviace roky s rastúcou záťažou.
+        self.load_growth_pct_y = float(load_growth_pct_y or 0.0)
         self.ems_arb_min_spread_eur_mwh = ems_arb_min_spread_eur_mwh
         self.ems_arb_band_pct = ems_arb_band_pct
         self.pv_inverter_kw = pv_inverter_kw
@@ -235,6 +240,40 @@ class VariantGenerator:
         if self.bess_kw_ac and self.bess_kw_ac > 0:
             return self.bess_kw_ac
         return bess_kwh * self.bess_c_rate
+
+    # Kotviace roky, pre ktoré sa pri raste spotreby prepočíta dispatch. Medzi nimi
+    # CashflowBuilder interpoluje — priebeh samospotreby voči záťaži je hladký.
+    RASTOVE_KOTVY = (1, 10, 20)
+
+    def _streamy_pri_zatazi(self, load_kw, pv_kw, retail, battery, bess, bess_kwh, nasobok: float) -> dict:
+        """Rozpad úspor pri záťaži naškálovanej na `nasobok` (1,0 = dnešná spotreba)."""
+        _load = load_kw * float(nasobok)
+        if bess and bess_kwh > 0 and battery is not None:
+            ems = RuleBasedEMS(
+                battery, self.site, self.tariff_engine.get(self.site.distribuutor, self.site.sadzba), retail,
+                EMSConfig(
+                    max_efc_per_year=int(self.ems_max_efc_per_year or (bess.warranty_cycles / self.horizon_years)),
+                    **({"arb_min_spread_eur_mwh": float(self.ems_arb_min_spread_eur_mwh)}
+                       if self.ems_arb_min_spread_eur_mwh else {}),
+                    **({"arb_band_pct": float(self.ems_arb_band_pct)}
+                       if self.ems_arb_band_pct is not None else {}),
+                    peak_shave_enabled=(self.site.sadzba.value == "VN"),
+                ),
+                export_price_eur_kwh=self.export_price,
+                export_mode=self.export_mode,
+                export_spot_diskont_eur_mwh=self.export_spot_diskont,
+            )
+            _, sm = ems.run_year(_load, pv_kw, self.spot, self.timestamps, 60)
+        else:
+            sm = self._build_pv_only_summary(_load, pv_kw, retail)
+        return {
+            "sav_solar_self_cons_eur": sm.sav_solar_self_cons_eur,
+            "sav_solar_export_eur": sm.sav_solar_export_eur,
+            "sav_bess_self_cons_eur": sm.sav_bess_self_cons_eur,
+            "sav_arbitrage_eur": sm.sav_arbitrage_eur,
+            "sav_peak_shaving_eur": sm.sav_peak_shaving_eur,
+            "sav_mrk_penalty_avoided_eur": sm.sav_mrk_penalty_avoided_eur,
+        }
 
     def _make_pv(self, kwp: float) -> PVInput:
         """Postaví PVInput pre danú kWp."""
@@ -450,6 +489,25 @@ class VariantGenerator:
             annual_pv_kwh=float(getattr(summary, "pv_total_kwh", 0.0) or 0.0),
             annual_bess_charge_cost_eur=float(getattr(summary, "grid_charge_cost_eur", 0.0) or 0.0),
         )
+
+        # Rast spotreby klienta (napr. „zdvíhame odber o 6 % ročne"). Nestačí naškálovať
+        # úsporu — rast presúva kWh z exportu do samospotreby a ten rozdiel je ~50 €/MWh.
+        # Preto prepočítame dispatch pre kotviace roky a cashflow medzi nimi interpoluje.
+        # Merchant režim vynechávame: batéria tam neslúži záťaži, rast spotreby ju nemení.
+        if self.load_growth_pct_y and not self.merchant_mode:
+            _g = self.load_growth_pct_y / 100.0
+            _po_rokoch = {}
+            for _rok in self.RASTOVE_KOTVY:
+                if _rok > self.horizon_years:
+                    continue
+                _nas = (1.0 + _g) ** (_rok - 1)
+                _po_rokoch[_rok] = (saving_decomp if _rok == 1 else
+                                    self._streamy_pri_zatazi(load_kw, pv_kw, retail,
+                                                             locals().get("battery"),
+                                                             bess, bess_kwh, _nas))
+            if len(_po_rokoch) > 1:
+                _cf_kwargs["saving_decomp_by_year"] = _po_rokoch
+
         financial = builder.build(dotacia_eur=0.0, **_cf_kwargs)
 
         return VariantResult(
