@@ -883,11 +883,15 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
         except Exception:
             _manual_keep = []
 
+        # Ak používateľ pridal vlastné (manuálne) varianty, generuj IBA ich — NEvkladaj 12 typových.
+        _only_manual = len(_manual_keep) > 0
+
         # Clear existing variants
         sb.table("analyza_om_variants").delete().eq("analyza_id", analyza_id).execute()
 
         rows = []
-        for idx, v in enumerate(variants):
+        _gen_variants = [] if _only_manual else variants
+        for idx, v in enumerate(_gen_variants):
             rows.append({
                 "analyza_id": analyza_id,
                 "name": v.get("label", f"V{idx+1}"),
@@ -984,7 +988,7 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
             except Exception:
                 log.exception("[aom-v2] rebuild top_picks po delte zlyhal")
 
-        _ins = sb.table("analyza_om_variants").insert(rows).execute()
+        _ins = sb.table("analyza_om_variants").insert(rows).execute() if rows else None
 
         # Prepočítaj a znovu vlož ručné varianty (zachovaj marker 'manual' + daj im reálnu ekonomiku).
         # Ich rich výsledok pridáme aj do full_response.variants, aby ich posudok/UI našiel — inak
@@ -1013,8 +1017,28 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
                                           capex_source="manual", inverter_kw=_mv.get("inverter_kw"))
                 if _mres and _mres.get("rich_variant"):
                     _manual_rich.append(_mres["rich_variant"])
+                elif _only_manual:
+                    # engine sa nepodaril — nestrať vlastný variant; vlož ho aspoň bez ekonomiky
+                    try:
+                        _pos = sb.table("analyza_om_variants").select("position").eq("analyza_id", analyza_id).order("position", desc=True).limit(1).execute()
+                        _p = (_pos.data[0]["position"] + 1) if _pos.data else 1
+                        _frow = {"analyza_id": analyza_id, "name": _mv.get("name") or "Vlastný variant", "position": _p,
+                                 "fve_kwp": _fk, "bess_kwh": _bk, "bess_kw": _mv.get("bess_kw"),
+                                 "capex_eur": _cap, "capex_source": "manual"}
+                        if _mv.get("inverter_kw"):
+                            _frow["inverter_kw"] = _mv.get("inverter_kw")
+                        sb.table("analyza_om_variants").insert(_frow).execute()
+                    except Exception:
+                        log.exception("[aom-v2] fallback insert manuálneho variantu zlyhal")
             except Exception:
                 log.exception("[aom-v2] prepočet ručného variantu zlyhal")
+        # V režime "iba manuálne" nechaj vo full_response len vlastné varianty (žiadne typové).
+        if _only_manual:
+            result["variants"] = []
+            try:
+                result["top_picks"] = _rebuild_top_picks(_manual_rich) if _manual_rich else []
+            except Exception:
+                result["top_picks"] = []
         # Pridaj rich ručné varianty do full_response -> UI/posudok ich nájde (koniec slučky bannera).
         if _manual_rich:
             result.setdefault("variants", []).extend(_manual_rich)
@@ -1025,7 +1049,7 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
         if _old_sel:
             _new_sel = None
             if _old_sel_key:
-                _cand = list(_ins.data or [])
+                _cand = list((_ins.data if _ins else []) or [])
                 try:
                     _allv = sb.table("analyza_om_variants").select("id,fve_kwp,bess_kwh,capex_source").eq("analyza_id", analyza_id).execute()
                     if _allv.data:
@@ -1057,7 +1081,7 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
         "sim_results": result.get("variants", [])[:1] if result.get("variants") else None,
         "econ_results": {
             "top_picks": result.get("top_picks", []),
-            "variants_count": len(variants),
+            "variants_count": len(result.get("variants") or []),
             "engine_version": result.get("engine_version", "0.9.5"),
             "full_response": result,
             "ai_narrative": ai_narrative,
@@ -1068,7 +1092,7 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
     return {
         "ok": True,
         "analyza_id": analyza_id,
-        "variants_count": len(variants),
+        "variants_count": len(result.get("variants") or []),
         "top_picks": result.get("top_picks", [])[:6],
     }
 
