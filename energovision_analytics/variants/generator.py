@@ -420,6 +420,27 @@ class VariantGenerator:
                 _max_cyklov_denne = max(0.1, float(self.ems_max_efc_per_year) / 365.0)
             else:
                 _max_cyklov_denne = 1.0
+            # DEGRADAČNÁ REZERVA (oprava 9/2026, kalibrácia voči Energe)
+            # Merchant obchod platí opotrebenie batérie — obchodník, ktorý to nezaráta,
+            # vykazuje ako zisk aj obchody, ktoré batériu spotrebujú rýchlejšie, než čo
+            # na nich zarobí. Ak používateľ nezadal vlastnú hodnotu, odvodíme ju z ceny
+            # batérie a záruky cyklov. Ak sa v cashflow účtuje EXPLICITNÁ výmena článkov,
+            # rezervu nepoužijeme — inak by sa to isté opotrebenie započítalo dvakrát.
+            from energovision_analytics.financial.merchant_arbitrage import degradation_reserve_eur_mwh
+            _degr_eur_mwh = float(self.merchant_degradation_eur_mwh or 0.0)
+            _degr_source = "manual" if _degr_eur_mwh > 0 else None
+            if _degr_eur_mwh <= 0:
+                if getattr(self, "count_battery_replacement", False):
+                    _degr_source = "vymena_clankov"          # opotrebenie rieši výmena v cashflow
+                else:
+                    _warr_cyc = int(self.bess_warranty_cycles or getattr(bess, "warranty_cycles", 0) or 6000)
+                    _usable_frac = 0.90
+                    try:
+                        _usable_frac = float(bess.soc_max_pct - bess.soc_min_pct)
+                    except Exception:
+                        pass
+                    _degr_eur_mwh = degradation_reserve_eur_mwh(self.capex_bess, _warr_cyc, _usable_frac)
+                    _degr_source = "auto"
             _m = compute_merchant_arbitrage(
                 spot_eur_mwh=self.spot,
                 dt_h=_dt_h,
@@ -429,7 +450,7 @@ class VariantGenerator:
                 export_kw=_export_kw,
                 organizer_fee_pct=self.merchant_organizer_fee_pct,
                 imbalance_cost_eur_mwh=self.merchant_imbalance_eur_mwh,
-                degradation_cost_eur_mwh=self.merchant_degradation_eur_mwh,
+                degradation_cost_eur_mwh=_degr_eur_mwh,
                 revenue_share_pct=self.merchant_revenue_share_pct,
                 window=_window,
                 max_cycles_per_day=_max_cyklov_denne,
@@ -444,6 +465,16 @@ class VariantGenerator:
             saving_decomp["sav_arbitrage_eur"] = 0.0
             saving_decomp["sav_peak_shaving_eur"] = 0.0
             saving_decomp["sav_merchant_eur"] = float(_m["annual_profit_eur"])
+            # Implikovaná životnosť batérie pri TOMTO cyklovaní. Aj keď sa výmena článkov
+            # do cashflow neúčtuje (opt-in), posudok aj CRM musia vidieť, že batéria pri
+            # napr. 1 500 cykloch/rok vyčerpá 6 000-cyklovú záruku za 4 roky — inak model
+            # tvrdí 20 rokov výnosu zo zariadenia, ktoré tak dlho nevydrží.
+            _m["degradation_source"] = _degr_source
+            _warr_for_life = int(self.bess_warranty_cycles or getattr(bess, "warranty_cycles", 0) or 6000)
+            _m["warranty_cycles"] = _warr_for_life
+            _eq_cyc = float(_m.get("equiv_cycles") or 0.0)
+            _m["battery_life_years"] = round(_warr_for_life / _eq_cyc, 1) if _eq_cyc > 0 else None
+            _m["cycles_exceed_warranty"] = bool(_eq_cyc > 0 and (_warr_for_life / _eq_cyc) < self.horizon_years)
             _merchant_detail = _m  # plný merchant výstup pre posudok
             # Throughput z merchantu → degradácia a plán výmeny článkov.
             # DC throughput (energia reálne prehnaná článkami) je správny podklad;
