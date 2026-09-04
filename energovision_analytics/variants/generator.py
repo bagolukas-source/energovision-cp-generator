@@ -433,6 +433,11 @@ class VariantGenerator:
                 revenue_share_pct=self.merchant_revenue_share_pct,
                 window=_window,
                 max_cycles_per_day=_max_cyklov_denne,
+                # Nabíjanie ide cez to isté OM ako odber — bez profilu záťaže by merchant
+                # obchodoval plným výkonom aj v hodinách, keď je prípojka takmer plná,
+                # a v realite by to znamenalo prekročenie MRK s penále.
+                # Posielame ČISTÝ odber po FVE: cez deň FVE uvoľní miesto pod RK.
+                load_kw=np.maximum(0.0, load_kw - pv_kw),
             )
             # Batéria neslúži záťaži → vynuluj jej samospotrebné/arbitráž/peak streamy
             saving_decomp["sav_bess_self_cons_eur"] = 0.0

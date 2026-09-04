@@ -16,6 +16,12 @@ vyššia hodnota = viac obchodovaných dvojíc, None = bez limitu (obmedzí len 
 Volajúci si musí zvýšené cyklovanie premietnuť do degradácie a výmeny článkov — inak by
 sa tá istá kapacita započítala dvakrát.
 
+MRK/RK headroom: nabíjanie ide cez to isté odberné miesto ako výroba, takže sa SČÍTAVA
+so súbežným odberom. Bez `load_kw` sa strop berie ako celá RK — to pri OM s vysokou
+základnou záťažou (napr. 24/7 prevádzka s odberom 2 100 kW pri RK 3 400 kW) nadhodnotí
+obchodovaný objem aj výnos, a v realite by znamenalo prekročenie MRK s penále.
+S `load_kw` sa v každom intervale nabíja len do voľnej kapacity (rk_kw − load_kw[i]).
+
 Energetická bilancia (DC = energia v batérii):
   - uloženie e_dc → AC odber z gridu = e_dc / sqrt(rte)   (strata pri nabíjaní)
   - dodávka z e_dc → AC export do gridu = e_dc * sqrt(rte) (strata pri vybíjaní)
@@ -41,10 +47,12 @@ def compute_merchant_arbitrage(
     soc_max_frac: float = 0.95,
     window: int = 96,        # dĺžka denného bloku (intervalov); 96=15-min, 24=hodinové
     max_cycles_per_day: float | None = 1.0,  # koľko plných cyklov denne; None = bez limitu
+    load_kw=None,            # súbežný odber OM (kW) — nabíjanie sa vojde len do RK MÍNUS odber
 ) -> dict:
     spot = np.asarray(spot_eur_mwh, dtype=float)
     n = len(spot)
     empty = {"annual_profit_eur": 0.0, "throughput_mwh": 0.0, "dc_throughput_mwh": 0.0,
+             "grid_charge_mwh": 0.0, "mrk_aware": False, "intervals_blocked_by_mrk": 0,
              "max_cycles_per_day": max_cycles_per_day, "equiv_cycles": 0.0,
              "sell_eur": 0.0, "buy_eur": 0.0, "fee_pct": organizer_fee_pct, "gross_eur": 0.0,
              "organizer_fee_eur": 0.0, "imbalance_eur": 0.0, "degradation_eur": 0.0,
@@ -55,16 +63,31 @@ def compute_merchant_arbitrage(
     sqrt_rte = rte ** 0.5
     usable = bess_kwh * (soc_max_frac - soc_min_frac)              # DC kWh/deň max
 
-    # Per-interval kapacity (konštantné):
-    chg_ac_cap = min(power_kw_ac, rk_kw) * dt_h                    # AC odber / interval
+    # Vybíjanie (export) je konštantné — limituje ho menič a max export.
     dis_ac_cap = min(power_kw_ac, export_kw) * dt_h               # AC export / interval
-    if chg_ac_cap <= 0 or dis_ac_cap <= 0:
+    if dis_ac_cap <= 0:
         return empty
-    chg_dc_per = chg_ac_cap * sqrt_rte                            # DC uložené / nabíjací interval
     dis_dc_per = dis_ac_cap / sqrt_rte                           # DC odobraté / vybíjací interval
+
+    # Nabíjanie je per-interval: batéria a odber OM zdieľajú tú istú prípojku, takže
+    # strop je RK MÍNUS súbežný odber. Bez profilu záťaže sa (kompatibilne so starým
+    # správaním) berie celá RK, ale výsledok sa označí ako neoverený voči MRK.
+    if load_kw is not None and len(load_kw) >= n:
+        _load = np.asarray(load_kw[:n], dtype=float)
+        headroom_kw = np.maximum(0.0, rk_kw - _load)
+        chg_ac_arr = np.minimum(power_kw_ac, headroom_kw) * dt_h
+        mrk_aware = True
+    else:
+        chg_ac_arr = np.full(n, min(power_kw_ac, rk_kw) * dt_h, dtype=float)
+        mrk_aware = False
+    if float(chg_ac_arr.max()) <= 0:
+        return empty
+    chg_dc_arr = chg_ac_arr * sqrt_rte                            # DC uložené / nabíjací interval
 
     sell_eur = 0.0; buy_eur = 0.0
     ac_export_total = 0.0; dc_throughput = 0.0
+    ac_charge_total = 0.0     # koľko sa reálne odobralo zo siete na nabíjanie
+    blocked_intervals = 0     # intervaly, kde headroom nestačil na plný výkon
 
     for start in range(0, n, window):
         w = spot[start:start + window]
@@ -75,7 +98,12 @@ def compute_merchant_arbitrage(
         # nabíjanie: najlacnejšie hodiny VRÁTANE záporného spotu (pri cene < 0 grid platí za
         # odber → náklad je záporné číslo, znižuje buy_eur); vybíjanie: najdrahšie hodiny.
         # Nezisk. páry aj tak zastaví profitability-break v cykle nižšie.
-        charge_cand = [(float(w[k]), chg_dc_per) for k in order]
+        # Kapacita nabíjania je per-interval (voľné miesto pod RK), preto sa berie z poľa.
+        chg_w = chg_dc_arr[start:start + window]
+        charge_cand = [(float(w[k]), float(chg_w[k])) for k in order if chg_w[k] > 1e-9]
+        blocked_intervals += int((chg_w <= 1e-9).sum())
+        if not charge_cand:
+            continue
         discharge_cand = [(float(w[k]), dis_dc_per) for k in order[::-1]]
 
         ci = 0; di = 0
@@ -99,6 +127,7 @@ def compute_merchant_arbitrage(
                 break
             buy_eur  += (move_dc / sqrt_rte) * p_chg / 1000.0    # AC odber × cena
             sell_eur += (move_dc * sqrt_rte) * p_dis / 1000.0    # AC export × cena
+            ac_charge_total += move_dc / sqrt_rte
             ac_export_total += move_dc * sqrt_rte
             dc_throughput   += move_dc
             rem_usable -= move_dc
@@ -123,6 +152,11 @@ def compute_merchant_arbitrage(
     # DC throughput je podklad pre degradáciu a plán výmeny článkov
     dc_throughput_mwh = dc_throughput / 1000.0
     return {"annual_profit_eur": round(client_value, 0),
+            # koľko sa NAOZAJ odobralo zo siete na nabíjanie — to je energia, ktorá
+            # ide cez fakturačné meranie OM navyše k spotrebe (posudok to musí ukázať)
+            "grid_charge_mwh": round(ac_charge_total / 1000.0, 1),
+            "mrk_aware": mrk_aware,
+            "intervals_blocked_by_mrk": blocked_intervals,
             "throughput_mwh": round(ac_export_total / 1000.0, 1),
             "dc_throughput_mwh": round(dc_throughput_mwh, 1),
             "max_cycles_per_day": max_cycles_per_day,
