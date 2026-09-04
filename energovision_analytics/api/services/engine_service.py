@@ -20,6 +20,7 @@ from energovision_analytics.data.auto_fill import (
 )
 from energovision_analytics.financial.dotacie import apply_dotacia, load_dotacie_schemes
 from energovision_analytics.tariff import TariffEngine
+from energovision_analytics.tariff.retail_calculator import RetailCalculator
 from energovision_analytics.variants import VariantGenerator, pick_top_variants
 
 log = get_logger(__name__)
@@ -294,10 +295,48 @@ def run_variants_pipeline(request_dict: dict, progress_cb=None) -> dict:
     manifest = build_run_manifest(tariff_yaml=TARIFF_YAML, spot_csv=SPOT_CSV)
 
     elapsed_ms = (time.time() - t0) * 1000
+
+    # === TARIFF DETAIL — sadzby, ktoré engine REÁLNE použil ===
+    # Bez tohto si musel posudok v CRM držať vlastnú kópiu sadzieb, a tie sa
+    # rozišli (UI 144 €/MWh vs engine 121,80; MRK 3,20 vs 8,02 €/kW/mes) —
+    # v jednom dokumente potom svietili dve rôzne ceny za to isté.
+    tariff_detail = {}
+    try:
+        _t = gen.tariff_engine.get(site.distribuutor, site.sadzba)
+        _spot_avg = float(np.mean(spot)) if len(spot) else None
+        _r = RetailCalculator(_t, typ_tarify=site.typ_tarify,
+                              spot_koeficient=float((request_dict.get("tariff_overrides") or {}).get("spot_koeficient") or 1.0))
+        tariff_detail = {
+            "rok": int(_t.rok),
+            "distribuutor": str(getattr(site.distribuutor, "value", site.distribuutor)),
+            "sadzba": str(getattr(site.sadzba, "value", site.sadzba)),
+            "typ_tarify": str(getattr(site.typ_tarify, "value", site.typ_tarify)),
+            "spot_avg_eur_mwh": round(_spot_avg, 2) if _spot_avg is not None else None,
+            # €/MWh — priamo použiteľné pre rozpis účtu
+            "silova_eur_mwh": round(_r.silova_eur_mwh(_spot_avg), 2),
+            "obchodnik_eur_mwh": round(_r.obchodnik_eur_mwh(), 2),
+            "tps_eur_mwh": round(float(_t.tps_eur_mwh), 2),
+            "distrib_eur_mwh": round(float(_t.distrib_eur_mwh), 2),
+            "straty_eur_mwh": round(float(_t.straty_eur_mwh), 2),
+            "njf_eur_mwh": round(float(_t.njf_eur_mwh), 2),
+            "spotrebna_dan_eur_mwh": round(float(_t.spotrebna_dan_eur_mwh), 2),
+            "tss_eur_mwh": round(float(_t.tss_eur_mwh), 2),
+            "regulovane_eur_mwh": round(float(_t.regulovane_zlozky_eur_mwh), 2),
+            "retail_total_eur_mwh": round(_r.retail_buy_eur_kwh(_spot_avg) * 1000, 2),
+            # kapacitné — engine ich drží v €/MW/mes, CRM ich chce v €/kW/mes
+            "mrk_kapacita_eur_kw_mes": round(float(_t.mrk_kapacita_eur_mw_mes) / 1000.0, 3),
+            "rk_kapacita_eur_kw_mes": round(float(_t.rk_kapacita_eur_mw_mes) / 1000.0, 3),
+            "mrk_export_penalty_eur_mwh": round(float(_t.mrk_export_penalty_eur_kwh) * 1000, 2),
+            "export_price_eur_mwh": round(float(request_dict.get("export_price_eur_kwh") or 0.06) * 1000, 2),
+        }
+    except Exception as _e:  # tarify sú „nice to have" — nesmú zhodiť celý beh
+        log.warning("tariff_detail sa nepodarilo zostaviť: %s", _e)
+
     return {
         "results": results,
         "top_picks": top_picks,
         "manifest": manifest,
+        "tariff_detail": tariff_detail,
         "elapsed_ms": elapsed_ms,
     }
 
@@ -495,6 +534,7 @@ def build_run_variants_response(
     return {
         "success": True,
         "job_id": job_id,
+        "tariff_detail": pipeline_output.get("tariff_detail") or {},
         "variants": variants_out,
         "top_picks": [
             {"label": label, "variant_id": v.variant_id, "npv_eur": v.npv_eur}
