@@ -46,7 +46,13 @@ DEFAULTS = {
     "platnost_dni": 30,
     "cena_el_eur_kwh": 0.16,        # priemer SK 2026
     "vykupna_cena_eur_kwh": 0.05,   # prebytky do siete
-    "samospotreba_pct": 70,         # typicky 60-80% pre RD s batériou
+    # Podiel VYROBY, ktory dom spotrebuje priamo (zvysok ide do siete za vykupnu cenu).
+    "samospotreba_pct": 70,         # bez baterie 70 %, s bateriou +10 = 80 %
+    # Strop POKRYTIA SPOTREBY: aj velka FVE nepokryje cely rok — v noci a v zime
+    # sa odoberá zo siete. Bez tohto stropu model pri predimenzovanej FVE tvrdil
+    # uzitocnu spotrebu vyssiu, nez je cela rocna spotreba domu (zakaznici to
+    # spravne nezbastili — poziadavka Lukas 14.9.2026).
+    "max_pokrytie_pct": 70,         # bez baterie 70 %, s bateriou +10 = 80 %
     "degradacia_pct_rok": 0.5,      # ročná degradácia panelov %
     "vyroba_kwh_per_kwp": 1075,     # SR priemer pre J orientáciu
     "narast_cien_el_pct_rok": 3.0,  # ročný nárast ceny elektriny
@@ -259,8 +265,30 @@ def vyrataj_navratnost(konfig, ceny, lead):
     naras_pct = DEFAULTS["narast_cien_el_pct_rok"] / 100
     deg_pct = DEFAULTS["degradacia_pct_rok"] / 100
 
-    rocne_uspora = rocna_vyroba * (samosp * cena_el + (1 - samosp) * vykupna)
-    rocne_naklady_bez_fve = lead["rocna_spotreba_kwh"] * cena_el
+    # Priamo spotrebovana energia ma DVA stropy a plati ten prisnejsi:
+    #  1) kolko z VYROBY sa da spotrebovat (samosp — profil vyroby vs. odberu)
+    #  2) kolko zo SPOTREBY vie FVE vobec pokryt (max_pokr — v noci a v zime sa beri zo siete)
+    # Bez druheho stropu model pri predimenzovanej FVE tvrdil uzitocnu spotrebu
+    # vyssiu, nez je cela rocna spotreba domu, a slubil uporu vacsiu nez cela faktura.
+    rocna_spotreba = float(lead.get("rocna_spotreba_kwh") or 0)
+    max_pokr = (lead.get("max_pokrytie_pct") or
+                (DEFAULTS["max_pokrytie_pct"] + (10 if konfig["ma_bateriu"] else 0))) / 100
+    if max_pokr > 1: max_pokr = 0.85
+
+    def _rozdel(vyroba_kwh):
+        """Vrati (priamo spotrebovane, dodane do siete) v kWh."""
+        z_vyroby = vyroba_kwh * samosp
+        z_spotreby = rocna_spotreba * max_pokr if rocna_spotreba > 0 else z_vyroby
+        priamo = min(z_vyroby, z_spotreby)
+        return priamo, max(0.0, vyroba_kwh - priamo)
+
+    priamo_kwh, export_kwh = _rozdel(rocna_vyroba)
+    rocne_uspora = priamo_kwh * cena_el + export_kwh * vykupna
+    rocne_naklady_bez_fve = rocna_spotreba * cena_el
+    # Kolko % svojej rocnej spotreby zakaznik realne pokryje — prve cislo,
+    # ktore si kazdy overuje na fakture.
+    pokrytie_spotreby = (priamo_kwh / rocna_spotreba) if rocna_spotreba > 0 else 0.0
+    realna_samosp = (priamo_kwh / rocna_vyroba) if rocna_vyroba > 0 else 0.0
 
     # 25-rocna kumulativna
     kumul = []
@@ -268,7 +296,8 @@ def vyrataj_navratnost(konfig, ceny, lead):
     for r in range(1, 26):
         deg = (1 - deg_pct) ** (r - 1)
         cena = cena_el * (1 + naras_pct) ** (r - 1)
-        usp = rocna_vyroba * deg * (samosp * cena + (1 - samosp) * vykupna)
+        p_kwh, e_kwh = _rozdel(rocna_vyroba * deg)
+        usp = p_kwh * cena + e_kwh * vykupna
         suma += usp
         kumul.append((r, usp, suma))
 
@@ -280,7 +309,11 @@ def vyrataj_navratnost(konfig, ceny, lead):
         "navratnost_rokov": navratnost_rokov,
         "uspora_25_rokov": suma,
         "kumul_25": kumul,
-        "samospotreba_pct": samosp * 100,
+        "samospotreba_pct": realna_samosp * 100,   # realne dosiahnuta, uz po strope spotrebou
+        "samospotreba_cielova_pct": samosp * 100,  # vstupny predpoklad (profil vyroby vs. odberu)
+        "pokrytie_spotreby_pct": pokrytie_spotreby * 100,
+        "priamo_spotrebovane_kwh": priamo_kwh,
+        "dodane_do_siete_kwh": export_kwh,
         "kg_co2_rok": rocna_vyroba * 0.4,  # SK mix ~0.4 kg CO2/kWh
     }
 
