@@ -97,7 +97,12 @@ def gen_copywriting(lead, konfig, ceny, navratnost):
     vyroba = navratnost["rocna_vyroba_kwh"]
     # P0 FIX: div-by-zero guard pre leady bez spotreby (Ivan Gaži, Jaroslav Repáň, atď.)
     if spotreba and spotreba > 0:
-        pokrytie = min(100, vyroba / spotreba * 100)
+        # REALNE pokrytie = kolko z vyroby zakaznik naozaj spotrebuje (strop samospotreby),
+        # nie hruby pomer vyroba/spotreba. Zdroj: vyrataj_navratnost().
+        pokrytie = navratnost.get("pokrytie_spotreby_pct")
+        if pokrytie is None:
+            pokrytie = min(100, vyroba / spotreba * 100)
+        pokrytie = min(100.0, float(pokrytie))
         nadvyroba_pct = (vyroba / spotreba * 100) - 100 if vyroba > spotreba else 0
     else:
         pokrytie = 0
@@ -171,9 +176,11 @@ def gen_copywriting(lead, konfig, ceny, navratnost):
     # Záver
     if nadvyroba_pct > 20:
         zaver = (
-            f"Navrhujeme výkon <strong>{_sk_dec(vykon)} kWp</strong>, ktorý pokryje Vašu spotrebu "
-            f"na 100 % a vyrobí ešte {nadvyroba_pct:.0f} % naviac. Prebytky predáme do siete za "
-            f"výkupnú cenu, alebo ich neskôr viete uložiť do prípadnej batérie."
+            f"Navrhujeme výkon <strong>{_sk_dec(vykon)} kWp</strong>. Vyrobí o {nadvyroba_pct:.0f} % viac, "
+            f"než ročne spotrebujete — reálne z toho priamo využijete zhruba "
+            f"<strong>{pokrytie:.0f} %</strong> svojej spotreby, zvyšok ide do siete za výkupnú cenu "
+            f"alebo neskôr do batérie. Počítame konzervatívne: elektrina vyrobená napoludnie sa "
+            f"nedá minúť večer bez úložiska."
         )
     elif pokrytie >= 95:
         zaver = (
@@ -196,8 +203,17 @@ def gen_copywriting(lead, konfig, ceny, navratnost):
     # === BENEFITY ===
     rocna_uspora = navratnost["rocne_uspora_eur"]
     nav_rokov = navratnost["navratnost_rokov"]
+    priamo_kwh = navratnost.get("priamo_spotrebovane_kwh") or 0
+    export_kwh = navratnost.get("dodane_do_siete_kwh") or 0
+    if priamo_kwh > 0 and export_kwh > 0:
+        rozpad = (
+            f" Z toho ~{_sk_int(priamo_kwh)} kWh miniete priamo v dome (ušetrené na faktúre) "
+            f"a ~{_sk_int(export_kwh)} kWh predáme do siete."
+        )
+    else:
+        rozpad = ""
     benefit_uspora = (
-        f"Ročná úspora <strong>~{_sk_int(rocna_uspora)} €</strong> pri dnešných cenách. "
+        f"Ročná úspora <strong>~{_sk_int(rocna_uspora)} €</strong> pri dnešných cenách.{rozpad} "
         f"Keďže ceny elektriny rastú a panely majú degradáciu len ~0,5 % ročne, úspora sa s každým rokom zvyšuje. "
         f"Investícia sa Vám vráti za <strong>~{_sk_dec(nav_rokov, 1)} rokov</strong> — a potom ďalších 15+ rokov vyrábate prakticky zadarmo."
     )
@@ -210,8 +226,9 @@ def gen_copywriting(lead, konfig, ceny, navratnost):
     if konfig["ma_bateriu"]:
         benefit_bateria = (
             f"Batéria s kapacitou {_sk_dec(konfig['bateria_kwh'], 1)} kWh uloží to, čo cez deň nestihnete spotrebovať. "
-            "Večer a v noci čerpáte vlastnú elektrinu zo slnka, nie zo siete. Samospotreba sa tak zvyšuje "
-            "z bežných ~70 % až na 90 %+."
+            "Večer a v noci čerpáte vlastnú elektrinu zo slnka, nie zo siete. V našom prepočte "
+            f"preto rátame s využitím výroby na úrovni {_sk_int(navratnost.get('samospotreba_cielova_pct') or 80)} % "
+            f"namiesto bežných {_sk_int((navratnost.get('samospotreba_cielova_pct') or 80) - 10)} % bez batérie."
         )
     else:
         benefit_bateria = (
@@ -379,7 +396,14 @@ def vyrob_html_pdf(lead, konfig, ceny, navratnost, grafy, out_pdf, bom_rozpis=No
         "navratnost_rokov_sk": f"{navratnost['navratnost_rokov']:.1f}".replace(".", ","),
         "uspora_25_rokov": navratnost["uspora_25_rokov"],
         "kg_co2_rok": navratnost["kg_co2_rok"],
-        "pokrytie_pct": min(100, navratnost["rocna_vyroba_kwh"] / lead["rocna_spotreba_kwh"] * 100),
+        "pokrytie_pct": min(100.0, float(
+            navratnost.get("pokrytie_spotreby_pct")
+            if navratnost.get("pokrytie_spotreby_pct") is not None
+            else navratnost["rocna_vyroba_kwh"] / lead["rocna_spotreba_kwh"] * 100
+        )),
+        "samospotreba_pct": navratnost.get("samospotreba_cielova_pct"),
+        "priamo_spotrebovane_kwh": navratnost.get("priamo_spotrebovane_kwh"),
+        "dodane_do_siete_kwh": navratnost.get("dodane_do_siete_kwh"),
         "ma_bateriu": konfig["ma_bateriu"],
         "ma_wallbox": konfig["ma_wallbox"],
         "bateria_kwh_sk": f"{konfig['bateria_kwh']:.2f}".replace(".", ",") if konfig["ma_bateriu"] else "",
