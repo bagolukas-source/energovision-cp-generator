@@ -40,12 +40,12 @@ def compute_daily_kpi(site_id: str, day: date) -> dict:
 
     # 1. Master data stanice
     site = sb.table("inverter_sites").select(
-        "id, kw_dc_nominal, lat, lon, tilt_deg, azimuth_deg"
+        "id, dc_kwp, latitude, longitude, tilt_deg, azimuth_deg"
     ).eq("id", site_id).single().execute().data
-    if not site or not site.get("kw_dc_nominal"):
-        log.warning(f"Site {site_id} missing kw_dc_nominal, skip")
+    if not site or not site.get("dc_kwp"):
+        log.warning(f"Site {site_id} missing dc_kwp, skip")
         return None
-    kwp = float(site["kw_dc_nominal"])
+    kwp = float(site["dc_kwp"])
 
     # 2. Energia z telemetry_daily (continuous aggregate)
     res = sb.table("telemetry_daily").select(
@@ -111,7 +111,7 @@ def compute_daily_kpi(site_id: str, day: date) -> dict:
 def compute_cohort_z_scores(day: date):
     """Pre každú stanicu vypočíta z-score voči jej peer kohorty.
 
-    Kohorta = stanice s podobným kw_dc_nominal (±50 %), rovnaký distribučný region
+    Kohorta = stanice s podobným dc_kwp (±50 %), rovnaký distribučný region
     a podobná lokácia (do 50 km).
 
     |z| > 2 = potenciálna anomália.
