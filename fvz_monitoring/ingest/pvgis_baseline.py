@@ -124,9 +124,9 @@ def backfill_new():
     from supabase import create_client
     sb = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_ROLE_KEY"])
 
-    sites = sb.table("inverter_sites").select("id, lat, lon, tilt_deg, azimuth_deg, kw_dc_nominal").execute().data or []
+    sites = sb.table("inverter_sites").select("id, latitude, longitude, tilt_deg, azimuth_deg, dc_kwp").execute().data or []
     for site in sites:
-        if not (site.get("lat") and site.get("lon")):
+        if not (site.get("latitude") and site.get("longitude")):
             continue
         has = sb.table("pvgis_baseline").select("site_id").eq("site_id", site["id"]).limit(1).execute().data
         if has:
@@ -134,11 +134,11 @@ def backfill_new():
         try:
             upsert_baseline(
                 site_id=site["id"],
-                lat=float(site["lat"]),
-                lon=float(site["lon"]),
+                lat=float(site["latitude"]),
+                lon=float(site["longitude"]),
                 tilt=float(site.get("tilt_deg") or 30),
                 azimuth=float(site.get("azimuth_deg") or 180),  # default juh
-                peak_kwp=float(site.get("kw_dc_nominal") or 1),
+                peak_kwp=float(site.get("dc_kwp") or 1),
             )
         except Exception as e:
             log.warning(f"PVGIS fail for site {site['id']}: {e}")
@@ -159,11 +159,11 @@ def main():
         s = sb.table("inverter_sites").select("*").eq("id", args.site_id).single().execute().data
         upsert_baseline(
             site_id=s["id"],
-            lat=float(s["lat"]),
-            lon=float(s["lon"]),
+            lat=float(s["latitude"]),
+            lon=float(s["longitude"]),
             tilt=float(s.get("tilt_deg") or 30),
             azimuth=float(s.get("azimuth_deg") or 180),
-            peak_kwp=float(s.get("kw_dc_nominal") or 1),
+            peak_kwp=float(s.get("dc_kwp") or 1),
         )
     else:
         parser.error("zadaj --site-id alebo --backfill-new")

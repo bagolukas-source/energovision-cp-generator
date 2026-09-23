@@ -135,11 +135,11 @@ def upsert_plants(plants: list[PlantInfo]):
             "vendor": p.vendor,
             "vendor_plant_code": p.vendor_plant_code,
             "site_name": p.site_name,
-            "kw_dc_nominal": p.kw_dc_nominal,
-            "kw_ac_nominal": p.kw_ac_nominal,
-            "battery_kwh_nominal": p.battery_kwh_nominal,
-            "lat": p.lat,
-            "lon": p.lon,
+            "dc_kwp": p.kw_dc_nominal,
+            "ac_kw": p.kw_ac_nominal,
+            "bess_kwh": p.battery_kwh_nominal,
+            "latitude": p.lat,
+            "longitude": p.lon,
             "address": p.address,
             "commissioning_date": p.commissioning_date.isoformat() if p.commissioning_date else None,
             "monitoring_enabled": True,
@@ -184,7 +184,7 @@ def insert_telemetry(vendor: str, snapshots: list[TelemetrySnapshot]):
         sb.table("telemetry_5min").upsert(rows, on_conflict="site_id,ts").execute()
         # Update last_seen
         for sid in {r["site_id"] for r in rows}:
-            sb.table("inverter_sites").update({"last_seen_at": datetime.now(timezone.utc).isoformat()}).eq("id", sid).execute()
+            sb.table("inverter_sites").update({"last_sync_at": datetime.now(timezone.utc).isoformat()}).eq("id", sid).execute()
     log.info(f"[{vendor}] inserted {len(rows)} telemetry rows, skipped {skipped} unknown plants")
 
 
