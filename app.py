@@ -4277,8 +4277,7 @@ def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchod
         — typicky pokryje 60-70 % Vašej dennej spotreby. Ideálne ak doma cez deň žije rodina, sušiete
         bielizeň, varíte alebo používate tepelné čerpadlo na ohrev TÚV.</p>
         <ul>
-          <li><strong>Investícia po dotácii Zelená domácnostiam:</strong> {_eur(cena_a)} s DPH</li>
-          <li><strong>Návratnosť:</strong> 6–8 rokov pri dnešnej cene elektriny 0,16 €/kWh</li>
+          <li><strong>Investícia:</strong> {_eur(cena_a)} s DPH</li>
           <li><strong>Záruka:</strong> 30 rokov na panely, 10 rokov na menič</li>
           <li><strong>Inštalácia:</strong> 1–2 dni, bez stavebných úprav</li>
         </ul>
@@ -4297,9 +4296,8 @@ def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchod
         Pri zlepšujúcich sa zľavách na komponenty je toto pre Slovákov dnes najatraktívnejšia voľba,
         najmä pre rodiny ktoré sú doma <strong>predovšetkým ráno a večer</strong>.</p>
         <ul>
-          <li><strong>Investícia po dotácii:</strong> {_eur(cena_b)} s DPH</li>
+          <li><strong>Investícia:</strong> {_eur(cena_b)} s DPH</li>
           <li><strong>Pokrytie spotreby:</strong> 85–95 % pri správnom dimenzovaní</li>
-          <li><strong>Návratnosť:</strong> 8–11 rokov</li>
           <li><strong>Backup:</strong> pri výpadku siete batéria automaticky prepne dom na ostrov (voliteľne)</li>
           <li><strong>Záruka batérie:</strong> 10 rokov / 6 000 cyklov</li>
         </ul>
@@ -4339,8 +4337,7 @@ def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchod
         Wallbox automaticky reaguje na prebytky FVE a využíva ich na nabíjanie EV. Optimálne riešenie ak doma cez deň
         bývate menej a hlavnou prioritou je nabíjanie auta zo slnka.</p>
         <ul>
-          <li><strong>Investícia po dotácii:</strong> {_eur(cena_d)} s DPH</li>
-          <li><strong>Návratnosť:</strong> 7–9 rokov pri kombinácii FVE + EV nabíjanie</li>
+          <li><strong>Investícia:</strong> {_eur(cena_d)} s DPH</li>
           <li><strong>Výhoda:</strong> nižšia investícia ako varianta C, ale stále plné EV nabíjanie zo slnka</li>
           <li><strong>Hybridný menič:</strong> možnosť doplnenia batérie neskôr bez prerábania systému</li>
         </ul>
@@ -4355,11 +4352,13 @@ def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchod
     if len(variants) > 1:
         rows = []
         if "A" in variants:
-            rows.append(f"<tr><td>A — iba FVE</td><td style='text-align:right;'>{_eur(cena_a)}</td><td>~7 rokov</td><td>Šetríš cez deň</td></tr>")
+            rows.append(f"<tr><td>A — iba FVE</td><td style='text-align:right;'>{_eur(cena_a)}</td><td>Šetríš cez deň</td></tr>")
         if "B" in variants:
-            rows.append(f"<tr><td>B — FVE + batéria</td><td style='text-align:right;'>{_eur(cena_b)}</td><td>~9 rokov</td><td>Plná denná + nočná nezávislosť</td></tr>")
+            rows.append(f"<tr><td>B — FVE + batéria</td><td style='text-align:right;'>{_eur(cena_b)}</td><td>Plná denná + nočná nezávislosť</td></tr>")
         if "C" in variants:
-            rows.append(f"<tr><td>C — komplet + wallbox</td><td style='text-align:right;'>{_eur(cena_c)}</td><td>~11 rokov</td><td>+ EV nabíjanie zadarmo</td></tr>")
+            rows.append(f"<tr><td>C — komplet + wallbox</td><td style='text-align:right;'>{_eur(cena_c)}</td><td>+ EV nabíjanie zadarmo</td></tr>")
+        if "D" in variants:
+            rows.append(f"<tr><td>D — FVE + wallbox</td><td style='text-align:right;'>{_eur(cena_d)}</td><td>EV nabíjanie zo slnka cez deň</td></tr>")
 
         comparison = f"""
         <h3 style="color:#1B5E3F;margin-top:24px;">Krátke porovnanie</h3>
@@ -4368,7 +4367,6 @@ def build_email_body(priezvisko, mesto, kwp, bateria_kwh, ceny, variants, obchod
             <tr style="background:#1B5E3F;color:white;">
               <th style="padding:8px;text-align:left;">Varianta</th>
               <th style="padding:8px;text-align:right;">Cena s DPH</th>
-              <th style="padding:8px;text-align:left;">Návratnosť</th>
               <th style="padding:8px;text-align:left;">Komfort</th>
             </tr>
           </thead>
