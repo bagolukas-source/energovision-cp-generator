@@ -56,6 +56,15 @@ DEFAULTS = {
     "degradacia_pct_rok": 0.5,      # ročná degradácia panelov %
     "vyroba_kwh_per_kwp": 1075,     # SR priemer pre J orientáciu
     "narast_cien_el_pct_rok": 3.0,  # ročný nárast ceny elektriny
+    # Elektromobil (varianty s wallboxom C/D) — auto je „batéria“ pre prebytky FVE.
+    # Nájazd: priemer SK 21 230 km/rok (carVertical, auto.pravda.sk 2024).
+    # Spotreba: reálne 16–21 kWh/100 km (EU štúdia MDPI 2024 / go-electra 2025) → 19 vrátane
+    # strát nabíjania (~10 %). Podiel nabitý zo slnka: auto musí stáť doma cez deň —
+    # bez batérie 40 %, s batériou +10 % (domáca batéria presunie časť prebytku na večer).
+    # Požiadavka D. Galaba 30.9.2026: variant s wallboxom má mať lepšiu návratnosť než samotná FVE.
+    "ev_najazd_km_rok": 21230,
+    "ev_spotreba_kwh_100km": 19,
+    "ev_podiel_zo_slnka_pct": 40,
     # Dotácia je paušálna — pevná suma bez ohľadu na výkon (Lukáš 2026-09-28).
     # Musí zostať zhodná s fve-os CRM:
     # apps/web/src/app/(admin)/ponuky/novy/actions.ts → DOTACIA_EUR.
@@ -282,19 +291,39 @@ def vyrataj_navratnost(konfig, ceny, lead):
                 (DEFAULTS["max_pokrytie_pct"] + (10 if konfig["ma_bateriu"] else 0))) / 100
     if max_pokr > 1: max_pokr = 0.85
 
-    def _rozdel(vyroba_kwh):
-        """Vrati (priamo spotrebovane, dodane do siete) v kWh."""
+    # Wallbox: časť prebytku, ktorý by išiel do siete za výkupnú cenu, nabije auto
+    # → ušetrí nákup elektriny na nabíjanie za plnú cenu. Ráta sa len elektrina, nie benzín.
+    ev_kwh_rok = 0.0
+    ev_zo_slnka_ciel = 0.0
+    if konfig.get("ma_wallbox"):
+        ev_kwh_rok = float(lead.get("ev_kwh_rok") or
+                           DEFAULTS["ev_najazd_km_rok"] * DEFAULTS["ev_spotreba_kwh_100km"] / 100)
+        ev_podiel = (lead.get("ev_podiel_zo_slnka_pct") or
+                     (DEFAULTS["ev_podiel_zo_slnka_pct"] + (10 if konfig["ma_bateriu"] else 0))) / 100
+        ev_zo_slnka_ciel = ev_kwh_rok * min(ev_podiel, 1.0)
+
+    def _rozdel3(vyroba_kwh):
+        """Vrati (priamo v dome, nabite do auta zo slnka, dodane do siete) v kWh."""
         z_vyroby = vyroba_kwh * samosp
         z_spotreby = rocna_spotreba * max_pokr if rocna_spotreba > 0 else z_vyroby
         priamo = min(z_vyroby, z_spotreby)
-        return priamo, max(0.0, vyroba_kwh - priamo)
+        zvysok = max(0.0, vyroba_kwh - priamo)
+        do_auta = min(ev_zo_slnka_ciel, zvysok)
+        return priamo, do_auta, zvysok - do_auta
 
+    def _rozdel(vyroba_kwh):
+        """Vrati (vyuzite doma vrátane auta, dodane do siete) v kWh."""
+        p, a, e = _rozdel3(vyroba_kwh)
+        return p + a, e
+
+    priamo_dom_kwh, ev_zo_slnka_kwh, _ = _rozdel3(rocna_vyroba)
     priamo_kwh, export_kwh = _rozdel(rocna_vyroba)
     rocne_uspora = priamo_kwh * cena_el + export_kwh * vykupna
     rocne_naklady_bez_fve = rocna_spotreba * cena_el
     # Kolko % svojej rocnej spotreby zakaznik realne pokryje — prve cislo,
     # ktore si kazdy overuje na fakture.
-    pokrytie_spotreby = (priamo_kwh / rocna_spotreba) if rocna_spotreba > 0 else 0.0
+    # pokrytie = len spotreba domu (auto sa do ročnej spotreby z faktúry nerátalo)
+    pokrytie_spotreby = (priamo_dom_kwh / rocna_spotreba) if rocna_spotreba > 0 else 0.0
     realna_samosp = (priamo_kwh / rocna_vyroba) if rocna_vyroba > 0 else 0.0
 
     # 25-rocna kumulativna
@@ -320,6 +349,11 @@ def vyrataj_navratnost(konfig, ceny, lead):
         "samospotreba_cielova_pct": samosp * 100,  # vstupny predpoklad (profil vyroby vs. odberu)
         "pokrytie_spotreby_pct": pokrytie_spotreby * 100,
         "priamo_spotrebovane_kwh": priamo_kwh,
+        "priamo_v_dome_kwh": priamo_dom_kwh,
+        "ev_kwh_rok": ev_kwh_rok,
+        "ev_zo_slnka_kwh": ev_zo_slnka_kwh,
+        "ev_najazd_km_rok": (float(lead.get("ev_kwh_rok")) / DEFAULTS["ev_spotreba_kwh_100km"] * 100
+                             if lead.get("ev_kwh_rok") else DEFAULTS["ev_najazd_km_rok"]) if ev_kwh_rok else 0,
         "dodane_do_siete_kwh": export_kwh,
         "kg_co2_rok": rocna_vyroba * 0.4,  # SK mix ~0.4 kg CO2/kWh
     }
