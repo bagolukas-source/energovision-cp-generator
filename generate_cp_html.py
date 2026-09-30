@@ -205,7 +205,14 @@ def gen_copywriting(lead, konfig, ceny, navratnost):
     nav_rokov = navratnost["navratnost_rokov"]
     priamo_kwh = navratnost.get("priamo_spotrebovane_kwh") or 0
     export_kwh = navratnost.get("dodane_do_siete_kwh") or 0
-    if priamo_kwh > 0 and export_kwh > 0:
+    ev_kwh = navratnost.get("ev_zo_slnka_kwh") or 0
+    if ev_kwh > 0 and export_kwh > 0:
+        dom_kwh = navratnost.get("priamo_v_dome_kwh") or max(0, priamo_kwh - ev_kwh)
+        rozpad = (
+            f" Z toho ~{_sk_int(dom_kwh)} kWh miniete priamo v dome, ~{_sk_int(ev_kwh)} kWh nabijete do auta zo slnka "
+            f"(pri nájazde ~{_sk_int(navratnost.get('ev_najazd_km_rok') or 21230)} km/rok) a ~{_sk_int(export_kwh)} kWh predáme do siete."
+        )
+    elif priamo_kwh > 0 and export_kwh > 0:
         rozpad = (
             f" Z toho ~{_sk_int(priamo_kwh)} kWh miniete priamo v dome (ušetrené na faktúre) "
             f"a ~{_sk_int(export_kwh)} kWh predáme do siete."
