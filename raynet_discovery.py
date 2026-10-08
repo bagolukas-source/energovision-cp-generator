@@ -16,6 +16,8 @@ Env vars (na Render):
 Endpoint Raynet: https://app.raynet.cz/api/v2/{resource}/
 Auth: HTTP Basic + X-Instance-Name header
 """
+import contextlib
+import contextvars
 import os
 import time
 import logging
@@ -26,20 +28,33 @@ log = logging.getLogger(__name__)
 RAYNET_BASE = "https://app.raynet.cz/api/v2"
 
 
-_RUNTIME_CREDS = {}  # set per-request via set_creds(user, key, inst)
+# Prihlasovacie údaje z tela požiadavky platia LEN počas jedného volania (vnútri `with use_creds(...)`).
+# Nie sú v globálnej premennej modulu: ContextVar je izolovaný na vlákno/požiadavku a po výstupe
+# z `with` sa vráti na pôvodnú hodnotu (None → použijú sa env RAYNET_USERNAME / RAYNET_API_KEY).
+_CALL_CREDS: contextvars.ContextVar = contextvars.ContextVar("raynet_call_creds", default=None)
 
 
-def set_creds(user: str, key: str, inst: str = "energovision"):
-    """Override env vars for single request (used by webhook body)."""
-    _RUNTIME_CREDS["user"] = user
-    _RUNTIME_CREDS["key"] = key
-    _RUNTIME_CREDS["inst"] = inst or "energovision"
+@contextlib.contextmanager
+def use_creds(user=None, key=None, inst=None):
+    """Prihlasovacie údaje k Raynetu (z tela webhooku) len pre blok `with` = jedno volanie.
+
+    Ak chýba `user` alebo `key`, blok nič nemení a platia env premenné. Údaje sa po bloku
+    (aj pri výnimke) zahodia, takže ich nemôže použiť ďalšia požiadavka."""
+    if not (user and key):
+        yield
+        return
+    token = _CALL_CREDS.set({"user": user, "key": key, "inst": inst or "energovision"})
+    try:
+        yield
+    finally:
+        _CALL_CREDS.reset(token)
 
 
 def _creds():
-    user = _RUNTIME_CREDS.get("user") or os.environ.get("RAYNET_USERNAME", "")
-    key = _RUNTIME_CREDS.get("key") or os.environ.get("RAYNET_API_KEY", "")
-    inst = _RUNTIME_CREDS.get("inst") or os.environ.get("RAYNET_INSTANCE", "energovision")
+    call = _CALL_CREDS.get() or {}
+    user = call.get("user") or os.environ.get("RAYNET_USERNAME", "")
+    key = call.get("key") or os.environ.get("RAYNET_API_KEY", "")
+    inst = call.get("inst") or os.environ.get("RAYNET_INSTANCE", "energovision")
     if not user or not key:
         raise RuntimeError("Missing RAYNET_USERNAME / RAYNET_API_KEY (env or body)")
     return user, key, inst
