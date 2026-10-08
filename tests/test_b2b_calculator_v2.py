@@ -968,3 +968,20 @@ class TestEvaVypnuta(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestLegacyInverters(unittest.TestCase):
+    def test_legacy_model_not_auto_picked(self):
+        from b2b_calculator_v2 import _pick_inverters
+        invs = [
+            {"key": "old50", "name": "Old 50K", "ac_kw": 50, "max_kwp": 75, "price": 4000, "cost": 3200, "hybrid": True, "legacy": True},
+            {"key": "new50", "name": "New 50K", "ac_kw": 50, "max_kwp": 75, "price": 4400, "cost": 3545, "hybrid": True},
+        ]
+        picked = _pick_inverters(invs, 59.92 / 1.10, require_hybrid=True)
+        self.assertTrue(picked)
+        self.assertTrue(all(p["inverter"]["key"] == "new50" for p in picked))
+
+    def test_only_legacy_still_works(self):
+        from b2b_calculator_v2 import _pick_inverters
+        invs = [{"key": "old50", "name": "Old 50K", "ac_kw": 50, "max_kwp": 75, "price": 4000, "cost": 3200, "hybrid": True, "legacy": True}]
+        self.assertTrue(_pick_inverters(invs, 59.92 / 1.10, require_hybrid=True))

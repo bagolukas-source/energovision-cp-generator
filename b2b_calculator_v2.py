@@ -187,7 +187,9 @@ def _pick_inverters(inverters: list[dict], required_ac_kw: float, require_hybrid
     Ak žiadna platná kombinácia (extra veľký systém) → max počet najväčších meničov."""
     import itertools
     kwp = required_ac_kw * DC_AC_RATIO
-    invs = [i for i in inverters if (i.get("ac_kw") or 0) > 0]
+    invs_all = [i for i in inverters if (i.get("ac_kw") or 0) > 0]
+    # Staršie modely (legacy: true) neponúkať automaticky, ak existuje aktuálny model (Raynet 10/2026: MC0, M2HT, V21)
+    invs = [i for i in invs_all if not i.get("legacy")] or invs_all
     if not invs:
         return []
     # BESS → len hybridné (battery-ready). Bez BESS → len stringové (lacnejšie, neplytvať hybridom).
