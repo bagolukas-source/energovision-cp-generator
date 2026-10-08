@@ -523,6 +523,47 @@ def backfill_history(device_sn: str, days: int = 30) -> Tuple[bool, Dict]:
     return True, {"site_id": site_id, "days_attempted": days, "rows_inserted": total, "failed_days": failed}
 
 
+# inverter_alarms CHECK: status ∈ open|acknowledged|in_progress|resolved|ignored,
+#                       severity ∈ critical|major|warning|info
+# Neznáma / číselná severity → "info" (číselné úrovne Solinteg API nie sú zdokumentované).
+_ALARM_SEVERITY = {
+    "critical": "critical", "fatal": "critical", "fault": "critical", "error": "critical",
+    "major": "major",
+    "warning": "warning", "warn": "warning", "minor": "warning", "alarm": "warning",
+    "info": "info", "notice": "info", "prompt": "info", "hint": "info",
+}
+
+
+def _alarm_severity(v) -> str:
+    return _ALARM_SEVERITY.get(str(v if v is not None else "").strip().lower(), "info")
+
+
+def _alarm_ts(v) -> Optional[str]:
+    """Solinteg čas (ms / s epoch alebo string) → ISO 8601 UTC; None ak chýba / nečitateľný."""
+    if v in (None, "", 0, "0"):
+        return None
+    try:
+        n = float(v)
+        if n > 1e11:  # ms
+            n = n / 1000.0
+        return datetime.fromtimestamp(n, tz=timezone.utc).isoformat()
+    except (TypeError, ValueError):
+        pass
+    sv = str(v).strip()
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            # Bez zóny berieme ako UTC (rovnako ako doteraz implicitne robil Postgres).
+            return datetime.strptime(sv[:19], fmt).replace(tzinfo=timezone.utc).isoformat()
+        except ValueError:
+            continue
+    return None
+
+
+def _ts_key(iso: Optional[str]) -> str:
+    """Normalizovaný kľúč času na sekundy (DB vracia '+00:00', my generujeme isoformat)."""
+    return (iso or "")[:19].replace(" ", "T")
+
+
 def sync_alarms(device_sn: str, days: int = 7) -> Tuple[bool, Dict]:
     sb_headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"}
     sr = requests.get(f"{SUPABASE_URL}/rest/v1/inverter_sites", headers=sb_headers,
@@ -542,25 +583,69 @@ def sync_alarms(device_sn: str, days: int = 7) -> Tuple[bool, Dict]:
     if isinstance(body, dict):
         body = body.get("list") or body.get("data") or []
 
-    rows = []
+    # inverter_alarms nemá unique index → „ignore-duplicates“ nič nerobil a každý sync
+    # duplikoval. Dedup robíme sami cez (alarm_code, raised_at) v rámci stanice.
+    since_iso = datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc).isoformat()
+    er = requests.get(f"{SUPABASE_URL}/rest/v1/inverter_alarms", headers=sb_headers,
+                      params={"select": "id,alarm_code,raised_at,status", "site_id": f"eq.{site_id}",
+                              "or": f"(status.in.(open,acknowledged,in_progress),raised_at.gte.\"{since_iso}\")",
+                              "limit": 5000}, timeout=15)
+    if not er.ok:
+        return False, {"error": "existing alarms query failed", "snippet": er.text[:200]}
+    existing = {}
+    for e in er.json() or []:
+        existing.setdefault((str(e.get("alarm_code")), _ts_key(e.get("raised_at"))), []).append(e)
+
+    rows, seen = [], set()
+    resolved = 0
+    now_iso = datetime.now(timezone.utc).isoformat()
     for a in body if isinstance(body, list) else []:
         if not isinstance(a, dict):
             continue
+        code = str(a.get("alarmCode") or a.get("code") or "unknown")
+        raised = _alarm_ts(a.get("startTime") or a.get("alarmTime"))
+        ended = _alarm_ts(a.get("endTime"))
+        if not raised:
+            continue  # raised_at je NOT NULL a bez času nevieme deduplikovať
+        key = (code, _ts_key(raised))
+        if key in seen:
+            continue
+        seen.add(key)
+        if key in existing:
+            # Už evidovaný — ak ho Solinteg medzičasom ukončil, zatvor aktívne riadky.
+            if ended:
+                for e in existing[key]:
+                    if e.get("status") in ("open", "acknowledged", "in_progress"):
+                        pr = requests.patch(f"{SUPABASE_URL}/rest/v1/inverter_alarms",
+                                            headers={**sb_headers, "Prefer": "return=minimal"},
+                                            params={"id": f"eq.{e['id']}", "status": "in.(open,acknowledged,in_progress)"},
+                                            json={"status": "resolved", "resolved_at": ended,
+                                                  "auto_resolved": True, "updated_at": now_iso},
+                                            timeout=15)
+                        if pr.ok:
+                            resolved += 1
+            continue
         rows.append({
             "site_id": site_id,
-            "alarm_code": str(a.get("alarmCode") or a.get("code") or "unknown"),
+            "alarm_code": code,
             "alarm_name": str(a.get("alarmName") or a.get("name") or "—")[:200],
-            "severity": str(a.get("severity") or "info"),
-            "raised_at": a.get("startTime") or a.get("alarmTime"),
-            "resolved_at": a.get("endTime"),
-            "status": "resolved" if a.get("endTime") else "active",
+            "severity": _alarm_severity(a.get("severity") or a.get("level")),
+            "raised_at": raised,
+            "resolved_at": ended,
+            "status": "resolved" if ended else "open",
             "raw_description": str(a)[:1000],
+            "raw_json": a,
         })
+    inserted = 0
     if rows:
-        requests.post(f"{SUPABASE_URL}/rest/v1/inverter_alarms",
-                      headers={**sb_headers, "Prefer": "resolution=ignore-duplicates"},
-                      json=rows, timeout=30)
-    return True, {"site_id": site_id, "alarms_count": len(rows)}
+        ir = requests.post(f"{SUPABASE_URL}/rest/v1/inverter_alarms",
+                           headers={**sb_headers, "Prefer": "return=minimal"},
+                           json=rows, timeout=30)
+        if not ir.ok:
+            log.warning("[solinteg] alarms insert failed: %s", ir.text[:300])
+            return False, {"error": "alarms insert failed", "status": ir.status_code, "snippet": ir.text[:300]}
+        inserted = len(rows)
+    return True, {"site_id": site_id, "alarms_count": len(seen), "inserted": inserted, "resolved": resolved}
 
 
 # ============================================================================

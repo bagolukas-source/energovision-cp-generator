@@ -10262,6 +10262,9 @@ from datetime import timedelta as _td
 TWILIO_SID = _os.environ.get('TWILIO_ACCOUNT_SID', '')
 TWILIO_TOKEN = _os.environ.get('TWILIO_AUTH_TOKEN', '')
 TWILIO_FROM = _os.environ.get('TWILIO_FROM_NUMBER', '')
+# Centrálny vypínač SMS (rozhodnutie majiteľa 2026-10: „SMS zruš zatiaľ“ — nikomu, ani interne).
+# Predvolene VYPNUTÉ. Zapnúť len vedome: SMS_ENABLED=1. WhatsApp (Twilio) sa ho netýka.
+SMS_ENABLED = _os.environ.get('SMS_ENABLED', '').strip().lower() in ('1', 'true', 'yes', 'on')
 
 # VAPID for Web Push
 VAPID_PUBLIC = _os.environ.get('VAPID_PUBLIC_KEY', '')
@@ -10270,7 +10273,11 @@ VAPID_SUBJECT = _os.environ.get('VAPID_SUBJECT', 'mailto:dispecing@energovision.
 
 
 def _send_sms(phone: str, body: str, ticket_id: str = None) -> dict:
-    """Pošli SMS cez Twilio."""
+    """Pošli SMS cez Twilio. Jediné miesto v app.py, ktoré SMS odosiela — gated cez SMS_ENABLED."""
+    if not SMS_ENABLED:
+        _masked = (str(phone or "")[:4] + "***") if phone else "—"
+        log.info("[notif] SMS vypnuté (SMS_ENABLED) — neodoslané na %s (ticket=%s)", _masked, ticket_id)
+        return {"ok": False, "skipped": True, "error": "sms_disabled"}
     if not TWILIO_SID or not TWILIO_TOKEN:
         log.warning("[notif] Twilio not configured, skipping SMS")
         return {"ok": False, "error": "twilio_not_configured"}
@@ -10315,12 +10322,15 @@ def _send_push(subscription: dict, title: str, body: str, url: str = None) -> di
 
 
 def _notify_ticket_dispatch(ticket_id: str, channels: list[str] = None) -> dict:
-    """Pre daný ticket pošle notifikácie podľa severity + preference."""
+    """Pre daný ticket pošle INTERNÉ notifikácie podľa severity + preference.
+
+    Zákazníkovi sa odtiaľto neposiela nič (ani SMS, ani e-mail) — rozhodnutie majiteľa 2026-10.
+    (Predtým čítal neexistujúci customers.phone1 → celý select padal a funkcia nikdy nedobehla.)
+    SMS ide len cez _send_sms, ktorý je predvolene vypnutý (SMS_ENABLED)."""
     sb = _sb()
     t = sb.table("service_tickets").select(
-        "id, ticket_number, title, severity, sla_tier, sla_due_at, customer_id, assigned_to, site_id, "
-        "customer:customers(first_name, last_name, company_name, email, phone1), "
-        "site:inverter_sites(site_name, public_token)"
+        "id, ticket_number, title, severity, sla_tier, sla_due_at, assigned_to, site_id, vendor_alarm_code, "
+        "site:inverter_sites(site_name)"
     ).eq("id", ticket_id).single().execute().data
     if not t:
         return {"ok": False, "error": "ticket_not_found"}
@@ -10337,8 +10347,6 @@ def _notify_ticket_dispatch(ticket_id: str, channels: list[str] = None) -> dict:
             channels = ["email"]
 
     site_name = (t.get("site") or {}).get("site_name", "—")
-    customer = t.get("customer") or {}
-    customer_name = customer.get("company_name") or f"{customer.get('first_name','')} {customer.get('last_name','')}".strip() or "klient"
 
     subject = f"🔴 {severity.upper()}: {t['title']} — {site_name}"
     body_short = f"Stanica {site_name}: {t['title']}. Ticket {t['ticket_number']}. Otvor: app.energovision.sk/admin/servis/{t['id']}"
@@ -10360,21 +10368,20 @@ def _notify_ticket_dispatch(ticket_id: str, channels: list[str] = None) -> dict:
 
     results = []
 
-    # ─── SMS ───
-    if "sms" in channels:
-        # Get phone z notification_preferences (alebo customer.phone1)
+    # ─── SMS (len interne; predvolene vypnuté) ───
+    if "sms" in channels and not SMS_ENABLED:
+        results.append({"channel": "sms", "skipped": "sms_disabled"})
+    elif "sms" in channels:
+        # Telefón len z notification_preferences interných používateľov — zákazník nikdy.
         phones_to_notify = []
-        # 1) Customer
-        if customer.get("phone1"):
-            phones_to_notify.append((customer["phone1"], "customer", customer_name))
-        # 2) Assignee user
+        # 1) Assignee user
         if t.get("assigned_to"):
-            u = sb.table("notification_preferences").select("sms_phone, sms_critical, sms_warning, sms_info").eq("user_id", t["assigned_to"]).maybeSingle().execute().data
+            u = (sb.table("notification_preferences").select("sms_phone, sms_critical, sms_warning, sms_info").eq("user_id", t["assigned_to"]).limit(1).execute().data or [None])[0]
             if u and u.get("sms_phone"):
                 want = (severity == "critical" and u.get("sms_critical")) or (severity == "warning" and u.get("sms_warning")) or (severity in ("info","catastrophic"))
                 if want:
                     phones_to_notify.append((u["sms_phone"], "technician", "tech"))
-        # 3) Admin fallback (Lukáš)
+        # 2) Admin fallback (Lukáš)
         admin_prefs = sb.table("notification_preferences").select("sms_phone, sms_critical").not_.is_("sms_phone", "null").execute().data or []
         for ap in admin_prefs:
             if ap.get("sms_phone") and ap.get("sms_critical"):
@@ -10421,11 +10428,8 @@ def _notify_ticket_dispatch(ticket_id: str, channels: list[str] = None) -> dict:
         except Exception:
             send_email_m365 = None
 
-        recipients_email = []
-        if customer.get("email"):
-            recipients_email.append(customer["email"])
-        # Dispečer email
-        recipients_email.append("dispecing@energovision.sk")
+        # Len dispečing — zákazníkovi sa e-mail neposiela.
+        recipients_email = ["dispecing@energovision.sk"]
 
         for to in set(recipients_email):
             if send_email_m365:
@@ -15334,9 +15338,21 @@ _HUAWEI_LEV_SEVERITY = {1: "critical", 2: "critical", 3: "warning", 4: "info"}
 
 @app.route("/api/huawei/v1/sync-alarms-fleet", methods=["POST", "GET"])
 def huawei_sync_alarms_fleet():
-    """Fleet-wide alarm sync: getAlarmList (48h okno, batch po 50 staníc)
-    → upsert inverter_alarms (dedup cez raw_json.alarmId) → alarm-to-ticket
-    cron na Verceli z nich potom robí tikety podľa alarm_sla_mapping."""
+    """Fleet-wide alarm sync: getAlarmList (okno HUAWEI_ALARM_WINDOW_HOURS, default 48 h,
+    batch po 50 staníc) → insert inverter_alarms → alarm-to-ticket cron na Verceli z nich
+    potom robí tikety podľa alarm_sla_mapping.
+
+    Identita alarmu = (stationCode, esnCode/devName, alarmId, raiseTime). Huawei `alarmId` je
+    TYP alarmu (napr. 2012 = String current backfeed), nie inštancia — starý dedup len cez
+    alarmId zlieval rôzne zariadenia/výskyty a auto-resolve potom zatváral len jeden riadok.
+
+    Auto-resolve: aktívny alarm v DB (open / acknowledged / in_progress), ktorého stanica sa
+    v TOMTO behu úspešne načítala a ktorého raised_at spadá do dotazovaného okna, ale Huawei
+    ho už medzi aktívnymi nevracia → resolved (resolved_at = now, auto_resolved = true).
+    getAlarmList filtruje podľa raiseTime v [beginTime, endTime] (v DB nie je ani jeden alarm
+    s raised_at starším ako okno pred created_at), takže alarm starší ako okno Huawei nevráti
+    ani keď stále trvá → takéto alarmy NEZATVÁRAME (inak by sa každý alarm „vyriešil" po 48 h).
+    Počet takých je v odpovedi ako `active_older_than_window`."""
     if not _hs_auth_ok(request):
         return jsonify({"error": "unauthorized"}), 401
     try:
@@ -15344,9 +15360,10 @@ def huawei_sync_alarms_fleet():
         if not base or not headers:
             return jsonify({"success": False, "error": "Huawei auth failed"}), 503
 
+        sb_h = {"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"}
         sr = requests.get(
             f"{SUPABASE_URL}/rest/v1/inverter_sites",
-            headers={"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"},
+            headers=sb_h,
             params={"select": "id,site_name,vendor_plant_code,vendor_station_id", "vendor": "eq.huawei",
                     "monitoring_enabled": "eq.true", "archived_at": "is.null"},
             timeout=10,
@@ -15359,13 +15376,22 @@ def huawei_sync_alarms_fleet():
             c = s.get("vendor_plant_code") or s.get("vendor_station_id")
             if c:
                 code_to_site[str(c)] = s
+        site_to_code = {s["id"]: c for c, s in code_to_site.items()}
 
+        try:
+            window_h = max(1, min(int(os.environ.get("HUAWEI_ALARM_WINDOW_HOURS", "48")), 24 * 30))
+        except ValueError:
+            window_h = 48
         codes = list(code_to_site.keys())
         end_ms = int(_time.time() * 1000)
-        start_ms = end_ms - 48 * 3600 * 1000
+        start_ms = end_ms - window_h * 3600 * 1000
+        # Rezerva na hranici okna — alarm tesne pri beginTime nechávame tak.
+        resolve_from_ms = start_ms + 10 * 60 * 1000
 
         active_rows = []
+        ok_codes = set()   # stanice, pre ktoré API v tomto behu odpovedalo OK
         api_calls = 0
+        failed_chunks = 0
         for i in range(0, len(codes), 50):
             chunk = codes[i:i + 50]
             try:
@@ -15376,33 +15402,85 @@ def huawei_sync_alarms_fleet():
                 )
                 api_calls += 1
                 if r.status_code != 200:
+                    failed_chunks += 1
                     continue
                 payload = r.json() or {}
-                if payload.get("failCode") not in (None, 0):
+                if payload.get("failCode") not in (None, 0) or payload.get("success") is False:
                     log.warning("[alarm-sync] getAlarmList failCode %s", payload.get("failCode"))
+                    failed_chunks += 1
                     continue
-                rows = payload.get("data") or []
-                if isinstance(rows, list):
-                    active_rows.extend([x for x in rows if isinstance(x, dict)])
+                rows = payload.get("data")
+                if rows is None:
+                    rows = []
+                if not isinstance(rows, list):
+                    log.warning("[alarm-sync] getAlarmList unexpected data type %s", type(rows).__name__)
+                    failed_chunks += 1
+                    continue
+                active_rows.extend([x for x in rows if isinstance(x, dict)])
+                ok_codes.update(chunk)
             except Exception as e:
+                failed_chunks += 1
                 log.warning("[alarm-sync] chunk failed: %s", e)
 
-        # Existujúce alarmy okna (dedup podľa vendor alarmId)
-        er = requests.get(
-            f"{SUPABASE_URL}/rest/v1/inverter_alarms",
-            headers={"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"},
-            params={"select": "id,raw_json,status", "raised_at": f"gte.{datetime.fromtimestamp(start_ms/1000, tz=timezone.utc).isoformat()}"},
-            timeout=10,
-        )
-        existing = er.json() if er.ok else []
-        existing_by_vid = {}
+        def _inst_key(j):
+            j = j if isinstance(j, dict) else {}
+            return (str(j.get("stationCode") or ""), str(j.get("esnCode") or j.get("devName") or ""),
+                    str(j.get("alarmId") or ""), str(j.get("raiseTime") or ""))
+
+        def _raised_dt(a):
+            # Primárne raiseTime (ms) z raw_json, fallback na raised_at (ISO z PostgREST).
+            rt = (a.get("raw_json") or {}).get("raiseTime") if isinstance(a.get("raw_json"), dict) else None
+            try:
+                if rt not in (None, ""):
+                    return datetime.fromtimestamp(int(rt) / 1000, tz=timezone.utc)
+            except (TypeError, ValueError):
+                pass
+            v = str(a.get("raised_at") or "")
+            m = re.match(r"^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})", v)
+            if not m:
+                return None
+            try:
+                # PostgREST vracia timestamptz v UTC (+00:00)
+                return datetime.strptime(m.group(1) + "T" + m.group(2), "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+            except ValueError:
+                return None
+
+        # Existujúce Huawei alarmy: všetky aktívne (bez ohľadu na vek) + všetko v okne (dedup).
+        window_start_iso = datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc).isoformat()
+        existing = []
+        offset = 0
+        while True:
+            er = requests.get(
+                f"{SUPABASE_URL}/rest/v1/inverter_alarms",
+                headers=sb_h,
+                params={"select": "id,site_id,raw_json,status,raised_at",
+                        "or": f"(status.in.(open,acknowledged,in_progress),raised_at.gte.\"{window_start_iso}\")",
+                        "raw_json": "not.is.null",
+                        "order": "raised_at.asc,id.asc", "limit": "1000", "offset": str(offset)},
+                timeout=15,
+            )
+            if not er.ok:
+                # Bez spoľahlivého zoznamu existujúcich by sme duplikovali / zle zatvárali → stop.
+                return jsonify({"success": False, "error": "DB existing alarms query failed",
+                                "detail": er.text[:200]}), 500
+            page = er.json() or []
+            existing.extend(a for a in page if a.get("site_id") in site_to_code)
+            if len(page) < 1000:
+                break
+            offset += 1000
+
+        existing_keys = set()
+        active_by_key = {}
         for a in existing:
-            vid = str(((a.get("raw_json") or {}) if isinstance(a.get("raw_json"), dict) else {}).get("alarmId") or "")
-            if vid:
-                existing_by_vid[vid] = a
+            k = _inst_key(a.get("raw_json"))
+            if not k[2]:
+                continue
+            existing_keys.add(k)
+            if a.get("status") in ("open", "acknowledged", "in_progress"):
+                active_by_key.setdefault(k, []).append(a)
 
         inserted = 0
-        seen_vids = set()
+        seen_keys = set()
         for row in active_rows:
             vid = str(row.get("alarmId") or "")
             code = str(row.get("stationCode") or "")
@@ -15411,8 +15489,11 @@ def huawei_sync_alarms_fleet():
             is_active = str(row.get("status")) in ("1", "None", "") or row.get("status") is None
             if not vid or not site or not is_active:
                 continue
-            seen_vids.add(vid)
-            if vid in existing_by_vid:
+            key = _inst_key(row)
+            if key in seen_keys:
+                continue  # API občas vráti ten istý výskyt viackrát
+            seen_keys.add(key)
+            if key in existing_keys:
                 continue
             name = row.get("alarmName") or "Huawei alarm"
             cause = row.get("alarmCause") or ""
@@ -15434,8 +15515,7 @@ def huawei_sync_alarms_fleet():
             }
             ir = requests.post(
                 f"{SUPABASE_URL}/rest/v1/inverter_alarms",
-                headers={"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
-                         "Content-Type": "application/json", "Prefer": "return=minimal"},
+                headers={**sb_h, "Content-Type": "application/json", "Prefer": "return=minimal"},
                 json=payload, timeout=10,
             )
             if ir.ok:
@@ -15443,24 +15523,41 @@ def huawei_sync_alarms_fleet():
             else:
                 log.warning("[alarm-sync] insert failed: %s", ir.text[:200])
 
-        # Alarmy, ktoré už Huawei nehlási ako aktívne → resolved
+        # Aktívne alarmy, ktoré Huawei pre úspešne načítanú stanicu už nevracia → resolved
         resolved = 0
-        for vid, a in existing_by_vid.items():
-            if vid not in seen_vids and a.get("status") == "open":
+        older_than_window = 0
+        now_dt = datetime.now(timezone.utc)
+        for key, rows_for_key in active_by_key.items():
+            if key in seen_keys:
+                continue
+            for a in rows_for_key:
+                if site_to_code.get(a.get("site_id")) not in ok_codes:
+                    continue  # API pre stanicu v tomto behu zlyhalo → nič neriešime
+                raised_dt = _raised_dt(a)
+                if raised_dt is None:
+                    continue
+                if raised_dt.timestamp() * 1000 < resolve_from_ms:
+                    older_than_window += 1  # mimo okna — Huawei by ho nevrátil ani keby trval
+                    continue
                 rr = requests.patch(
                     f"{SUPABASE_URL}/rest/v1/inverter_alarms",
-                    headers={"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
-                             "Content-Type": "application/json", "Prefer": "return=minimal"},
-                    params={"id": f"eq.{a['id']}"},
-                    json={"status": "resolved", "resolved_at": datetime.now(timezone.utc).isoformat()},
+                    headers={**sb_h, "Content-Type": "application/json", "Prefer": "return=minimal"},
+                    params={"id": f"eq.{a['id']}", "status": "in.(open,acknowledged,in_progress)"},
+                    json={"status": "resolved", "resolved_at": now_dt.isoformat(), "auto_resolved": True,
+                          "duration_minutes": max(0, int((now_dt - raised_dt).total_seconds() // 60)),
+                          "updated_at": now_dt.isoformat()},
                     timeout=10,
                 )
                 if rr.ok:
                     resolved += 1
+                else:
+                    log.warning("[alarm-sync] resolve failed: %s", rr.text[:200])
 
         return jsonify({
-            "success": True, "auth": auth_method, "stations": len(codes), "api_calls": api_calls,
+            "success": True, "auth": auth_method, "stations": len(codes), "stations_ok": len(ok_codes),
+            "api_calls": api_calls, "failed_chunks": failed_chunks, "window_hours": window_h,
             "active_from_api": len(active_rows), "inserted": inserted, "resolved": resolved,
+            "active_older_than_window": older_than_window,
         }), 200
     except Exception as e:
         log.exception("alarm-sync-fleet")
@@ -15884,6 +15981,7 @@ def webhook_urgent_watchdog():
     def notify(uid, icon, title, body, prio="high"):
         ph = uphone(uid)
         if ph:
+            # SMS len pri SMS_ENABLED=1 (predvolene vypnuté) — inak ostáva len in-app notifikácia nižšie.
             try: _send_sms(ph, f"{title} {body}".strip()[:300])
             except Exception: pass
         try:
