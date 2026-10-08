@@ -16221,6 +16221,10 @@ def _eva_tool_vytvor_lead(args, ctx):
             "klient": (firma or meno or "kontakt"), "workspace": lead["workspace"]}
 
 def _eva_tool_priprav_ponuku_b2b(args, ctx):
+    # VYPNUTÉ (Fáza 0, 2026-10): B2B ponuky sa skladajú len v kalkulačke CRM. Eva volala jadro bez kontrol
+    # (zahodila warnings, bez DC rozvádzača/dispečingu, DPH natvrdo, marža z LLM). Jadro sa tu nevolá.
+    # Pôvodné telo nižšie ostáva pre prípadné opätovné zapnutie po doplnení post-processingu.
+    return {"ok": False, "message": "B2B ponuky sa zostavujú v kalkulačke CRM (/b2b/kalkulacka)."}
     popis = (args.get("popis") or "").strip()
     if not popis:
         return {"error": "chýba popis (napr. '50 kWp trapéz Huawei')"}
