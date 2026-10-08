@@ -3,21 +3,30 @@ B2B Kalkulačka V2 — panely-driven + vendor stacks + AI compatibility
 
 Vstupy:
   typ_strechy: vychod_zapad | trapez | skridla | falcovany_plech | juzna | zemne_skrutky | corab
-  pocet_panelov: int  (HLAVNÝ vstup — primary)
+  pocet_panelov: int  (HLAVNÝ vstup — primary); bez neho sa panely odvodia z kwp
+  kwp: float (voliteľné; použije sa len ak nie je pocet_panelov)
   panel_sku: str (default "LONGI535")
   vendor_stack: 'sungrow' | 'huawei' | 'goodwe' | 'solinteg'
-  has_bess: bool, bess_kwh: float
+  has_bess: bool, bess_kwh: float, bess_count: int, bess_sku/bess_key: str, bess_class: residential|industrial
   has_wallbox: bool, wallbox_pocet: int
   has_optimizery: bool
   has_rapid_shutdown: bool
-  vzdialenost_rozvadzac: float (m, default 30)
-  vzdialenost_doprava: float (km, default 20)
-  margin_pct: float (default 25)
+  has_janitza: bool (default true; Janitza sa ponúka len pri Huawei nad prahom), janitza_key: str
+  has_dc_rozvadzac: bool (default true)
+  distribucka: 'ZSD' | 'SSD' | 'VSD' | None  (dispečing pri Σ AC >= 100 kW; None → ZSD + varovanie)
+  vzdialenost_doprava: float (km; 0/chýba = bez riadku dopravy + varovanie)
+  margin_pct: float (marža Z PREDAJA v %, default 22; platí 0 <= m < 100)
 
-Output: BOM JSON s vendor compatibility checks + AI warnings.
+Cenotvorba (Fáza 0, 2026-10): predaj = nákup / (1 - m/100) jednotne pre VŠETKY položky.
+Nákup sa berie z DB pravidiel (cost_per_unit) a zo stacku (cost); ak chýba, odhad predaj x 0,77
+a varovanie `cost_estimated`.
+
+Output: BOM JSON — items[], jediný zoznam warnings[] ({severity: info|warning|error, kind, message}),
+totals{}. Chyba vstupu (marža mimo rozsahu, neznámy výrobca, 0 panelov bez batérie) → ok:false.
 """
 import math
 import logging
+import re as _re
 from typing import Optional
 
 log = logging.getLogger(__name__)
@@ -31,31 +40,88 @@ TARGET_OVERSIZE = 1.15       # ideálny DC/AC pomer
 MAX_INVERTER_UNITS = 3       # max počet meničov v zostave (nestackovať mikro-meniče)
 OVERSIZE_BAND = (0.85, 1.35)  # zdravé pásmo DC/AC; mimo neho penalizuj (1.35 = bežný komerčný oversizing)
 
+# --- Fáza 0 (2026-10): jednotná cenotvorba a pravidlá ponuky (F0-SPEC) ---
+DEFAULT_MARGIN_PCT = 22.0     # marža Z PREDAJA v %; predaj = nákup / (1 - m/100)
+COST_FALLBACK_FACTOR = 0.77   # odhad nákupu z predajnej ceny, ak chýba cost (+ varovanie cost_estimated)
+ASDR_MIN_AC_KW = 100.0        # Σ AC >= 100 kW → dispečerské riadenie podľa distribučky
+MTP_MIN_AC_KW = 30.0          # Σ AC > 30 kW → 3 ks MTP
+STATIKA_MIN_KWP = 100.0       # kWp >= 100 → statický posudok + projekt požiarnej bezpečnosti
+TIGO_CCA_PER_SET = 150        # 1 sada CCA Kit + TAP na 150 optimizérov
+JANITZA_DEFAULT_ABOVE_KW = 30.0  # Janitza (len Huawei) nad týmto výkonom, ak stack nemá offer_above_kw
+BESS_KWH_TOLERANCE = 0.05     # odchýlka efektívnej kapacity od cieľa, nad ktorú varujeme
+SCOPE_MAX_KWP = 500.0         # nad týmto výkonom je ponuka mimo bežného rozsahu kalkulačky (len varovanie)
+SCOPE_MAX_BESS_KWH = 250.0    # C&I batéria nad touto kapacitou (alebo Huawei LUNA C&I) je mimo bežného rozsahu
+GROUND_ROOFS = ("zemne_skrutky", "zemna_ramming")
+DISTRIBUCKY = ("ZSD", "SSD", "VSD")
+
+
+def _num(v, default: float = 0.0) -> float:
+    """Bezpečné číslo: None/''/nečíselné/NaN → default."""
+    try:
+        if v is None or v == "":
+            return default
+        f = float(v)
+        return f if math.isfinite(f) else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _flag(v, default: bool = True) -> bool:
+    """Bezpečný boolean: None/'' → default; 'false'/'0'/'no'/'nie' → False."""
+    if v is None:
+        return default
+    if isinstance(v, str):
+        s = v.strip().lower()
+        if not s:
+            return default
+        return s not in ("0", "false", "no", "nie", "off")
+    return bool(v)
+
+
+def _warn(severity: str, kind: str, message: str, **extra) -> dict:
+    w = {"severity": severity, "kind": kind, "message": message}
+    w.update(extra)
+    return w
+
+
+def _error_result(kind: str, message: str) -> dict:
+    """Neplatný vstup → ok:false (UI zablokuje Uložiť/Tlač); chyba je aj v jedinom poli warnings."""
+    return {"ok": False, "error": message, "warnings": [_warn("error", kind, message)]}
+
 
 def _load_vendor_stack(sb, vendor_key: str) -> Optional[dict]:
-    res = sb.table("b2b_vendor_stacks").select("*").eq("vendor_key", vendor_key).single().execute()
-    return res.data
+    # .limit(1) namiesto .single(): neznámy výrobca nesmie hodiť výnimku (→ ok:false v calculate_bom_v2)
+    res = sb.table("b2b_vendor_stacks").select("*").eq("vendor_key", vendor_key).limit(1).execute()
+    rows = res.data or []
+    return rows[0] if rows else None
+
+
+def _sort_rules(rows: list[dict]) -> list[dict]:
+    """Stabilné zoradenie pravidiel: priority, potom min_kwp (rovnako ako ORDER BY v DB)."""
+    return sorted(rows or [], key=lambda r: (_num(r.get("priority"), 100.0), _num(r.get("min_kwp"), 0.0)))
 
 
 def _load_konstrukcia_rule(sb, typ_strechy: str) -> list[dict]:
-    """Vráti konštrukciu pre typ strechy z b2b_calc_rules."""
-    res = sb.table("b2b_calc_rules").select("*").eq("rule_type", "konstrukcia").eq("typ_strechy", typ_strechy).execute()
-    return res.data or []
+    """Vráti AKTÍVNE pravidlá konštrukcie pre typ strechy z b2b_calc_rules (podľa priority, min_kwp)."""
+    res = (sb.table("b2b_calc_rules").select("*")
+             .eq("rule_type", "konstrukcia").eq("typ_strechy", typ_strechy)
+             .eq("active", True).order("priority").execute())
+    return _sort_rules(res.data or [])
 
 
 def _load_rule(sb, rule_type: str, rule_key: str = None) -> list[dict]:
-    q = sb.table("b2b_calc_rules").select("*").eq("rule_type", rule_type)
+    """Vráti AKTÍVNE pravidlá daného typu (podľa priority, min_kwp)."""
+    q = sb.table("b2b_calc_rules").select("*").eq("rule_type", rule_type).eq("active", True)
     if rule_key:
         q = q.eq("rule_key", rule_key)
-    res = q.execute()
-    return res.data or []
+    res = q.order("priority").execute()
+    return _sort_rules(res.data or [])
 
 
-import re as _re
-
-def _eval_qty_formula(formula, kwp, pocet_panelov) -> int:
+def _eval_qty_formula(formula, kwp, pocet_panelov, exact: bool = False):
     """Bezpečne vyhodnotí qty_formula z b2b_calc_rules (napr. 'ceil(kwp * 1.5)', 'kwp * 10', 'pocet_panelov').
-    Rešpektuje koeficienty z DB (predtým ich kód ignoroval → žľab dostal kWp×7 namiesto ×1.5)."""
+    Rešpektuje koeficienty z DB (predtým ich kód ignoroval → žľab dostal kWp×7 namiesto ×1.5).
+    exact=False: celé číslo nahor (ks); exact=True: presná hodnota na 2 desatinné (jednotka kWp)."""
     f = (formula or "").strip().lower()
     if not f:
         return 1
@@ -66,10 +132,48 @@ def _eval_qty_formula(formula, kwp, pocet_panelov) -> int:
            "kwp": float(kwp or 0), "kwp_actual": float(kwp or 0), "pocet_panelov": float(pocet_panelov or 0),
            "panels": float(pocet_panelov or 0)}
     try:
-        val = eval(f, {"__builtins__": {}}, env)
-        return max(1, int(math.ceil(float(val))))
+        val = float(eval(f, {"__builtins__": {}}, env))
+        if exact:
+            return max(0.0, round(val, 2))
+        return max(1, int(math.ceil(val)))
     except Exception:
         return 1
+
+
+def _rule_qty(r: dict, kwp, pocet_panelov, default=1):
+    """Množstvo z pravidla: qty_formula z DB (jednotka kWp → presne, inak celé nahor); bez vzorca → default."""
+    formula = r.get("qty_formula")
+    if not formula or not str(formula).strip():
+        return default
+    exact = str(r.get("unit") or "").strip().lower() == "kwp"
+    return _eval_qty_formula(formula, kwp, pocet_panelov, exact=exact)
+
+
+def _pick_band(rules: list[dict], value: float) -> Optional[dict]:
+    """Prvé pravidlo (v poradí priority, min_kwp), ktorého pásmo [min_kwp, max_kwp] obsahuje value.
+    Dolná hranica má toleranciu 0,011 (pásma 10 | 10,01 nemajú medzeru pri neceločíselnom value)."""
+    for r in rules:
+        lo = _num(r.get("min_kwp"), 0.0)
+        hi = r.get("max_kwp")
+        hi = 99999.0 if hi is None else _num(hi, 99999.0)
+        if lo - 0.011 <= value <= hi:
+            return r
+    return None
+
+
+def _select_band(rules: list[dict], value: float):
+    """(pravidlo, násobok, nad_rozsahom). Nad najvyšším pásmom vráti najvyššie pásmo a násobok ceil(value / max_kwp).
+    Bez pravidiel alebo bez zhody vo vnútri rozsahu vráti (None, 1, False)."""
+    if not rules:
+        return None, 1, False
+    band = _pick_band(rules, value)
+    if band:
+        return band, 1, False
+    top = max(rules, key=lambda r: _num(r.get("max_kwp"), 0.0))
+    top_max = _num(top.get("max_kwp"), 0.0)
+    if top_max > 0 and value > top_max:
+        return top, max(1, math.ceil(value / top_max)), True
+    return None, 1, False
 
 
 def _pick_inverters(inverters: list[dict], required_ac_kw: float, require_hybrid: bool = False) -> list[dict]:
@@ -133,9 +237,16 @@ def _pick_inverters(inverters: list[dict], required_ac_kw: float, require_hybrid
     return picked
 
 
+def _is_luna_ci(battery: dict) -> bool:
+    """Huawei LUNA2000-200/241 (C&I) — samostatný PCS, Raynet ho doteraz nepridával."""
+    key = battery.get("key") or ""
+    return battery.get("battery_class") == "industrial" and ("luna2000_200" in key or "luna2000_241" in key)
+
+
 def _pick_bess(batteries: list[dict], target_kwh: float, count: int = 0) -> list[dict]:
-    """Vyber batérie. Ak count>0 → počet KUSOV modulov (zadáva user priamo).
-    Inak fallback na cieľovú kapacitu v kWh."""
+    """Vyber batérie. Ak count>0 → počet KUSOV modulov/skríň (zadáva user priamo).
+    Inak cieľová kapacita v kWh: najbližší model podľa kapacity a qty = ceil(cieľ / kapacita)
+    pre modulárne AJ nemodulárne batérie (odchýlku kapacity od cieľa hlási calculate_bom_v2)."""
     if not batteries:
         return []
     # Režim POČET KUSOV — vyber primárny modulárny modul a vynásob počtom
@@ -143,412 +254,532 @@ def _pick_bess(batteries: list[dict], target_kwh: float, count: int = 0) -> list
         modular = [b for b in batteries if b.get("modular")]
         base = min(modular, key=lambda x: x["capacity_kwh"]) if modular else batteries[0]
         return [{"battery": base, "qty": int(count)}]
-    # Režim KAPACITA kWh (legacy)
+    # Režim KAPACITA kWh
     if target_kwh <= 0:
         return []
     sorted_batt = sorted(batteries, key=lambda x: abs(x["capacity_kwh"] - target_kwh))
     best = sorted_batt[0]
-    if best.get("modular"):
-        qty = max(1, math.ceil(target_kwh / best["capacity_kwh"]))
-        return [{"battery": best, "qty": qty}]
-    else:
-        return [{"battery": best, "qty": 1}]
+    # round(…, 6): 20,48 / 10,24 nesmie dať 2,0000000000000004 → 3 ks
+    qty = max(1, math.ceil(round(target_kwh / float(best["capacity_kwh"]), 6)))
+    return [{"battery": best, "qty": qty}]
 
 
 def calculate_bom_v2(sb, config: dict) -> dict:
-    """Hlavná V2 funkcia — panely-driven + vendor stack aware."""
+    """Hlavná V2 funkcia — panely-driven + vendor stack aware.
+
+    Cenotvorba: predaj = nákup / (1 - m/100) pre všetky položky (bez výnimiek). Neplatný vstup → ok:false;
+    všetko ostatné sú varovania v jedinom zozname `warnings`."""
+    config = config or {}
+
+    # ===== VSTUPY =====
     typ_strechy = config.get("typ_strechy", "vychod_zapad")
-    vendor_key = config.get("vendor_stack", "sungrow")
-    panel_sku = config.get("panel_sku", "LONGI535")
-    pocet_panelov_input = int(config.get("pocet_panelov") or 0)
-    
-    has_bess = bool(config.get("has_bess"))
-    bess_kwh = float(config.get("bess_kwh", 0) or 0)
-    bess_count = int(config.get("bess_count", 0) or 0)
-    has_wallbox = bool(config.get("has_wallbox"))
-    wallbox_pocet = int(config.get("wallbox_pocet", 0) or 0)
-    has_optimizery = bool(config.get("has_optimizery"))
-    has_rapid_shutdown = bool(config.get("has_rapid_shutdown"))
-    vzdialenost_doprava = float(config.get("vzdialenost_doprava", 20))
-    margin_pct = float(config.get("margin_pct", 25))
-    
+    vendor_key = str(config.get("vendor_stack") or "sungrow").strip().lower()
+    panel_sku = str(config.get("panel_sku") or "LONGI535").strip()
+    pocet_panelov_input = int(_num(config.get("pocet_panelov"), 0))
+    kwp_input = _num(config.get("kwp"), 0.0)
+
+    has_bess = _flag(config.get("has_bess"), False)
+    bess_kwh = _num(config.get("bess_kwh"), 0.0)
+    bess_count = int(_num(config.get("bess_count"), 0))
+    bess_sku = str(config.get("bess_sku") or config.get("bess_key") or "").strip()
+    has_wallbox = _flag(config.get("has_wallbox"), False)
+    wallbox_pocet = int(_num(config.get("wallbox_pocet"), 0))
+    has_optimizery = _flag(config.get("has_optimizery"), False)
+    has_rapid_shutdown = _flag(config.get("has_rapid_shutdown"), False)
+    vzdialenost_doprava = _num(config.get("vzdialenost_doprava"), 0.0)
+
+    # Marža Z PREDAJA: predaj = nákup / (1 - m/100). Chýba → 22 %. Mimo 0 <= m < 100 → chyba.
+    raw_margin = config.get("margin_pct")
+    if raw_margin is None or (isinstance(raw_margin, str) and not raw_margin.strip()):
+        margin_pct = DEFAULT_MARGIN_PCT
+    else:
+        try:
+            margin_pct = float(str(raw_margin).replace(",", ".")) if isinstance(raw_margin, str) else float(raw_margin)
+        except (TypeError, ValueError):
+            return _error_result("margin_invalid", f"Marža '{raw_margin}' nie je číslo.")
+    if not math.isfinite(margin_pct) or margin_pct < 0 or margin_pct >= 100:
+        return _error_result("margin_range",
+                             f"Marža {margin_pct:g} % je mimo rozsahu — povolené je 0 ≤ marža < 100 % (z predaja).")
+
+    distribucka = str(config.get("distribucka") or "").strip().upper()
+    if distribucka not in DISTRIBUCKY:
+        distribucka = ""
+
+    bess_requested = has_bess and (bess_kwh > 0 or bess_count > 0 or bool(bess_sku))
+
     # Načítaj vendor stack
     stack = _load_vendor_stack(sb, vendor_key)
     if not stack:
-        return {"ok": False, "error": f"Vendor stack '{vendor_key}' not found"}
-    
-    # Vyber panel z vendor stack
-    panels = stack.get("preferred_panels") or []
-    panel = next((p for p in panels if p["sku"] == panel_sku), None)
-    if not panel:
-        panel = panels[0] if panels else {"sku": "LONGI535", "name": "LONGi Hi-MO X10 EcoLife LR7-60HVH-535M 535 Wp", "wp": 535, "price_per_unit": 90.69, "cost": 72.55}
-    
-    # Ak pocet_panelov nie je zadané — odvodzuj z kWp
-    if pocet_panelov_input <= 0:
-        target_kwp = float(config.get("kwp", 30))
-        pocet_panelov = math.ceil(target_kwp * 1000 / panel["wp"])
-    else:
-        pocet_panelov = pocet_panelov_input
-    
-    kwp_actual = round(pocet_panelov * panel["wp"] / 1000, 2)
-    
-    items = []
-    pos = 1
-    warnings = []
-    
-    # ===== 1. PANELY =====
-    items.append({
-        "position": pos, "category": "Panely",
-        "product_name": panel["name"],
-        "qty": pocet_panelov, "unit": "ks",
-        "cost_per_unit": float(panel.get("cost") or panel["price_per_unit"] * 0.77),
-        "price_per_unit": float(panel["price_per_unit"]),
-        "rule_id": f"panel.{panel['sku']}",
-        "vendor_stack": vendor_key,
-    })
-    pos += 1
-    
-    # ===== 2. MENIČE =====
-    required_ac_kw = kwp_actual / DC_AC_RATIO
-    inverters = stack.get("inverters") or []
-    picked_inv = _pick_inverters(inverters, required_ac_kw, require_hybrid=has_bess)
-    
-    for p in picked_inv:
-        items.append({
-            "position": pos, "category": "Striedače",
-            "product_name": p["inverter"]["name"],
-            "qty": p["qty"], "unit": "ks",
-            "cost_per_unit": (float(p["inverter"]["cost"]) if p["inverter"].get("cost") is not None else float(p["inverter"]["price"]) * 0.77),
-            "price_per_unit": float(p["inverter"]["price"]),
-            "rule_id": f"menic.{vendor_key}.{p['inverter']['key']}",
-            "vendor_stack": vendor_key,
-        })
-        pos += 1
-    
-    # Smart manager + smart meter (povinné pri väčších inštaláciách)
-    # Väčšie inštalácie (napr. Huawei >10 kWp) vyžadujú Smart Logger namiesto dongle.
-    sm = stack.get("smart_manager")
-    sm_large = stack.get("smart_manager_large")
-    if sm_large and kwp_actual > sm_large.get("required_above_kwp", 10):
-        sm = sm_large
-    if sm and kwp_actual > sm.get("required_above_kwp", 0):
-        items.append({
-            "position": pos, "category": "Monitoring",
-            "product_name": sm["name"], "qty": 1, "unit": "ks",
-            "cost_per_unit": sm["price"] * 0.77, "price_per_unit": float(sm["price"]),
-            "rule_id": f"smart_manager.{vendor_key}", "vendor_stack": vendor_key,
-        })
-        pos += 1
-    smtr = stack.get("smart_meter")
-    if smtr:
-        items.append({
-            "position": pos, "category": "Monitoring",
-            "product_name": smtr["name"], "qty": 1, "unit": "ks",
-            "cost_per_unit": smtr["price"] * 0.77, "price_per_unit": float(smtr["price"]),
-            "rule_id": f"smart_meter.{vendor_key}", "vendor_stack": vendor_key,
-        })
-        pos += 1
-    
-    # ===== 2b. SIEŤOVÝ ANALYZÁTOR (Janitza) — auto pri >prah kW; kompatibilný so všetkými meničmi =====
-    _acc = stack.get("accessories") or []
-    _nas = [a for a in _acc if a.get("category") == "network_analyzer"]
-    if _nas and config.get("has_janitza") is not False:
-        _thr = float(_nas[0].get("offer_above_kw") or 10)
-        if kwp_actual > _thr:
-            _jk = config.get("janitza_key")
-            _ja = next((a for a in _nas if a.get("key") == _jk), _nas[0])
-            _jcost = float(_ja["cost"]) if _ja.get("cost") is not None else float(_ja["price"]) * 0.77
-            items.append({
-                "position": pos, "category": "Diagnostika siete",
-                "product_name": _ja["name"], "qty": 1, "unit": "ks",
-                "cost_per_unit": _jcost, "price_per_unit": float(_ja["price"]),
-                "rule_id": f"accessory.{_ja['key']}", "vendor_stack": vendor_key,
-                "ai_note": f"Auto pri >{_thr:g} kW; kompatibilné so všetkými meničmi",
-            })
-            pos += 1
+        return _error_result("unknown_vendor", f"Neznámy výrobca '{vendor_key}' — vendor stack neexistuje.")
 
-    # ===== 3. KONŠTRUKCIA =====
-    k_rules = _load_konstrukcia_rule(sb, typ_strechy)
-    for r in k_rules:
-        # Nový cenník 2026-06-12: konštrukcia sa účtuje podľa POČTU PANELOV (ks), nie kWp.
-        # qty_formula z DB ('pocet_panelov' / 'kwp') sa rešpektuje; cost_per_unit z DB má prednosť pred paušálom 0.77.
-        k_qty = _eval_qty_formula(r.get("qty_formula"), kwp_actual, pocet_panelov)
-        k_cost = float(r["cost_per_unit"]) if r.get("cost_per_unit") is not None else float(r["price_per_unit"]) * 0.77
-        items.append({
-            "position": pos, "category": "Konštrukcia",
-            "product_name": r["product_name"],
-            "qty": k_qty, "unit": r["unit"],
-            "cost_per_unit": k_cost,
-            "price_per_unit": float(r["price_per_unit"]),
-            "price_locked": True,  # predaj podľa cenníka 2026-06-12 — globálna marža ho neprepisuje
-            "rule_id": f"konstrukcia.{r['rule_key']}",
-        })
-        pos += 1
-    
-    # ===== 4. ROZVÁDZAČ (podľa kWp pásma) =====
-    r_rules = [r for r in _load_rule(sb, "rozvadzac") 
-               if (r.get("min_kwp") or 0) <= kwp_actual <= (r.get("max_kwp") or 99999)]
-    if r_rules:
-        r = r_rules[0]
-        items.append({
-            "position": pos, "category": "Rozvádzač",
-            "product_name": r["product_name"], "qty": 1, "unit": "ks",
-            "cost_per_unit": float(r["price_per_unit"]) * 0.77,
-            "price_per_unit": float(r["price_per_unit"]),
-            "rule_id": f"rozvadzac.{r['rule_key']}",
-        })
-        pos += 1
-    
-    # ===== 5. VODIČE + 6. PD + 7. SPOTREBNÝ + 8. OSTATNÉ =====
-    for rt, rk in [("vodice", "dc"), ("vodice", "ac"), ("spotrebny", "standard")]:
-        r = next((x for x in _load_rule(sb, rt, rk)), None)
-        if r:
-            items.append({
-                "position": pos, "category": "Vodiče" if rt == "vodice" else "Spotrebný material",
-                "product_name": r["product_name"], "qty": kwp_actual, "unit": r["unit"],
-                "cost_per_unit": float(r["price_per_unit"]) * 0.77,
-                "price_per_unit": float(r["price_per_unit"]),
-                "rule_id": f"{rt}.{rk}",
-            })
-            pos += 1
-    
-    # PD — pásmo podľa kWp
-    pd_rules = [r for r in _load_rule(sb, "pd") if (r.get("min_kwp") or 0) <= kwp_actual <= (r.get("max_kwp") or 99999)]
-    if pd_rules:
-        r = pd_rules[0]
-        items.append({
-            "position": pos, "category": "Projektová dokumentácia",
-            "product_name": r["product_name"], "qty": 1, "unit": r["unit"],
-            "cost_per_unit": float(r["price_per_unit"]) * 0.77,
-            "price_per_unit": float(r["price_per_unit"]),
-            "rule_id": f"pd.{r['rule_key']}",
-        })
-        pos += 1
-    
-    # Ostatné (žľaby, chráničky)
-    for rk in ["zlab_kryt_50mm", "chranicka_25mm", "chranicka_40mm"]:
-        r = next((x for x in _load_rule(sb, "ostatne", rk)), None)
-        if r:
-            # qty z DB vzorca — reálne vyhodnotené (rešpektuje koeficient, napr. žľab kWp×1.5)
-            qty = _eval_qty_formula(r.get("qty_formula"), kwp_actual, pocet_panelov)
-            items.append({
-                "position": pos, "category": "Ostatné",
-                "product_name": r["product_name"], "qty": qty, "unit": r["unit"],
-                "cost_per_unit": float(r["price_per_unit"]) * 0.77,
-                "price_per_unit": float(r["price_per_unit"]),
-                "rule_id": f"ostatne.{rk}",
-            })
-            pos += 1
-    
-    # ===== 9. OPTIMIZÉRY (vendor-specific!) =====
-    if has_optimizery:
-        # Použiť vendor-specific optimizer (Huawei → MERC, Sungrow/GoodWe/Solinteg → Tigo)
-        opts = stack.get("optimizers") or []
-        if opts:
-            opt = opts[0]  # default first
-            # počet optimizérov: panels_per_unit (Huawei MERC = 2 panely/kus, Tigo = 1 panel/kus)
-            ppu = int(opt.get("panels_per_unit") or 1)
-            opt_qty = math.ceil(pocet_panelov / max(1, ppu))
-            items.append({
-                "position": pos, "category": "Optimizéry",
-                "product_name": opt["name"], "qty": opt_qty, "unit": "ks",
-                "cost_per_unit": opt["price_per_panel"] * 0.77,
-                "price_per_unit": float(opt["price_per_panel"]),
-                "rule_id": f"optimizer.{vendor_key}.{opt['key']}",
-                "vendor_stack": vendor_key,
-                "ai_note": opt.get("notes", ""),
-            })
-            pos += 1
-            # Montáž optimizérov (na kus optimizéra)
-            items.append({
-                "position": pos, "category": "Montáž",
-                "product_name": "Montáž optimizér", "qty": opt_qty, "unit": "ks",
-                "cost_per_unit": 3.90 * 0.77, "price_per_unit": 3.90,
-                "rule_id": "montaz_optimizer",
-            })
-            pos += 1
-    
-    # ===== 10. RAPID SHUTDOWN =====
-    if has_rapid_shutdown:
-        for rk in ["bfs12", "esw12", "montaz_rs"]:
-            r = next((x for x in _load_rule(sb, "rapid_shutdown", rk)), None)
-            if r:
-                if "ceil" in (r.get("qty_formula") or ""):
-                    qty = math.ceil(pocet_panelov / 4) if "4" in r["qty_formula"] else math.ceil(pocet_panelov / 200)
-                else:
-                    qty = 1
-                items.append({
-                    "position": pos, "category": "Rapid Shutdown",
-                    "product_name": r["product_name"], "qty": qty, "unit": r["unit"],
-                    "cost_per_unit": float(r["price_per_unit"]) * 0.77,
-                    "price_per_unit": float(r["price_per_unit"]),
-                    "rule_id": f"rapid_shutdown.{rk}",
-                })
-                pos += 1
-    
-    # ===== 11. BESS (vendor-specific + trieda rez/priemysel + limity) =====
-    if has_bess and (bess_kwh > 0 or bess_count > 0 or config.get("bess_sku") or config.get("bess_key")):
-        batteries = stack.get("batteries") or []
+    items: list[dict] = []
+    warnings: list[dict] = []
+    estimated: list[str] = []   # položky s odhadnutým nákupom (predaj × 0,77)
+
+    def warn(severity, kind, message, **extra):
+        warnings.append(_warn(severity, kind, message, **extra))
+
+    def add(category, name, qty, unit, cost, price_hint, rule_id, **extra):
+        """Pridá riadok BOM. cost=None → odhad price_hint × 0,77 + zápis do `estimated`.
+        price_per_unit a total_* sa dopočítajú nižšie jednotnou funkciou marže."""
+        if cost is None:
+            cost = round(_num(price_hint, 0.0) * COST_FALLBACK_FACTOR, 4)
+            if name not in estimated:
+                estimated.append(name)
+        item = {"position": len(items) + 1, "category": category, "product_name": name,
+                "qty": qty, "unit": unit, "cost_per_unit": float(cost), "rule_id": rule_id}
+        item.update(extra)
+        items.append(item)
+        return item
+
+    _rule_cache: dict[str, list[dict]] = {}
+
+    def rules(rule_type, rule_key=None):
+        """Aktívne pravidlá typu (1 dopyt na typ, potom filter v pamäti)."""
+        if rule_type not in _rule_cache:
+            _rule_cache[rule_type] = _load_rule(sb, rule_type)
+        rows = _rule_cache[rule_type]
+        return rows if rule_key is None else [r for r in rows if r.get("rule_key") == rule_key]
+
+    def rule(rule_type, rule_key):
+        found = rules(rule_type, rule_key)
+        return found[0] if found else None
+
+    def missing_rule(rule_type, rule_key, what):
+        warn("warning", "missing_rule",
+             f"V cenníku chýba pravidlo '{what}' ({rule_type}/{rule_key}) — položka nie je v ponuke, doplň ju ručne.")
+
+    def add_from_rule(category, r, qty, rule_id, **extra):
+        return add(category, r["product_name"], qty, r.get("unit") or "ks",
+                   r.get("cost_per_unit"), r.get("price_per_unit"), rule_id, **extra)
+
+    # ===== VSTUPNÝ REŽIM: panely / len BESS / chyba =====
+    panel = None
+    pocet_panelov = 0
+    bess_only = False
+    if pocet_panelov_input > 0 or kwp_input > 0:
+        # Vyber panel z vendor stack
+        panels = stack.get("preferred_panels") or []
+        panel = next((p for p in panels if p.get("sku") == panel_sku), None)
+        if not panel:
+            warn("warning", "panel_unknown",
+                 f"Panel '{panel_sku}' nie je v katalógu výrobcu — použitý predvolený panel; over počet panelov a kWp.")
+            panel = panels[0] if panels else {"sku": "LONGI535", "name": "LONGi Hi-MO X10 EcoLife LR7-60HVH-535M 535 Wp", "wp": 535, "price_per_unit": 90.69, "cost": 72.55}
+        if pocet_panelov_input > 0:
+            pocet_panelov = pocet_panelov_input
+        else:
+            # round(…, 6): 59,92 kWp / 535 Wp nesmie vyjsť 112,0000000001 → 113 panelov
+            pocet_panelov = math.ceil(round(kwp_input * 1000 / float(panel["wp"]), 6))
+    elif bess_requested:
+        bess_only = True   # 0 panelov, bez kWp, má batériu → zjednodušená vetva "len BESS"
+    else:
+        return _error_result("no_panels",
+                             "Nulový počet panelov (ani kWp) a žiadna batéria — nie je čo kalkulovať. "
+                             "Zadaj počet panelov alebo zapni batériu s kWh/počtom.")
+
+    kwp_actual = round(pocet_panelov * float(panel["wp"]) / 1000, 2) if panel else 0.0
+
+    # ===== PD (projektová dokumentácia) — pásmo podľa Σ AC kW; v režime len BESS pásmo PD50 =====
+    def build_pd(ac_value: float, bess_mode: bool = False):
+        pd_rules = rules("pd")
+        if bess_mode:
+            band, mult, over = _pick_band(pd_rules, 50.0), 1, False
+        else:
+            band, mult, over = _select_band(pd_rules, ac_value)
+        if not band:
+            missing_rule("pd", "PD50" if bess_mode else f"pásmo {ac_value:g} kW AC", "Projektová dokumentácia")
+            return
+        add_from_rule("Projektová dokumentácia", band, 1, f"pd.{band['rule_key']}")
+        if over:
+            warn("warning", "pd_over_range",
+                 f"Σ AC {ac_value:g} kW je nad najvyšším pásmom PD ({_num(band.get('max_kwp')):g} kW) — "
+                 f"účtované najvyššie pásmo, individuálne preveriť.")
+
+    # ===== BATÉRIA (vendor-specific + trieda rez/priemysel + limity) =====
+    def build_battery():
+        """Pridá batériu + montáž. Vráti (vybrané_batérie, efektívna kapacita kWh)."""
+        batteries = list(stack.get("batteries") or [])
         # Filter podľa triedy (residential / industrial) — toggle z UI
-        bess_class = (config.get("bess_class") or "").strip().lower()
+        bess_class = str(config.get("bess_class") or "").strip().lower()
         if bess_class in ("residential", "industrial"):
             _cls = [b for b in batteries if (b.get("battery_class") or "residential") == bess_class]
             batteries = _cls or batteries
         # Explicitne zvolený model (key) z UI
-        _bsku = config.get("bess_sku") or config.get("bess_key")
-        if _bsku:
-            _chosen = [b for b in batteries if b.get("key") == _bsku]
+        if bess_sku:
+            _chosen = [b for b in batteries if b.get("key") == bess_sku]
             if _chosen:
                 batteries = _chosen
+            else:
+                warn("warning", "bess_sku_unknown",
+                     f"Model batérie '{bess_sku}' nie je v katalógu výrobcu — vybraný podľa kapacity/počtu.")
         # Ak je zvolený konkrétny model bez počtu/kWh → default 1 ks
-        _eff_count = bess_count
-        if _bsku and _eff_count <= 0 and bess_kwh <= 0:
-            _eff_count = 1
-        picked_batt = _pick_bess(batteries, bess_kwh, _eff_count)
+        eff_count = bess_count
+        if bess_sku and eff_count <= 0 and bess_kwh <= 0:
+            eff_count = 1
+        kwh_mode = eff_count <= 0 and bess_kwh > 0
+        picked = _pick_bess(batteries, bess_kwh, eff_count)
+        if not picked:
+            warn("warning", "bess_unavailable", "Výrobca nemá v katalógu vhodnú batériu — batéria nie je v ponuke.")
+            return [], 0.0
         # Limit ks na menič (napr. Solinteg max 2)
-        for pb in picked_batt:
+        for pb in picked:
             _mx = pb["battery"].get("max_units")
             if _mx and pb["qty"] > int(_mx):
-                warnings.append({"severity": "warning", "kind": "bess_limit",
-                                 "message": f"{pb['battery']['name']}: max {int(_mx)} ks na menič — znížené z {pb['qty']} na {int(_mx)}."})
+                warn("warning", "bess_limit",
+                     f"{pb['battery']['name']}: max {int(_mx)} ks na menič — znížené z {pb['qty']} na {int(_mx)}.")
                 pb["qty"] = int(_mx)
-        # efektívna kapacita (kWh) z reálne vybraných modulov — pre downstream/ekonomiku
-        if picked_batt:
-            bess_kwh = sum(float(p["battery"]["capacity_kwh"]) * p["qty"] for p in picked_batt) or bess_kwh
-        for b in picked_batt:
+        # efektívna kapacita (kWh) z reálne vybraných modulov/skríň
+        eff_kwh = round(sum(float(p["battery"]["capacity_kwh"]) * p["qty"] for p in picked), 2)
+        if kwh_mode and bess_kwh > 0 and abs(eff_kwh - bess_kwh) / bess_kwh > BESS_KWH_TOLERANCE:
+            warn("warning", "bess_kwh_deviation",
+                 f"Požadovaná kapacita {bess_kwh:g} kWh, ponúkaná {eff_kwh:g} kWh "
+                 f"({(eff_kwh - bess_kwh) / bess_kwh * 100:+.1f} %) — over výber skríň/modulov.")
+        for b in picked:
             _bat = b["battery"]
-            # NÁKUPNÁ cena: ak je 'cost' (nové batérie z distribútorov), použi ju priamo; inak 77% z 'price' (legacy list)
-            _cost = float(_bat["cost"]) if _bat.get("cost") is not None else float(_bat["price"]) * 0.77
-            items.append({
-                "position": pos, "category": "Batéria",
-                "product_name": _bat["name"], "qty": b["qty"], "unit": "ks",
-                "cost_per_unit": _cost,
-                "price_per_unit": float(_bat["price"]),
-                "rule_id": f"battery.{vendor_key}.{_bat['key']}",
-                "vendor_stack": vendor_key,
-            })
-            pos += 1
-            # C&I batéria čo potrebuje samostatný PCS (Huawei LUNA-200/241)
-            _bk = _bat.get("key") or ""
-            if _bat.get("battery_class") == "industrial" and ("luna2000_200" in _bk or "luna2000_241" in _bk):
-                warnings.append({"severity": "warning", "kind": "pcs_required",
-                                 "message": f"{_bat['name']} vyžaduje samostatný PCS (SUN2000-…KTL-H) — doplniť do ponuky (cena nie je v katalógu)."})
-        # Montáž batérie
-        items.append({
-            "position": pos, "category": "Batéria",
-            "product_name": "Montáž batérie", "qty": 1, "unit": "kpl",
-            "cost_per_unit": 5000 * 0.77, "price_per_unit": 5000,
-            "rule_id": "battery.montaz",
-        })
-        pos += 1
-    
-    # ===== 12. WALLBOX =====
+            add("Batéria", _bat["name"], b["qty"], "ks", _bat.get("cost"), _bat.get("price"),
+                f"battery.{_bat['key']}", vendor_stack=vendor_key)
+            # C&I batéria, ktorá by mohla potrebovať samostatný PCS (Huawei LUNA-200/241)
+            if _is_luna_ci(_bat):
+                warn("info", "pcs_required",
+                     f"{_bat['name']}: samostatný PCS nie je v ponuke — Raynet PCS doteraz nepridával — over u dodávateľa.")
+        # Montáž batérie: industrial = za skriňu (× počet kusov), residential = za systém (× 1)
+        ind_qty = sum(p["qty"] for p in picked if (p["battery"].get("battery_class") or "residential") == "industrial")
+        has_res = any((p["battery"].get("battery_class") or "residential") != "industrial" for p in picked)
+        if ind_qty > 0:
+            r = rule("batteria", "montaz_baterie")
+            if r:
+                add_from_rule("Batéria", r, ind_qty, "battery.montaz")
+            else:
+                warn("warning", "missing_rule",
+                     "V cenníku chýba pravidlo 'Montáž batériového úložiska' (batteria/montaz_baterie) — "
+                     "použitá záložná cena 2 000 € predaj / 1 750 € nákup za skriňu.")
+                add("Batéria", "Montáž batériového úložiska", ind_qty, "ks", 1750.0, 2000.0, "battery.montaz")
+        if has_res:
+            rid = "battery.montaz" if ind_qty == 0 else "battery.montaz_rez"
+            r = rule("batteria", "montaz_baterie_rez")
+            if r:
+                add_from_rule("Batéria", r, 1, rid)
+            else:
+                warn("warning", "missing_rule",
+                     "V cenníku chýba pravidlo 'Montáž batérie (rezidenčná sada)' (batteria/montaz_baterie_rez) — "
+                     "použitá záložná cena 500 € predaj / 300 € nákup.")
+                add("Batéria", "Montáž batérie (rezidenčná sada)", 1, "kpl", 300.0, 500.0, rid)
+        return picked, eff_kwh
+
+    picked_inv: list[dict] = []
+    picked_batt: list[dict] = []
+    ac_kw_total = 0.0
+    bess_kwh_effective = 0.0
+
+    if bess_only:
+        # ===== LEN BESS: batéria + montáž batérie + PD50 + doprava (bez panelov, meničov, konštrukcie, FVE montáže) =====
+        picked_batt, bess_kwh_effective = build_battery()
+        if not picked_batt:
+            return _error_result("no_battery", "Výrobca nemá v katalógu vhodnú batériu — nie je čo kalkulovať.")
+        build_pd(0.0, bess_mode=True)
+        warn("warning", "bess_only",
+             "Ponuka len pre batériu (bez FVE) — over PCS/menič, AC rozvádzač, kabeláž, EMS, dispečing; "
+             "tieto položky kalkulačka nepridáva.")
+    else:
+        # ===== 1. PANELY =====
+        add("Panely", panel["name"], pocet_panelov, "ks", panel.get("cost"), panel.get("price_per_unit"),
+            f"panel.{panel['sku']}", vendor_stack=vendor_key)
+
+        # ===== 2. MENIČE =====
+        required_ac_kw = kwp_actual / DC_AC_RATIO
+        picked_inv = _pick_inverters(stack.get("inverters") or [], required_ac_kw, require_hybrid=has_bess)
+        if not picked_inv:
+            warn("warning", "no_inverter", "Výrobca nemá v katalógu žiadny menič — ponuka je bez meničov.")
+        for p in picked_inv:
+            inv = p["inverter"]
+            add("Striedače", inv["name"], p["qty"], "ks", inv.get("cost"), inv.get("price"),
+                f"menic.{vendor_key}.{inv.get('key') or inv.get('name')}", vendor_stack=vendor_key,
+                sku=inv.get("key"), ac_kw=_num(inv.get("ac_kw")))
+        # Σ AC výkon vybraných meničov — základ pre rozvádzač AC, PD, MTP a dispečing
+        ac_kw_total = round(sum(_num(p["inverter"].get("ac_kw")) * p["qty"] for p in picked_inv), 2)
+
+        # Smart manager + smart meter (povinné pri väčších inštaláciách)
+        # Väčšie inštalácie (napr. Huawei >10 kWp) vyžadujú Smart Logger namiesto dongle.
+        sm = stack.get("smart_manager")
+        sm_large = stack.get("smart_manager_large")
+        if sm_large and kwp_actual > sm_large.get("required_above_kwp", 10):
+            sm = sm_large
+        if sm and kwp_actual > sm.get("required_above_kwp", 0):
+            add("Monitoring", sm["name"], 1, "ks", sm.get("cost"), sm.get("price"),
+                f"smart_manager.{vendor_key}", vendor_stack=vendor_key)
+        smtr = stack.get("smart_meter")
+        if smtr:
+            add("Monitoring", smtr["name"], 1, "ks", smtr.get("cost"), smtr.get("price"),
+                f"smart_meter.{vendor_key}", vendor_stack=vendor_key)
+
+        # ===== 2b. SIEŤOVÝ ANALYZÁTOR (Janitza) — len Huawei nad prahom; has_janitza:false ho vypne =====
+        accessories = stack.get("accessories") or []
+        if vendor_key == "huawei" and _flag(config.get("has_janitza"), True):
+            _nas = [a for a in accessories if a.get("category") == "network_analyzer"]
+            if _nas:
+                _jk = config.get("janitza_key")
+                _ja = next((a for a in _nas if _jk and a.get("key") == _jk), None)
+                if _ja is None:   # uprednostni UMG 103-CBM
+                    _ja = next((a for a in _nas if "103" in f"{a.get('key') or ''} {a.get('name') or ''}"), _nas[0])
+                _thr = _num(_ja.get("offer_above_kw"), JANITZA_DEFAULT_ABOVE_KW)
+                if kwp_actual > _thr:
+                    add("Diagnostika siete", _ja["name"], 1, "ks", _ja.get("cost"), _ja.get("price"),
+                        f"accessory.{_ja['key']}", vendor_stack=vendor_key,
+                        ai_note=f"Auto pri >{_thr:g} kW; kompatibilné so všetkými meničmi")
+
+        # ===== 3. KONŠTRUKCIA (+ záťaž pri východ-západ) =====
+        k_rules = _load_konstrukcia_rule(sb, typ_strechy) if typ_strechy else []
+        if not k_rules:
+            warn("warning", "konstrukcia_missing",
+                 f"Pre typ strechy '{typ_strechy}' nie je v cenníku konštrukcia — ponuka je bez konštrukcie, doplň ju ručne.")
+        for r in k_rules:
+            # qty_formula a jednotka z DB (konštrukcia je od F0 na kWp; staré dáta: ks podľa počtu panelov)
+            _kwp_unit = str(r.get("unit") or "").strip().lower() == "kwp"
+            k_qty = _rule_qty(r, kwp_actual, pocet_panelov, default=kwp_actual if _kwp_unit else pocet_panelov)
+            add_from_rule("Konštrukcia", r, k_qty, f"konstrukcia.{r['rule_key']}")
+        if typ_strechy == "vychod_zapad":
+            r = rule("zatiaz", "vz")
+            if r:
+                add_from_rule("Konštrukcia", r, _rule_qty(r, kwp_actual, pocet_panelov, default=kwp_actual), "zatiaz.vz")
+            else:
+                missing_rule("zatiaz", "vz", "Záťaž konštrukcie (V-Z)")
+
+        # ===== 4. ROZVÁDZAČ DC (pri FVE vždy, vypínateľný has_dc_rozvadzac) =====
+        if _flag(config.get("has_dc_rozvadzac"), True):
+            r = rule("rozvadzac_dc", "r_dc")
+            if r:
+                add_from_rule("Rozvádzač", r, _rule_qty(r, kwp_actual, pocet_panelov, default=kwp_actual), "rozvadzac_dc")
+            else:
+                missing_rule("rozvadzac_dc", "r_dc", "Rozvádzač DC")
+
+        # ===== 4b. ROZVÁDZAČ AC (pásmo podľa Σ AC kW meničov) =====
+        band, mult, over = _select_band(rules("rozvadzac"), ac_kw_total)
+        if band:
+            add_from_rule("Rozvádzač", band, mult, f"rozvadzac.{band['rule_key']}")
+            if over:
+                warn("warning", "rozvadzac_over_range",
+                     f"Σ AC {ac_kw_total:g} kW je nad najvyšším pásmom rozvádzača ({_num(band.get('max_kwp')):g} kW) — "
+                     f"účtovaných {mult} ks najvyššieho pásma, individuálne preveriť.")
+        else:
+            missing_rule("rozvadzac", f"pásmo {ac_kw_total:g} kW AC", "Rozvádzač AC")
+
+        # ===== 5. VODIČE + SPOTREBNÝ + KÁBLOVÉ ŽĽABY =====
+        for rt, rk, cat in [("vodice", "dc", "Vodiče"), ("vodice", "ac", "Vodiče"), ("spotrebny", "standard", "Spotrebný materiál")]:
+            r = rule(rt, rk)
+            if r:
+                add_from_rule(cat, r, kwp_actual, f"{rt}.{rk}")
+            else:
+                missing_rule(rt, rk, "Vodiče DC" if rk == "dc" else ("Vodiče AC" if rk == "ac" else "Spotrebný materiál"))
+        r = rule("ostatne", "kablove_zlaby")
+        if r:
+            _zl_kwp = str(r.get("unit") or "").strip().lower() == "kwp"
+            add_from_rule("Káblové žľaby", r,
+                          _rule_qty(r, kwp_actual, pocet_panelov, default=kwp_actual if _zl_kwp else pocet_panelov),
+                          "kablove_zlaby")
+        else:
+            # staré dáta (pred F0): žľab + chráničky ako tri pravidlá; v nových dátach sú neaktívne
+            _legacy = [(rk, rule("ostatne", rk)) for rk in ("zlab_kryt_50mm", "chranicka_25mm", "chranicka_40mm")]
+            _legacy = [(rk, lr) for rk, lr in _legacy if lr]
+            for rk, lr in _legacy:
+                add_from_rule("Káblové žľaby", lr, _eval_qty_formula(lr.get("qty_formula"), kwp_actual, pocet_panelov),
+                              f"ostatne.{rk}")
+            if not _legacy:
+                missing_rule("ostatne", "kablove_zlaby", "Káblové žľaby")
+
+        # ===== 6. PD — pásmo podľa Σ AC kW =====
+        build_pd(ac_kw_total)
+
+        # ===== 6b. STATIKA + PBS (kWp >= 100) =====
+        if kwp_actual >= STATIKA_MIN_KWP:
+            for rk, label in (("statika", "Statický posudok"), ("ppbs", "Projekt požiarnej bezpečnosti")):
+                r = rule("statika", rk)
+                if r:
+                    add_from_rule("Statika a PBS", r, _rule_qty(r, kwp_actual, pocet_panelov, default=1), rk)
+                else:
+                    missing_rule("statika", rk, label)
+
+        # ===== 6c. MTP (Σ AC > 30 kW, 3 ks) =====
+        if ac_kw_total > MTP_MIN_AC_KW:
+            r = rule("mtp", "mtp3")
+            if r:
+                add_from_rule("Meranie", r, _rule_qty(r, kwp_actual, pocet_panelov, default=3), "mtp")
+            else:
+                missing_rule("mtp", "mtp3", "Merací transformátor prúdu (MTP)")
+
+        # ===== 6d. DISPEČING / ASDR (Σ AC >= 100 kW) podľa distribučky =====
+        requires_asdr = ac_kw_total >= ASDR_MIN_AC_KW
+        if requires_asdr:
+            dkey = distribucka or "ZSD"
+            if not distribucka:
+                warn("warning", "distribucka",
+                     "Zvoľ distribučku (ZSD/SSD/VSD) — dispečerské riadenie je počítané pre ZSD.")
+            r = rule("dispecing", dkey)
+            if r:
+                add_from_rule("Dispečerské riadenie", r, _rule_qty(r, kwp_actual, pocet_panelov, default=1),
+                              f"dispecing.{dkey}")
+            else:
+                missing_rule("dispecing", dkey, f"Dispečerské riadenie {dkey}")
+
+        # ===== 7. OPTIMIZÉRY (vendor-specific!) =====
+        if has_optimizery:
+            # Huawei → MERC, Sungrow/GoodWe/Solinteg → Tigo
+            opts = stack.get("optimizers") or []
+            if opts:
+                opt = opts[0]  # default first
+                # počet optimizérov: panels_per_unit (Huawei MERC = 2 panely/kus, Tigo = 1 panel/kus)
+                ppu = int(_num(opt.get("panels_per_unit"), 1)) or 1
+                opt_qty = math.ceil(pocet_panelov / max(1, ppu))
+                opt_cost = next((opt[k] for k in ("cost", "cost_per_unit", "cost_per_panel") if opt.get(k) is not None), None)
+                add("Optimizéry", opt["name"], opt_qty, "ks", opt_cost, opt.get("price_per_panel"),
+                    f"optimizer.{vendor_key}.{opt['key']}", vendor_stack=vendor_key, ai_note=opt.get("notes", ""))
+                # Tigo → povinný CCA Kit + TAP (1 sada na 150 optimizérov); bez "Montáž optimizér" (od F0 zrušená)
+                if "tigo" in f"{opt.get('key') or ''} {opt.get('name') or ''}".lower():
+                    cca_items = [a for a in accessories if a.get("category") == "tigo_cca"]
+                    if not cca_items:
+                        warn("warning", "tigo_cca_missing",
+                             "Tigo optimizéry vyžadujú CCA Kit + TAP, v dátach výrobcu nie sú — doplň ich ručne "
+                             "(1 sada na 150 optimizérov).")
+                    else:
+                        sets = max(1, math.ceil(opt_qty / TIGO_CCA_PER_SET))
+                        for a in cca_items:
+                            add("Optimizéry", a["name"], sets * max(1, int(_num(a.get("qty_per_set"), 1))), "ks",
+                                a.get("cost"), a.get("price"),
+                                "tigo_cca" if len(cca_items) == 1 else f"tigo_cca.{a.get('key')}",
+                                vendor_stack=vendor_key)
+                        if opt_qty > TIGO_CCA_PER_SET:
+                            warn("warning", "tigo_cca_multi",
+                                 f"{opt_qty} optimizérov Tigo je nad {TIGO_CCA_PER_SET} — pridaných {sets} sád CCA Kit + TAP "
+                                 f"(1 sada na {TIGO_CCA_PER_SET} optimizérov); over počet u dodávateľa.")
+            else:
+                warn("warning", "optimizer_missing", "Výrobca nemá v katalógu optimizér — riadok optimizérov chýba.")
+
+        # ===== 8. RAPID SHUTDOWN =====
+        if has_rapid_shutdown:
+            for rk in ["bfs12", "esw12", "montaz_rs"]:
+                r = rule("rapid_shutdown", rk)
+                if r:
+                    if "ceil" in (r.get("qty_formula") or ""):
+                        qty = math.ceil(pocet_panelov / 4) if "4" in r["qty_formula"] else math.ceil(pocet_panelov / 200)
+                    else:
+                        qty = 1
+                    add_from_rule("Rapid Shutdown", r, qty, f"rapid_shutdown.{rk}")
+                else:
+                    missing_rule("rapid_shutdown", rk, "Rapid Shutdown")
+
+        # ===== 9. BESS =====
+        if bess_requested:
+            picked_batt, bess_kwh_effective = build_battery()
+        elif has_bess:
+            warn("warning", "bess_missing_qty",
+                 "Batéria je zapnutá, ale bez počtu, kapacity (kWh) alebo modelu — batéria nie je v ponuke.")
+
+    # ===== 10. WALLBOX =====
     if has_wallbox and wallbox_pocet > 0:
         wbs = stack.get("wallboxes") or []
         if wbs:
             wb = wbs[0]
-            items.append({
-                "position": pos, "category": "Wallbox",
-                "product_name": wb["name"], "qty": wallbox_pocet, "unit": "ks",
-                "cost_per_unit": wb["price"] * 0.77, "price_per_unit": float(wb["price"]),
-                "rule_id": f"wallbox.{vendor_key}.{wb['key']}",
-            })
-            pos += 1
-    
-    # ===== 13. MONTÁŽ (kWp pásmo) =====
-    m_rules = [r for r in _load_rule(sb, "montaz") if (r.get("min_kwp") or 0) <= kwp_actual <= (r.get("max_kwp") or 99999)]
-    if m_rules:
-        r = m_rules[0]
-        items.append({
-            "position": pos, "category": "Montáž",
-            "product_name": r["product_name"], "qty": kwp_actual, "unit": r["unit"],
-            "cost_per_unit": float(r["price_per_unit"]) * 0.77,
-            "price_per_unit": float(r["price_per_unit"]),
-            "rule_id": f"montaz.{r['rule_key']}",
-        })
-        pos += 1
-    
-    # ===== 14. DOPRAVA =====
-    r = next((x for x in _load_rule(sb, "doprava", "km")), None)
-    if r:
-        items.append({
-            "position": pos, "category": "Doprava",
-            "product_name": r["product_name"], "qty": vzdialenost_doprava, "unit": "km",
-            "cost_per_unit": float(r["price_per_unit"]) * 0.77,
-            "price_per_unit": float(r["price_per_unit"]),
-            "rule_id": "doprava.km",
-        })
-        pos += 1
-    
-    # ===== MARŽA aplikácia =====
-    if margin_pct > 0:
-        factor = 1 + margin_pct / 100
-        for it in items:
-            cost = it["cost_per_unit"]
-            # price_locked (konštrukcia z cenníka): predaj z DB, marža ho neprepisuje
-            if not it.get("price_locked"):
-                it["price_per_unit"] = round(cost * factor, 2)
-            it["total_cost"] = round(cost * it["qty"], 2)
-            it["total_price"] = round(it["price_per_unit"] * it["qty"], 2)
+            add("Wallbox", wb["name"], wallbox_pocet, "ks", wb.get("cost"), wb.get("price"),
+                f"wallbox.{vendor_key}.{wb['key']}")
+        else:
+            warn("warning", "wallbox_missing", "Výrobca nemá v katalógu wallbox — riadok wallboxu chýba.")
+
+    # ===== 11. MONTÁŽ FVE (kWp pásmo) =====
+    if not bess_only:
+        m_band = _pick_band(rules("montaz"), kwp_actual)
+        if m_band:
+            add_from_rule("Montáž", m_band, kwp_actual, f"montaz.{m_band['rule_key']}")
+        else:
+            missing_rule("montaz", f"pásmo {kwp_actual:g} kWp", "Montáž FVE")
+
+    # ===== 12. DOPRAVA =====
+    if vzdialenost_doprava > 0:
+        r = rule("doprava", "km")
+        if r:
+            add_from_rule("Doprava", r, vzdialenost_doprava, "doprava.km")
+        else:
+            missing_rule("doprava", "km", "Doprava")
     else:
-        for it in items:
-            it["total_cost"] = round(it["cost_per_unit"] * it["qty"], 2)
-            it["total_price"] = round(it["price_per_unit"] * it["qty"], 2)
-    
-    # ===== Compatibility warnings (Vrstva F) =====
+        warn("warning", "doprava_km",
+             "Vzdialenosť dopravy nie je zadaná (0 km) — riadok dopravy nie je v ponuke. Zadaj vzdialenosť v km.")
+
+    # ===== CENOTVORBA: predaj = nákup / (1 - m/100) pre VŠETKY položky =====
+    for it in items:
+        cost = it["cost_per_unit"]
+        it["price_per_unit"] = round(cost / (1 - margin_pct / 100), 2)
+        it["total_cost"] = round(cost * it["qty"], 2)
+        it["total_price"] = round(it["price_per_unit"] * it["qty"], 2)
+
+    # ===== Varovania (jediný zoznam) =====
+    if estimated:
+        warn("warning", "cost_estimated",
+             "Nákup nie je v dátach, odhadnutý ako 77 % z cenníkovej ceny pre: " + "; ".join(estimated)
+             + ". Doplň nákupné ceny.", items=list(estimated))
+
     # Huawei + Tigo bug
-    if vendor_key == "huawei" and has_optimizery:
-        warnings.append({
-            "severity": "info",
-            "kind": "vendor_match",
-            "message": "✓ Huawei stack používa HUAWEI MERC-1300W (native optimizer) — NIE Tigo (nekompatibilný)",
-        })
-    
+    if vendor_key == "huawei" and has_optimizery and not bess_only:
+        warn("info", "vendor_match",
+             "✓ Huawei stack používa HUAWEI MERC-1300W (native optimizer) — NIE Tigo (nekompatibilný)")
+
     if not has_bess and kwp_actual >= 100:
-        warnings.append({
-            "severity": "tip",
-            "kind": "bess_recommendation",
-            "message": f"💡 Pri {kwp_actual} kWp >> 100 odporúčam zvážiť BESS — pre arbitráž a peak shaving. Návratnosť +0.5-1 rok.",
-        })
-    
-    if has_optimizery and not has_rapid_shutdown:
-        warnings.append({
-            "severity": "tip",
-            "kind": "rs_recommendation",
-            "message": "💡 Optimizéry + Rapid Shutdown — vyžadované pre verejné budovy podľa STN EN 50549.",
-        })
-    
+        warn("info", "bess_recommendation",
+             f"💡 Pri {kwp_actual} kWp >> 100 odporúčam zvážiť BESS — pre arbitráž a peak shaving. Návratnosť +0.5-1 rok.")
+
+    if has_optimizery and not has_rapid_shutdown and not bess_only:
+        warn("info", "rs_recommendation",
+             "💡 Optimizéry + Rapid Shutdown — vyžadované pre verejné budovy podľa STN EN 50549.")
+
+    # Batéria bez hybridného meniča (napr. Sungrow nemá hybrid) — varovanie, nie ticho
+    if picked_batt and picked_inv and not all(p["inverter"].get("hybrid") for p in picked_inv):
+        warn("warning", "no_hybrid",
+             "Pri batérii nebol nájdený vhodný hybridný menič pre tento výkon — vybraný stringový. "
+             "Skontroluj zostavu/doplň hybrid model.")
+
+    # Mimo bežného rozsahu kalkulačky — kalkulačka pustí všetko, len varuje
+    if kwp_actual > SCOPE_MAX_KWP:
+        warn("warning", "out_of_scope",
+             f"Výkon {kwp_actual:g} kWp je nad {SCOPE_MAX_KWP:g} kWp — mimo bežného rozsahu kalkulačky, "
+             f"výsledok ber ako orientačný.")
+    if typ_strechy in GROUND_ROOFS:
+        warn("warning", "out_of_scope",
+             "Zemná konštrukcia je mimo bežného rozsahu kalkulačky — over položky, ktoré kalkulačka nepokrýva "
+             "(výkopy, kabeláž, oplotenie).")
+    if any((p["battery"].get("battery_class") or "residential") == "industrial" for p in picked_batt) and (
+            bess_kwh_effective > SCOPE_MAX_BESS_KWH or any(_is_luna_ci(p["battery"]) for p in picked_batt)):
+        warn("warning", "out_of_scope",
+             f"C&I batéria ({bess_kwh_effective:g} kWh) je mimo bežného rozsahu kalkulačky — "
+             f"over PCS/menič, AC rozvádzač, kabeláž a EMS.")
+
     # Totals
-    inverter_warnings = []
-    if has_bess and picked_inv and not all(p["inverter"].get("hybrid") for p in picked_inv):
-        inverter_warnings.append("Pri batérii nebol nájdený vhodný hybridný menič pre tento výkon — vybraný stringový. Skontroluj zostavu/doplň hybrid model.")
     total_cost = sum(it["total_cost"] for it in items)
     total_price = sum(it["total_price"] for it in items)
-    
+
     return {
         "ok": True,
         "config": {
             "vendor_stack": vendor_key,
-            "vendor_display": stack["display_name"],
+            "vendor_display": stack.get("display_name"),
             "typ_strechy": typ_strechy,
             "panel": panel,
             "pocet_panelov": pocet_panelov,
             "kwp_actual": kwp_actual,
         },
         "items": items,
-        "warnings": inverter_warnings,
+        "warnings": warnings,
         "totals": {
             "pocet_panelov": pocet_panelov,
             "pocet_menicov": sum(p["qty"] for p in picked_inv),
             "kwp": kwp_actual,
-            "panel_wp": panel["wp"],
+            "panel_wp": panel["wp"] if panel else 0,
+            "ac_kw_total": ac_kw_total,
+            "requires_asdr": ac_kw_total >= ASDR_MIN_AC_KW,
+            "bess_kwh_effective": bess_kwh_effective,
+            "margin_pct_input": margin_pct,
+            "margin_pct_effective": round((total_price - total_cost) / total_price * 100, 2) if total_price > 0 else 0,
             "total_cost": round(total_cost, 2),
             "total_price": round(total_price, 2),
             "total_margin_eur": round(total_price - total_cost, 2),
-            "margin_pct_effective": round((total_price - total_cost) / total_price * 100, 2) if total_price > 0 else 0,
             "items_count": len(items),
         },
-        "warnings": warnings,
     }
 
 
@@ -642,20 +873,20 @@ Vysvetli 1-vetou (max 20 slov) prečo je táto položka v cenovke. Slovenčina, 
 # AI FEATURES — Vendor Recommender / Compatibility / Sanity / Validator
 # ============================================================
 
-# Raynet patterns (z analýzy 2000 ponúk) — fallback heuristics
+# Podiel výrobcov v Raynet ponukách (audit 2026-10-08, Fáza 0) — fallback heuristics
 RAYNET_VENDOR_DISTRIBUTION = {
-    "sungrow": 0.65,   # dominantný pri >30 kWp, hala/priemysel
-    "huawei":  0.20,   # < 15 kWp, prémiové projekty, FusionSolar
-    "goodwe":  0.10,   # menšie residential/komerčné
-    "solinteg": 0.05,  # výnimočne, tieto starty
+    "huawei":   0.50,
+    "solinteg": 0.33,
+    "sungrow":  0.17,
+    "goodwe":   0.0,   # v Raynete bez cenníka
 }
 
-# Priemerné €/kWp z Raynet ponúk (predaj bez DPH)
+# Priemerné €/kWp z Raynet ponúk (predaj bez DPH; audit 2026-10-08, Fáza 0)
 RAYNET_AVG_EUR_PER_KWP = {
-    "do_30":    1150.0,   # do 30 kWp
-    "30_60":     950.0,   # 30-60 kWp
-    "60_100":    830.0,
-    "nad_100":   720.0,
+    "do_30":    790.0,    # do 30 kWp
+    "30_60":    745.0,    # 30-60 kWp
+    "60_100":   680.0,
+    "nad_100":  700.0,
 }
 
 # Toleranica per kategória (±%) — mimo = warning
@@ -756,6 +987,8 @@ def ai_compatibility_checker(sb, config: dict) -> dict:
     typ_strechy = config.get("typ_strechy") or ""
     has_bess = bool(config.get("has_bess"))
     bess_kwh = float(config.get("bess_kwh") or 0)
+    bess_count = int(_num(config.get("bess_count"), 0))
+    bess_selected = bool(config.get("bess_sku") or config.get("bess_key"))
     has_optim = bool(config.get("has_optimizery"))
     has_rs = bool(config.get("has_rapid_shutdown"))
     has_wb = bool(config.get("has_wallbox"))
@@ -772,10 +1005,22 @@ def ai_compatibility_checker(sb, config: dict) -> dict:
         issues.append({"severity": "info", "kind": "vendor_match",
                        "message": f"{vendor.title()} + optimizéry → external Tigo TS4-A-O (Huawei MERC inkompatibilný)."})
 
-    # BESS sanity
-    if has_bess and bess_kwh <= 0:
+    # BESS sanity — UI zadáva batériu počtom kusov (bess_count) alebo modelom, nie kWh
+    if has_bess and bess_kwh <= 0 and bess_count <= 0 and not bess_selected:
         issues.append({"severity": "warning", "kind": "bess_missing_kwh",
                        "message": "Označená batéria ale 0 kWh — nastavte kapacitu (default 10 kWh)."})
+    # Batéria vyžaduje hybridný menič: výrobca bez hybridu v katalógu (napr. Sungrow) → nekompatibilná zostava
+    if has_bess and (bess_kwh > 0 or bess_count > 0 or bess_selected) and vendor:
+        try:
+            _stack = _load_vendor_stack(sb, vendor)
+        except Exception:
+            log.exception("ai_compatibility_checker: načítanie stacku zlyhalo")
+            _stack = None
+        _invs = (_stack or {}).get("inverters") or []
+        if _invs and not any(i.get("hybrid") for i in _invs):
+            issues.append({"severity": "warning", "kind": "no_hybrid",
+                           "message": f"{vendor.title()}: v katalógu nie je hybridný menič — batéria sa so stringovým "
+                                      f"meničom nedá zapojiť. Zvoľ iného výrobcu alebo doplň hybrid ručne."})
     if has_bess and bess_kwh > 0:
         if vendor == "solinteg" and bess_kwh < 5:
             issues.append({"severity": "warning", "kind": "vendor_bess",
@@ -869,12 +1114,13 @@ def ai_bom_validator(sb, items: list[dict], config: dict) -> dict:
     warnings = []
 
     # Skupiny ktoré sú "OK ak existuje aspoň jeden"
+    # (aliasy zodpovedajú kategóriám, ktoré vracia calculate_bom_v2: Panely, Striedače, Vodiče)
     grouped = {
-        "Panel": ["Panel", "Fotovoltický panel"],
-        "Menič": ["Menič", "Striedač", "Invertor"],
+        "Panel": ["Panel", "Panely", "Fotovoltický panel"],
+        "Menič": ["Menič", "Striedač", "Striedače", "Invertor"],
         "Konštrukcia": ["Konštrukcia"],
-        "Káble - DC": ["Káble - DC", "DC kábel", "Solárny kábel"],
-        "Káble - AC": ["Káble - AC", "AC kábel", "CYKY"],
+        "Káble - DC": ["Káble - DC", "Vodiče", "DC kábel", "Solárny kábel"],
+        "Káble - AC": ["Káble - AC", "Vodiče", "AC kábel", "CYKY"],
         "Práca - montáž": ["Práca - montáž", "Práca", "Montáž"],
         "Projektová dokumentácia": ["Projektová dokumentácia", "PD", "Projekt"],
     }
