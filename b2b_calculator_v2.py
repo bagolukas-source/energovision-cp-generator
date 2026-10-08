@@ -536,7 +536,9 @@ def calculate_bom_v2(sb, config: dict) -> dict:
             return [], 0.0
         # N-19: počet kusov bez modelu aj bez cieľa kWh → model je len "prvý v poradí", user ho má vybrať
         if not bess_sku and not kwh_mode and len(batteries) > 1:
-            warn("warning", "bess_model_missing",
+            # Rezidenčná automatická voľba (UI default: počet modulov) je bežná — len info; priemyselná = varovanie
+            _sev = "warning" if (picked[0]["battery"].get("battery_class") or "residential") == "industrial" else "info"
+            warn(_sev, "bess_model_missing",
                  f"Nie je zvolený model batérie ani cieľová kapacita (kWh) — použitý {picked[0]['battery'].get('name')}; "
                  f"vyber model batérie alebo zadaj kapacitu v kWh.")
         # Limit ks na menič (napr. Solinteg max 2)
