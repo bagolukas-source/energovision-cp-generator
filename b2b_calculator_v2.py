@@ -16,6 +16,17 @@ Vstupy:
   distribucka: 'ZSD' | 'SSD' | 'VSD' | None  (dispečing pri Σ AC >= 100 kW; None → ZSD + varovanie)
   vzdialenost_doprava: float (km; 0/chýba = bez riadku dopravy + varovanie)
   margin_pct: float (marža Z PREDAJA v %, default 22; platí 0 <= m < 100)
+  inverters_override: [{key|code, qty}] (Fáza 3, plánovač FVE) — meniče presne podľa plánovača namiesto automatického
+                      výberu. Párovanie na stack["inverters"] podľa key alebo code bez ohľadu na veľkosť písmen; qty celé
+                      číslo >= 1 (neplatné → 1); rovnaký menič viackrát sa sčíta; smie vybrať aj legacy model.
+                      Nespárované → warning inverter_override_unknown; nič nespárované → automatický výber (+ to isté
+                      varovanie). Len pri override: DC/AC mimo <MIN_OVERSIZE; MAX_OVERSIZE> → inverter_override_ratio,
+                      rezidenčná batéria bez hybridného meniča → inverter_override_no_hybrid. totals.inverters_source.
+  konstrukcia_mix: [{typ_strechy, kwp}] (Fáza 3) — konštrukcia po častiach strechy. Bez poľa alebo s jediným typom platí
+                      presne doterajšie správanie (jediný typ nahradí typ_strechy). Od 2 typov: riadok konštrukcie na typ
+                      (qty = kWp časti, rule_id konstrukcia.<rule_key>), záťaž V-Z len pre kWp časti vychod_zapad.
+                      Súčet kWp mimo ±2 % od kwp_actual → časti sa prepočítajú pomerne (info konstrukcia_mix_kwp);
+                      typ bez pravidla v cenníku → konstrukcia_mix_unknown, jeho kWp sa oceňujú ako typ_strechy.
 
 Režim LEN BESS (Fáza 1, 2026-10; F1-SPEC "Jadro BESS"): pocet_panelov 0, bez kwp, has_bess + kWh/počet/model.
   bess_kwh: cieľová kapacita (model + počet skríň vyberie jadro: kombinácia jedného modelu, ceil, odchýlka > 5 % = varovanie)
@@ -73,6 +84,10 @@ BESS_KW_PER_KWH = 0.5         # odhad výkonu (0,5C = kWh / 2), ak chýba bess_k
 BESS_KW_TOLERANCE = 0.10      # požadovaný bess_kw môže prevyšovať výkon batérií v dátach najviac o toľko bez varovania
 BESS_INDUSTRIAL_FROM_KWH = 60.0  # bez zvolenej triedy (bess_class) sa od tejto cieľovej kapacity vyberá z priemyselných skríň
 BESS_MANY_UNITS = 12          # výber podľa kWh, ktorý vyjde na viac kusov, je podozrivý (varovanie bess_many_units)
+
+# --- Fáza 3 (2026-10): plánovač FVE → kalkulačka (F3-PLANOVAC-SPEC, časť E) ---
+MIN_OVERSIZE = 0.6            # spodná hranica DC/AC (kWp / Σ AC kW) pri automatickom výbere aj pri inverters_override
+MIX_KWP_TOLERANCE = 0.02      # súčet kWp konstrukcia_mix sa smie od kwp_actual líšiť najviac o 2 %, inak sa časti prepočítajú
 
 
 def _num(v, default: float = 0.0) -> float:
@@ -228,7 +243,7 @@ def _pick_inverters(inverters: list[dict], required_ac_kw: float, require_hybrid
             if sum((i.get("max_kwp") or 99999) for i in combo) < kwp:
                 continue
             ov = kwp / ac
-            if ov > MAX_OVERSIZE or ov < 0.6:
+            if ov > MAX_OVERSIZE or ov < MIN_OVERSIZE:
                 continue
             # Kapacita: panely sa medzi meniče rozdelia voľne (nie proporcionálne podľa AC),
             # takže combo uvezie kwp, ak Σmax_kwp >= kwp (overené vyššie). Žiadny ďalší
@@ -258,6 +273,115 @@ def _pick_inverters(inverters: list[dict], required_ac_kw: float, require_hybrid
         else:
             picked.append({"inverter": i, "qty": 1})
     return picked
+
+
+def _norm_ident(v) -> str:
+    """Identifikátor (key/code) na porovnanie: bez okrajových medzier a bez ohľadu na veľkosť písmen."""
+    return "" if v is None else str(v).strip().lower()
+
+
+def _override_entries(raw) -> list:
+    """Položky `inverters_override` ako zoznam: None / '' / [] / {} → [] (override nie je zadaný), dict → jedna položka,
+    iný skalár → jedna neplatná položka (nespáruje sa)."""
+    if raw is None:
+        return []
+    if isinstance(raw, (list, tuple)):
+        return list(raw)
+    if isinstance(raw, dict):
+        return [raw] if raw else []
+    if isinstance(raw, str) and not raw.strip():
+        return []
+    return [raw]
+
+
+def _match_inverters_override(inverters: list[dict], raw) -> tuple[list[dict], list[str], bool]:
+    """Spáruje `inverters_override` ([{key|code, qty}]) so zoznamom meničov zo stacku (všetky, aj legacy).
+    Položka sa páruje podľa key (potom code) bez ohľadu na veľkosť písmen: jej `key`/`code` sa porovná s `key`,
+    potom s `code` meničov zo stacku. qty = celé číslo >= 1 (desatinné sa orezá, neplatné/< 1 → 1); rovnaký menič
+    viackrát sa sčíta.
+    Vráti (picked, unknown, requested):
+      picked    — v tvare výstupu `_pick_inverters`: [{"inverter": inv, "qty": n}] v poradí prvého výskytu
+      unknown   — označenia nespárovaných položiek (key/code ako prišli; '(bez key/code)' ak chýbajú)
+      requested — True, ak bol override vôbec zadaný (neprázdny)"""
+    entries = _override_entries(raw)
+    picked: list[dict] = []
+    unknown: list[str] = []
+    for e in entries:
+        if not isinstance(e, dict):
+            unknown.append("(prázdna položka)" if e is None else str(e)[:60])
+            continue
+        idents = [i for i in (_norm_ident(e.get("key")), _norm_ident(e.get("code"))) if i]
+        label = next((str(e[k]).strip() for k in ("key", "code") if _norm_ident(e.get(k))), "(bez key/code)")
+        inv = None
+        for field in ("key", "code"):
+            for ident in idents:
+                inv = next((i for i in inverters if _norm_ident(i.get(field)) == ident), None)
+                if inv is not None:
+                    break
+            if inv is not None:
+                break
+        if inv is None:
+            unknown.append(label)
+            continue
+        qty = max(1, int(_num(e.get("qty"), 1)))
+        ik = inv.get("key") or inv.get("name")
+        existing = next((p for p in picked if (p["inverter"].get("key") or p["inverter"].get("name")) == ik), None)
+        if existing:
+            existing["qty"] += qty
+        else:
+            picked.append({"inverter": inv, "qty": qty})
+    return picked, unknown, bool(entries)
+
+
+def _parse_konstrukcia_mix(raw) -> list[tuple[str, float]]:
+    """`konstrukcia_mix` ([{typ_strechy, kwp}]) → [(typ, kwp)] zlúčené podľa typu (súčet kWp) v poradí prvého výskytu.
+    Typ sa porovnáva bez okrajových medzier a bez ohľadu na veľkosť písmen. Neplatné položky (nie dict, bez typu,
+    kWp <= 0 alebo nečíselné) sa preskočia."""
+    if isinstance(raw, dict):
+        raw = [raw]
+    if not isinstance(raw, (list, tuple)):
+        return []
+    merged: dict[str, float] = {}
+    for e in raw:
+        if not isinstance(e, dict):
+            continue
+        typ = str(e.get("typ_strechy") or "").strip().lower()
+        k = e.get("kwp")
+        kwp = _num(str(k).replace(",", ".") if isinstance(k, str) else k, 0.0)
+        if not typ or round(kwp, 2) <= 0:
+            continue
+        merged[typ] = merged.get(typ, 0.0) + kwp
+    return [(t, round(k, 2)) for t, k in merged.items()]
+
+
+def _scale_mix_parts(parts: list[tuple[str, float]], target_kwp: float) -> list[tuple[str, float]]:
+    """Prepočíta kWp častí pomerne tak, aby súčet bol presne target_kwp (zvyšok zaokrúhľovania ide na najväčšiu časť;
+    časti, ktoré by vyšli 0, sa vynechajú)."""
+    total = sum(k for _, k in parts)
+    if total <= 0 or target_kwp <= 0:
+        return list(parts)
+    scaled = [[t, round(k * target_kwp / total, 2)] for t, k in parts]
+    scaled = [p for p in scaled if p[1] > 0]
+    if not scaled:
+        return list(parts)
+    diff = round(target_kwp - sum(k for _, k in scaled), 2)
+    if diff:
+        big = max(scaled, key=lambda p: p[1])
+        big[1] = round(big[1] + diff, 2)
+    return [(t, k) for t, k in scaled]
+
+
+def _split_int(total: int, weights: list[float]) -> list[int]:
+    """Rozdelí celé číslo `total` podľa váh na celé časti so súčtom presne `total` (metóda najväčšieho zvyšku).
+    Slúži len pre staré pravidlá konštrukcie na kusy (qty podľa počtu panelov danej časti strechy)."""
+    s = sum(weights)
+    if total <= 0 or s <= 0:
+        return [0] * len(weights)
+    raw = [total * w / s for w in weights]
+    base = [int(x) for x in raw]
+    for i in sorted(range(len(weights)), key=lambda i: raw[i] - base[i], reverse=True)[: total - sum(base)]:
+        base[i] += 1
+    return base
 
 
 def _is_luna_ci(battery: dict) -> bool:
@@ -632,6 +756,8 @@ def calculate_bom_v2(sb, config: dict) -> dict:
     picked_batt: list[dict] = []
     ac_kw_total = 0.0
     bess_kwh_effective = 0.0
+    override_active = False                    # F3: meniče podľa inverters_override (nie automatický výber)
+    mix_parts: list[tuple[str, float]] = []    # F3: konštrukcia po častiach strechy (len pri >= 2 typoch)
 
     if bess_only:
         # ===== LEN BESS: batéria + montáž, AC rozvádzač, kabeláž, PD, EMS, statika + PBS, dispečing (bez panelov,
@@ -656,8 +782,26 @@ def calculate_bom_v2(sb, config: dict) -> dict:
             f"panel.{panel['sku']}", vendor_stack=vendor_key)
 
         # ===== 2. MENIČE =====
+        # F3: inverters_override = meniče presne podľa plánovača (bez automatického výberu a bez legacy filtra);
+        # ak sa nespáruje nič, platí doterajší automatický výber.
         required_ac_kw = kwp_actual / DC_AC_RATIO
-        picked_inv = _pick_inverters(stack.get("inverters") or [], required_ac_kw, require_hybrid=has_bess)
+        _ov_picked, _ov_unknown, _ov_requested = _match_inverters_override(
+            stack.get("inverters") or [], config.get("inverters_override"))
+        if _ov_picked:
+            picked_inv = _ov_picked
+            override_active = True
+        else:
+            picked_inv = _pick_inverters(stack.get("inverters") or [], required_ac_kw, require_hybrid=has_bess)
+        if _ov_requested and _ov_unknown:
+            _ov_list = ", ".join(_ov_unknown)
+            if override_active:
+                warn("warning", "inverter_override_unknown",
+                     f"Nepodarilo sa spárovať menič z plánovača s katalógom výrobcu '{vendor_key}': {_ov_list} — "
+                     f"v ponuke nie je, doplň ho ručne.", items=list(_ov_unknown))
+            else:
+                warn("warning", "inverter_override_unknown",
+                     f"Nepodarilo sa spárovať žiadny menič z plánovača s katalógom výrobcu '{vendor_key}' ({_ov_list}) — "
+                     f"použitý automatický výber.", items=list(_ov_unknown))
         if not picked_inv:
             warn("warning", "no_inverter", "Výrobca nemá v katalógu žiadny menič — ponuka je bez meničov.")
         for p in picked_inv:
@@ -667,6 +811,18 @@ def calculate_bom_v2(sb, config: dict) -> dict:
                 sku=inv.get("key"), ac_kw=_num(inv.get("ac_kw")))
         # Σ AC výkon vybraných meničov — základ pre rozvádzač AC, PD, MTP a dispečing
         ac_kw_total = round(sum(_num(p["inverter"].get("ac_kw")) * p["qty"] for p in picked_inv), 2)
+        if override_active:
+            # F3: zostavu meničov určil plánovač — automatický výber (okno DC/AC) tu nerozhoduje, len upozorníme
+            if ac_kw_total <= 0:
+                warn("warning", "inverter_override_ratio",
+                     "Zvolené meniče z plánovača majú AC výkon 0 kW — pomer DC/AC sa nedá vyhodnotiť; over zostavu meničov.")
+            else:
+                _ratio = kwp_actual / ac_kw_total
+                if _ratio < MIN_OVERSIZE - 1e-9 or _ratio > MAX_OVERSIZE + 1e-9:
+                    warn("warning", "inverter_override_ratio",
+                         f"Pomer DC/AC {_ratio:.2f} ({kwp_actual:g} kWp / {ac_kw_total:g} kW AC) je mimo rozsahu "
+                         f"{MIN_OVERSIZE:g}–{MAX_OVERSIZE:g} — over zostavu meničov z plánovača.",
+                         ratio=round(_ratio, 3))
         # E-12: žiadna kombinácia do MAX_INVERTER_UNITS kusov nevyhovela → n × najväčší menič (výber bez signálu by klamal)
         _fb = next((p for p in picked_inv if p.get("fallback")), None)
         if _fb:
@@ -706,21 +862,87 @@ def calculate_bom_v2(sb, config: dict) -> dict:
                         ai_note=f"Auto pri >{_thr:g} kW; kompatibilné so všetkými meničmi")
 
         # ===== 3. KONŠTRUKCIA (+ záťaž pri východ-západ) =====
-        k_rules = _load_konstrukcia_rule(sb, typ_strechy) if typ_strechy else []
-        if not k_rules:
-            warn("warning", "konstrukcia_missing",
-                 f"Pre typ strechy '{typ_strechy}' nie je v cenníku konštrukcia — ponuka je bez konštrukcie, doplň ju ručne.")
-        for r in k_rules:
-            # qty_formula a jednotka z DB (konštrukcia je od F0 na kWp; staré dáta: ks podľa počtu panelov)
-            _kwp_unit = str(r.get("unit") or "").strip().lower() == "kwp"
-            k_qty = _rule_qty(r, kwp_actual, pocet_panelov, default=kwp_actual if _kwp_unit else pocet_panelov)
-            add_from_rule("Konštrukcia", r, k_qty, f"konstrukcia.{r['rule_key']}")
-        if typ_strechy == "vychod_zapad":
-            r = rule("zatiaz", "vz")
-            if r:
-                add_from_rule("Konštrukcia", r, _rule_qty(r, kwp_actual, pocet_panelov, default=kwp_actual), "zatiaz.vz")
-            else:
-                missing_rule("zatiaz", "vz", "Záťaž konštrukcie (V-Z)")
+        # F3: konstrukcia_mix = konštrukcia po častiach strechy (plánovač FVE). Bez poľa alebo s jediným typom platí
+        # presne doterajšie správanie (jediný typ len nahradí typ_strechy); od 2 typov ide jeden riadok konštrukcie
+        # na typ (qty = kWp časti) a záťaž V-Z len z kWp časti vychod_zapad. Od typu strechy nezávisí nič iné:
+        # montáž je podľa kWp pásma, vodiče/žľaby/rozvádzače podľa kWp a Σ AC (len varovanie o zemnej konštrukcii
+        # sa vyhodnocuje zo všetkých častí, viď out_of_scope nižšie).
+        _k_cache: dict = {}
+
+        def k_rules_for(typ):
+            """Aktívne pravidlá konštrukcie typu strechy (1 dopyt na typ)."""
+            ck = repr(typ)   # repr: kľúč je vždy hashovateľný (aj pri nesprávnom type vo vstupe)
+            if ck not in _k_cache:
+                _k_cache[ck] = _load_konstrukcia_rule(sb, typ) if typ else []
+            return _k_cache[ck]
+
+        _mix = _parse_konstrukcia_mix(config.get("konstrukcia_mix"))
+        if _mix:
+            _base = typ_strechy if (typ_strechy is None or isinstance(typ_strechy, str)) else str(typ_strechy)
+            _resolved: dict = {}
+            _unknown_mix: list[tuple[str, float]] = []
+            for _t, _k in _mix:
+                if k_rules_for(_t):
+                    _resolved[_t] = _resolved.get(_t, 0.0) + _k
+                else:   # typ bez pravidla v cenníku → jeho kWp sa oceňujú ako typ_strechy z configu
+                    _unknown_mix.append((_t, _k))
+                    _resolved[_base] = _resolved.get(_base, 0.0) + _k
+            if _unknown_mix:
+                warn("warning", "konstrukcia_mix_unknown",
+                     "Typ strechy z plánovača nie je v cenníku konštrukcie: "
+                     + ", ".join(f"{t} ({k:g} kWp)" for t, k in _unknown_mix)
+                     + f" — jeho kWp sú ocenené ako '{_base}' (typ_strechy). Over konštrukciu.",
+                     items=[t for t, _ in _unknown_mix])
+            _parts = [(t, round(k, 2)) for t, k in _resolved.items()]
+            if len(_parts) >= 2:
+                _sum = round(sum(k for _, k in _parts), 2)
+                if kwp_actual > 0 and abs(_sum - kwp_actual) / kwp_actual > MIX_KWP_TOLERANCE + 1e-9:
+                    warn("info", "konstrukcia_mix_kwp",
+                         f"Súčet kWp v častiach strechy ({_sum:g} kWp) sa líši od kWp ponuky ({kwp_actual:g} kWp) o "
+                         f"{abs(_sum - kwp_actual) / kwp_actual * 100:.1f} % — kWp častí konštrukcie sú prepočítané pomerne.",
+                         kwp_mix=_sum)
+                    _parts = _scale_mix_parts(_parts, kwp_actual)
+            if len(_parts) >= 2:
+                mix_parts = _parts
+            elif _parts:
+                typ_strechy = _parts[0][0]   # jediný typ → presne doterajšie správanie
+
+        if mix_parts:
+            _mix_panels = dict(zip([t for t, _ in mix_parts], _split_int(pocet_panelov, [k for _, k in mix_parts])))
+            for _t, _pk in mix_parts:
+                _rs = k_rules_for(_t)
+                if not _rs:
+                    warn("warning", "konstrukcia_missing",
+                         f"Pre typ strechy '{_t}' nie je v cenníku konštrukcia — ponuka je bez konštrukcie pre "
+                         f"{_pk:g} kWp, doplň ju ručne.")
+                for r in _rs:
+                    _kwp_unit = str(r.get("unit") or "").strip().lower() == "kwp"
+                    k_qty = _rule_qty(r, _pk, _mix_panels[_t], default=_pk if _kwp_unit else _mix_panels[_t])
+                    add_from_rule("Konštrukcia", r, k_qty, f"konstrukcia.{r['rule_key']}")
+            _vz_kwp = next((k for t, k in mix_parts if t == "vychod_zapad"), None)
+            if _vz_kwp is not None:   # záťaž len pre kWp časti východ-západ
+                r = rule("zatiaz", "vz")
+                if r:
+                    add_from_rule("Konštrukcia", r, _rule_qty(r, _vz_kwp, _mix_panels["vychod_zapad"], default=_vz_kwp),
+                                  "zatiaz.vz")
+                else:
+                    missing_rule("zatiaz", "vz", "Záťaž konštrukcie (V-Z)")
+        else:
+            k_rules = k_rules_for(typ_strechy)
+            if not k_rules:
+                warn("warning", "konstrukcia_missing",
+                     f"Pre typ strechy '{typ_strechy}' nie je v cenníku konštrukcia — ponuka je bez konštrukcie, doplň ju ručne.")
+            for r in k_rules:
+                # qty_formula a jednotka z DB (konštrukcia je od F0 na kWp; staré dáta: ks podľa počtu panelov)
+                _kwp_unit = str(r.get("unit") or "").strip().lower() == "kwp"
+                k_qty = _rule_qty(r, kwp_actual, pocet_panelov, default=kwp_actual if _kwp_unit else pocet_panelov)
+                add_from_rule("Konštrukcia", r, k_qty, f"konstrukcia.{r['rule_key']}")
+            if typ_strechy == "vychod_zapad":
+                r = rule("zatiaz", "vz")
+                if r:
+                    add_from_rule("Konštrukcia", r, _rule_qty(r, kwp_actual, pocet_panelov, default=kwp_actual), "zatiaz.vz")
+                else:
+                    missing_rule("zatiaz", "vz", "Záťaž konštrukcie (V-Z)")
 
         # ===== 4. ROZVÁDZAČ DC (pri FVE vždy, vypínateľný has_dc_rozvadzac) =====
         if _flag(config.get("has_dc_rozvadzac"), True):
@@ -825,6 +1047,12 @@ def calculate_bom_v2(sb, config: dict) -> dict:
             picked_batt, bess_kwh_effective = build_battery()
             if picked_batt:
                 build_ems(default_on=False)
+                # F3: rezidenčná batéria potrebuje hybridný menič — pri inverters_override ho nevyberá jadro, len upozorní
+                if (override_active and not any(p["inverter"].get("hybrid") for p in picked_inv)
+                        and any((p["battery"].get("battery_class") or "residential") != "industrial" for p in picked_batt)):
+                    warn("warning", "inverter_override_no_hybrid",
+                         "Rezidenčná batéria, ale medzi meničmi z plánovača nie je žiadny hybridný menič — batériu "
+                         "nie je možné zapojiť; over zostavu meničov alebo doplň hybrid.")
         elif has_bess:
             warn("warning", "bess_missing_qty",
                  "Batéria je zapnutá, ale bez počtu, kapacity (kWh) alebo modelu — batéria nie je v ponuke.")
@@ -884,8 +1112,9 @@ def calculate_bom_v2(sb, config: dict) -> dict:
         warn("info", "rs_recommendation",
              "💡 Optimizéry + Rapid Shutdown — vyžadované pre verejné budovy podľa STN EN 50549.")
 
-    # Batéria bez hybridného meniča (napr. Sungrow nemá hybrid) — varovanie, nie ticho
-    if picked_batt and picked_inv and not all(p["inverter"].get("hybrid") for p in picked_inv):
+    # Batéria bez hybridného meniča (napr. Sungrow nemá hybrid) — varovanie, nie ticho.
+    # Pri inverters_override zostavu určil plánovač: platí inverter_override_no_hybrid (nižšie pri batérii), nie tento výber.
+    if picked_batt and picked_inv and not override_active and not all(p["inverter"].get("hybrid") for p in picked_inv):
         warn("warning", "no_hybrid",
              "Pri batérii nebol nájdený vhodný hybridný menič pre tento výkon — vybraný stringový. "
              "Skontroluj zostavu/doplň hybrid model.")
@@ -895,7 +1124,8 @@ def calculate_bom_v2(sb, config: dict) -> dict:
         warn("warning", "out_of_scope",
              f"Výkon {kwp_actual:g} kWp je nad {SCOPE_MAX_KWP:g} kWp — mimo bežného rozsahu kalkulačky, "
              f"výsledok ber ako orientačný.")
-    if typ_strechy in GROUND_ROOFS and not bess_only:
+    # (pri konstrukcia_mix s >= 2 typmi stačí, aby zemná bola aspoň jedna časť strechy)
+    if any(t in GROUND_ROOFS for t in ([t for t, _ in mix_parts] or [typ_strechy])) and not bess_only:
         warn("warning", "out_of_scope",
              "Zemná konštrukcia je mimo bežného rozsahu kalkulačky — over položky, ktoré kalkulačka nepokrýva "
              "(výkopy, kabeláž, oplotenie).")
@@ -910,16 +1140,20 @@ def calculate_bom_v2(sb, config: dict) -> dict:
     total_cost = sum(it["total_cost"] for it in items)
     total_price = sum(it["total_price"] for it in items)
 
+    out_config = {
+        "vendor_stack": vendor_key,
+        "vendor_display": stack.get("display_name"),
+        "typ_strechy": typ_strechy,
+        "panel": panel,
+        "pocet_panelov": pocet_panelov,
+        "kwp_actual": kwp_actual,
+    }
+    if mix_parts:   # F3: konštrukcia po častiach — kWp častí tak, ako boli ocenené (po zlúčení a prepočte)
+        out_config["konstrukcia_mix"] = [{"typ_strechy": t, "kwp": k} for t, k in mix_parts]
+
     return {
         "ok": True,
-        "config": {
-            "vendor_stack": vendor_key,
-            "vendor_display": stack.get("display_name"),
-            "typ_strechy": typ_strechy,
-            "panel": panel,
-            "pocet_panelov": pocet_panelov,
-            "kwp_actual": kwp_actual,
-        },
+        "config": out_config,
         "items": items,
         "warnings": warnings,
         "totals": {
@@ -936,6 +1170,7 @@ def calculate_bom_v2(sb, config: dict) -> dict:
             "total_price": round(total_price, 2),
             "total_margin_eur": round(total_price - total_cost, 2),
             "items_count": len(items),
+            "inverters_source": "override" if override_active else "auto",
         },
     }
 

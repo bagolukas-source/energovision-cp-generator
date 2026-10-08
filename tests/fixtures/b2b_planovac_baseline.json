@@ -1,0 +1,444 @@
+{
+  "_meta": {"popis": "Výstup calculate_bom_v2 BEZ nových polí (FakeSB: f0_rules + b2b_vendor_stacks.json); totals.inverters_source sa neporovnáva. Generuje: python3 tests/test_b2b_planovac.py --regen-baseline", "zdroj": "origin/main f752509 (pred Fázou 3)"},
+  "cases": {
+    "solinteg_trapez_112": {
+      "variant": "f0",
+      "overrides": {},
+      "result": {
+        "ok": true,
+        "config": {"kwp_actual": 59.92, "panel": {"cost": 80, "name": "LONGi Hi-MO X10 EcoLife LR7-60HVH-535M 535 Wp", "price_per_unit": 103.9, "sku": "LONGI535", "wp": 535}, "pocet_panelov": 112, "typ_strechy": "trapez", "vendor_display": "Solinteg 💎", "vendor_stack": "solinteg"},
+        "totals": {"ac_kw_total": 50.0, "bess_kwh_effective": 0.0, "items_count": 15, "kwp": 59.92, "margin_pct_effective": 22.0, "margin_pct_input": 22.0, "panel_wp": 535, "pocet_menicov": 1, "pocet_panelov": 112, "requires_asdr": false, "total_cost": 29773.21, "total_margin_eur": 8397.85, "total_price": 38171.06},
+        "items": [
+          {"category": "Panely", "cost_per_unit": 80.0, "position": 1, "price_per_unit": 102.56, "product_name": "LONGi Hi-MO X10 EcoLife LR7-60HVH-535M 535 Wp", "qty": 112, "rule_id": "panel.LONGI535", "total_cost": 8960.0, "total_price": 11486.72, "unit": "ks", "vendor_stack": "solinteg"},
+          {"ac_kw": 50.0, "category": "Striedače", "cost_per_unit": 3545.0, "position": 2, "price_per_unit": 4544.87, "product_name": "Solinteg MHT-50K-100 (3f hybrid)", "qty": 1, "rule_id": "menic.solinteg.solinteg_mht_50", "sku": "solinteg_mht_50", "total_cost": 3545.0, "total_price": 4544.87, "unit": "ks", "vendor_stack": "solinteg"},
+          {"category": "Monitoring", "cost_per_unit": 43.0, "position": 3, "price_per_unit": 55.13, "product_name": "Solinteg DuoCOM Wi-Fi/LAN 2 in 1 module", "qty": 1, "rule_id": "smart_manager.solinteg", "total_cost": 43.0, "total_price": 55.13, "unit": "ks", "vendor_stack": "solinteg"},
+          {"category": "Monitoring", "cost_per_unit": 99.0, "position": 4, "price_per_unit": 126.92, "product_name": "Solinteg Smart Meter (CT)", "qty": 1, "rule_id": "smart_meter.solinteg", "total_cost": 99.0, "total_price": 126.92, "unit": "ks", "vendor_stack": "solinteg"},
+          {"category": "Konštrukcia", "cost_per_unit": 34.0, "position": 5, "price_per_unit": 43.59, "product_name": "Konštrukcia - Trapéz", "qty": 59.92, "rule_id": "konstrukcia.trapez", "total_cost": 2037.28, "total_price": 2611.91, "unit": "kWp"},
+          {"category": "Rozvádzač", "cost_per_unit": 30.0, "position": 6, "price_per_unit": 38.46, "product_name": "Rozvádzač DC", "qty": 59.92, "rule_id": "rozvadzac_dc", "total_cost": 1797.6, "total_price": 2304.52, "unit": "kWp"},
+          {"category": "Rozvádzač", "cost_per_unit": 2500.0, "position": 7, "price_per_unit": 3205.13, "product_name": "Rozvádzač AC R50", "qty": 1, "rule_id": "rozvadzac.R50", "total_cost": 2500.0, "total_price": 3205.13, "unit": "ks"},
+          {"category": "Vodiče", "cost_per_unit": 15.38, "position": 8, "price_per_unit": 19.72, "product_name": "Vodiče DC", "qty": 59.92, "rule_id": "vodice.dc", "total_cost": 921.57, "total_price": 1181.62, "unit": "kWp"},
+          {"category": "Vodiče", "cost_per_unit": 20.0, "position": 9, "price_per_unit": 25.64, "product_name": "Vodiče AC", "qty": 59.92, "rule_id": "vodice.ac", "total_cost": 1198.4, "total_price": 1536.35, "unit": "kWp"},
+          {"category": "Spotrebný materiál", "cost_per_unit": 24.0, "position": 10, "price_per_unit": 30.77, "product_name": "Spotrebný materiál", "qty": 59.92, "rule_id": "spotrebny.standard", "total_cost": 1438.08, "total_price": 1843.74, "unit": "kWp"},
+          {"category": "Káblové žľaby", "cost_per_unit": 14.0, "position": 11, "price_per_unit": 17.95, "product_name": "Káblové žľaby", "qty": 59.92, "rule_id": "kablove_zlaby", "total_cost": 838.88, "total_price": 1075.56, "unit": "kWp"},
+          {"category": "Projektová dokumentácia", "cost_per_unit": 1800.0, "position": 12, "price_per_unit": 2307.69, "product_name": "Projektová dokumentácia PD50", "qty": 1, "rule_id": "pd.PD50", "total_cost": 1800.0, "total_price": 2307.69, "unit": "kpl"},
+          {"category": "Meranie", "cost_per_unit": 80.0, "position": 13, "price_per_unit": 102.56, "product_name": "Merací transformátor prúdu", "qty": 3, "rule_id": "mtp", "total_cost": 240.0, "total_price": 307.68, "unit": "ks"},
+          {"category": "Montáž", "cost_per_unit": 70.0, "position": 14, "price_per_unit": 89.74, "product_name": "Montáž", "qty": 59.92, "rule_id": "montaz.do_100", "total_cost": 4194.4, "total_price": 5377.22, "unit": "kWp"},
+          {"category": "Doprava", "cost_per_unit": 0.8, "position": 15, "price_per_unit": 1.03, "product_name": "Doprava materiálu", "qty": 200.0, "rule_id": "doprava.km", "total_cost": 160.0, "total_price": 206.0, "unit": "km"}
+        ],
+        "warnings": [
+        ]
+      }
+    },
+    "pon_26_1404_bess_112kwh": {
+      "variant": "f0",
+      "overrides": {"bess_class": "industrial", "bess_count": 1, "bess_kwh": 112, "bess_sku": "solinteg_e2br_112r", "has_bess": true, "margin_pct": 25.2, "vzdialenost_doprava": 200},
+      "result": {
+        "ok": true,
+        "config": {"kwp_actual": 59.92, "panel": {"cost": 80, "name": "LONGi Hi-MO X10 EcoLife LR7-60HVH-535M 535 Wp", "price_per_unit": 103.9, "sku": "LONGI535", "wp": 535}, "pocet_panelov": 112, "typ_strechy": "trapez", "vendor_display": "Solinteg 💎", "vendor_stack": "solinteg"},
+        "totals": {"ac_kw_total": 50.0, "bess_kwh_effective": 112.0, "items_count": 17, "kwp": 59.92, "margin_pct_effective": 25.2, "margin_pct_input": 25.2, "panel_wp": 535, "pocet_menicov": 1, "pocet_panelov": 112, "requires_asdr": false, "total_cost": 44922.21, "total_margin_eur": 15134.33, "total_price": 60056.54},
+        "items": [
+          {"category": "Panely", "cost_per_unit": 80.0, "position": 1, "price_per_unit": 106.95, "product_name": "LONGi Hi-MO X10 EcoLife LR7-60HVH-535M 535 Wp", "qty": 112, "rule_id": "panel.LONGI535", "total_cost": 8960.0, "total_price": 11978.4, "unit": "ks", "vendor_stack": "solinteg"},
+          {"ac_kw": 50.0, "category": "Striedače", "cost_per_unit": 3545.0, "position": 2, "price_per_unit": 4739.3, "product_name": "Solinteg MHT-50K-100 (3f hybrid)", "qty": 1, "rule_id": "menic.solinteg.solinteg_mht_50", "sku": "solinteg_mht_50", "total_cost": 3545.0, "total_price": 4739.3, "unit": "ks", "vendor_stack": "solinteg"},
+          {"category": "Monitoring", "cost_per_unit": 43.0, "position": 3, "price_per_unit": 57.49, "product_name": "Solinteg DuoCOM Wi-Fi/LAN 2 in 1 module", "qty": 1, "rule_id": "smart_manager.solinteg", "total_cost": 43.0, "total_price": 57.49, "unit": "ks", "vendor_stack": "solinteg"},
+          {"category": "Monitoring", "cost_per_unit": 99.0, "position": 4, "price_per_unit": 132.35, "product_name": "Solinteg Smart Meter (CT)", "qty": 1, "rule_id": "smart_meter.solinteg", "total_cost": 99.0, "total_price": 132.35, "unit": "ks", "vendor_stack": "solinteg"},
+          {"category": "Konštrukcia", "cost_per_unit": 34.0, "position": 5, "price_per_unit": 45.45, "product_name": "Konštrukcia - Trapéz", "qty": 59.92, "rule_id": "konstrukcia.trapez", "total_cost": 2037.28, "total_price": 2723.36, "unit": "kWp"},
+          {"category": "Rozvádzač", "cost_per_unit": 30.0, "position": 6, "price_per_unit": 40.11, "product_name": "Rozvádzač DC", "qty": 59.92, "rule_id": "rozvadzac_dc", "total_cost": 1797.6, "total_price": 2403.39, "unit": "kWp"},
+          {"category": "Rozvádzač", "cost_per_unit": 2500.0, "position": 7, "price_per_unit": 3342.25, "product_name": "Rozvádzač AC R50", "qty": 1, "rule_id": "rozvadzac.R50", "total_cost": 2500.0, "total_price": 3342.25, "unit": "ks"},
+          {"category": "Vodiče", "cost_per_unit": 15.38, "position": 8, "price_per_unit": 20.56, "product_name": "Vodiče DC", "qty": 59.92, "rule_id": "vodice.dc", "total_cost": 921.57, "total_price": 1231.96, "unit": "kWp"},
+          {"category": "Vodiče", "cost_per_unit": 20.0, "position": 9, "price_per_unit": 26.74, "product_name": "Vodiče AC", "qty": 59.92, "rule_id": "vodice.ac", "total_cost": 1198.4, "total_price": 1602.26, "unit": "kWp"},
+          {"category": "Spotrebný materiál", "cost_per_unit": 24.0, "position": 10, "price_per_unit": 32.09, "product_name": "Spotrebný materiál", "qty": 59.92, "rule_id": "spotrebny.standard", "total_cost": 1438.08, "total_price": 1922.83, "unit": "kWp"},
+          {"category": "Káblové žľaby", "cost_per_unit": 14.0, "position": 11, "price_per_unit": 18.72, "product_name": "Káblové žľaby", "qty": 59.92, "rule_id": "kablove_zlaby", "total_cost": 838.88, "total_price": 1121.7, "unit": "kWp"},
+          {"category": "Projektová dokumentácia", "cost_per_unit": 1800.0, "position": 12, "price_per_unit": 2406.42, "product_name": "Projektová dokumentácia PD50", "qty": 1, "rule_id": "pd.PD50", "total_cost": 1800.0, "total_price": 2406.42, "unit": "kpl"},
+          {"category": "Meranie", "cost_per_unit": 80.0, "position": 13, "price_per_unit": 106.95, "product_name": "Merací transformátor prúdu", "qty": 3, "rule_id": "mtp", "total_cost": 240.0, "total_price": 320.85, "unit": "ks"},
+          {"category": "Batéria", "cost_per_unit": 13399.0, "position": 14, "price_per_unit": 17913.1, "product_name": "Solinteg E2BR-S112K-R Indoor (112 kWh)", "qty": 1, "rule_id": "battery.solinteg_e2br_112r", "total_cost": 13399.0, "total_price": 17913.1, "unit": "ks", "vendor_stack": "solinteg"},
+          {"category": "Batéria", "cost_per_unit": 1750.0, "position": 15, "price_per_unit": 2339.57, "product_name": "Montáž batériového úložiska", "qty": 1, "rule_id": "battery.montaz", "total_cost": 1750.0, "total_price": 2339.57, "unit": "ks"},
+          {"category": "Montáž", "cost_per_unit": 70.0, "position": 16, "price_per_unit": 93.58, "product_name": "Montáž", "qty": 59.92, "rule_id": "montaz.do_100", "total_cost": 4194.4, "total_price": 5607.31, "unit": "kWp"},
+          {"category": "Doprava", "cost_per_unit": 0.8, "position": 17, "price_per_unit": 1.07, "product_name": "Doprava materiálu", "qty": 200.0, "rule_id": "doprava.km", "total_cost": 160.0, "total_price": 214.0, "unit": "km"}
+        ],
+        "warnings": [
+        ]
+      }
+    },
+    "huawei_vz_optimizery_rs_wallbox": {
+      "variant": "f0",
+      "overrides": {"has_optimizery": true, "has_rapid_shutdown": true, "has_wallbox": true, "pocet_panelov": 120, "typ_strechy": "vychod_zapad", "vendor_stack": "huawei", "wallbox_pocet": 2},
+      "result": {
+        "ok": true,
+        "config": {"kwp_actual": 64.2, "panel": {"cost": 80, "name": "LONGi Hi-MO X10 EcoLife LR7-60HVH-535M 535 Wp", "price_per_unit": 103.9, "sku": "LONGI535", "wp": 535}, "pocet_panelov": 120, "typ_strechy": "vychod_zapad", "vendor_display": "Huawei 🔋", "vendor_stack": "huawei"},
+        "totals": {"ac_kw_total": 50.0, "bess_kwh_effective": 0.0, "items_count": 22, "kwp": 64.2, "margin_pct_effective": 22.0, "margin_pct_input": 22.0, "panel_wp": 535, "pocet_menicov": 1, "pocet_panelov": 120, "requires_asdr": false, "total_cost": 42190.18, "total_margin_eur": 11899.92, "total_price": 54090.1},
+        "items": [
+          {"category": "Panely", "cost_per_unit": 80.0, "position": 1, "price_per_unit": 102.56, "product_name": "LONGi Hi-MO X10 EcoLife LR7-60HVH-535M 535 Wp", "qty": 120, "rule_id": "panel.LONGI535", "total_cost": 9600.0, "total_price": 12307.2, "unit": "ks", "vendor_stack": "huawei"},
+          {"ac_kw": 50.0, "category": "Striedače", "cost_per_unit": 4004.0, "position": 2, "price_per_unit": 5133.33, "product_name": "HUAWEI SUN2000-50KTL-M3", "qty": 1, "rule_id": "menic.huawei.sun2000_50ktl", "sku": "sun2000_50ktl", "total_cost": 4004.0, "total_price": 5133.33, "unit": "ks", "vendor_stack": "huawei"},
+          {"category": "Monitoring", "cost_per_unit": 736.89, "position": 3, "price_per_unit": 944.73, "product_name": "Huawei Smart Logger 3000A03 s MBUS", "qty": 1, "rule_id": "smart_manager.huawei", "total_cost": 736.89, "total_price": 944.73, "unit": "ks", "vendor_stack": "huawei"},
+          {"category": "Monitoring", "cost_per_unit": 123.2, "position": 4, "price_per_unit": 157.95, "product_name": "HUAWEI DTSU666-H 250A/50mA", "qty": 1, "rule_id": "smart_meter.huawei", "total_cost": 123.2, "total_price": 157.95, "unit": "ks", "vendor_stack": "huawei"},
+          {"ai_note": "Auto pri >30 kW; kompatibilné so všetkými meničmi", "category": "Diagnostika siete", "cost_per_unit": 309.6, "position": 5, "price_per_unit": 396.92, "product_name": "Janitza UMG 103-CBM (sietovy analyzator)", "qty": 1, "rule_id": "accessory.janitza_umg103cbm", "total_cost": 309.6, "total_price": 396.92, "unit": "ks", "vendor_stack": "huawei"},
+          {"category": "Konštrukcia", "cost_per_unit": 80.0, "position": 6, "price_per_unit": 102.56, "product_name": "Konštrukcia - V-Z", "qty": 64.2, "rule_id": "konstrukcia.vychod_zapad", "total_cost": 5136.0, "total_price": 6584.35, "unit": "kWp"},
+          {"category": "Konštrukcia", "cost_per_unit": 10.0, "position": 7, "price_per_unit": 12.82, "product_name": "Záťaž konštrukcie (V-Z)", "qty": 64.2, "rule_id": "zatiaz.vz", "total_cost": 642.0, "total_price": 823.04, "unit": "kWp"},
+          {"category": "Rozvádzač", "cost_per_unit": 30.0, "position": 8, "price_per_unit": 38.46, "product_name": "Rozvádzač DC", "qty": 64.2, "rule_id": "rozvadzac_dc", "total_cost": 1926.0, "total_price": 2469.13, "unit": "kWp"},
+          {"category": "Rozvádzač", "cost_per_unit": 2500.0, "position": 9, "price_per_unit": 3205.13, "product_name": "Rozvádzač AC R50", "qty": 1, "rule_id": "rozvadzac.R50", "total_cost": 2500.0, "total_price": 3205.13, "unit": "ks"},
+          {"category": "Vodiče", "cost_per_unit": 15.38, "position": 10, "price_per_unit": 19.72, "product_name": "Vodiče DC", "qty": 64.2, "rule_id": "vodice.dc", "total_cost": 987.4, "total_price": 1266.02, "unit": "kWp"},
+          {"category": "Vodiče", "cost_per_unit": 20.0, "position": 11, "price_per_unit": 25.64, "product_name": "Vodiče AC", "qty": 64.2, "rule_id": "vodice.ac", "total_cost": 1284.0, "total_price": 1646.09, "unit": "kWp"},
+          {"category": "Spotrebný materiál", "cost_per_unit": 24.0, "position": 12, "price_per_unit": 30.77, "product_name": "Spotrebný materiál", "qty": 64.2, "rule_id": "spotrebny.standard", "total_cost": 1540.8, "total_price": 1975.43, "unit": "kWp"},
+          {"category": "Káblové žľaby", "cost_per_unit": 14.0, "position": 13, "price_per_unit": 17.95, "product_name": "Káblové žľaby", "qty": 64.2, "rule_id": "kablove_zlaby", "total_cost": 898.8, "total_price": 1152.39, "unit": "kWp"},
+          {"category": "Projektová dokumentácia", "cost_per_unit": 1800.0, "position": 14, "price_per_unit": 2307.69, "product_name": "Projektová dokumentácia PD50", "qty": 1, "rule_id": "pd.PD50", "total_cost": 1800.0, "total_price": 2307.69, "unit": "kpl"},
+          {"category": "Meranie", "cost_per_unit": 80.0, "position": 15, "price_per_unit": 102.56, "product_name": "Merací transformátor prúdu", "qty": 3, "rule_id": "mtp", "total_cost": 240.0, "total_price": 307.68, "unit": "ks"},
+          {"ai_note": "Native Huawei optimizer — NIE Tigo (pre Huawei meniče)", "category": "Optimizéry", "cost_per_unit": 50.05, "position": 16, "price_per_unit": 64.17, "product_name": "HUAWEI MERC-1300W (Smart PV Optimizer)", "qty": 60, "rule_id": "optimizer.huawei.huawei_merc", "total_cost": 3003.0, "total_price": 3850.2, "unit": "ks", "vendor_stack": "huawei"},
+          {"category": "Rapid Shutdown", "cost_per_unit": 39.039, "position": 17, "price_per_unit": 50.05, "product_name": "Rapid Shutdown BFS-12", "qty": 30, "rule_id": "rapid_shutdown.bfs12", "total_cost": 1171.17, "total_price": 1501.5, "unit": "ks"},
+          {"category": "Rapid Shutdown", "cost_per_unit": 34.034, "position": 18, "price_per_unit": 43.63, "product_name": "Rapid Shutdown ESW-12", "qty": 1, "rule_id": "rapid_shutdown.esw12", "total_cost": 34.03, "total_price": 43.63, "unit": "ks"},
+          {"category": "Rapid Shutdown", "cost_per_unit": 3.003, "position": 19, "price_per_unit": 3.85, "product_name": "Montáž Rapid Shutdown", "qty": 30, "rule_id": "rapid_shutdown.montaz_rs", "total_cost": 90.09, "total_price": 115.5, "unit": "ks"},
+          {"category": "Wallbox", "cost_per_unit": 754.6, "position": 20, "price_per_unit": 967.44, "product_name": "HUAWEI Smart Charger 22kW", "qty": 2, "rule_id": "wallbox.huawei.huawei_smart_charger", "total_cost": 1509.2, "total_price": 1934.88, "unit": "ks"},
+          {"category": "Montáž", "cost_per_unit": 70.0, "position": 21, "price_per_unit": 89.74, "product_name": "Montáž", "qty": 64.2, "rule_id": "montaz.do_100", "total_cost": 4494.0, "total_price": 5761.31, "unit": "kWp"},
+          {"category": "Doprava", "cost_per_unit": 0.8, "position": 22, "price_per_unit": 1.03, "product_name": "Doprava materiálu", "qty": 200.0, "rule_id": "doprava.km", "total_cost": 160.0, "total_price": 206.0, "unit": "km"}
+        ],
+        "warnings": [
+          {"items": ["HUAWEI SUN2000-50KTL-M3", "Huawei Smart Logger 3000A03 s MBUS", "HUAWEI DTSU666-H 250A/50mA", "HUAWEI MERC-1300W (Smart PV Optimizer)", "Rapid Shutdown BFS-12", "Rapid Shutdown ESW-12", "Montáž Rapid Shutdown", "HUAWEI Smart Charger 22kW"], "kind": "cost_estimated", "message": "Nákup nie je v dátach, odhadnutý ako 77 % z cenníkovej ceny pre: HUAWEI SUN2000-50KTL-M3; Huawei Smart Logger 3000A03 s MBUS; HUAWEI DTSU666-H 250A/50mA; HUAWEI MERC-1300W (Smart PV Optimizer); Rapid Shutdown BFS-12; Rapid Shutdown ESW-12; Montáž Rapid Shutdown; HUAWEI Smart Charger 22kW. Doplň nákupné ceny.", "severity": "warning"},
+          {"kind": "vendor_match", "message": "✓ Huawei stack používa natívne optimizéry HUAWEI MERC — nie Tigo (nekompatibilné)", "severity": "info"}
+        ]
+      }
+    },
+    "sungrow_juzna_160kwp_ssd": {
+      "variant": "f0",
+      "overrides": {"distribucka": "SSD", "pocet_panelov": 300, "typ_strechy": "juzna", "vendor_stack": "sungrow"},
+      "result": {
+        "ok": true,
+        "config": {"kwp_actual": 160.5, "panel": {"cost": 80, "name": "LONGi Hi-MO X10 EcoLife LR7-60HVH-535M 535 Wp", "price_per_unit": 103.9, "sku": "LONGI535", "wp": 535}, "pocet_panelov": 300, "typ_strechy": "juzna", "vendor_display": "Sungrow ⚡", "vendor_stack": "sungrow"},
+        "totals": {"ac_kw_total": 125.0, "bess_kwh_effective": 0.0, "items_count": 18, "kwp": 160.5, "margin_pct_effective": 22.0, "margin_pct_input": 22.0, "panel_wp": 535, "pocet_menicov": 1, "pocet_panelov": 300, "requires_asdr": true, "total_cost": 108694.29, "total_margin_eur": 30656.54, "total_price": 139350.83},
+        "items": [
+          {"category": "Panely", "cost_per_unit": 80.0, "position": 1, "price_per_unit": 102.56, "product_name": "LONGi Hi-MO X10 EcoLife LR7-60HVH-535M 535 Wp", "qty": 300, "rule_id": "panel.LONGI535", "total_cost": 24000.0, "total_price": 30768.0, "unit": "ks", "vendor_stack": "sungrow"},
+          {"ac_kw": 125.0, "category": "Striedače", "cost_per_unit": 3473.0, "position": 2, "price_per_unit": 4452.56, "product_name": "Sungrow SG125CX-P2", "qty": 1, "rule_id": "menic.sungrow.sg125cx", "sku": "sg125cx", "total_cost": 3473.0, "total_price": 4452.56, "unit": "ks", "vendor_stack": "sungrow"},
+          {"category": "Monitoring", "cost_per_unit": 654.5, "position": 3, "price_per_unit": 839.1, "product_name": "Sungrow COM100E", "qty": 1, "rule_id": "smart_manager.sungrow", "total_cost": 654.5, "total_price": 839.1, "unit": "ks", "vendor_stack": "sungrow"},
+          {"category": "Monitoring", "cost_per_unit": 223.3, "position": 4, "price_per_unit": 286.28, "product_name": "Smartmeter Sungrow", "qty": 1, "rule_id": "smart_meter.sungrow", "total_cost": 223.3, "total_price": 286.28, "unit": "ks", "vendor_stack": "sungrow"},
+          {"category": "Konštrukcia", "cost_per_unit": 132.0, "position": 5, "price_per_unit": 169.23, "product_name": "Konštrukcia - Južná", "qty": 160.5, "rule_id": "konstrukcia.juzna", "total_cost": 21186.0, "total_price": 27161.41, "unit": "kWp"},
+          {"category": "Rozvádzač", "cost_per_unit": 30.0, "position": 6, "price_per_unit": 38.46, "product_name": "Rozvádzač DC", "qty": 160.5, "rule_id": "rozvadzac_dc", "total_cost": 4815.0, "total_price": 6172.83, "unit": "kWp"},
+          {"category": "Rozvádzač", "cost_per_unit": 6000.0, "position": 7, "price_per_unit": 7692.31, "product_name": "Rozvádzač AC R200", "qty": 1, "rule_id": "rozvadzac.R200", "total_cost": 6000.0, "total_price": 7692.31, "unit": "ks"},
+          {"category": "Vodiče", "cost_per_unit": 15.38, "position": 8, "price_per_unit": 19.72, "product_name": "Vodiče DC", "qty": 160.5, "rule_id": "vodice.dc", "total_cost": 2468.49, "total_price": 3165.06, "unit": "kWp"},
+          {"category": "Vodiče", "cost_per_unit": 20.0, "position": 9, "price_per_unit": 25.64, "product_name": "Vodiče AC", "qty": 160.5, "rule_id": "vodice.ac", "total_cost": 3210.0, "total_price": 4115.22, "unit": "kWp"},
+          {"category": "Spotrebný materiál", "cost_per_unit": 24.0, "position": 10, "price_per_unit": 30.77, "product_name": "Spotrebný materiál", "qty": 160.5, "rule_id": "spotrebny.standard", "total_cost": 3852.0, "total_price": 4938.59, "unit": "kWp"},
+          {"category": "Káblové žľaby", "cost_per_unit": 14.0, "position": 11, "price_per_unit": 17.95, "product_name": "Káblové žľaby", "qty": 160.5, "rule_id": "kablove_zlaby", "total_cost": 2247.0, "total_price": 2880.97, "unit": "kWp"},
+          {"category": "Projektová dokumentácia", "cost_per_unit": 4080.0, "position": 12, "price_per_unit": 5230.77, "product_name": "Projektová dokumentácia PD200", "qty": 1, "rule_id": "pd.PD200", "total_cost": 4080.0, "total_price": 5230.77, "unit": "kpl"},
+          {"category": "Statika a PBS", "cost_per_unit": 500.0, "position": 13, "price_per_unit": 641.03, "product_name": "Statický posudok", "qty": 1, "rule_id": "statika", "total_cost": 500.0, "total_price": 641.03, "unit": "kpl"},
+          {"category": "Statika a PBS", "cost_per_unit": 350.0, "position": 14, "price_per_unit": 448.72, "product_name": "Projekt požiarnej bezpečnosti", "qty": 1, "rule_id": "ppbs", "total_cost": 350.0, "total_price": 448.72, "unit": "kpl"},
+          {"category": "Meranie", "cost_per_unit": 80.0, "position": 15, "price_per_unit": 102.56, "product_name": "Merací transformátor prúdu", "qty": 3, "rule_id": "mtp", "total_cost": 240.0, "total_price": 307.68, "unit": "ks"},
+          {"category": "Dispečerské riadenie", "cost_per_unit": 20000.0, "position": 16, "price_per_unit": 25641.03, "product_name": "Dispečerské riadenie SSD", "qty": 1, "rule_id": "dispecing.SSD", "total_cost": 20000.0, "total_price": 25641.03, "unit": "kpl"},
+          {"category": "Montáž", "cost_per_unit": 70.0, "position": 17, "price_per_unit": 89.74, "product_name": "Montáž", "qty": 160.5, "rule_id": "montaz.do_250", "total_cost": 11235.0, "total_price": 14403.27, "unit": "kWp"},
+          {"category": "Doprava", "cost_per_unit": 0.8, "position": 18, "price_per_unit": 1.03, "product_name": "Doprava materiálu", "qty": 200.0, "rule_id": "doprava.km", "total_cost": 160.0, "total_price": 206.0, "unit": "km"}
+        ],
+        "warnings": [
+          {"items": ["Sungrow COM100E", "Smartmeter Sungrow"], "kind": "cost_estimated", "message": "Nákup nie je v dátach, odhadnutý ako 77 % z cenníkovej ceny pre: Sungrow COM100E; Smartmeter Sungrow. Doplň nákupné ceny.", "severity": "warning"},
+          {"kind": "bess_recommendation", "message": "💡 Pri 160.5 kWp >> 100 odporúčam zvážiť BESS — pre arbitráž a peak shaving. Návratnosť +0.5-1 rok.", "severity": "info"}
+        ]
+      }
+    },
+    "goodwe_skridla_bateria_rez": {
+      "variant": "f0",
+      "overrides": {"bess_class": "residential", "bess_kwh": 20, "has_bess": true, "pocet_panelov": 56, "typ_strechy": "skridla", "vendor_stack": "goodwe"},
+      "result": {
+        "ok": true,
+        "config": {"kwp_actual": 29.96, "panel": {"cost": 80, "name": "LONGi Hi-MO X10 EcoLife LR7-60HVH-535M 535 Wp", "price_per_unit": 103.9, "sku": "LONGI535", "wp": 535}, "pocet_panelov": 56, "typ_strechy": "skridla", "vendor_display": "GoodWe 🌐", "vendor_stack": "goodwe"},
+        "totals": {"ac_kw_total": 25.0, "bess_kwh_effective": 20.24, "items_count": 17, "kwp": 29.96, "margin_pct_effective": 22.0, "margin_pct_input": 22.0, "panel_wp": 535, "pocet_menicov": 2, "pocet_panelov": 56, "requires_asdr": false, "total_cost": 21553.22, "total_margin_eur": 6079.81, "total_price": 27633.03},
+        "items": [
+          {"category": "Panely", "cost_per_unit": 80.0, "position": 1, "price_per_unit": 102.56, "product_name": "LONGi Hi-MO X10 EcoLife LR7-60HVH-535M 535 Wp", "qty": 56, "rule_id": "panel.LONGI535", "total_cost": 4480.0, "total_price": 5743.36, "unit": "ks", "vendor_stack": "goodwe"},
+          {"ac_kw": 10.0, "category": "Striedače", "cost_per_unit": 1025.0, "position": 2, "price_per_unit": 1314.1, "product_name": "GoodWe GW10K-ET", "qty": 1, "rule_id": "menic.goodwe.gw_et_10", "sku": "gw_et_10", "total_cost": 1025.0, "total_price": 1314.1, "unit": "ks", "vendor_stack": "goodwe"},
+          {"ac_kw": 15.0, "category": "Striedače", "cost_per_unit": 1458.0, "position": 3, "price_per_unit": 1869.23, "product_name": "GoodWe GW15K-ET", "qty": 1, "rule_id": "menic.goodwe.gw_et_15", "sku": "gw_et_15", "total_cost": 1458.0, "total_price": 1869.23, "unit": "ks", "vendor_stack": "goodwe"},
+          {"category": "Monitoring", "cost_per_unit": 169.4, "position": 4, "price_per_unit": 217.18, "product_name": "GoodWe Smart Meter GM3000", "qty": 1, "rule_id": "smart_manager.goodwe", "total_cost": 169.4, "total_price": 217.18, "unit": "ks", "vendor_stack": "goodwe"},
+          {"category": "Monitoring", "cost_per_unit": 138.6, "position": 5, "price_per_unit": 177.69, "product_name": "GoodWe EzLogger Pro WiFi", "qty": 1, "rule_id": "smart_meter.goodwe", "total_cost": 138.6, "total_price": 177.69, "unit": "ks", "vendor_stack": "goodwe"},
+          {"category": "Konštrukcia", "cost_per_unit": 81.0, "position": 6, "price_per_unit": 103.85, "product_name": "Konštrukcia - Škridla", "qty": 29.96, "rule_id": "konstrukcia.skridla", "total_cost": 2426.76, "total_price": 3111.35, "unit": "kWp"},
+          {"category": "Rozvádzač", "cost_per_unit": 30.0, "position": 7, "price_per_unit": 38.46, "product_name": "Rozvádzač DC", "qty": 29.96, "rule_id": "rozvadzac_dc", "total_cost": 898.8, "total_price": 1152.26, "unit": "kWp"},
+          {"category": "Rozvádzač", "cost_per_unit": 1200.0, "position": 8, "price_per_unit": 1538.46, "product_name": "Rozvádzač AC R30", "qty": 1, "rule_id": "rozvadzac.R30", "total_cost": 1200.0, "total_price": 1538.46, "unit": "ks"},
+          {"category": "Vodiče", "cost_per_unit": 15.38, "position": 9, "price_per_unit": 19.72, "product_name": "Vodiče DC", "qty": 29.96, "rule_id": "vodice.dc", "total_cost": 460.78, "total_price": 590.81, "unit": "kWp"},
+          {"category": "Vodiče", "cost_per_unit": 20.0, "position": 10, "price_per_unit": 25.64, "product_name": "Vodiče AC", "qty": 29.96, "rule_id": "vodice.ac", "total_cost": 599.2, "total_price": 768.17, "unit": "kWp"},
+          {"category": "Spotrebný materiál", "cost_per_unit": 24.0, "position": 11, "price_per_unit": 30.77, "product_name": "Spotrebný materiál", "qty": 29.96, "rule_id": "spotrebny.standard", "total_cost": 719.04, "total_price": 921.87, "unit": "kWp"},
+          {"category": "Káblové žľaby", "cost_per_unit": 14.0, "position": 12, "price_per_unit": 17.95, "product_name": "Káblové žľaby", "qty": 29.96, "rule_id": "kablove_zlaby", "total_cost": 419.44, "total_price": 537.78, "unit": "kWp"},
+          {"category": "Projektová dokumentácia", "cost_per_unit": 1200.0, "position": 13, "price_per_unit": 1538.46, "product_name": "Projektová dokumentácia PD30", "qty": 1, "rule_id": "pd.PD30", "total_cost": 1200.0, "total_price": 1538.46, "unit": "kpl"},
+          {"category": "Batéria", "cost_per_unit": 3801.0, "position": 14, "price_per_unit": 4873.08, "product_name": "Dyness Tower TS21 (20,2 kWh)", "qty": 1, "rule_id": "battery.dyness_tower_ts21", "total_cost": 3801.0, "total_price": 4873.08, "unit": "ks", "vendor_stack": "goodwe"},
+          {"category": "Batéria", "cost_per_unit": 300.0, "position": 15, "price_per_unit": 384.62, "product_name": "Montáž batérie (rezidenčná sada)", "qty": 1, "rule_id": "battery.montaz", "total_cost": 300.0, "total_price": 384.62, "unit": "kpl"},
+          {"category": "Montáž", "cost_per_unit": 70.0, "position": 16, "price_per_unit": 89.74, "product_name": "Montáž", "qty": 29.96, "rule_id": "montaz.do_30", "total_cost": 2097.2, "total_price": 2688.61, "unit": "kWp"},
+          {"category": "Doprava", "cost_per_unit": 0.8, "position": 17, "price_per_unit": 1.03, "product_name": "Doprava materiálu", "qty": 200.0, "rule_id": "doprava.km", "total_cost": 160.0, "total_price": 206.0, "unit": "km"}
+        ],
+        "warnings": [
+          {"items": ["GoodWe Smart Meter GM3000", "GoodWe EzLogger Pro WiFi"], "kind": "cost_estimated", "message": "Nákup nie je v dátach, odhadnutý ako 77 % z cenníkovej ceny pre: GoodWe Smart Meter GM3000; GoodWe EzLogger Pro WiFi. Doplň nákupné ceny.", "severity": "warning"}
+        ]
+      }
+    },
+    "huawei_falcovany_bateria_pocet": {
+      "variant": "f0",
+      "overrides": {"bess_class": "residential", "bess_count": 3, "bess_sku": "luna2000_5", "has_bess": true, "pocet_panelov": 80, "typ_strechy": "falcovany_plech", "vendor_stack": "huawei"},
+      "result": {
+        "ok": true,
+        "config": {"kwp_actual": 42.8, "panel": {"cost": 80, "name": "LONGi Hi-MO X10 EcoLife LR7-60HVH-535M 535 Wp", "price_per_unit": 103.9, "sku": "LONGI535", "wp": 535}, "pocet_panelov": 80, "typ_strechy": "falcovany_plech", "vendor_display": "Huawei 🔋", "vendor_stack": "huawei"},
+        "totals": {"ac_kw_total": 37.0, "bess_kwh_effective": 15.0, "items_count": 19, "kwp": 42.8, "margin_pct_effective": 22.0, "margin_pct_input": 22.0, "panel_wp": 535, "pocet_menicov": 2, "pocet_panelov": 80, "requires_asdr": false, "total_cost": 31949.35, "total_margin_eur": 9011.7, "total_price": 40961.05},
+        "items": [
+          {"category": "Panely", "cost_per_unit": 80.0, "position": 1, "price_per_unit": 102.56, "product_name": "LONGi Hi-MO X10 EcoLife LR7-60HVH-535M 535 Wp", "qty": 80, "rule_id": "panel.LONGI535", "total_cost": 6400.0, "total_price": 8204.8, "unit": "ks", "vendor_stack": "huawei"},
+          {"ac_kw": 12.0, "category": "Striedače", "cost_per_unit": 1358.0, "position": 2, "price_per_unit": 1741.03, "product_name": "HUAWEI SUN2000-12K-MAP0", "qty": 1, "rule_id": "menic.huawei.sun2000_12k_map0", "sku": "sun2000_12k_map0", "total_cost": 1358.0, "total_price": 1741.03, "unit": "ks", "vendor_stack": "huawei"},
+          {"ac_kw": 25.0, "category": "Striedače", "cost_per_unit": 2000.0, "position": 3, "price_per_unit": 2564.1, "product_name": "HUAWEI SUN2000-25K-MB0", "qty": 1, "rule_id": "menic.huawei.sun2000_25k_mb0", "sku": "sun2000_25k_mb0", "total_cost": 2000.0, "total_price": 2564.1, "unit": "ks", "vendor_stack": "huawei"},
+          {"category": "Monitoring", "cost_per_unit": 736.89, "position": 4, "price_per_unit": 944.73, "product_name": "Huawei Smart Logger 3000A03 s MBUS", "qty": 1, "rule_id": "smart_manager.huawei", "total_cost": 736.89, "total_price": 944.73, "unit": "ks", "vendor_stack": "huawei"},
+          {"category": "Monitoring", "cost_per_unit": 123.2, "position": 5, "price_per_unit": 157.95, "product_name": "HUAWEI DTSU666-H 250A/50mA", "qty": 1, "rule_id": "smart_meter.huawei", "total_cost": 123.2, "total_price": 157.95, "unit": "ks", "vendor_stack": "huawei"},
+          {"ai_note": "Auto pri >30 kW; kompatibilné so všetkými meničmi", "category": "Diagnostika siete", "cost_per_unit": 309.6, "position": 6, "price_per_unit": 396.92, "product_name": "Janitza UMG 103-CBM (sietovy analyzator)", "qty": 1, "rule_id": "accessory.janitza_umg103cbm", "total_cost": 309.6, "total_price": 396.92, "unit": "ks", "vendor_stack": "huawei"},
+          {"category": "Konštrukcia", "cost_per_unit": 45.0, "position": 7, "price_per_unit": 57.69, "product_name": "Konštrukcia - Falcovaný plech", "qty": 42.8, "rule_id": "konstrukcia.falcovany_plech", "total_cost": 1926.0, "total_price": 2469.13, "unit": "kWp"},
+          {"category": "Rozvádzač", "cost_per_unit": 30.0, "position": 8, "price_per_unit": 38.46, "product_name": "Rozvádzač DC", "qty": 42.8, "rule_id": "rozvadzac_dc", "total_cost": 1284.0, "total_price": 1646.09, "unit": "kWp"},
+          {"category": "Rozvádzač", "cost_per_unit": 2500.0, "position": 9, "price_per_unit": 3205.13, "product_name": "Rozvádzač AC R50", "qty": 1, "rule_id": "rozvadzac.R50", "total_cost": 2500.0, "total_price": 3205.13, "unit": "ks"},
+          {"category": "Vodiče", "cost_per_unit": 15.38, "position": 10, "price_per_unit": 19.72, "product_name": "Vodiče DC", "qty": 42.8, "rule_id": "vodice.dc", "total_cost": 658.26, "total_price": 844.02, "unit": "kWp"},
+          {"category": "Vodiče", "cost_per_unit": 20.0, "position": 11, "price_per_unit": 25.64, "product_name": "Vodiče AC", "qty": 42.8, "rule_id": "vodice.ac", "total_cost": 856.0, "total_price": 1097.39, "unit": "kWp"},
+          {"category": "Spotrebný materiál", "cost_per_unit": 24.0, "position": 12, "price_per_unit": 30.77, "product_name": "Spotrebný materiál", "qty": 42.8, "rule_id": "spotrebny.standard", "total_cost": 1027.2, "total_price": 1316.96, "unit": "kWp"},
+          {"category": "Káblové žľaby", "cost_per_unit": 14.0, "position": 13, "price_per_unit": 17.95, "product_name": "Káblové žľaby", "qty": 42.8, "rule_id": "kablove_zlaby", "total_cost": 599.2, "total_price": 768.26, "unit": "kWp"},
+          {"category": "Projektová dokumentácia", "cost_per_unit": 1800.0, "position": 14, "price_per_unit": 2307.69, "product_name": "Projektová dokumentácia PD50", "qty": 1, "rule_id": "pd.PD50", "total_cost": 1800.0, "total_price": 2307.69, "unit": "kpl"},
+          {"category": "Meranie", "cost_per_unit": 80.0, "position": 15, "price_per_unit": 102.56, "product_name": "Merací transformátor prúdu", "qty": 3, "rule_id": "mtp", "total_cost": 240.0, "total_price": 307.68, "unit": "ks"},
+          {"category": "Batéria", "cost_per_unit": 2225.0, "position": 16, "price_per_unit": 2852.56, "product_name": "HUAWEI LUNA2000-5-S0", "qty": 3, "rule_id": "battery.luna2000_5", "total_cost": 6675.0, "total_price": 8557.68, "unit": "ks", "vendor_stack": "huawei"},
+          {"category": "Batéria", "cost_per_unit": 300.0, "position": 17, "price_per_unit": 384.62, "product_name": "Montáž batérie (rezidenčná sada)", "qty": 1, "rule_id": "battery.montaz", "total_cost": 300.0, "total_price": 384.62, "unit": "kpl"},
+          {"category": "Montáž", "cost_per_unit": 70.0, "position": 18, "price_per_unit": 89.74, "product_name": "Montáž", "qty": 42.8, "rule_id": "montaz.do_100", "total_cost": 2996.0, "total_price": 3840.87, "unit": "kWp"},
+          {"category": "Doprava", "cost_per_unit": 0.8, "position": 19, "price_per_unit": 1.03, "product_name": "Doprava materiálu", "qty": 200.0, "rule_id": "doprava.km", "total_cost": 160.0, "total_price": 206.0, "unit": "km"}
+        ],
+        "warnings": [
+          {"items": ["Huawei Smart Logger 3000A03 s MBUS", "HUAWEI DTSU666-H 250A/50mA"], "kind": "cost_estimated", "message": "Nákup nie je v dátach, odhadnutý ako 77 % z cenníkovej ceny pre: Huawei Smart Logger 3000A03 s MBUS; HUAWEI DTSU666-H 250A/50mA. Doplň nákupné ceny.", "severity": "warning"}
+        ]
+      }
+    },
+    "solinteg_ci_482kwh": {
+      "variant": "f0",
+      "overrides": {"bess_class": "industrial", "bess_kwh": 482, "distribucka": "ZSD", "has_bess": true},
+      "result": {
+        "ok": true,
+        "config": {"kwp_actual": 59.92, "panel": {"cost": 80, "name": "LONGi Hi-MO X10 EcoLife LR7-60HVH-535M 535 Wp", "price_per_unit": 103.9, "sku": "LONGI535", "wp": 535}, "pocet_panelov": 112, "typ_strechy": "trapez", "vendor_display": "Solinteg 💎", "vendor_stack": "solinteg"},
+        "totals": {"ac_kw_total": 50.0, "bess_kwh_effective": 482.0, "items_count": 17, "kwp": 59.92, "margin_pct_effective": 22.0, "margin_pct_input": 22.0, "panel_wp": 535, "pocet_menicov": 1, "pocet_panelov": 112, "requires_asdr": false, "total_cost": 106441.21, "total_margin_eur": 30022.15, "total_price": 136463.36},
+        "items": [
+          {"category": "Panely", "cost_per_unit": 80.0, "position": 1, "price_per_unit": 102.56, "product_name": "LONGi Hi-MO X10 EcoLife LR7-60HVH-535M 535 Wp", "qty": 112, "rule_id": "panel.LONGI535", "total_cost": 8960.0, "total_price": 11486.72, "unit": "ks", "vendor_stack": "solinteg"},
+          {"ac_kw": 50.0, "category": "Striedače", "cost_per_unit": 3545.0, "position": 2, "price_per_unit": 4544.87, "product_name": "Solinteg MHT-50K-100 (3f hybrid)", "qty": 1, "rule_id": "menic.solinteg.solinteg_mht_50", "sku": "solinteg_mht_50", "total_cost": 3545.0, "total_price": 4544.87, "unit": "ks", "vendor_stack": "solinteg"},
+          {"category": "Monitoring", "cost_per_unit": 43.0, "position": 3, "price_per_unit": 55.13, "product_name": "Solinteg DuoCOM Wi-Fi/LAN 2 in 1 module", "qty": 1, "rule_id": "smart_manager.solinteg", "total_cost": 43.0, "total_price": 55.13, "unit": "ks", "vendor_stack": "solinteg"},
+          {"category": "Monitoring", "cost_per_unit": 99.0, "position": 4, "price_per_unit": 126.92, "product_name": "Solinteg Smart Meter (CT)", "qty": 1, "rule_id": "smart_meter.solinteg", "total_cost": 99.0, "total_price": 126.92, "unit": "ks", "vendor_stack": "solinteg"},
+          {"category": "Konštrukcia", "cost_per_unit": 34.0, "position": 5, "price_per_unit": 43.59, "product_name": "Konštrukcia - Trapéz", "qty": 59.92, "rule_id": "konstrukcia.trapez", "total_cost": 2037.28, "total_price": 2611.91, "unit": "kWp"},
+          {"category": "Rozvádzač", "cost_per_unit": 30.0, "position": 6, "price_per_unit": 38.46, "product_name": "Rozvádzač DC", "qty": 59.92, "rule_id": "rozvadzac_dc", "total_cost": 1797.6, "total_price": 2304.52, "unit": "kWp"},
+          {"category": "Rozvádzač", "cost_per_unit": 2500.0, "position": 7, "price_per_unit": 3205.13, "product_name": "Rozvádzač AC R50", "qty": 1, "rule_id": "rozvadzac.R50", "total_cost": 2500.0, "total_price": 3205.13, "unit": "ks"},
+          {"category": "Vodiče", "cost_per_unit": 15.38, "position": 8, "price_per_unit": 19.72, "product_name": "Vodiče DC", "qty": 59.92, "rule_id": "vodice.dc", "total_cost": 921.57, "total_price": 1181.62, "unit": "kWp"},
+          {"category": "Vodiče", "cost_per_unit": 20.0, "position": 9, "price_per_unit": 25.64, "product_name": "Vodiče AC", "qty": 59.92, "rule_id": "vodice.ac", "total_cost": 1198.4, "total_price": 1536.35, "unit": "kWp"},
+          {"category": "Spotrebný materiál", "cost_per_unit": 24.0, "position": 10, "price_per_unit": 30.77, "product_name": "Spotrebný materiál", "qty": 59.92, "rule_id": "spotrebny.standard", "total_cost": 1438.08, "total_price": 1843.74, "unit": "kWp"},
+          {"category": "Káblové žľaby", "cost_per_unit": 14.0, "position": 11, "price_per_unit": 17.95, "product_name": "Káblové žľaby", "qty": 59.92, "rule_id": "kablove_zlaby", "total_cost": 838.88, "total_price": 1075.56, "unit": "kWp"},
+          {"category": "Projektová dokumentácia", "cost_per_unit": 1800.0, "position": 12, "price_per_unit": 2307.69, "product_name": "Projektová dokumentácia PD50", "qty": 1, "rule_id": "pd.PD50", "total_cost": 1800.0, "total_price": 2307.69, "unit": "kpl"},
+          {"category": "Meranie", "cost_per_unit": 80.0, "position": 13, "price_per_unit": 102.56, "product_name": "Merací transformátor prúdu", "qty": 3, "rule_id": "mtp", "total_cost": 240.0, "total_price": 307.68, "unit": "ks"},
+          {"category": "Batéria", "cost_per_unit": 36584.0, "position": 14, "price_per_unit": 46902.56, "product_name": "Sunwoda Oasis L241 (241 kWh all-in-one)", "qty": 2, "rule_id": "battery.sunwoda_oasis_l241", "total_cost": 73168.0, "total_price": 93805.12, "unit": "ks", "vendor_stack": "solinteg"},
+          {"category": "Batéria", "cost_per_unit": 1750.0, "position": 15, "price_per_unit": 2243.59, "product_name": "Montáž batériového úložiska", "qty": 2, "rule_id": "battery.montaz", "total_cost": 3500.0, "total_price": 4487.18, "unit": "ks"},
+          {"category": "Montáž", "cost_per_unit": 70.0, "position": 16, "price_per_unit": 89.74, "product_name": "Montáž", "qty": 59.92, "rule_id": "montaz.do_100", "total_cost": 4194.4, "total_price": 5377.22, "unit": "kWp"},
+          {"category": "Doprava", "cost_per_unit": 0.8, "position": 17, "price_per_unit": 1.03, "product_name": "Doprava materiálu", "qty": 200.0, "rule_id": "doprava.km", "total_cost": 160.0, "total_price": 206.0, "unit": "km"}
+        ],
+        "warnings": [
+          {"kind": "out_of_scope", "message": "C&I batéria (482 kWh) je mimo bežného rozsahu kalkulačky — over PCS/menič, AC rozvádzač, kabeláž a EMS.", "severity": "warning"}
+        ]
+      }
+    },
+    "sungrow_zemne_skrutky_500kwp": {
+      "variant": "f0",
+      "overrides": {"distribucka": "VSD", "pocet_panelov": 934, "typ_strechy": "zemne_skrutky", "vendor_stack": "sungrow"},
+      "result": {
+        "ok": true,
+        "config": {"kwp_actual": 499.69, "panel": {"cost": 80, "name": "LONGi Hi-MO X10 EcoLife LR7-60HVH-535M 535 Wp", "price_per_unit": 103.9, "sku": "LONGI535", "wp": 535}, "pocet_panelov": 934, "typ_strechy": "zemne_skrutky", "vendor_display": "Sungrow ⚡", "vendor_stack": "sungrow"},
+        "totals": {"ac_kw_total": 375.0, "bess_kwh_effective": 0.0, "items_count": 18, "kwp": 499.69, "margin_pct_effective": 22.0, "margin_pct_input": 22.0, "panel_wp": 535, "pocet_menicov": 3, "pocet_panelov": 934, "requires_asdr": true, "total_cost": 276762.75, "total_margin_eur": 78058.96, "total_price": 354821.71},
+        "items": [
+          {"category": "Panely", "cost_per_unit": 80.0, "position": 1, "price_per_unit": 102.56, "product_name": "LONGi Hi-MO X10 EcoLife LR7-60HVH-535M 535 Wp", "qty": 934, "rule_id": "panel.LONGI535", "total_cost": 74720.0, "total_price": 95791.04, "unit": "ks", "vendor_stack": "sungrow"},
+          {"ac_kw": 125.0, "category": "Striedače", "cost_per_unit": 3473.0, "position": 2, "price_per_unit": 4452.56, "product_name": "Sungrow SG125CX-P2", "qty": 3, "rule_id": "menic.sungrow.sg125cx", "sku": "sg125cx", "total_cost": 10419.0, "total_price": 13357.68, "unit": "ks", "vendor_stack": "sungrow"},
+          {"category": "Monitoring", "cost_per_unit": 654.5, "position": 3, "price_per_unit": 839.1, "product_name": "Sungrow COM100E", "qty": 1, "rule_id": "smart_manager.sungrow", "total_cost": 654.5, "total_price": 839.1, "unit": "ks", "vendor_stack": "sungrow"},
+          {"category": "Monitoring", "cost_per_unit": 223.3, "position": 4, "price_per_unit": 286.28, "product_name": "Smartmeter Sungrow", "qty": 1, "rule_id": "smart_meter.sungrow", "total_cost": 223.3, "total_price": 286.28, "unit": "ks", "vendor_stack": "sungrow"},
+          {"category": "Konštrukcia", "cost_per_unit": 130.0, "position": 5, "price_per_unit": 166.67, "product_name": "Konštrukcia - Zemné skrutky", "qty": 499.69, "rule_id": "konstrukcia.zemne_skrutky", "total_cost": 64959.7, "total_price": 83283.33, "unit": "kWp"},
+          {"category": "Rozvádzač", "cost_per_unit": 30.0, "position": 6, "price_per_unit": 38.46, "product_name": "Rozvádzač DC", "qty": 499.69, "rule_id": "rozvadzac_dc", "total_cost": 14990.7, "total_price": 19218.08, "unit": "kWp"},
+          {"category": "Rozvádzač", "cost_per_unit": 12500.0, "position": 7, "price_per_unit": 16025.64, "product_name": "Rozvádzač AC R500", "qty": 1, "rule_id": "rozvadzac.R500", "total_cost": 12500.0, "total_price": 16025.64, "unit": "ks"},
+          {"category": "Vodiče", "cost_per_unit": 15.38, "position": 8, "price_per_unit": 19.72, "product_name": "Vodiče DC", "qty": 499.69, "rule_id": "vodice.dc", "total_cost": 7685.23, "total_price": 9853.89, "unit": "kWp"},
+          {"category": "Vodiče", "cost_per_unit": 20.0, "position": 9, "price_per_unit": 25.64, "product_name": "Vodiče AC", "qty": 499.69, "rule_id": "vodice.ac", "total_cost": 9993.8, "total_price": 12812.05, "unit": "kWp"},
+          {"category": "Spotrebný materiál", "cost_per_unit": 24.0, "position": 10, "price_per_unit": 30.77, "product_name": "Spotrebný materiál", "qty": 499.69, "rule_id": "spotrebny.standard", "total_cost": 11992.56, "total_price": 15375.46, "unit": "kWp"},
+          {"category": "Káblové žľaby", "cost_per_unit": 14.0, "position": 11, "price_per_unit": 17.95, "product_name": "Káblové žľaby", "qty": 499.69, "rule_id": "kablove_zlaby", "total_cost": 6995.66, "total_price": 8969.44, "unit": "kWp"},
+          {"category": "Projektová dokumentácia", "cost_per_unit": 4400.0, "position": 12, "price_per_unit": 5641.03, "product_name": "Projektová dokumentácia PD500", "qty": 1, "rule_id": "pd.PD500", "total_cost": 4400.0, "total_price": 5641.03, "unit": "kpl"},
+          {"category": "Statika a PBS", "cost_per_unit": 500.0, "position": 13, "price_per_unit": 641.03, "product_name": "Statický posudok", "qty": 1, "rule_id": "statika", "total_cost": 500.0, "total_price": 641.03, "unit": "kpl"},
+          {"category": "Statika a PBS", "cost_per_unit": 350.0, "position": 14, "price_per_unit": 448.72, "product_name": "Projekt požiarnej bezpečnosti", "qty": 1, "rule_id": "ppbs", "total_cost": 350.0, "total_price": 448.72, "unit": "kpl"},
+          {"category": "Meranie", "cost_per_unit": 80.0, "position": 15, "price_per_unit": 102.56, "product_name": "Merací transformátor prúdu", "qty": 3, "rule_id": "mtp", "total_cost": 240.0, "total_price": 307.68, "unit": "ks"},
+          {"category": "Dispečerské riadenie", "cost_per_unit": 21000.0, "position": 16, "price_per_unit": 26923.08, "product_name": "Dispečerské riadenie VSD", "qty": 1, "rule_id": "dispecing.VSD", "total_cost": 21000.0, "total_price": 26923.08, "unit": "kpl"},
+          {"category": "Montáž", "cost_per_unit": 70.0, "position": 17, "price_per_unit": 89.74, "product_name": "Montáž", "qty": 499.69, "rule_id": "montaz.do_500", "total_cost": 34978.3, "total_price": 44842.18, "unit": "kWp"},
+          {"category": "Doprava", "cost_per_unit": 0.8, "position": 18, "price_per_unit": 1.03, "product_name": "Doprava materiálu", "qty": 200.0, "rule_id": "doprava.km", "total_cost": 160.0, "total_price": 206.0, "unit": "km"}
+        ],
+        "warnings": [
+          {"items": ["Sungrow COM100E", "Smartmeter Sungrow"], "kind": "cost_estimated", "message": "Nákup nie je v dátach, odhadnutý ako 77 % z cenníkovej ceny pre: Sungrow COM100E; Smartmeter Sungrow. Doplň nákupné ceny.", "severity": "warning"},
+          {"kind": "bess_recommendation", "message": "💡 Pri 499.69 kWp >> 100 odporúčam zvážiť BESS — pre arbitráž a peak shaving. Návratnosť +0.5-1 rok.", "severity": "info"},
+          {"kind": "out_of_scope", "message": "Zemná konštrukcia je mimo bežného rozsahu kalkulačky — over položky, ktoré kalkulačka nepokrýva (výkopy, kabeláž, oplotenie).", "severity": "warning"}
+        ]
+      }
+    },
+    "corab_bez_pravidla": {
+      "variant": "f0",
+      "overrides": {"typ_strechy": "corab"},
+      "result": {
+        "ok": true,
+        "config": {"kwp_actual": 59.92, "panel": {"cost": 80, "name": "LONGi Hi-MO X10 EcoLife LR7-60HVH-535M 535 Wp", "price_per_unit": 103.9, "sku": "LONGI535", "wp": 535}, "pocet_panelov": 112, "typ_strechy": "corab", "vendor_display": "Solinteg 💎", "vendor_stack": "solinteg"},
+        "totals": {"ac_kw_total": 50.0, "bess_kwh_effective": 0.0, "items_count": 14, "kwp": 59.92, "margin_pct_effective": 22.0, "margin_pct_input": 22.0, "panel_wp": 535, "pocet_menicov": 1, "pocet_panelov": 112, "requires_asdr": false, "total_cost": 27735.93, "total_margin_eur": 7823.22, "total_price": 35559.15},
+        "items": [
+          {"category": "Panely", "cost_per_unit": 80.0, "position": 1, "price_per_unit": 102.56, "product_name": "LONGi Hi-MO X10 EcoLife LR7-60HVH-535M 535 Wp", "qty": 112, "rule_id": "panel.LONGI535", "total_cost": 8960.0, "total_price": 11486.72, "unit": "ks", "vendor_stack": "solinteg"},
+          {"ac_kw": 50.0, "category": "Striedače", "cost_per_unit": 3545.0, "position": 2, "price_per_unit": 4544.87, "product_name": "Solinteg MHT-50K-100 (3f hybrid)", "qty": 1, "rule_id": "menic.solinteg.solinteg_mht_50", "sku": "solinteg_mht_50", "total_cost": 3545.0, "total_price": 4544.87, "unit": "ks", "vendor_stack": "solinteg"},
+          {"category": "Monitoring", "cost_per_unit": 43.0, "position": 3, "price_per_unit": 55.13, "product_name": "Solinteg DuoCOM Wi-Fi/LAN 2 in 1 module", "qty": 1, "rule_id": "smart_manager.solinteg", "total_cost": 43.0, "total_price": 55.13, "unit": "ks", "vendor_stack": "solinteg"},
+          {"category": "Monitoring", "cost_per_unit": 99.0, "position": 4, "price_per_unit": 126.92, "product_name": "Solinteg Smart Meter (CT)", "qty": 1, "rule_id": "smart_meter.solinteg", "total_cost": 99.0, "total_price": 126.92, "unit": "ks", "vendor_stack": "solinteg"},
+          {"category": "Rozvádzač", "cost_per_unit": 30.0, "position": 5, "price_per_unit": 38.46, "product_name": "Rozvádzač DC", "qty": 59.92, "rule_id": "rozvadzac_dc", "total_cost": 1797.6, "total_price": 2304.52, "unit": "kWp"},
+          {"category": "Rozvádzač", "cost_per_unit": 2500.0, "position": 6, "price_per_unit": 3205.13, "product_name": "Rozvádzač AC R50", "qty": 1, "rule_id": "rozvadzac.R50", "total_cost": 2500.0, "total_price": 3205.13, "unit": "ks"},
+          {"category": "Vodiče", "cost_per_unit": 15.38, "position": 7, "price_per_unit": 19.72, "product_name": "Vodiče DC", "qty": 59.92, "rule_id": "vodice.dc", "total_cost": 921.57, "total_price": 1181.62, "unit": "kWp"},
+          {"category": "Vodiče", "cost_per_unit": 20.0, "position": 8, "price_per_unit": 25.64, "product_name": "Vodiče AC", "qty": 59.92, "rule_id": "vodice.ac", "total_cost": 1198.4, "total_price": 1536.35, "unit": "kWp"},
+          {"category": "Spotrebný materiál", "cost_per_unit": 24.0, "position": 9, "price_per_unit": 30.77, "product_name": "Spotrebný materiál", "qty": 59.92, "rule_id": "spotrebny.standard", "total_cost": 1438.08, "total_price": 1843.74, "unit": "kWp"},
+          {"category": "Káblové žľaby", "cost_per_unit": 14.0, "position": 10, "price_per_unit": 17.95, "product_name": "Káblové žľaby", "qty": 59.92, "rule_id": "kablove_zlaby", "total_cost": 838.88, "total_price": 1075.56, "unit": "kWp"},
+          {"category": "Projektová dokumentácia", "cost_per_unit": 1800.0, "position": 11, "price_per_unit": 2307.69, "product_name": "Projektová dokumentácia PD50", "qty": 1, "rule_id": "pd.PD50", "total_cost": 1800.0, "total_price": 2307.69, "unit": "kpl"},
+          {"category": "Meranie", "cost_per_unit": 80.0, "position": 12, "price_per_unit": 102.56, "product_name": "Merací transformátor prúdu", "qty": 3, "rule_id": "mtp", "total_cost": 240.0, "total_price": 307.68, "unit": "ks"},
+          {"category": "Montáž", "cost_per_unit": 70.0, "position": 13, "price_per_unit": 89.74, "product_name": "Montáž", "qty": 59.92, "rule_id": "montaz.do_100", "total_cost": 4194.4, "total_price": 5377.22, "unit": "kWp"},
+          {"category": "Doprava", "cost_per_unit": 0.8, "position": 14, "price_per_unit": 1.03, "product_name": "Doprava materiálu", "qty": 200.0, "rule_id": "doprava.km", "total_cost": 160.0, "total_price": 206.0, "unit": "km"}
+        ],
+        "warnings": [
+          {"kind": "konstrukcia_missing", "message": "Pre typ strechy 'corab' nie je v cenníku konštrukcia — ponuka je bez konštrukcie, doplň ju ručne.", "severity": "warning"}
+        ]
+      }
+    },
+    "huawei_kwp_bez_typu_strechy": {
+      "variant": "f0",
+      "overrides": {"kwp": 59.92, "pocet_panelov": 0, "typ_strechy": null, "vendor_stack": "huawei"},
+      "result": {
+        "ok": true,
+        "config": {"kwp_actual": 59.92, "panel": {"cost": 80, "name": "LONGi Hi-MO X10 EcoLife LR7-60HVH-535M 535 Wp", "price_per_unit": 103.9, "sku": "LONGI535", "wp": 535}, "pocet_panelov": 112, "typ_strechy": null, "vendor_display": "Huawei 🔋", "vendor_stack": "huawei"},
+        "totals": {"ac_kw_total": 50.0, "bess_kwh_effective": 0.0, "items_count": 15, "kwp": 59.92, "margin_pct_effective": 22.0, "margin_pct_input": 22.0, "panel_wp": 535, "pocet_menicov": 1, "pocet_panelov": 112, "requires_asdr": false, "total_cost": 29222.62, "total_margin_eur": 8242.54, "total_price": 37465.16},
+        "items": [
+          {"category": "Panely", "cost_per_unit": 80.0, "position": 1, "price_per_unit": 102.56, "product_name": "LONGi Hi-MO X10 EcoLife LR7-60HVH-535M 535 Wp", "qty": 112, "rule_id": "panel.LONGI535", "total_cost": 8960.0, "total_price": 11486.72, "unit": "ks", "vendor_stack": "huawei"},
+          {"ac_kw": 50.0, "category": "Striedače", "cost_per_unit": 4004.0, "position": 2, "price_per_unit": 5133.33, "product_name": "HUAWEI SUN2000-50KTL-M3", "qty": 1, "rule_id": "menic.huawei.sun2000_50ktl", "sku": "sun2000_50ktl", "total_cost": 4004.0, "total_price": 5133.33, "unit": "ks", "vendor_stack": "huawei"},
+          {"category": "Monitoring", "cost_per_unit": 736.89, "position": 3, "price_per_unit": 944.73, "product_name": "Huawei Smart Logger 3000A03 s MBUS", "qty": 1, "rule_id": "smart_manager.huawei", "total_cost": 736.89, "total_price": 944.73, "unit": "ks", "vendor_stack": "huawei"},
+          {"category": "Monitoring", "cost_per_unit": 123.2, "position": 4, "price_per_unit": 157.95, "product_name": "HUAWEI DTSU666-H 250A/50mA", "qty": 1, "rule_id": "smart_meter.huawei", "total_cost": 123.2, "total_price": 157.95, "unit": "ks", "vendor_stack": "huawei"},
+          {"ai_note": "Auto pri >30 kW; kompatibilné so všetkými meničmi", "category": "Diagnostika siete", "cost_per_unit": 309.6, "position": 5, "price_per_unit": 396.92, "product_name": "Janitza UMG 103-CBM (sietovy analyzator)", "qty": 1, "rule_id": "accessory.janitza_umg103cbm", "total_cost": 309.6, "total_price": 396.92, "unit": "ks", "vendor_stack": "huawei"},
+          {"category": "Rozvádzač", "cost_per_unit": 30.0, "position": 6, "price_per_unit": 38.46, "product_name": "Rozvádzač DC", "qty": 59.92, "rule_id": "rozvadzac_dc", "total_cost": 1797.6, "total_price": 2304.52, "unit": "kWp"},
+          {"category": "Rozvádzač", "cost_per_unit": 2500.0, "position": 7, "price_per_unit": 3205.13, "product_name": "Rozvádzač AC R50", "qty": 1, "rule_id": "rozvadzac.R50", "total_cost": 2500.0, "total_price": 3205.13, "unit": "ks"},
+          {"category": "Vodiče", "cost_per_unit": 15.38, "position": 8, "price_per_unit": 19.72, "product_name": "Vodiče DC", "qty": 59.92, "rule_id": "vodice.dc", "total_cost": 921.57, "total_price": 1181.62, "unit": "kWp"},
+          {"category": "Vodiče", "cost_per_unit": 20.0, "position": 9, "price_per_unit": 25.64, "product_name": "Vodiče AC", "qty": 59.92, "rule_id": "vodice.ac", "total_cost": 1198.4, "total_price": 1536.35, "unit": "kWp"},
+          {"category": "Spotrebný materiál", "cost_per_unit": 24.0, "position": 10, "price_per_unit": 30.77, "product_name": "Spotrebný materiál", "qty": 59.92, "rule_id": "spotrebny.standard", "total_cost": 1438.08, "total_price": 1843.74, "unit": "kWp"},
+          {"category": "Káblové žľaby", "cost_per_unit": 14.0, "position": 11, "price_per_unit": 17.95, "product_name": "Káblové žľaby", "qty": 59.92, "rule_id": "kablove_zlaby", "total_cost": 838.88, "total_price": 1075.56, "unit": "kWp"},
+          {"category": "Projektová dokumentácia", "cost_per_unit": 1800.0, "position": 12, "price_per_unit": 2307.69, "product_name": "Projektová dokumentácia PD50", "qty": 1, "rule_id": "pd.PD50", "total_cost": 1800.0, "total_price": 2307.69, "unit": "kpl"},
+          {"category": "Meranie", "cost_per_unit": 80.0, "position": 13, "price_per_unit": 102.56, "product_name": "Merací transformátor prúdu", "qty": 3, "rule_id": "mtp", "total_cost": 240.0, "total_price": 307.68, "unit": "ks"},
+          {"category": "Montáž", "cost_per_unit": 70.0, "position": 14, "price_per_unit": 89.74, "product_name": "Montáž", "qty": 59.92, "rule_id": "montaz.do_100", "total_cost": 4194.4, "total_price": 5377.22, "unit": "kWp"},
+          {"category": "Doprava", "cost_per_unit": 0.8, "position": 15, "price_per_unit": 1.03, "product_name": "Doprava materiálu", "qty": 200.0, "rule_id": "doprava.km", "total_cost": 160.0, "total_price": 206.0, "unit": "km"}
+        ],
+        "warnings": [
+          {"kind": "konstrukcia_missing", "message": "Pre typ strechy 'None' nie je v cenníku konštrukcia — ponuka je bez konštrukcie, doplň ju ručne.", "severity": "warning"},
+          {"items": ["HUAWEI SUN2000-50KTL-M3", "Huawei Smart Logger 3000A03 s MBUS", "HUAWEI DTSU666-H 250A/50mA"], "kind": "cost_estimated", "message": "Nákup nie je v dátach, odhadnutý ako 77 % z cenníkovej ceny pre: HUAWEI SUN2000-50KTL-M3; Huawei Smart Logger 3000A03 s MBUS; HUAWEI DTSU666-H 250A/50mA. Doplň nákupné ceny.", "severity": "warning"}
+        ]
+      }
+    },
+    "len_bess_482": {
+      "variant": "f0",
+      "overrides": {"bess_class": "industrial", "bess_kabel_m": 40, "bess_kwh": 482, "distribucka": "SSD", "has_bess": true, "pocet_panelov": 0},
+      "result": {
+        "ok": true,
+        "config": {"kwp_actual": 0.0, "panel": null, "pocet_panelov": 0, "typ_strechy": "trapez", "vendor_display": "Solinteg 💎", "vendor_stack": "solinteg"},
+        "totals": {"ac_kw_total": 250.0, "bess_kwh_effective": 482.0, "items_count": 10, "kwp": 0.0, "margin_pct_effective": 22.0, "margin_pct_input": 22.0, "panel_wp": 0, "pocet_menicov": 0, "pocet_panelov": 0, "requires_asdr": true, "total_cost": 117968.88, "total_margin_eur": 33274.3, "total_price": 151243.18},
+        "items": [
+          {"category": "Batéria", "cost_per_unit": 36584.0, "position": 1, "price_per_unit": 46902.56, "product_name": "Sunwoda Oasis L241 (241 kWh all-in-one)", "qty": 2, "rule_id": "battery.sunwoda_oasis_l241", "total_cost": 73168.0, "total_price": 93805.12, "unit": "ks", "vendor_stack": "solinteg"},
+          {"category": "Batéria", "cost_per_unit": 1750.0, "position": 2, "price_per_unit": 2243.59, "product_name": "Montáž batériového úložiska", "qty": 2, "rule_id": "battery.montaz", "total_cost": 3500.0, "total_price": 4487.18, "unit": "ks"},
+          {"category": "Rozvádzač", "cost_per_unit": 8000.0, "position": 3, "price_per_unit": 10256.41, "product_name": "Rozvádzač AC R250", "qty": 1, "rule_id": "rozvadzac.R250", "total_cost": 8000.0, "total_price": 10256.41, "unit": "ks"},
+          {"category": "Vodiče", "cost_per_unit": 8.78, "position": 4, "price_per_unit": 11.26, "product_name": "Kabeláž AC batérie AYKY-J 3x150+70", "qty": 40, "rule_id": "kabelaz_bess", "total_cost": 351.2, "total_price": 450.4, "unit": "m"},
+          {"category": "Projektová dokumentácia", "cost_per_unit": 4400.0, "position": 5, "price_per_unit": 5641.03, "product_name": "Projektová dokumentácia PD500", "qty": 1, "rule_id": "pd.PD500", "total_cost": 4400.0, "total_price": 5641.03, "unit": "kpl"},
+          {"category": "EMS", "cost_per_unit": 7539.68, "position": 6, "price_per_unit": 9666.26, "product_name": "EnergoStation EMS compact + licencia", "qty": 1, "rule_id": "ems", "total_cost": 7539.68, "total_price": 9666.26, "unit": "kpl"},
+          {"category": "Statika a PBS", "cost_per_unit": 500.0, "position": 7, "price_per_unit": 641.03, "product_name": "Statický posudok", "qty": 1, "rule_id": "statika", "total_cost": 500.0, "total_price": 641.03, "unit": "kpl"},
+          {"category": "Statika a PBS", "cost_per_unit": 350.0, "position": 8, "price_per_unit": 448.72, "product_name": "Projekt požiarnej bezpečnosti", "qty": 1, "rule_id": "ppbs", "total_cost": 350.0, "total_price": 448.72, "unit": "kpl"},
+          {"category": "Dispečerské riadenie", "cost_per_unit": 20000.0, "position": 9, "price_per_unit": 25641.03, "product_name": "Dispečerské riadenie SSD", "qty": 1, "rule_id": "dispecing.SSD", "total_cost": 20000.0, "total_price": 25641.03, "unit": "kpl"},
+          {"category": "Doprava", "cost_per_unit": 0.8, "position": 10, "price_per_unit": 1.03, "product_name": "Doprava materiálu", "qty": 200.0, "rule_id": "doprava.km", "total_cost": 160.0, "total_price": 206.0, "unit": "km"}
+        ],
+        "warnings": [
+          {"kind": "bess_only", "message": "Ponuka len pre batériu (bez FVE): 482 kWh / 250 kW. Menič/PCS kalkulačka nepridáva — over, či je PCS súčasťou batérie, inak ho doplň ručne.", "severity": "info"}
+        ]
+      }
+    },
+    "huawei_marza_4_bez_dopravy": {
+      "variant": "f0",
+      "overrides": {"margin_pct": 4, "pocet_panelov": 200, "vendor_stack": "huawei", "vzdialenost_doprava": 0},
+      "result": {
+        "ok": true,
+        "config": {"kwp_actual": 107.0, "panel": {"cost": 80, "name": "LONGi Hi-MO X10 EcoLife LR7-60HVH-535M 535 Wp", "price_per_unit": 103.9, "sku": "LONGI535", "wp": 535}, "pocet_panelov": 200, "typ_strechy": "trapez", "vendor_display": "Huawei 🔋", "vendor_stack": "huawei"},
+        "totals": {"ac_kw_total": 90.0, "bess_kwh_effective": 0.0, "items_count": 18, "kwp": 107.0, "margin_pct_effective": 4.0, "margin_pct_input": 4.0, "panel_wp": 535, "pocet_menicov": 2, "pocet_panelov": 200, "requires_asdr": false, "total_cost": 53733.35, "total_margin_eur": 2238.11, "total_price": 55971.46},
+        "items": [
+          {"category": "Panely", "cost_per_unit": 80.0, "position": 1, "price_per_unit": 83.33, "product_name": "LONGi Hi-MO X10 EcoLife LR7-60HVH-535M 535 Wp", "qty": 200, "rule_id": "panel.LONGI535", "total_cost": 16000.0, "total_price": 16666.0, "unit": "ks", "vendor_stack": "huawei"},
+          {"ac_kw": 40.0, "category": "Striedače", "cost_per_unit": 2240.0, "position": 2, "price_per_unit": 2333.33, "product_name": "HUAWEI SUN2000-40KTL-M3", "qty": 1, "rule_id": "menic.huawei.sun2000_40ktl", "sku": "sun2000_40ktl", "total_cost": 2240.0, "total_price": 2333.33, "unit": "ks", "vendor_stack": "huawei"},
+          {"ac_kw": 50.0, "category": "Striedače", "cost_per_unit": 4004.0, "position": 3, "price_per_unit": 4170.83, "product_name": "HUAWEI SUN2000-50KTL-M3", "qty": 1, "rule_id": "menic.huawei.sun2000_50ktl", "sku": "sun2000_50ktl", "total_cost": 4004.0, "total_price": 4170.83, "unit": "ks", "vendor_stack": "huawei"},
+          {"category": "Monitoring", "cost_per_unit": 736.89, "position": 4, "price_per_unit": 767.59, "product_name": "Huawei Smart Logger 3000A03 s MBUS", "qty": 1, "rule_id": "smart_manager.huawei", "total_cost": 736.89, "total_price": 767.59, "unit": "ks", "vendor_stack": "huawei"},
+          {"category": "Monitoring", "cost_per_unit": 123.2, "position": 5, "price_per_unit": 128.33, "product_name": "HUAWEI DTSU666-H 250A/50mA", "qty": 1, "rule_id": "smart_meter.huawei", "total_cost": 123.2, "total_price": 128.33, "unit": "ks", "vendor_stack": "huawei"},
+          {"ai_note": "Auto pri >30 kW; kompatibilné so všetkými meničmi", "category": "Diagnostika siete", "cost_per_unit": 309.6, "position": 6, "price_per_unit": 322.5, "product_name": "Janitza UMG 103-CBM (sietovy analyzator)", "qty": 1, "rule_id": "accessory.janitza_umg103cbm", "total_cost": 309.6, "total_price": 322.5, "unit": "ks", "vendor_stack": "huawei"},
+          {"category": "Konštrukcia", "cost_per_unit": 34.0, "position": 7, "price_per_unit": 35.42, "product_name": "Konštrukcia - Trapéz", "qty": 107.0, "rule_id": "konstrukcia.trapez", "total_cost": 3638.0, "total_price": 3789.94, "unit": "kWp"},
+          {"category": "Rozvádzač", "cost_per_unit": 30.0, "position": 8, "price_per_unit": 31.25, "product_name": "Rozvádzač DC", "qty": 107.0, "rule_id": "rozvadzac_dc", "total_cost": 3210.0, "total_price": 3343.75, "unit": "kWp"},
+          {"category": "Rozvádzač", "cost_per_unit": 4000.0, "position": 9, "price_per_unit": 4166.67, "product_name": "Rozvádzač AC R100", "qty": 1, "rule_id": "rozvadzac.R100", "total_cost": 4000.0, "total_price": 4166.67, "unit": "ks"},
+          {"category": "Vodiče", "cost_per_unit": 15.38, "position": 10, "price_per_unit": 16.02, "product_name": "Vodiče DC", "qty": 107.0, "rule_id": "vodice.dc", "total_cost": 1645.66, "total_price": 1714.14, "unit": "kWp"},
+          {"category": "Vodiče", "cost_per_unit": 20.0, "position": 11, "price_per_unit": 20.83, "product_name": "Vodiče AC", "qty": 107.0, "rule_id": "vodice.ac", "total_cost": 2140.0, "total_price": 2228.81, "unit": "kWp"},
+          {"category": "Spotrebný materiál", "cost_per_unit": 24.0, "position": 12, "price_per_unit": 25.0, "product_name": "Spotrebný materiál", "qty": 107.0, "rule_id": "spotrebny.standard", "total_cost": 2568.0, "total_price": 2675.0, "unit": "kWp"},
+          {"category": "Káblové žľaby", "cost_per_unit": 14.0, "position": 13, "price_per_unit": 14.58, "product_name": "Káblové žľaby", "qty": 107.0, "rule_id": "kablove_zlaby", "total_cost": 1498.0, "total_price": 1560.06, "unit": "kWp"},
+          {"category": "Projektová dokumentácia", "cost_per_unit": 3040.0, "position": 14, "price_per_unit": 3166.67, "product_name": "Projektová dokumentácia PD100", "qty": 1, "rule_id": "pd.PD100", "total_cost": 3040.0, "total_price": 3166.67, "unit": "kpl"},
+          {"category": "Statika a PBS", "cost_per_unit": 500.0, "position": 15, "price_per_unit": 520.83, "product_name": "Statický posudok", "qty": 1, "rule_id": "statika", "total_cost": 500.0, "total_price": 520.83, "unit": "kpl"},
+          {"category": "Statika a PBS", "cost_per_unit": 350.0, "position": 16, "price_per_unit": 364.58, "product_name": "Projekt požiarnej bezpečnosti", "qty": 1, "rule_id": "ppbs", "total_cost": 350.0, "total_price": 364.58, "unit": "kpl"},
+          {"category": "Meranie", "cost_per_unit": 80.0, "position": 17, "price_per_unit": 83.33, "product_name": "Merací transformátor prúdu", "qty": 3, "rule_id": "mtp", "total_cost": 240.0, "total_price": 249.99, "unit": "ks"},
+          {"category": "Montáž", "cost_per_unit": 70.0, "position": 18, "price_per_unit": 72.92, "product_name": "Montáž", "qty": 107.0, "rule_id": "montaz.do_250", "total_cost": 7490.0, "total_price": 7802.44, "unit": "kWp"}
+        ],
+        "warnings": [
+          {"kind": "doprava_km", "message": "Vzdialenosť dopravy nie je zadaná (0 km) — riadok dopravy nie je v ponuke. Zadaj vzdialenosť v km.", "severity": "warning"},
+          {"items": ["HUAWEI SUN2000-50KTL-M3", "Huawei Smart Logger 3000A03 s MBUS", "HUAWEI DTSU666-H 250A/50mA"], "kind": "cost_estimated", "message": "Nákup nie je v dátach, odhadnutý ako 77 % z cenníkovej ceny pre: HUAWEI SUN2000-50KTL-M3; Huawei Smart Logger 3000A03 s MBUS; HUAWEI DTSU666-H 250A/50mA. Doplň nákupné ceny.", "severity": "warning"},
+          {"kind": "bess_recommendation", "message": "💡 Pri 107.0 kWp >> 100 odporúčam zvážiť BESS — pre arbitráž a peak shaving. Návratnosť +0.5-1 rok.", "severity": "info"}
+        ]
+      }
+    },
+    "sungrow_4000_panelov_fallback": {
+      "variant": "f0",
+      "overrides": {"pocet_panelov": 4000, "vendor_stack": "sungrow"},
+      "result": {
+        "ok": true,
+        "config": {"kwp_actual": 2140.0, "panel": {"cost": 80, "name": "LONGi Hi-MO X10 EcoLife LR7-60HVH-535M 535 Wp", "price_per_unit": 103.9, "sku": "LONGI535", "wp": 535}, "pocet_panelov": 4000, "typ_strechy": "trapez", "vendor_display": "Sungrow ⚡", "vendor_stack": "sungrow"},
+        "totals": {"ac_kw_total": 1500.0, "bess_kwh_effective": 0.0, "items_count": 18, "kwp": 2140.0, "margin_pct_effective": 22.0, "margin_pct_input": 22.0, "panel_wp": 535, "pocet_menicov": 12, "pocet_panelov": 4000, "requires_asdr": true, "total_cost": 891037.0, "total_margin_eur": 251298.69, "total_price": 1142335.69},
+        "items": [
+          {"category": "Panely", "cost_per_unit": 80.0, "position": 1, "price_per_unit": 102.56, "product_name": "LONGi Hi-MO X10 EcoLife LR7-60HVH-535M 535 Wp", "qty": 4000, "rule_id": "panel.LONGI535", "total_cost": 320000.0, "total_price": 410240.0, "unit": "ks", "vendor_stack": "sungrow"},
+          {"ac_kw": 125.0, "category": "Striedače", "cost_per_unit": 3473.0, "position": 2, "price_per_unit": 4452.56, "product_name": "Sungrow SG125CX-P2", "qty": 12, "rule_id": "menic.sungrow.sg125cx", "sku": "sg125cx", "total_cost": 41676.0, "total_price": 53430.72, "unit": "ks", "vendor_stack": "sungrow"},
+          {"category": "Monitoring", "cost_per_unit": 654.5, "position": 3, "price_per_unit": 839.1, "product_name": "Sungrow COM100E", "qty": 1, "rule_id": "smart_manager.sungrow", "total_cost": 654.5, "total_price": 839.1, "unit": "ks", "vendor_stack": "sungrow"},
+          {"category": "Monitoring", "cost_per_unit": 223.3, "position": 4, "price_per_unit": 286.28, "product_name": "Smartmeter Sungrow", "qty": 1, "rule_id": "smart_meter.sungrow", "total_cost": 223.3, "total_price": 286.28, "unit": "ks", "vendor_stack": "sungrow"},
+          {"category": "Konštrukcia", "cost_per_unit": 34.0, "position": 5, "price_per_unit": 43.59, "product_name": "Konštrukcia - Trapéz", "qty": 2140.0, "rule_id": "konstrukcia.trapez", "total_cost": 72760.0, "total_price": 93282.6, "unit": "kWp"},
+          {"category": "Rozvádzač", "cost_per_unit": 30.0, "position": 6, "price_per_unit": 38.46, "product_name": "Rozvádzač DC", "qty": 2140.0, "rule_id": "rozvadzac_dc", "total_cost": 64200.0, "total_price": 82304.4, "unit": "kWp"},
+          {"category": "Rozvádzač", "cost_per_unit": 25000.0, "position": 7, "price_per_unit": 32051.28, "product_name": "Rozvádzač AC R1000", "qty": 2, "rule_id": "rozvadzac.R1000", "total_cost": 50000.0, "total_price": 64102.56, "unit": "ks"},
+          {"category": "Vodiče", "cost_per_unit": 15.38, "position": 8, "price_per_unit": 19.72, "product_name": "Vodiče DC", "qty": 2140.0, "rule_id": "vodice.dc", "total_cost": 32913.2, "total_price": 42200.8, "unit": "kWp"},
+          {"category": "Vodiče", "cost_per_unit": 20.0, "position": 9, "price_per_unit": 25.64, "product_name": "Vodiče AC", "qty": 2140.0, "rule_id": "vodice.ac", "total_cost": 42800.0, "total_price": 54869.6, "unit": "kWp"},
+          {"category": "Spotrebný materiál", "cost_per_unit": 24.0, "position": 10, "price_per_unit": 30.77, "product_name": "Spotrebný materiál", "qty": 2140.0, "rule_id": "spotrebny.standard", "total_cost": 51360.0, "total_price": 65847.8, "unit": "kWp"},
+          {"category": "Káblové žľaby", "cost_per_unit": 14.0, "position": 11, "price_per_unit": 17.95, "product_name": "Káblové žľaby", "qty": 2140.0, "rule_id": "kablove_zlaby", "total_cost": 29960.0, "total_price": 38413.0, "unit": "kWp"},
+          {"category": "Projektová dokumentácia", "cost_per_unit": 5440.0, "position": 12, "price_per_unit": 6974.36, "product_name": "Projektová dokumentácia PD2000", "qty": 1, "rule_id": "pd.PD2000", "total_cost": 5440.0, "total_price": 6974.36, "unit": "kpl"},
+          {"category": "Statika a PBS", "cost_per_unit": 500.0, "position": 13, "price_per_unit": 641.03, "product_name": "Statický posudok", "qty": 1, "rule_id": "statika", "total_cost": 500.0, "total_price": 641.03, "unit": "kpl"},
+          {"category": "Statika a PBS", "cost_per_unit": 350.0, "position": 14, "price_per_unit": 448.72, "product_name": "Projekt požiarnej bezpečnosti", "qty": 1, "rule_id": "ppbs", "total_cost": 350.0, "total_price": 448.72, "unit": "kpl"},
+          {"category": "Meranie", "cost_per_unit": 80.0, "position": 15, "price_per_unit": 102.56, "product_name": "Merací transformátor prúdu", "qty": 3, "rule_id": "mtp", "total_cost": 240.0, "total_price": 307.68, "unit": "ks"},
+          {"category": "Dispečerské riadenie", "cost_per_unit": 28000.0, "position": 16, "price_per_unit": 35897.44, "product_name": "Dispečerské riadenie ZSDIS", "qty": 1, "rule_id": "dispecing.ZSD", "total_cost": 28000.0, "total_price": 35897.44, "unit": "kpl"},
+          {"category": "Montáž", "cost_per_unit": 70.0, "position": 17, "price_per_unit": 89.74, "product_name": "Montáž", "qty": 2140.0, "rule_id": "montaz.nad_500", "total_cost": 149800.0, "total_price": 192043.6, "unit": "kWp"},
+          {"category": "Doprava", "cost_per_unit": 0.8, "position": 18, "price_per_unit": 1.03, "product_name": "Doprava materiálu", "qty": 200.0, "rule_id": "doprava.km", "total_cost": 160.0, "total_price": 206.0, "unit": "km"}
+        ],
+        "warnings": [
+          {"kind": "inverter_fallback", "message": "Zostava meničov sa nezmestila do 3 ks — vybraných 12× Sungrow SG125CX-P2 (1500 kW AC, DC/AC 1.43); over zostavu meničov (typ, počet, oversizing) a rozsah ponuky.", "severity": "warning"},
+          {"kind": "rozvadzac_over_range", "message": "Σ AC 1500 kW je nad najvyšším pásmom rozvádzača (1000 kW) — účtovaných 2 ks najvyššieho pásma, individuálne preveriť.", "severity": "warning"},
+          {"kind": "distribucka", "message": "Zvoľ distribučku (ZSD/SSD/VSD) — dispečerské riadenie je počítané pre ZSD.", "severity": "warning"},
+          {"items": ["Sungrow COM100E", "Smartmeter Sungrow"], "kind": "cost_estimated", "message": "Nákup nie je v dátach, odhadnutý ako 77 % z cenníkovej ceny pre: Sungrow COM100E; Smartmeter Sungrow. Doplň nákupné ceny.", "severity": "warning"},
+          {"kind": "bess_recommendation", "message": "💡 Pri 2140.0 kWp >> 100 odporúčam zvážiť BESS — pre arbitráž a peak shaving. Návratnosť +0.5-1 rok.", "severity": "info"},
+          {"kind": "out_of_scope", "message": "Výkon 2140 kWp je nad 500 kWp — mimo bežného rozsahu kalkulačky, výsledok ber ako orientačný.", "severity": "warning"}
+        ]
+      }
+    },
+    "stare_pravidla_konstrukcia_na_kusy": {
+      "variant": "ks",
+      "overrides": {"pocet_panelov": 100, "typ_strechy": "vychod_zapad"},
+      "result": {
+        "ok": true,
+        "config": {"kwp_actual": 53.5, "panel": {"cost": 80, "name": "LONGi Hi-MO X10 EcoLife LR7-60HVH-535M 535 Wp", "price_per_unit": 103.9, "sku": "LONGI535", "wp": 535}, "pocet_panelov": 100, "typ_strechy": "vychod_zapad", "vendor_display": "Solinteg 💎", "vendor_stack": "solinteg"},
+        "totals": {"ac_kw_total": 50.0, "bess_kwh_effective": 0.0, "items_count": 16, "kwp": 53.5, "margin_pct_effective": 22.0, "margin_pct_input": 22.0, "panel_wp": 535, "pocet_menicov": 1, "pocet_panelov": 100, "requires_asdr": false, "total_cost": 34197.83, "total_margin_eur": 9645.43, "total_price": 43843.26},
+        "items": [
+          {"category": "Panely", "cost_per_unit": 80.0, "position": 1, "price_per_unit": 102.56, "product_name": "LONGi Hi-MO X10 EcoLife LR7-60HVH-535M 535 Wp", "qty": 100, "rule_id": "panel.LONGI535", "total_cost": 8000.0, "total_price": 10256.0, "unit": "ks", "vendor_stack": "solinteg"},
+          {"ac_kw": 50.0, "category": "Striedače", "cost_per_unit": 3545.0, "position": 2, "price_per_unit": 4544.87, "product_name": "Solinteg MHT-50K-100 (3f hybrid)", "qty": 1, "rule_id": "menic.solinteg.solinteg_mht_50", "sku": "solinteg_mht_50", "total_cost": 3545.0, "total_price": 4544.87, "unit": "ks", "vendor_stack": "solinteg"},
+          {"category": "Monitoring", "cost_per_unit": 43.0, "position": 3, "price_per_unit": 55.13, "product_name": "Solinteg DuoCOM Wi-Fi/LAN 2 in 1 module", "qty": 1, "rule_id": "smart_manager.solinteg", "total_cost": 43.0, "total_price": 55.13, "unit": "ks", "vendor_stack": "solinteg"},
+          {"category": "Monitoring", "cost_per_unit": 99.0, "position": 4, "price_per_unit": 126.92, "product_name": "Solinteg Smart Meter (CT)", "qty": 1, "rule_id": "smart_meter.solinteg", "total_cost": 99.0, "total_price": 126.92, "unit": "ks", "vendor_stack": "solinteg"},
+          {"category": "Konštrukcia", "cost_per_unit": 80.0, "position": 5, "price_per_unit": 102.56, "product_name": "Konštrukcia - V-Z", "qty": 100, "rule_id": "konstrukcia.vychod_zapad", "total_cost": 8000.0, "total_price": 10256.0, "unit": "ks"},
+          {"category": "Konštrukcia", "cost_per_unit": 10.0, "position": 6, "price_per_unit": 12.82, "product_name": "Záťaž konštrukcie (V-Z)", "qty": 53.5, "rule_id": "zatiaz.vz", "total_cost": 535.0, "total_price": 685.87, "unit": "kWp"},
+          {"category": "Rozvádzač", "cost_per_unit": 30.0, "position": 7, "price_per_unit": 38.46, "product_name": "Rozvádzač DC", "qty": 53.5, "rule_id": "rozvadzac_dc", "total_cost": 1605.0, "total_price": 2057.61, "unit": "kWp"},
+          {"category": "Rozvádzač", "cost_per_unit": 2500.0, "position": 8, "price_per_unit": 3205.13, "product_name": "Rozvádzač AC R50", "qty": 1, "rule_id": "rozvadzac.R50", "total_cost": 2500.0, "total_price": 3205.13, "unit": "ks"},
+          {"category": "Vodiče", "cost_per_unit": 15.38, "position": 9, "price_per_unit": 19.72, "product_name": "Vodiče DC", "qty": 53.5, "rule_id": "vodice.dc", "total_cost": 822.83, "total_price": 1055.02, "unit": "kWp"},
+          {"category": "Vodiče", "cost_per_unit": 20.0, "position": 10, "price_per_unit": 25.64, "product_name": "Vodiče AC", "qty": 53.5, "rule_id": "vodice.ac", "total_cost": 1070.0, "total_price": 1371.74, "unit": "kWp"},
+          {"category": "Spotrebný materiál", "cost_per_unit": 24.0, "position": 11, "price_per_unit": 30.77, "product_name": "Spotrebný materiál", "qty": 53.5, "rule_id": "spotrebny.standard", "total_cost": 1284.0, "total_price": 1646.19, "unit": "kWp"},
+          {"category": "Káblové žľaby", "cost_per_unit": 14.0, "position": 12, "price_per_unit": 17.95, "product_name": "Káblové žľaby", "qty": 53.5, "rule_id": "kablove_zlaby", "total_cost": 749.0, "total_price": 960.32, "unit": "kWp"},
+          {"category": "Projektová dokumentácia", "cost_per_unit": 1800.0, "position": 13, "price_per_unit": 2307.69, "product_name": "Projektová dokumentácia PD50", "qty": 1, "rule_id": "pd.PD50", "total_cost": 1800.0, "total_price": 2307.69, "unit": "kpl"},
+          {"category": "Meranie", "cost_per_unit": 80.0, "position": 14, "price_per_unit": 102.56, "product_name": "Merací transformátor prúdu", "qty": 3, "rule_id": "mtp", "total_cost": 240.0, "total_price": 307.68, "unit": "ks"},
+          {"category": "Montáž", "cost_per_unit": 70.0, "position": 15, "price_per_unit": 89.74, "product_name": "Montáž", "qty": 53.5, "rule_id": "montaz.do_100", "total_cost": 3745.0, "total_price": 4801.09, "unit": "kWp"},
+          {"category": "Doprava", "cost_per_unit": 0.8, "position": 16, "price_per_unit": 1.03, "product_name": "Doprava materiálu", "qty": 200.0, "rule_id": "doprava.km", "total_cost": 160.0, "total_price": 206.0, "unit": "km"}
+        ],
+        "warnings": [
+        ]
+      }
+    }
+  }
+}
