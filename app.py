@@ -11,6 +11,7 @@ Deployovať na Render.com (alebo iný cloud s Python 3.11+).
 import os
 import sys
 import json
+import hmac
 import logging
 import re
 
@@ -645,7 +646,10 @@ NOTION_HEADERS = {
 
 
 def require_secret(f):
-    """Dekorátor — kontroluje X-Webhook-Secret header."""
+    """Dekorátor — kontroluje X-Webhook-Secret header.
+
+    POZOR: je FAIL-OPEN — ak WEBHOOK_SECRET nie je nastavený, pustí všetko. Pre /webhook/b2b-* a
+    /webhook/raynet-* platí namiesto neho prísna brána `_secret_gate_b2b_raynet` nižšie."""
     @wraps(f)
     def wrapper(*args, **kwargs):
         if WEBHOOK_SECRET:
@@ -654,6 +658,36 @@ def require_secret(f):
                 return jsonify({"error": "unauthorized"}), 401
         return f(*args, **kwargs)
     return wrapper
+
+
+# ============================================================
+# BRÁNA pre /webhook/b2b-* a /webhook/raynet-* — FAIL-CLOSED (Fáza 1 bezpečnosť, 2026-10)
+# Tieto webhooky vracajú nákupné ceny a marže (b2b-vendor-stacks, b2b-calc-v2-preview), volajú
+# drahé AI (b2b-ai-configurator) alebo píšu do CRM (raynet-import), preto ich smie volať len
+# server s hlavičkou X-Webhook-Secret (CRM proxy /api/b2b/engine/*), nie prehliadač.
+# Na rozdiel od `require_secret` (fail-open) tu chýbajúci WEBHOOK_SECRET znamená 503, nie "pustiť
+# všetko". Brána je podľa prefixu cesty, takže kryje aj route pridané neskôr pod týmito prefixmi.
+# Iné webhooky (Notion, Make, PDF, AOM…) a CORS sa nemenia. OPTIONS (preflight) sa nekontroluje.
+# Tajomstvo sa berie len z hlavičky (nie z query reťazca, ten sa zapisuje do logov).
+# ============================================================
+_SECRET_GATE_PREFIXES = ("/webhook/b2b-", "/webhook/raynet-")
+
+
+@app.before_request
+def _secret_gate_b2b_raynet():
+    if request.method == "OPTIONS" or not request.path.startswith(_SECRET_GATE_PREFIXES):
+        return None
+    expected = os.environ.get("WEBHOOK_SECRET", "")
+    if not expected.strip():
+        log.error("[secret-gate] WEBHOOK_SECRET nie je nastavený — %s %s odmietnuté (503)",
+                  request.method, request.path)
+        return jsonify({"ok": False, "error": "server misconfigured"}), 503
+    received = request.headers.get("X-Webhook-Secret", "")
+    if not hmac.compare_digest(received.encode("utf-8"), expected.encode("utf-8")):
+        log.warning("[secret-gate] chýbajúce/neplatné X-Webhook-Secret — %s %s (401)",
+                    request.method, request.path)
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    return None
 
 
 # ============================================================
@@ -6691,18 +6725,26 @@ def webhook_eva_proactive_hourly():
 
 # ============================================================
 # RAYNET DISCOVERY — pull cenoviek/firiem/produktov pre offline analýzu
+# Všetky /webhook/raynet-* sú za bránou X-Webhook-Secret (`_secret_gate_b2b_raynet`, fail-closed).
+# Prihlasovacie údaje z tela ({raynet_user, raynet_key, raynet_instance}) platia len pre dané volanie
+# (raynet_discovery.use_creds) — nezostávajú v globálnej premennej ani pre ďalšiu požiadavku.
 # ============================================================
 import raynet_discovery as _raynet
 
+
+def _raynet_call_creds(body):
+    """Context manager: Raynet údaje z tela požiadavky len pre toto jedno volanie (inak platia env)."""
+    return _raynet.use_creds(body.get("raynet_user"), body.get("raynet_key"), body.get("raynet_instance"))
+
+
 @app.route("/webhook/raynet-whoami", methods=["GET", "POST"])
 def webhook_raynet_whoami():
-    """Quick auth check — overí že credentials fungujú. No-secret (read-only).
-    Body môže obsahovať: {raynet_user, raynet_key, raynet_instance}."""
+    """Quick auth check — overí že credentials fungujú (read-only). Chránené X-Webhook-Secret.
+    Body môže obsahovať: {raynet_user, raynet_key, raynet_instance} — platia len pre toto volanie."""
     body = request.get_json(silent=True) or {}
-    if body.get("raynet_user") and body.get("raynet_key"):
-        _raynet.set_creds(body["raynet_user"], body["raynet_key"], body.get("raynet_instance", "energovision"))
     try:
-        return jsonify({"ok": True, "whoami": _raynet.whoami()})
+        with _raynet_call_creds(body):
+            return jsonify({"ok": True, "whoami": _raynet.whoami()})
     except Exception as e:
         log.exception("[raynet-whoami] failed")
         return jsonify({"ok": False, "error": str(e)}), 500
@@ -6711,23 +6753,23 @@ def webhook_raynet_whoami():
 @app.route("/webhook/raynet-discover", methods=["POST"])
 def webhook_raynet_discover():
     """Stiahne všetky quotations/business_cases/products/companies do Supabase staging.
-    Telo: {only?, raynet_user?, raynet_key?, raynet_instance?}. No-secret (write only do staging)."""
+    Telo: {only?, raynet_user?, raynet_key?, raynet_instance?} — údaje platia len pre toto volanie.
+    Chránené X-Webhook-Secret (zapisuje len do staging)."""
     body = request.get_json(silent=True) or {}
-    if body.get("raynet_user") and body.get("raynet_key"):
-        _raynet.set_creds(body["raynet_user"], body["raynet_key"], body.get("raynet_instance", "energovision"))
     only = body.get("only")
     try:
         sb = _sb()
-        if only == "products":
-            out = {"products": _raynet.discover_products(sb)}
-        elif only == "companies":
-            out = {"companies": _raynet.discover_companies(sb)}
-        elif only == "business_cases":
-            out = {"business_cases": _raynet.discover_business_cases(sb)}
-        elif only == "quotations":
-            out = {"quotations": _raynet.discover_quotations(sb)}
-        else:
-            out = _raynet.discover_all(sb)
+        with _raynet_call_creds(body):
+            if only == "products":
+                out = {"products": _raynet.discover_products(sb)}
+            elif only == "companies":
+                out = {"companies": _raynet.discover_companies(sb)}
+            elif only == "business_cases":
+                out = {"business_cases": _raynet.discover_business_cases(sb)}
+            elif only == "quotations":
+                out = {"quotations": _raynet.discover_quotations(sb)}
+            else:
+                out = _raynet.discover_all(sb)
         return jsonify({"ok": True, **out})
     except Exception as e:
         log.exception("[raynet-discover] failed")
@@ -6735,13 +6777,13 @@ def webhook_raynet_discover():
 
 @app.route("/webhook/raynet-fetch-items", methods=["POST"])
 def webhook_raynet_fetch_items():
-    """Batch fetch items pre ponuky bez items. Volaj viackrát kým ostávajú."""
+    """Batch fetch items pre ponuky bez items. Volaj viackrát kým ostávajú.
+    Chránené X-Webhook-Secret; {raynet_user, raynet_key, raynet_instance} z tela platia len pre toto volanie."""
     body = request.get_json(silent=True) or {}
-    if body.get("raynet_user") and body.get("raynet_key"):
-        _raynet.set_creds(body["raynet_user"], body["raynet_key"], body.get("raynet_instance", "energovision"))
     try:
         max_offers = int(body.get("max_offers", 100))
-        out = _raynet.fetch_offer_detail_items(_sb(), max_offers=max_offers)
+        with _raynet_call_creds(body):
+            out = _raynet.fetch_offer_detail_items(_sb(), max_offers=max_offers)
         return jsonify({"ok": True, **out})
     except Exception as e:
         log.exception("[raynet-fetch-items] failed")
@@ -6749,65 +6791,22 @@ def webhook_raynet_fetch_items():
 
 
 # ============================================================
-# B2B KALKULAČKA — generovanie BOM + uloženie cenovky
+# B2B v1 (calc-preview, calc-save, generate-pdf) a v2-save — ZRUŠENÉ (Fáza 1 bezpečnosť, 2026-10)
+# Implementácia odstránená: tieto endpointy zapisovali do quote_bundles (workspace 'b2b') a dôverovali
+# vstupu od klienta, v1 PDF čítalo neexistujúcu tabuľku b2b_quotes. CRM ich nevolá — kalkulačka je
+# /b2b/kalkulacka v CRM, ktorá volá len b2b-calc-v2-preview a pomocné b2b-* cez server proxy.
+# Cesty ostávajú ako 410, aby starý volajúci zistil prečo (stále za bránou X-Webhook-Secret).
 # ============================================================
-import b2b_calculator as _b2b_calc
-
-@app.route("/webhook/b2b-calc-preview", methods=["POST"])
-def webhook_b2b_calc_preview():
-    """Vygeneruje BOM bez uloženia (live preview v UI)."""
-    body = request.get_json(silent=True) or {}
-    try:
-        result = _b2b_calc.calculate_bom(_sb(), body)
-        return jsonify({"ok": True, **result})
-    except Exception as e:
-        log.exception("[b2b-calc-preview] failed")
-        return jsonify({"ok": False, "error": str(e)[:500]}), 500
+_B2B_ZRUSENE_METHODY = ["GET", "POST", "PUT", "PATCH", "DELETE"]
 
 
-@app.route("/webhook/b2b-calc-save", methods=["POST"])
-def webhook_b2b_calc_save():
-    """Vygeneruje 4 archetypy variantov a uloží ako jeden quote_bundles záznam (workspace='b2b').
-    Zdieľa lifecycle s B2C — bundle editor / PDF / public link / accept flow."""
-    body = request.get_json(silent=True) or {}
-    try:
-        config = body.get("config", {})
-        bundle = _b2b_calc.save_quote_as_bundle(
-            _sb(),
-            base_config=config,
-            customer_id=body.get("customer_id"),
-            lead_id=body.get("lead_id"),
-            user_id=body.get("user_id"),
-        )
-        return jsonify({"ok": True, "bundle_id": bundle.get("id"), "bundle_number": bundle.get("bundle_number"), "bundle": bundle})
-    except Exception as e:
-        log.exception("[b2b-calc-save] failed")
-        return jsonify({"ok": False, "error": str(e)[:500]}), 500
-
-
-# ============================================================
-# B2B PDF generator
-# ============================================================
-import b2b_pdf as _b2b_pdf
-
-@app.route("/webhook/b2b-generate-pdf", methods=["POST"])
-def webhook_b2b_generate_pdf():
-    """Vygeneruje PDF pre b2b_quote. Body: {quote_id, mode: 'klient'|'internal'|'both'}."""
-    body = request.get_json(silent=True) or {}
-    quote_id = body.get("quote_id")
-    mode = body.get("mode", "klient")
-    if not quote_id:
-        return jsonify({"ok": False, "error": "quote_id required"}), 400
-    try:
-        results = {}
-        if mode in ("klient", "both"):
-            results["klient"] = _b2b_pdf.generate_quote_pdf(_sb(), quote_id, "klient")
-        if mode in ("internal", "both"):
-            results["internal"] = _b2b_pdf.generate_quote_pdf(_sb(), quote_id, "internal")
-        return jsonify({"ok": True, **results})
-    except Exception as e:
-        log.exception("[b2b-generate-pdf] failed")
-        return jsonify({"ok": False, "error": str(e)[:500]}), 500
+@app.route("/webhook/b2b-calc-preview", methods=_B2B_ZRUSENE_METHODY)
+@app.route("/webhook/b2b-calc-save", methods=_B2B_ZRUSENE_METHODY)
+@app.route("/webhook/b2b-generate-pdf", methods=_B2B_ZRUSENE_METHODY)
+@app.route("/webhook/b2b-calc-v2-save", methods=_B2B_ZRUSENE_METHODY)
+def webhook_b2b_zrusene():
+    """Zrušené endpointy → 410 Gone (bez práce s DB)."""
+    return jsonify({"ok": False, "error": "zrušené — použi /b2b/kalkulacka v CRM"}), 410
 
 
 # ============================================================
@@ -7322,6 +7321,8 @@ def webhook_aom_parse_public():
 
 # ============================================================
 # B2B Kalkulačka V2 — panels-driven + vendor stacks + AI
+# Všetky /webhook/b2b-* sú za bránou X-Webhook-Secret (`_secret_gate_b2b_raynet`, fail-closed):
+# volá ich len server (CRM proxy /api/b2b/engine/*), odpovede obsahujú nákup a maržu.
 # ============================================================
 import b2b_calculator_v2 as _b2b_v2
 
@@ -7419,21 +7420,7 @@ def webhook_b2b_bom_validator():
         return jsonify({"ok": False, "error": str(e)[:500]}), 500
 
 
-@app.route("/webhook/b2b-calc-v2-save", methods=["POST"])
-def webhook_b2b_calc_v2_save():
-    """Uloží V2 ponuku ako quote_bundles (workspace=b2b) s final BOM po user editoch."""
-    body = request.get_json(silent=True) or {}
-    try:
-        bundle = _b2b_v2.save_bundle_v2(_sb(), body)
-        return jsonify({
-            "ok": True,
-            "bundle_id": bundle.get("id"),
-            "bundle_number": bundle.get("bundle_number"),
-            "bundle": bundle,
-        })
-    except Exception as e:
-        log.exception("[b2b-calc-v2-save] failed")
-        return jsonify({"ok": False, "error": str(e)[:500]}), 500
+# (b2b-calc-v2-save zrušené → 410, viď blok "B2B v1 ... ZRUŠENÉ" vyššie; save_bundle_v2 sa už nevolá.)
 
 
 # ============================================================
@@ -13827,6 +13814,7 @@ def ts_quote_generate_pdf():
 # RAYNET IMPORT — spustí raynet_import.py
 # Vstup: {dry_run: bool, entities: ["companies","persons","leads",...]}
 # Výstup: {ok, result: {...}}
+# Píše servisným kľúčom do CRM → chránené X-Webhook-Secret (`_secret_gate_b2b_raynet`, fail-closed).
 # ============================================================
 @app.route("/webhook/raynet-import", methods=["POST"])
 def raynet_import_endpoint():
