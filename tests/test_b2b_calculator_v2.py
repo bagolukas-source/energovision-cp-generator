@@ -1316,10 +1316,14 @@ class TestVyberBaterie(unittest.TestCase):
         self.assertEqual(self.pick(res), [("battery.luna2000_241_2s1", 2)])
 
     def test_n19_zvoleny_model_aj_s_kwh_pocet_je_pocet(self):
-        # model + počet zadané výslovne → počet platí (bez varovania o odchýlke); kWh bez počtu → ceil(kWh / kapacita)
+        # model + počet zadané výslovne → počet platí, rozpor s cieľom kWh sa len nahlási; kWh bez počtu → ceil(kWh / kapacita)
         res = calc({**self.IND, "bess_sku": "solinteg_e2br_112r", "bess_count": 3, "bess_kwh": 500})
         self.assertEqual(self.pick(res), [("battery.solinteg_e2br_112r", 3)])
-        self.assertNotIn("bess_kwh_deviation", kinds(res))
+        w = [w for w in res["warnings"] if w["kind"] == "bess_kwh_deviation"]
+        self.assertEqual(len(w), 1)
+        self.assertIn("-32.8 %", w[0]["message"])   # 336 kWh vs 500 kWh
+        res = calc({**self.IND, "bess_sku": "solinteg_e2br_112r", "bess_count": 3, "bess_kwh": 336})
+        self.assertNotIn("bess_kwh_deviation", kinds(res))   # sedí → bez varovania
         res = calc({**self.IND, "bess_sku": "solinteg_e2br_112r", "bess_kwh": 500})
         self.assertEqual(self.pick(res), [("battery.solinteg_e2br_112r", 5)])   # ceil(500 / 112) = 5 → 560 kWh (+12 %)
         self.assertIn("bess_kwh_deviation", kinds(res))

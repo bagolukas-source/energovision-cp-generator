@@ -554,7 +554,7 @@ def calculate_bom_v2(sb, config: dict) -> dict:
                          f"zváž priemyselnú triedu batérie (skrine) alebo iný model.")
         # efektívna kapacita (kWh) z reálne vybraných modulov/skríň
         eff_kwh = round(sum(_num(p["battery"].get("capacity_kwh")) * p["qty"] for p in picked), 2)
-        if kwh_mode and bess_kwh > 0 and _kwh_off_target(eff_kwh, bess_kwh):
+        if bess_kwh > 0 and _kwh_off_target(eff_kwh, bess_kwh):   # aj pri výslovnom modeli + počte, ak sa cieľ kWh rozchádza
             warn("warning", "bess_kwh_deviation",
                  f"Požadovaná kapacita {bess_kwh:g} kWh, ponúkaná {eff_kwh:g} kWh "
                  f"({_kwh_deviation(eff_kwh, bess_kwh) * 100:+.1f} %) — over výber skríň/modulov.")
