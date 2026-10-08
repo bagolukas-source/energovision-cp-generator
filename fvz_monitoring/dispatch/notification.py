@@ -7,6 +7,8 @@ Pre každý nový alarm pošle notifikáciu podľa severity:
 - minor    → Slack + email assignee
 - major    → Slack + email + SMS assignee
 - critical → Slack + email + SMS + customer notification
+
+2026-10: SMS len pri SMS_ENABLED=1 (predvolene vypnuté), customer notification vypnutá.
 """
 
 from __future__ import annotations
@@ -60,6 +62,10 @@ def send_email(to_email: str, subject: str, html: str) -> bool:
 
 
 def send_sms(to_phone: str, message: str) -> bool:
+    # Centrálny vypínač SMS (rozhodnutie majiteľa 2026-10: „SMS zruš zatiaľ“). Predvolene vypnuté.
+    if os.environ.get("SMS_ENABLED", "").strip().lower() not in ("1", "true", "yes", "on"):
+        log.info("SMS vypnuté (SMS_ENABLED) — neodoslané")
+        return False
     sid = os.environ.get("TWILIO_ACCOUNT_SID")
     auth = os.environ.get("TWILIO_AUTH_TOKEN")
     from_phone = os.environ.get("TWILIO_FROM_PHONE")
@@ -105,8 +111,8 @@ def notify_alarm(alarm: dict, site: dict, assignee: Optional[dict] = None, custo
     if assignee and severity in ("major", "critical") and assignee.get("phone"):
         send_sms(assignee["phone"], f"[{severity.upper()}] {site_name}: {title} — {crm_link}")
 
-    # Customer notification (critical only — neotravujeme klientov pri minore)
-    if customer and severity == "critical":
+    # Customer notification — VYPNUTÉ (rozhodnutie majiteľa 2026-10: zákazníkom zo servisu nič).
+    if False and customer and severity == "critical":
         send_email(
             customer["email"],
             f"Upozornenie — vaša FVE inštalácia ({site_name})",
