@@ -1,0 +1,1111 @@
+{
+ "_meta": {
+  "source": "Supabase b2b_vendor_stacks (SELECT *, 2026-10-08), orezané: preferred_panels na prvé 3, bez id/notes/created_at",
+  "raynet_nakupy_doplnene_pre_test": [
+   "solinteg.solinteg_mht_50 cost 3545 (Raynet PON-26-1404: Solinteg M2HT-50K-150 hybrid)",
+   "solinteg.smart_manager cost 43 (DuoCOM), smart_meter cost 99 (RMM-5A) — Raynet PON-26-1404",
+   "solinteg.solinteg_e2br_112r cost 13399 (Raynet PON-26-1404: E2BR-S112K-R Indoor Rack)",
+   "huawei.luna2000_241_2s1 cost 40000 (Raynet 08-10/2026, rozhodnutie orchestrátora)",
+   "optimizers[].cost 29 (Raynet Tigo TS4-A-O), accessories tigo_cca (TIGOCCATAP) cost 134 / cenník 160,8",
+   "accessories network_analyzer offer_above_kw 30 (F0-SPEC)"
+  ]
+ },
+ "stacks": [
+  {
+   "vendor_key": "goodwe",
+   "display_name": "GoodWe 🌐",
+   "preferred_panels": [
+    {
+     "wp": 535,
+     "sku": "LONGI535",
+     "cost": 80,
+     "name": "LONGi Hi-MO X10 EcoLife LR7-60HVH-535M 535 Wp",
+     "price_per_unit": 103.9
+    },
+    {
+     "wp": 535,
+     "sku": "01-600186",
+     "cost": 65.9,
+     "name": "JA Solar JAM60D42-535/LB 535 Wp (BFR)",
+     "price_per_unit": 80.4
+    },
+    {
+     "wp": 540,
+     "sku": "01-600160",
+     "cost": 76.7,
+     "name": "LONGi Hi-MO X10 Scientist LR7-60HVH-540M 540 Wp (BFR)",
+     "price_per_unit": 93.57
+    }
+   ],
+   "inverters": [
+    {
+     "key": "gw_et_10",
+     "cost": 1025,
+     "name": "GoodWe GW10K-ET",
+     "ac_kw": 10,
+     "price": 2200,
+     "hybrid": true,
+     "max_kwp": 13,
+     "min_kwp": 7
+    },
+    {
+     "key": "gw_et_15",
+     "cost": 1458,
+     "name": "GoodWe GW15K-ET",
+     "ac_kw": 15,
+     "price": 2800,
+     "hybrid": true,
+     "max_kwp": 18,
+     "min_kwp": 12
+    },
+    {
+     "key": "gw_smt_30",
+     "name": "GoodWe SMT30",
+     "ac_kw": 30,
+     "price": 3500,
+     "max_kwp": 40,
+     "min_kwp": 25
+    },
+    {
+     "key": "gw_50_smt",
+     "name": "GoodWe GW50K-SMT",
+     "ac_kw": 50,
+     "price": 4800,
+     "max_kwp": 80,
+     "min_kwp": 40
+    }
+   ],
+   "smart_manager": {
+    "key": "gw_smart_meter",
+    "name": "GoodWe Smart Meter GM3000",
+    "price": 220,
+    "required_above_kwp": 0
+   },
+   "smart_manager_large": null,
+   "smart_meter": {
+    "key": "gw_ezlogger",
+    "name": "GoodWe EzLogger Pro WiFi",
+    "price": 180
+   },
+   "optimizers": [
+    {
+     "key": "tigo_ts4",
+     "name": "Optimizér Tigo TS4-A-O",
+     "notes": "OK pre GoodWe",
+     "price_per_panel": 48,
+     "cost": 29.0
+    }
+   ],
+   "batteries": [
+    {
+     "key": "dyness_tower_ts10",
+     "cost": 2076,
+     "name": "Dyness Tower TS10 (10,1 kWh)",
+     "brand": "Dyness",
+     "price": 2076,
+     "source": "Memodo 2026-06",
+     "modular": true,
+     "capacity_kwh": 10.13,
+     "max_power_kw": 7,
+     "battery_class": "residential"
+    },
+    {
+     "key": "dyness_tower_ts14",
+     "cost": 2651,
+     "name": "Dyness Tower TS14 (13,5 kWh)",
+     "brand": "Dyness",
+     "price": 2651,
+     "source": "Memodo 2026-06",
+     "modular": true,
+     "capacity_kwh": 13.5,
+     "max_power_kw": 7,
+     "battery_class": "residential"
+    },
+    {
+     "key": "dyness_tower_ts21",
+     "cost": 3801,
+     "name": "Dyness Tower TS21 (20,2 kWh)",
+     "brand": "Dyness",
+     "price": 3801,
+     "source": "Memodo 2026-06",
+     "modular": true,
+     "capacity_kwh": 20.24,
+     "max_power_kw": 7,
+     "battery_class": "residential"
+    },
+    {
+     "key": "dyness_stack100_31",
+     "cost": 5127,
+     "name": "Dyness Stack100 (30,7 kWh)",
+     "brand": "Dyness",
+     "price": 5127,
+     "source": "Memodo 2026-06",
+     "modular": true,
+     "capacity_kwh": 30.72,
+     "max_power_kw": 12,
+     "battery_class": "residential"
+    },
+    {
+     "key": "dyness_bf100",
+     "cost": 14500,
+     "name": "Dyness BF100 (100 kWh C&I)",
+     "note": "all-in-one cabinet",
+     "brand": "Dyness",
+     "price": 14500,
+     "source": "Memodo 2026-06",
+     "modular": false,
+     "capacity_kwh": 100,
+     "max_power_kw": 50,
+     "battery_class": "industrial"
+    },
+    {
+     "key": "pylontech_force_h3",
+     "cost": 770,
+     "name": "Pylontech Force H3 (modul 5,12 kWh)",
+     "note": "2-7 modulov/veža",
+     "brand": "Pylontech",
+     "price": 770,
+     "source": "CRM cennik",
+     "modular": true,
+     "capacity_kwh": 5.12,
+     "max_power_kw": 7,
+     "battery_class": "residential"
+    },
+    {
+     "key": "goodwe_lynx_f",
+     "cost": 1142,
+     "name": "GoodWe Lynx D LX D5.0 (5 kWh)",
+     "brand": "GoodWe",
+     "price": 1142,
+     "source": "CRM cennik",
+     "modular": true,
+     "capacity_kwh": 5,
+     "max_power_kw": 5,
+     "battery_class": "residential"
+    }
+   ],
+   "wallboxes": [
+    {
+     "key": "wallbox_innc_22",
+     "name": "AC Wallbox Innc 1x22kW",
+     "price": 720,
+     "power_kw": 22
+    }
+   ],
+   "warnings": [],
+   "raynet_share_pct": 10.0,
+   "accessories": [
+    {
+     "key": "janitza_umg104",
+     "code": "EFV000000433",
+     "cost": 780,
+     "name": "Janitza UMG 104 (sietovy analyzator)",
+     "note": "diagnostika siete 95-240VAC/135-340VDC; kompat. so vsetkymi menicmi; sklad HH 4 ks",
+     "price": 780,
+     "source": "EFV 2026-06",
+     "category": "network_analyzer",
+     "compatible_all": true,
+     "offer_above_kw": 30
+    },
+    {
+     "key": "janitza_umg103cbm",
+     "code": "EFV000000511",
+     "cost": 309.6,
+     "name": "Janitza UMG 103-CBM (sietovy analyzator)",
+     "note": "115-277 VAC; kompat. so vsetkymi menicmi; na objednavku",
+     "price": 309.6,
+     "source": "EFV 2026-06",
+     "category": "network_analyzer",
+     "compatible_all": true,
+     "offer_above_kw": 30
+    },
+    {
+     "key": "tigo_cca_tap",
+     "code": "TIGOCCATAP",
+     "name": "TIGO CCA Kit, TAP, 120/240VAC PS",
+     "category": "tigo_cca",
+     "cost": 134.0,
+     "price": 160.8,
+     "source": "Raynet cenník LZ-SG 10/2026",
+     "note": "1 sada na 150 optimizérov"
+    }
+   ]
+  },
+  {
+   "vendor_key": "huawei",
+   "display_name": "Huawei 🔋",
+   "preferred_panels": [
+    {
+     "wp": 535,
+     "sku": "LONGI535",
+     "cost": 80,
+     "name": "LONGi Hi-MO X10 EcoLife LR7-60HVH-535M 535 Wp",
+     "price_per_unit": 103.9
+    },
+    {
+     "wp": 535,
+     "sku": "01-600186",
+     "cost": 65.9,
+     "name": "JA Solar JAM60D42-535/LB 535 Wp (BFR)",
+     "price_per_unit": 80.4
+    },
+    {
+     "wp": 540,
+     "sku": "01-600160",
+     "cost": 76.7,
+     "name": "LONGi Hi-MO X10 Scientist LR7-60HVH-540M 540 Wp (BFR)",
+     "price_per_unit": 93.57
+    }
+   ],
+   "inverters": [
+    {
+     "key": "sun2000_10ktl",
+     "name": "HUAWEI SUN2000-10KTL-M1-HC",
+     "ac_kw": 10,
+     "price": 1806.55,
+     "max_kwp": 15,
+     "min_kwp": 8
+    },
+    {
+     "key": "sun2000_15ktl",
+     "cost": 1419,
+     "name": "HUAWEI SUN2000-15KTL-M3",
+     "ac_kw": 15,
+     "price": 2100,
+     "max_kwp": 18,
+     "min_kwp": 12
+    },
+    {
+     "key": "sun2000_30ktl",
+     "cost": 1863,
+     "name": "HUAWEI SUN2000-30KTL-M3",
+     "ac_kw": 30,
+     "price": 3800,
+     "max_kwp": 35,
+     "min_kwp": 25
+    },
+    {
+     "key": "sun2000_40ktl",
+     "cost": 2240,
+     "name": "HUAWEI SUN2000-40KTL-M3",
+     "ac_kw": 40,
+     "price": 4800,
+     "max_kwp": 50,
+     "min_kwp": 35
+    },
+    {
+     "key": "sun2000_100ktl",
+     "cost": 3488,
+     "name": "HUAWEI SUN2000-100KTL-M2",
+     "ac_kw": 100,
+     "price": 7800,
+     "max_kwp": 150,
+     "min_kwp": 80
+    },
+    {
+     "key": "sun2000_50ktl",
+     "name": "HUAWEI SUN2000-50KTL-M3",
+     "ac_kw": 50,
+     "price": 5200,
+     "max_kwp": 78,
+     "min_kwp": 48
+    },
+    {
+     "key": "sun2000_5k_map0",
+     "cost": 844,
+     "name": "HUAWEI SUN2000-5K-MAP0",
+     "ac_kw": 5,
+     "price": 1055.0,
+     "hybrid": true,
+     "max_kwp": 9,
+     "min_kwp": 4
+    },
+    {
+     "key": "sun2000_6k_map0",
+     "cost": 944,
+     "name": "HUAWEI SUN2000-6K-MAP0",
+     "ac_kw": 6,
+     "price": 1180.0,
+     "hybrid": true,
+     "max_kwp": 11,
+     "min_kwp": 5
+    },
+    {
+     "key": "sun2000_8k_map0",
+     "cost": 1119,
+     "name": "HUAWEI SUN2000-8K-MAP0",
+     "ac_kw": 8,
+     "price": 1398.75,
+     "hybrid": true,
+     "max_kwp": 14,
+     "min_kwp": 7
+    },
+    {
+     "key": "sun2000_10k_map0",
+     "cost": 1257,
+     "name": "HUAWEI SUN2000-10K-MAP0",
+     "ac_kw": 10,
+     "price": 1571.25,
+     "hybrid": true,
+     "max_kwp": 18,
+     "min_kwp": 8
+    },
+    {
+     "key": "sun2000_12k_map0",
+     "cost": 1358,
+     "name": "HUAWEI SUN2000-12K-MAP0",
+     "ac_kw": 12,
+     "price": 1697.5,
+     "hybrid": true,
+     "max_kwp": 22,
+     "min_kwp": 10
+    },
+    {
+     "key": "sun2000_15k_mb0",
+     "cost": 1813,
+     "name": "HUAWEI SUN2000-15K-MB0",
+     "ac_kw": 15,
+     "price": 2266.25,
+     "hybrid": true,
+     "max_kwp": 22,
+     "min_kwp": 12
+    },
+    {
+     "key": "sun2000_17k_mb0",
+     "cost": 1850,
+     "name": "HUAWEI SUN2000-17K-MB0",
+     "ac_kw": 17,
+     "price": 2312.5,
+     "hybrid": true,
+     "max_kwp": 22,
+     "min_kwp": 14
+    },
+    {
+     "key": "sun2000_20k_mb0",
+     "cost": 1954,
+     "name": "HUAWEI SUN2000-20K-MB0",
+     "ac_kw": 20,
+     "price": 2442.5,
+     "hybrid": true,
+     "max_kwp": 30,
+     "min_kwp": 16
+    },
+    {
+     "key": "sun2000_25k_mb0",
+     "cost": 2000,
+     "name": "HUAWEI SUN2000-25K-MB0",
+     "ac_kw": 25,
+     "price": 2500.0,
+     "hybrid": true,
+     "max_kwp": 37,
+     "min_kwp": 20
+    }
+   ],
+   "smart_manager": {
+    "key": "huawei_dongle",
+    "name": "HUAWEI Smart Dongle WLAN-FE",
+    "price": 95,
+    "required_above_kwp": 0
+   },
+   "smart_manager_large": {
+    "key": "huawei_smartlogger_3000a03",
+    "name": "Huawei Smart Logger 3000A03 s MBUS",
+    "price": 957,
+    "required_above_kwp": 10
+   },
+   "smart_meter": {
+    "key": "smartmeter_huawei_dtsu",
+    "name": "HUAWEI DTSU666-H 250A/50mA",
+    "price": 160
+   },
+   "optimizers": [
+    {
+     "key": "huawei_merc",
+     "name": "HUAWEI MERC-1300W (Smart PV Optimizer)",
+     "notes": "Native Huawei optimizer — NIE Tigo (pre Huawei meniče)",
+     "panels_per_unit": 2,
+     "price_per_panel": 65
+    }
+   ],
+   "batteries": [
+    {
+     "key": "luna2000_5",
+     "cost": 2225,
+     "name": "HUAWEI LUNA2000-5-S0",
+     "price": 2225,
+     "source": "CRM cennik",
+     "modular": true,
+     "max_towers": 4,
+     "module_kwh": 5,
+     "capacity_kwh": 5,
+     "max_power_kw": 2.5,
+     "battery_class": "residential",
+     "max_modules_per_tower": 3
+    },
+    {
+     "key": "luna2000_10",
+     "cost": 3810,
+     "name": "HUAWEI LUNA2000-10-S0",
+     "price": 3810,
+     "source": "CRM cennik",
+     "modular": true,
+     "max_towers": 4,
+     "module_kwh": 5,
+     "capacity_kwh": 10,
+     "max_power_kw": 5,
+     "battery_class": "residential",
+     "max_modules_per_tower": 3
+    },
+    {
+     "key": "luna2000_241_2s1",
+     "cost": 40000,
+     "name": "HUAWEI LUNA2000-241-2S1 (241 kWh, hybrid cooling C&I)",
+     "note": "hybrid cooling, grid-forming; PCS + SmartLogger 3000C01 (988 EUR) zvlast",
+     "brand": "Huawei",
+     "price": 40000,
+     "source": "CRM cennik (POZOR: EFV ponuka mala 36873 — overit)",
+     "eco_fee": 393.6,
+     "modular": true,
+     "capacity_kwh": 241,
+     "max_power_kw": 100,
+     "battery_class": "industrial"
+    }
+   ],
+   "wallboxes": [
+    {
+     "key": "huawei_smart_charger",
+     "name": "HUAWEI Smart Charger 22kW",
+     "price": 980,
+     "power_kw": 22
+    }
+   ],
+   "warnings": [
+    {
+     "check": "no_tigo",
+     "message": "⚠ Huawei meniče NIE SÚ kompatibilné s Tigo TS4 — použi HUAWEI MERC-1300W native optimizer.",
+     "condition": "optimizer == tigo_ts4"
+    }
+   ],
+   "raynet_share_pct": 20.0,
+   "accessories": [
+    {
+     "key": "janitza_umg104",
+     "code": "EFV000000433",
+     "cost": 780,
+     "name": "Janitza UMG 104 (sietovy analyzator)",
+     "note": "diagnostika siete 95-240VAC/135-340VDC; kompat. so vsetkymi menicmi; sklad HH 4 ks",
+     "price": 780,
+     "source": "EFV 2026-06",
+     "category": "network_analyzer",
+     "compatible_all": true,
+     "offer_above_kw": 30
+    },
+    {
+     "key": "janitza_umg103cbm",
+     "code": "EFV000000511",
+     "cost": 309.6,
+     "name": "Janitza UMG 103-CBM (sietovy analyzator)",
+     "note": "115-277 VAC; kompat. so vsetkymi menicmi; na objednavku",
+     "price": 309.6,
+     "source": "EFV 2026-06",
+     "category": "network_analyzer",
+     "compatible_all": true,
+     "offer_above_kw": 30
+    }
+   ]
+  },
+  {
+   "vendor_key": "solinteg",
+   "display_name": "Solinteg 💎",
+   "preferred_panels": [
+    {
+     "wp": 535,
+     "sku": "LONGI535",
+     "cost": 80,
+     "name": "LONGi Hi-MO X10 EcoLife LR7-60HVH-535M 535 Wp",
+     "price_per_unit": 103.9
+    },
+    {
+     "wp": 535,
+     "sku": "01-600186",
+     "cost": 65.9,
+     "name": "JA Solar JAM60D42-535/LB 535 Wp (BFR)",
+     "price_per_unit": 80.4
+    },
+    {
+     "wp": 540,
+     "sku": "01-600160",
+     "cost": 76.7,
+     "name": "LONGi Hi-MO X10 Scientist LR7-60HVH-540M 540 Wp (BFR)",
+     "price_per_unit": 93.57
+    }
+   ],
+   "inverters": [
+    {
+     "key": "solinteg_mht_15",
+     "cost": 1449,
+     "name": "Solinteg MHT-15K-40 (3f hybrid)",
+     "ac_kw": 15,
+     "price": 3200,
+     "hybrid": true,
+     "max_kwp": 18,
+     "min_kwp": 12
+    },
+    {
+     "key": "solinteg_mht_30",
+     "cost": 2979,
+     "name": "Solinteg MHT-30K-40 (3f hybrid)",
+     "ac_kw": 30,
+     "price": 4800,
+     "hybrid": true,
+     "max_kwp": 40,
+     "min_kwp": 25
+    },
+    {
+     "key": "solinteg_mht_50",
+     "cost": 3545,
+     "name": "Solinteg MHT-50K-100 (3f hybrid)",
+     "ac_kw": 50,
+     "price": 6500,
+     "hybrid": true,
+     "max_kwp": 80,
+     "min_kwp": 40
+    }
+   ],
+   "smart_manager": {
+    "key": "solinteg_duocom",
+    "name": "Solinteg DuoCOM Wi-Fi/LAN 2 in 1 module",
+    "price": 53.75,
+    "required_above_kwp": 0,
+    "cost": 43
+   },
+   "smart_manager_large": null,
+   "smart_meter": {
+    "key": "solinteg_meter2",
+    "name": "Solinteg Smart Meter (CT)",
+    "price": 280,
+    "cost": 99
+   },
+   "optimizers": [
+    {
+     "key": "tigo_ts4",
+     "name": "Optimizér Tigo TS4-A-O",
+     "notes": "OK pre Solinteg",
+     "price_per_panel": 48,
+     "cost": 29.0
+    }
+   ],
+   "batteries": [
+    {
+     "key": "dyness_tower_ts10",
+     "cost": 2076,
+     "name": "Dyness Tower TS10 (10,1 kWh)",
+     "brand": "Dyness",
+     "price": 2076,
+     "source": "Memodo 2026-06",
+     "modular": true,
+     "capacity_kwh": 10.13,
+     "max_power_kw": 7,
+     "battery_class": "residential"
+    },
+    {
+     "key": "dyness_tower_ts14",
+     "cost": 2651,
+     "name": "Dyness Tower TS14 (13,5 kWh)",
+     "brand": "Dyness",
+     "price": 2651,
+     "source": "Memodo 2026-06",
+     "modular": true,
+     "capacity_kwh": 13.5,
+     "max_power_kw": 7,
+     "battery_class": "residential"
+    },
+    {
+     "key": "dyness_tower_ts17",
+     "cost": 3226,
+     "name": "Dyness Tower TS17 (16,9 kWh)",
+     "brand": "Dyness",
+     "price": 3226,
+     "source": "Memodo 2026-06",
+     "modular": true,
+     "capacity_kwh": 16.87,
+     "max_power_kw": 7,
+     "battery_class": "residential"
+    },
+    {
+     "key": "dyness_tower_ts21",
+     "cost": 3801,
+     "name": "Dyness Tower TS21 (20,2 kWh)",
+     "brand": "Dyness",
+     "price": 3801,
+     "source": "Memodo 2026-06",
+     "modular": true,
+     "capacity_kwh": 20.24,
+     "max_power_kw": 7,
+     "battery_class": "residential"
+    },
+    {
+     "key": "dyness_stack100_31",
+     "cost": 5127,
+     "name": "Dyness Stack100 (30,7 kWh)",
+     "brand": "Dyness",
+     "price": 5127,
+     "source": "Memodo 2026-06",
+     "modular": true,
+     "capacity_kwh": 30.72,
+     "max_power_kw": 12,
+     "battery_class": "residential"
+    },
+    {
+     "key": "dyness_stack100_51",
+     "cost": 8095,
+     "name": "Dyness Stack100 (51,2 kWh)",
+     "brand": "Dyness",
+     "price": 8095,
+     "source": "Memodo 2026-06",
+     "modular": true,
+     "capacity_kwh": 51.2,
+     "max_power_kw": 12,
+     "battery_class": "residential"
+    },
+    {
+     "key": "solinteg_e2br_64r",
+     "cost": 9700,
+     "name": "Solinteg E2BR-64K-R Indoor (64 kWh)",
+     "brand": "Solinteg",
+     "price": 11816.25,
+     "source": "Memodo 2026-06",
+     "modular": false,
+     "capacity_kwh": 64,
+     "max_power_kw": 50,
+     "battery_class": "industrial"
+    },
+    {
+     "key": "solinteg_e2br_80r",
+     "cost": 10971,
+     "name": "Solinteg E2BR-S80K-R Indoor (80 kWh)",
+     "brand": "Solinteg",
+     "price": 10971,
+     "source": "Memodo 2026-06",
+     "modular": false,
+     "capacity_kwh": 80,
+     "max_power_kw": 50,
+     "battery_class": "industrial"
+    },
+    {
+     "key": "solinteg_e2br_96r",
+     "cost": 12489,
+     "name": "Solinteg E2BR-S96K-R Indoor (96 kWh)",
+     "brand": "Solinteg",
+     "price": 12489,
+     "source": "Memodo 2026-06",
+     "modular": false,
+     "capacity_kwh": 96,
+     "max_power_kw": 50,
+     "battery_class": "industrial"
+    },
+    {
+     "key": "solinteg_e2br_112r",
+     "cost": 13399,
+     "name": "Solinteg E2BR-S112K-R Indoor (112 kWh)",
+     "brand": "Solinteg",
+     "price": 13600,
+     "source": "BayWa 2026-06 (najlacnejsi)",
+     "modular": false,
+     "capacity_kwh": 112,
+     "max_power_kw": 50,
+     "battery_class": "industrial"
+    },
+    {
+     "key": "solinteg_e2br_96c",
+     "cost": 16000,
+     "name": "Solinteg E2BR-S96K-C Outdoor (96 kWh)",
+     "note": "outdoor cabinet",
+     "brand": "Solinteg",
+     "price": 16000,
+     "source": "BayWa 2026-06 (najlacnejsi)",
+     "modular": false,
+     "capacity_kwh": 96,
+     "max_power_kw": 50,
+     "battery_class": "industrial"
+    },
+    {
+     "key": "solinteg_e2br_112c",
+     "cost": 17000,
+     "name": "Solinteg E2BR-S112K-C Outdoor (112 kWh)",
+     "note": "outdoor cabinet",
+     "brand": "Solinteg",
+     "price": 17000,
+     "source": "BayWa 2026-06 (najlacnejsi)",
+     "modular": false,
+     "capacity_kwh": 112,
+     "max_power_kw": 50,
+     "battery_class": "industrial"
+    },
+    {
+     "key": "sunwoda_oasis_60",
+     "cost": 11945,
+     "name": "Sunwoda Oasis 60 (60 kWh all-in-one)",
+     "note": "standalone C&I",
+     "brand": "Sunwoda",
+     "price": 11945,
+     "source": "IBC 2026-06",
+     "modular": false,
+     "capacity_kwh": 60,
+     "max_power_kw": 30,
+     "battery_class": "industrial"
+    },
+    {
+     "key": "sunwoda_oasis_l241",
+     "cost": 36584,
+     "name": "Sunwoda Oasis L241 (241 kWh all-in-one)",
+     "note": "standalone C&I, vstavany PCS",
+     "brand": "Sunwoda",
+     "price": 36584,
+     "source": "IBC 2026-06",
+     "modular": false,
+     "capacity_kwh": 241,
+     "max_power_kw": 125,
+     "battery_class": "industrial"
+    },
+    {
+     "key": "sunwoda_oasis_l261",
+     "cost": 40781,
+     "name": "Sunwoda Oasis L261 All-in-One (261 kWh/125 kW)",
+     "note": "standalone C&I, vstavany PCS 125 kW",
+     "brand": "Sunwoda",
+     "price": 40781,
+     "source": "IBC 2026-06",
+     "modular": false,
+     "capacity_kwh": 261,
+     "max_power_kw": 125,
+     "battery_class": "industrial"
+    },
+    {
+     "key": "pylontech_force_h3",
+     "cost": 770,
+     "name": "Pylontech Force H3 (modul 5,12 kWh)",
+     "note": "2-7 modulov/veža",
+     "brand": "Pylontech",
+     "price": 770,
+     "source": "CRM cennik",
+     "modular": true,
+     "capacity_kwh": 5.12,
+     "max_power_kw": 7,
+     "battery_class": "residential"
+    },
+    {
+     "key": "solinteg_eba_b5k1",
+     "cost": 720,
+     "name": "Solinteg EBA B5K1 (5,12 kWh)",
+     "brand": "Solinteg",
+     "price": 720,
+     "source": "CRM cennik",
+     "modular": true,
+     "max_units": 2,
+     "capacity_kwh": 5.12,
+     "max_power_kw": 5,
+     "battery_class": "residential"
+    }
+   ],
+   "wallboxes": [
+    {
+     "key": "wallbox_innc_22",
+     "name": "AC Wallbox Innc 1x22kW",
+     "price": 720,
+     "power_kw": 22
+    }
+   ],
+   "warnings": [],
+   "raynet_share_pct": 5.0,
+   "accessories": [
+    {
+     "key": "janitza_umg104",
+     "code": "EFV000000433",
+     "cost": 780,
+     "name": "Janitza UMG 104 (sietovy analyzator)",
+     "note": "diagnostika siete 95-240VAC/135-340VDC; kompat. so vsetkymi menicmi; sklad HH 4 ks",
+     "price": 780,
+     "source": "EFV 2026-06",
+     "category": "network_analyzer",
+     "compatible_all": true,
+     "offer_above_kw": 30
+    },
+    {
+     "key": "janitza_umg103cbm",
+     "code": "EFV000000511",
+     "cost": 309.6,
+     "name": "Janitza UMG 103-CBM (sietovy analyzator)",
+     "note": "115-277 VAC; kompat. so vsetkymi menicmi; na objednavku",
+     "price": 309.6,
+     "source": "EFV 2026-06",
+     "category": "network_analyzer",
+     "compatible_all": true,
+     "offer_above_kw": 30
+    },
+    {
+     "key": "tigo_cca_tap",
+     "code": "TIGOCCATAP",
+     "name": "TIGO CCA Kit, TAP, 120/240VAC PS",
+     "category": "tigo_cca",
+     "cost": 134.0,
+     "price": 160.8,
+     "source": "Raynet cenník LZ-SG 10/2026",
+     "note": "1 sada na 150 optimizérov"
+    }
+   ]
+  },
+  {
+   "vendor_key": "sungrow",
+   "display_name": "Sungrow ⚡",
+   "preferred_panels": [
+    {
+     "wp": 535,
+     "sku": "LONGI535",
+     "cost": 80,
+     "name": "LONGi Hi-MO X10 EcoLife LR7-60HVH-535M 535 Wp",
+     "price_per_unit": 103.9
+    },
+    {
+     "wp": 535,
+     "sku": "01-600186",
+     "cost": 65.9,
+     "name": "JA Solar JAM60D42-535/LB 535 Wp (BFR)",
+     "price_per_unit": 80.4
+    },
+    {
+     "wp": 540,
+     "sku": "01-600160",
+     "cost": 76.7,
+     "name": "LONGi Hi-MO X10 Scientist LR7-60HVH-540M 540 Wp (BFR)",
+     "price_per_unit": 93.57
+    }
+   ],
+   "inverters": [
+    {
+     "key": "sg10rt",
+     "name": "Sungrow SG10RT",
+     "ac_kw": 10,
+     "price": 1450,
+     "max_kwp": 15,
+     "min_kwp": 5
+    },
+    {
+     "key": "sg15rt",
+     "name": "Sungrow SG15RT",
+     "ac_kw": 15,
+     "price": 1800,
+     "max_kwp": 22,
+     "min_kwp": 10
+    },
+    {
+     "key": "sg33cx",
+     "cost": 1528,
+     "name": "Sungrow SG33CX-P2",
+     "ac_kw": 33,
+     "price": 2200,
+     "max_kwp": 50,
+     "min_kwp": 15
+    },
+    {
+     "key": "sg50cx",
+     "cost": 1720,
+     "name": "Sungrow SG50CX-P2",
+     "ac_kw": 50,
+     "price": 3200,
+     "max_kwp": 75,
+     "min_kwp": 30
+    },
+    {
+     "key": "sg110cx",
+     "cost": 4077,
+     "name": "Sungrow SG110CX-V112",
+     "ac_kw": 110,
+     "price": 5500,
+     "max_kwp": 165,
+     "min_kwp": 90
+    },
+    {
+     "key": "sg125cx",
+     "cost": 3473,
+     "name": "Sungrow SG125CX-P2",
+     "ac_kw": 125,
+     "price": 6200,
+     "max_kwp": 190,
+     "min_kwp": 100
+    }
+   ],
+   "smart_manager": {
+    "key": "com100e",
+    "name": "Sungrow COM100E",
+    "price": 850,
+    "required_above_kwp": 30
+   },
+   "smart_manager_large": null,
+   "smart_meter": {
+    "key": "smartmeter_sungrow",
+    "name": "Smartmeter Sungrow",
+    "price": 290
+   },
+   "optimizers": [
+    {
+     "key": "tigo_ts4",
+     "name": "Optimizér Tigo TS4-A-O",
+     "notes": "Štandard pre Sungrow + tienenie",
+     "price_per_panel": 48,
+     "cost": 29.0
+    }
+   ],
+   "batteries": [
+    {
+     "key": "sungrow_sbh100",
+     "cost": 3329,
+     "name": "Sungrow SBH100 (10 kWh)",
+     "brand": "Sungrow",
+     "price": 3329,
+     "source": "CRM cennik",
+     "modular": false,
+     "capacity_kwh": 10,
+     "max_power_kw": 5,
+     "battery_class": "residential"
+    },
+    {
+     "key": "sungrow_sbh150",
+     "cost": 4733,
+     "name": "Sungrow SBH150 (15 kWh)",
+     "brand": "Sungrow",
+     "price": 4733,
+     "source": "CRM cennik",
+     "modular": false,
+     "capacity_kwh": 15,
+     "max_power_kw": 5,
+     "battery_class": "residential"
+    },
+    {
+     "key": "sungrow_sbh200",
+     "cost": 6137,
+     "name": "Sungrow SBH200 (20 kWh)",
+     "brand": "Sungrow",
+     "price": 6137,
+     "source": "CRM cennik",
+     "modular": false,
+     "capacity_kwh": 20,
+     "max_power_kw": 5,
+     "battery_class": "residential"
+    },
+    {
+     "key": "sungrow_sbh300",
+     "cost": 8945,
+     "name": "Sungrow SBH300 (30 kWh)",
+     "brand": "Sungrow",
+     "price": 8945,
+     "source": "CRM cennik",
+     "modular": false,
+     "capacity_kwh": 30,
+     "max_power_kw": 5,
+     "battery_class": "residential"
+    },
+    {
+     "key": "sungrow_sbh400",
+     "cost": 11753,
+     "name": "Sungrow SBH400 (40 kWh)",
+     "brand": "Sungrow",
+     "price": 11753,
+     "source": "CRM cennik",
+     "modular": false,
+     "capacity_kwh": 40,
+     "max_power_kw": 5,
+     "battery_class": "residential"
+    },
+    {
+     "key": "sungrow_powerstack_255",
+     "cost": 39900,
+     "name": "Sungrow PowerStack ST255CS-125kW-2H (255 kWh)",
+     "brand": "Sungrow",
+     "price": 39900,
+     "source": "Memodo 2026-06",
+     "modular": false,
+     "capacity_kwh": 255,
+     "max_power_kw": 125,
+     "battery_class": "industrial"
+    },
+    {
+     "key": "sungrow_powerkeeper_250",
+     "cost": 47920,
+     "name": "Sungrow PowerKeeper ST250CF+SH125CX (250 kWh/125 kW)",
+     "brand": "Sungrow",
+     "price": 47920,
+     "source": "Memodo 2026-06",
+     "modular": false,
+     "capacity_kwh": 250,
+     "max_power_kw": 125,
+     "battery_class": "industrial"
+    },
+    {
+     "key": "sungrow_powerstack_510",
+     "cost": 78852,
+     "name": "Sungrow PowerStack ST510CS-125kW-4H (512 kWh)",
+     "brand": "Sungrow",
+     "price": 78852,
+     "source": "IBC 2026-06",
+     "modular": false,
+     "capacity_kwh": 512,
+     "max_power_kw": 125,
+     "battery_class": "industrial"
+    }
+   ],
+   "wallboxes": [
+    {
+     "key": "wallbox_innc_22",
+     "name": "AC Wallbox Innc 1x22kW",
+     "price": 720,
+     "power_kw": 22
+    },
+    {
+     "key": "wallbox_innc_44",
+     "name": "AC Charger Innc 2x22kW",
+     "price": 3150,
+     "power_kw": 44
+    }
+   ],
+   "warnings": [],
+   "raynet_share_pct": 65.0,
+   "accessories": [
+    {
+     "key": "janitza_umg104",
+     "code": "EFV000000433",
+     "cost": 780,
+     "name": "Janitza UMG 104 (sietovy analyzator)",
+     "note": "diagnostika siete 95-240VAC/135-340VDC; kompat. so vsetkymi menicmi; sklad HH 4 ks",
+     "price": 780,
+     "source": "EFV 2026-06",
+     "category": "network_analyzer",
+     "compatible_all": true,
+     "offer_above_kw": 30
+    },
+    {
+     "key": "janitza_umg103cbm",
+     "code": "EFV000000511",
+     "cost": 309.6,
+     "name": "Janitza UMG 103-CBM (sietovy analyzator)",
+     "note": "115-277 VAC; kompat. so vsetkymi menicmi; na objednavku",
+     "price": 309.6,
+     "source": "EFV 2026-06",
+     "category": "network_analyzer",
+     "compatible_all": true,
+     "offer_above_kw": 30
+    },
+    {
+     "key": "tigo_cca_tap",
+     "code": "TIGOCCATAP",
+     "name": "TIGO CCA Kit, TAP, 120/240VAC PS",
+     "category": "tigo_cca",
+     "cost": 134.0,
+     "price": 160.8,
+     "source": "Raynet cenník LZ-SG 10/2026",
+     "note": "1 sada na 150 optimizérov"
+    }
+   ]
+  }
+ ]
+}
