@@ -17,6 +17,16 @@ Vstupy:
   vzdialenost_doprava: float (km; 0/chýba = bez riadku dopravy + varovanie)
   margin_pct: float (marža Z PREDAJA v %, default 22; platí 0 <= m < 100)
 
+Režim LEN BESS (Fáza 1, 2026-10; F1-SPEC "Jadro BESS"): pocet_panelov 0, bez kwp, has_bess + kWh/počet/model.
+  bess_kwh: cieľová kapacita (model + počet skríň vyberie jadro: kombinácia jedného modelu, ceil, odchýlka > 5 % = varovanie)
+  bess_kw: cieľový AC výkon batérie/PCS v kW (voliteľný) — základ pre AC rozvádzač, PD, dispečing;
+           bez neho výkon zo stacku (max_power_kw x ks), inak kapacita / 2 + varovanie
+  has_ems: bool (default: len BESS od 100 kWh zapnuté; pri FVE+BESS vypnuté), ems_typ: 'compact' (default) | 'full'
+  bess_kabel_m: dĺžka AC kabeláže batéria ↔ rozvádzač v m (default 30 + varovanie)
+  Skladba: batéria, montáž za skriňu, AC rozvádzač (pásmo podľa kW), kabeláž (kabelaz_bess), PD (max(kWp, kW), min PD50),
+  EMS, statika + PBS (>= 100 kWh), dispečing (AC >= 100 kW podľa distribučky), doprava. Bez panelov, meničov FVE,
+  konštrukcie, vodičov DC, rozvádzača DC a montáže FVE. totals.ac_kw_total = výkon batérie/PCS.
+
 Cenotvorba (Fáza 0, 2026-10): predaj = nákup / (1 - m/100) jednotne pre VŠETKY položky.
 Nákup sa berie z DB pravidiel (cost_per_unit) a zo stacku (cost); ak chýba, odhad predaj x 0,77
 a varovanie `cost_estimated`.
@@ -53,6 +63,16 @@ SCOPE_MAX_KWP = 500.0         # nad týmto výkonom je ponuka mimo bežného roz
 SCOPE_MAX_BESS_KWH = 250.0    # C&I batéria nad touto kapacitou (alebo Huawei LUNA C&I) je mimo bežného rozsahu
 GROUND_ROOFS = ("zemne_skrutky", "zemna_ramming")
 DISTRIBUCKY = ("ZSD", "SSD", "VSD")
+
+# --- Fáza 1 (2026-10): plný režim len BESS (F1-SPEC) ---
+BESS_ONLY_MIN_PD_KW = 50.0    # PD v režime len BESS: pásmo podľa max(kWp, kW), najmenej PD50 (Raynet R5)
+BESS_EMS_DEFAULT_KWH = 100.0  # len BESS od tejto kapacity je EMS predvolene zapnutý (has_ems ho prebíja)
+BESS_STATIKA_MIN_KWH = 100.0  # len BESS od tejto kapacity: statický posudok + projekt požiarnej bezpečnosti
+BESS_KABEL_DEFAULT_M = 30.0   # predvolená dĺžka AC kabeláže, ak bess_kabel_m nie je zadané (+ varovanie)
+BESS_KW_PER_KWH = 0.5         # odhad výkonu (0,5C = kWh / 2), ak chýba bess_kw aj výkon batérie v dátach
+BESS_KW_TOLERANCE = 0.10      # požadovaný bess_kw môže prevyšovať výkon batérií v dátach najviac o toľko bez varovania
+BESS_INDUSTRIAL_FROM_KWH = 60.0  # bez zvolenej triedy (bess_class) sa od tejto cieľovej kapacity vyberá z priemyselných skríň
+BESS_MANY_UNITS = 12          # výber podľa kWh, ktorý vyjde na viac kusov, je podozrivý (varovanie bess_many_units)
 
 
 def _num(v, default: float = 0.0) -> float:
@@ -184,7 +204,8 @@ def _pick_inverters(inverters: list[dict], required_ac_kw: float, require_hybrid
       • celková kapacita meničov (Σ max_kwp) musí pokryť panely
       • do MAX_KWP_NO_ASDR uprednostni súčet AC < 100 kW (vyhne sa ASDR ~30k)
       • inak: najmenej kusov → oversizing najbližšie k cieľu → najlacnejšie
-    Ak žiadna platná kombinácia (extra veľký systém) → max počet najväčších meničov."""
+    Ak žiadna platná kombinácia (extra veľký systém) → n × najväčší menič; výsledok nesie "fallback": True
+    (calculate_bom_v2 z toho urobí varovanie inverter_fallback)."""
     import itertools
     kwp = required_ac_kw * DC_AC_RATIO
     invs_all = [i for i in inverters if (i.get("ac_kw") or 0) > 0]
@@ -217,7 +238,7 @@ def _pick_inverters(inverters: list[dict], required_ac_kw: float, require_hybrid
     if not cands:
         big = max(invs, key=lambda x: x["ac_kw"])
         n = max(1, math.ceil(kwp / (big.get("max_kwp") or big["ac_kw"])))
-        return [{"inverter": big, "qty": n}]
+        return [{"inverter": big, "qty": n, "fallback": True}]
 
     def _score(x):
         _combo, ac, r, ov, cost = x
@@ -245,9 +266,48 @@ def _is_luna_ci(battery: dict) -> bool:
     return battery.get("battery_class") == "industrial" and ("luna2000_200" in key or "luna2000_241" in key)
 
 
+def _kwh_deviation(eff_kwh: float, target_kwh: float) -> float:
+    """Relatívna odchýlka efektívnej kapacity od cieľa (+ = viac než cieľ)."""
+    return (eff_kwh - target_kwh) / target_kwh if target_kwh > 0 else 0.0
+
+
+def _kwh_off_target(eff_kwh: float, target_kwh: float) -> bool:
+    """Odchýlka kapacity od cieľa nad toleranciou BESS_KWH_TOLERANCE (5 %)."""
+    return abs(_kwh_deviation(eff_kwh, target_kwh)) > BESS_KWH_TOLERANCE + 1e-9
+
+
+def _best_bess_for_kwh(batteries: list[dict], target_kwh: float) -> dict:
+    """Model a počet skríň pre cieľ v kWh. Kombinácia je vždy z JEDNÉHO modelu: qty = ceil(cieľ / kapacita).
+    Z modelov v tolerancii (BESS_KWH_TOLERANCE) vyberie ten s najmenším počtom kusov, potom najlacnejší;
+    ak žiadny nie je v tolerancii, ten s najmenšou odchýlkou od cieľa (potom menej kusov, potom lacnejší).
+    Modely, pri ktorých by qty prekročilo max_units, sa preskočia (ak by nezostal žiadny, rozhodujú všetky
+    a limit orežú calculate_bom_v2 s varovaním bess_limit)."""
+    cands = []
+    for b in batteries:
+        cap = _num(b.get("capacity_kwh"), 0.0)
+        if cap <= 0:
+            continue
+        # round(…, 6): 20,48 / 10,24 nesmie dať 2,0000000000000004 → 3 ks
+        qty = max(1, math.ceil(round(target_kwh / cap, 6)))
+        cands.append({"battery": b, "qty": qty, "dev": abs(_kwh_deviation(cap * qty, target_kwh)),
+                      "cost": _num(b.get("cost"), _num(b.get("price"), 0.0)) * qty})
+    if not cands:
+        return {"battery": batteries[0], "qty": 1}
+    in_limit = [c for c in cands
+                if not (c["battery"].get("max_units") and c["qty"] > int(_num(c["battery"]["max_units"], 0)))]
+    pool = in_limit or cands
+    in_tol = [c for c in pool if c["dev"] <= BESS_KWH_TOLERANCE + 1e-9]
+    if in_tol:
+        best = min(in_tol, key=lambda c: (c["qty"], c["cost"], c["dev"]))
+    else:
+        best = min(pool, key=lambda c: (c["dev"], c["qty"], c["cost"]))
+    return {"battery": best["battery"], "qty": best["qty"]}
+
+
 def _pick_bess(batteries: list[dict], target_kwh: float, count: int = 0) -> list[dict]:
-    """Vyber batérie. Ak count>0 → počet KUSOV modulov/skríň (zadáva user priamo).
-    Inak cieľová kapacita v kWh: najbližší model podľa kapacity a qty = ceil(cieľ / kapacita)
+    """Vyber batérie. Ak count>0 → počet KUSOV modulov/skríň (zadáva user priamo; primárny modulárny modul,
+    inak prvý model — výber bez cieľa kWh hlási calculate_bom_v2 ako bess_model_missing).
+    Inak cieľová kapacita v kWh: kombinácia skríň jedného modelu (viď _best_bess_for_kwh), qty = ceil(cieľ / kapacita)
     pre modulárne AJ nemodulárne batérie (odchýlku kapacity od cieľa hlási calculate_bom_v2)."""
     if not batteries:
         return []
@@ -259,11 +319,7 @@ def _pick_bess(batteries: list[dict], target_kwh: float, count: int = 0) -> list
     # Režim KAPACITA kWh
     if target_kwh <= 0:
         return []
-    sorted_batt = sorted(batteries, key=lambda x: abs(x["capacity_kwh"] - target_kwh))
-    best = sorted_batt[0]
-    # round(…, 6): 20,48 / 10,24 nesmie dať 2,0000000000000004 → 3 ks
-    qty = max(1, math.ceil(round(target_kwh / float(best["capacity_kwh"]), 6)))
-    return [{"battery": best, "qty": qty}]
+    return [_best_bess_for_kwh(batteries, target_kwh)]
 
 
 def calculate_bom_v2(sb, config: dict) -> dict:
@@ -289,6 +345,8 @@ def calculate_bom_v2(sb, config: dict) -> dict:
     has_optimizery = _flag(config.get("has_optimizery"), False)
     has_rapid_shutdown = _flag(config.get("has_rapid_shutdown"), False)
     vzdialenost_doprava = _num(config.get("vzdialenost_doprava"), 0.0)
+    bess_kw_input = _num(config.get("bess_kw"), 0.0)        # cieľový AC výkon batérie/PCS (režim len BESS)
+    bess_kabel_m = _num(config.get("bess_kabel_m"), 0.0)    # dĺžka AC kabeláže batéria ↔ rozvádzač (režim len BESS)
 
     # Marža Z PREDAJA: predaj = nákup / (1 - m/100). Chýba → 22 %. Mimo 0 <= m < 100 → chyba.
     raw_margin = config.get("margin_pct")
@@ -381,21 +439,66 @@ def calculate_bom_v2(sb, config: dict) -> dict:
 
     kwp_actual = round(pocet_panelov * float(panel["wp"]) / 1000, 2) if panel else 0.0
 
-    # ===== PD (projektová dokumentácia) — pásmo podľa Σ AC kW; v režime len BESS pásmo PD50 =====
-    def build_pd(ac_value: float, bess_mode: bool = False):
-        pd_rules = rules("pd")
-        if bess_mode:
-            band, mult, over = _pick_band(pd_rules, 50.0), 1, False
-        else:
-            band, mult, over = _select_band(pd_rules, ac_value)
+    # ===== SPOLOČNÉ BLOKY (FVE aj len BESS): rozvádzač AC, PD, statika + PBS, dispečing, EMS =====
+    def build_rozvadzac_ac(ac_value: float):
+        """Rozvádzač AC — pásmo podľa Σ AC kW (nad najvyšším pásmom: ceil(AC / max) ks najvyššieho + varovanie)."""
+        band, mult, over = _select_band(rules("rozvadzac"), ac_value)
         if not band:
-            missing_rule("pd", "PD50" if bess_mode else f"pásmo {ac_value:g} kW AC", "Projektová dokumentácia")
+            missing_rule("rozvadzac", f"pásmo {ac_value:g} kW AC", "Rozvádzač AC")
+            return
+        add_from_rule("Rozvádzač", band, mult, f"rozvadzac.{band['rule_key']}")
+        if over:
+            warn("warning", "rozvadzac_over_range",
+                 f"Σ AC {ac_value:g} kW je nad najvyšším pásmom rozvádzača ({_num(band.get('max_kwp')):g} kW) — "
+                 f"účtovaných {mult} ks najvyššieho pásma, individuálne preveriť.")
+
+    def build_pd(ac_value: float):
+        """Projektová dokumentácia — pásmo podľa Σ AC kW (režim len BESS: podľa max(kW, 50) = najmenej PD50)."""
+        band, mult, over = _select_band(rules("pd"), ac_value)
+        if not band:
+            missing_rule("pd", f"pásmo {ac_value:g} kW AC", "Projektová dokumentácia")
             return
         add_from_rule("Projektová dokumentácia", band, 1, f"pd.{band['rule_key']}")
         if over:
             warn("warning", "pd_over_range",
                  f"Σ AC {ac_value:g} kW je nad najvyšším pásmom PD ({_num(band.get('max_kwp')):g} kW) — "
                  f"účtované najvyššie pásmo, individuálne preveriť.")
+
+    def build_statika_pbs():
+        """Statický posudok + projekt požiarnej bezpečnosti (FVE od 100 kWp, len BESS od 100 kWh)."""
+        for rk, label in (("statika", "Statický posudok"), ("ppbs", "Projekt požiarnej bezpečnosti")):
+            r = rule("statika", rk)
+            if r:
+                add_from_rule("Statika a PBS", r, _rule_qty(r, kwp_actual, pocet_panelov, default=1), rk)
+            else:
+                missing_rule("statika", rk, label)
+
+    def build_dispecing(ac_value: float):
+        """Dispečerské riadenie podľa distribučky pri Σ AC >= 100 kW (bez distribučky: ZSD + varovanie)."""
+        if ac_value < ASDR_MIN_AC_KW:
+            return
+        dkey = distribucka or "ZSD"
+        if not distribucka:
+            warn("warning", "distribucka",
+                 "Zvoľ distribučku (ZSD/SSD/VSD) — dispečerské riadenie je počítané pre ZSD.")
+        r = rule("dispecing", dkey)
+        if r:
+            add_from_rule("Dispečerské riadenie", r, _rule_qty(r, kwp_actual, pocet_panelov, default=1),
+                          f"dispecing.{dkey}")
+        else:
+            missing_rule("dispecing", dkey, f"Dispečerské riadenie {dkey}")
+
+    def build_ems(default_on: bool):
+        """EMS (riadenie spotreby, EnergoStation): has_ems prebíja default_on; typ compact (predvolený) | full."""
+        if not _flag(config.get("has_ems"), default_on):
+            return
+        typ = "full" if str(config.get("ems_typ") or "").strip().lower() == "full" else "compact"
+        r = rule("ems", typ)
+        if r:
+            add_from_rule("EMS", r, _rule_qty(r, kwp_actual, pocet_panelov, default=1),
+                          "ems" if typ == "compact" else f"ems.{typ}")
+        else:
+            missing_rule("ems", typ, "EMS (riadenie spotreby energie)")
 
     # ===== BATÉRIA (vendor-specific + trieda rez/priemysel + limity) =====
     def build_battery():
@@ -407,22 +510,35 @@ def calculate_bom_v2(sb, config: dict) -> dict:
             _cls = [b for b in batteries if (b.get("battery_class") or "residential") == bess_class]
             batteries = _cls or batteries
         # Explicitne zvolený model (key) z UI
+        sku_ok = False
         if bess_sku:
             _chosen = [b for b in batteries if b.get("key") == bess_sku]
             if _chosen:
                 batteries = _chosen
+                sku_ok = True
             else:
                 warn("warning", "bess_sku_unknown",
                      f"Model batérie '{bess_sku}' nie je v katalógu výrobcu — vybraný podľa kapacity/počtu.")
-        # Ak je zvolený konkrétny model bez počtu/kWh → default 1 ks
         eff_count = bess_count
         if bess_sku and eff_count <= 0 and bess_kwh <= 0:
-            eff_count = 1
+            eff_count = 1       # zvolený model bez počtu/kWh → default 1 ks
+        elif not sku_ok and bess_kwh > 0:
+            # Cieľ kWh bez (platného) modelu: model aj počet skríň vyberie jadro podľa cieľa. Počet z UI (predvolené
+            # 1–2 ks) by inak cieľ potichu prebil a vybral by sa model "podľa poradia v stacku" (N-19).
+            eff_count = 0
         kwh_mode = eff_count <= 0 and bess_kwh > 0
+        if kwh_mode and not sku_ok and bess_class not in ("residential", "industrial") and bess_kwh >= BESS_INDUSTRIAL_FROM_KWH:
+            # trieda nezvolená a cieľ na úrovni C&I skríň → drobné rezidenčné moduly (desiatky kusov) sú zlá skladba
+            batteries = [b for b in batteries if (b.get("battery_class") or "residential") == "industrial"] or batteries
         picked = _pick_bess(batteries, bess_kwh, eff_count)
         if not picked:
             warn("warning", "bess_unavailable", "Výrobca nemá v katalógu vhodnú batériu — batéria nie je v ponuke.")
             return [], 0.0
+        # N-19: počet kusov bez modelu aj bez cieľa kWh → model je len "prvý v poradí", user ho má vybrať
+        if not bess_sku and not kwh_mode and len(batteries) > 1:
+            warn("warning", "bess_model_missing",
+                 f"Nie je zvolený model batérie ani cieľová kapacita (kWh) — použitý {picked[0]['battery'].get('name')}; "
+                 f"vyber model batérie alebo zadaj kapacitu v kWh.")
         # Limit ks na menič (napr. Solinteg max 2)
         for pb in picked:
             _mx = pb["battery"].get("max_units")
@@ -430,12 +546,18 @@ def calculate_bom_v2(sb, config: dict) -> dict:
                 warn("warning", "bess_limit",
                      f"{pb['battery']['name']}: max {int(_mx)} ks na menič — znížené z {pb['qty']} na {int(_mx)}.")
                 pb["qty"] = int(_mx)
+        if kwh_mode:
+            for pb in picked:
+                if pb["qty"] > BESS_MANY_UNITS:
+                    warn("warning", "bess_many_units",
+                         f"Pre cieľ {bess_kwh:g} kWh vychádza {pb['qty']}× {pb['battery'].get('name')} — veľa kusov; "
+                         f"zváž priemyselnú triedu batérie (skrine) alebo iný model.")
         # efektívna kapacita (kWh) z reálne vybraných modulov/skríň
-        eff_kwh = round(sum(float(p["battery"]["capacity_kwh"]) * p["qty"] for p in picked), 2)
-        if kwh_mode and bess_kwh > 0 and abs(eff_kwh - bess_kwh) / bess_kwh > BESS_KWH_TOLERANCE:
+        eff_kwh = round(sum(_num(p["battery"].get("capacity_kwh")) * p["qty"] for p in picked), 2)
+        if kwh_mode and bess_kwh > 0 and _kwh_off_target(eff_kwh, bess_kwh):
             warn("warning", "bess_kwh_deviation",
                  f"Požadovaná kapacita {bess_kwh:g} kWh, ponúkaná {eff_kwh:g} kWh "
-                 f"({(eff_kwh - bess_kwh) / bess_kwh * 100:+.1f} %) — over výber skríň/modulov.")
+                 f"({_kwh_deviation(eff_kwh, bess_kwh) * 100:+.1f} %) — over výber skríň/modulov.")
         for b in picked:
             _bat = b["battery"]
             add("Batéria", _bat["name"], b["qty"], "ks", _bat.get("cost"), _bat.get("price"),
@@ -468,20 +590,64 @@ def calculate_bom_v2(sb, config: dict) -> dict:
                 add("Batéria", "Montáž batérie (rezidenčná sada)", 1, "kpl", 300.0, 500.0, rid)
         return picked, eff_kwh
 
+    # ===== LEN BESS: výkon batérie a AC kabeláž =====
+    def bess_ac_kw(picked: list[dict], eff_kwh: float) -> float:
+        """AC výkon batérie/PCS v kW: bess_kw zo vstupu → inak Σ max_power_kw × ks zo stacku → inak kWh / 2 + varovanie."""
+        powers = [_num(p["battery"].get("max_power_kw"), 0.0) for p in picked]
+        stack_kw = round(sum(pw * p["qty"] for pw, p in zip(powers, picked)), 2) if powers and all(pw > 0 for pw in powers) else 0.0
+        if bess_kw_input > 0:
+            if stack_kw > 0 and bess_kw_input > stack_kw * (1 + BESS_KW_TOLERANCE):
+                warn("warning", "bess_kw_below",
+                     f"Požadovaný výkon {bess_kw_input:g} kW je vyšší než výkon vybraných batérií {stack_kw:g} kW — "
+                     f"over PCS/menič (v režime len BESS ich kalkulačka nepridáva).")
+            return round(bess_kw_input, 2)
+        if stack_kw > 0:
+            return stack_kw
+        est = round(eff_kwh * BESS_KW_PER_KWH, 2)
+        warn("warning", "bess_kw_odhad",
+             f"Výkon batérie nie je zadaný (bess_kw) ani uvedený v dátach výrobcu — odhad {est:g} kW (kapacita / 2); "
+             f"AC rozvádzač, PD a dispečing sú počítané z neho. Zadaj výkon batérie.")
+        return est
+
+    def build_kabelaz_bess(ac_value: float):
+        """AC kabeláž batéria ↔ rozvádzač: m z bess_kabel_m (default 30 m + varovanie), cena z pravidla kabelaz_bess
+        (AYKY-J; ak DB definuje pásma podľa AC kW, vyberie sa pásmo, inak platí jediné pravidlo)."""
+        meters = bess_kabel_m
+        if meters <= 0:
+            meters = BESS_KABEL_DEFAULT_M
+            warn("warning", "bess_kabel_default",
+                 f"Dĺžka AC kabeláže batérie (bess_kabel_m) nie je zadaná — použitých {meters:g} m. "
+                 f"Zadaj vzdialenosť batérie od rozvádzača.")
+        meters = int(meters) if float(meters).is_integer() else round(meters, 2)
+        krules = rules("kabelaz_bess")
+        r = _pick_band(krules, ac_value) or (krules[-1] if krules else None)
+        if r:
+            add_from_rule("Vodiče", r, meters, "kabelaz_bess")
+        else:
+            missing_rule("kabelaz_bess", "ayky_3x150_70", "Kabeláž AC batérie (AYKY-J)")
+
     picked_inv: list[dict] = []
     picked_batt: list[dict] = []
     ac_kw_total = 0.0
     bess_kwh_effective = 0.0
 
     if bess_only:
-        # ===== LEN BESS: batéria + montáž batérie + PD50 + doprava (bez panelov, meničov, konštrukcie, FVE montáže) =====
+        # ===== LEN BESS: batéria + montáž, AC rozvádzač, kabeláž, PD, EMS, statika + PBS, dispečing (bez panelov,
+        # meničov FVE, konštrukcie, vodičov DC, rozvádzača DC a montáže FVE); doprava nižšie =====
         picked_batt, bess_kwh_effective = build_battery()
         if not picked_batt:
             return _error_result("no_battery", "Výrobca nemá v katalógu vhodnú batériu — nie je čo kalkulovať.")
-        build_pd(0.0, bess_mode=True)
-        warn("warning", "bess_only",
-             "Ponuka len pre batériu (bez FVE) — over PCS/menič, AC rozvádzač, kabeláž, EMS, dispečing; "
-             "tieto položky kalkulačka nepridáva.")
+        ac_kw_total = bess_ac_kw(picked_batt, bess_kwh_effective)
+        build_rozvadzac_ac(ac_kw_total)
+        build_kabelaz_bess(ac_kw_total)
+        build_pd(max(ac_kw_total, BESS_ONLY_MIN_PD_KW))
+        build_ems(default_on=bess_kwh_effective >= BESS_EMS_DEFAULT_KWH)
+        if bess_kwh_effective >= BESS_STATIKA_MIN_KWH:
+            build_statika_pbs()
+        build_dispecing(ac_kw_total)
+        warn("info", "bess_only",
+             f"Ponuka len pre batériu (bez FVE): {bess_kwh_effective:g} kWh / {ac_kw_total:g} kW. "
+             f"Menič/PCS kalkulačka nepridáva — over, či je PCS súčasťou batérie, inak ho doplň ručne.")
     else:
         # ===== 1. PANELY =====
         add("Panely", panel["name"], pocet_panelov, "ks", panel.get("cost"), panel.get("price_per_unit"),
@@ -499,6 +665,14 @@ def calculate_bom_v2(sb, config: dict) -> dict:
                 sku=inv.get("key"), ac_kw=_num(inv.get("ac_kw")))
         # Σ AC výkon vybraných meničov — základ pre rozvádzač AC, PD, MTP a dispečing
         ac_kw_total = round(sum(_num(p["inverter"].get("ac_kw")) * p["qty"] for p in picked_inv), 2)
+        # E-12: žiadna kombinácia do MAX_INVERTER_UNITS kusov nevyhovela → n × najväčší menič (výber bez signálu by klamal)
+        _fb = next((p for p in picked_inv if p.get("fallback")), None)
+        if _fb:
+            _fb_inv = _fb["inverter"]
+            warn("warning", "inverter_fallback",
+                 f"Zostava meničov sa nezmestila do {MAX_INVERTER_UNITS} ks — vybraných {_fb['qty']}× {_fb_inv.get('name')} "
+                 f"({ac_kw_total:g} kW AC, DC/AC {kwp_actual / ac_kw_total if ac_kw_total else 0:.2f}); "
+                 f"over zostavu meničov (typ, počet, oversizing) a rozsah ponuky.")
 
         # Smart manager + smart meter (povinné pri väčších inštaláciách)
         # Väčšie inštalácie (napr. Huawei >10 kWp) vyžadujú Smart Logger namiesto dongle.
@@ -555,15 +729,7 @@ def calculate_bom_v2(sb, config: dict) -> dict:
                 missing_rule("rozvadzac_dc", "r_dc", "Rozvádzač DC")
 
         # ===== 4b. ROZVÁDZAČ AC (pásmo podľa Σ AC kW meničov) =====
-        band, mult, over = _select_band(rules("rozvadzac"), ac_kw_total)
-        if band:
-            add_from_rule("Rozvádzač", band, mult, f"rozvadzac.{band['rule_key']}")
-            if over:
-                warn("warning", "rozvadzac_over_range",
-                     f"Σ AC {ac_kw_total:g} kW je nad najvyšším pásmom rozvádzača ({_num(band.get('max_kwp')):g} kW) — "
-                     f"účtovaných {mult} ks najvyššieho pásma, individuálne preveriť.")
-        else:
-            missing_rule("rozvadzac", f"pásmo {ac_kw_total:g} kW AC", "Rozvádzač AC")
+        build_rozvadzac_ac(ac_kw_total)
 
         # ===== 5. VODIČE + SPOTREBNÝ + KÁBLOVÉ ŽĽABY =====
         for rt, rk, cat in [("vodice", "dc", "Vodiče"), ("vodice", "ac", "Vodiče"), ("spotrebny", "standard", "Spotrebný materiál")]:
@@ -593,12 +759,7 @@ def calculate_bom_v2(sb, config: dict) -> dict:
 
         # ===== 6b. STATIKA + PBS (kWp >= 100) =====
         if kwp_actual >= STATIKA_MIN_KWP:
-            for rk, label in (("statika", "Statický posudok"), ("ppbs", "Projekt požiarnej bezpečnosti")):
-                r = rule("statika", rk)
-                if r:
-                    add_from_rule("Statika a PBS", r, _rule_qty(r, kwp_actual, pocet_panelov, default=1), rk)
-                else:
-                    missing_rule("statika", rk, label)
+            build_statika_pbs()
 
         # ===== 6c. MTP (Σ AC > 30 kW, 3 ks) =====
         if ac_kw_total > MTP_MIN_AC_KW:
@@ -609,18 +770,7 @@ def calculate_bom_v2(sb, config: dict) -> dict:
                 missing_rule("mtp", "mtp3", "Merací transformátor prúdu (MTP)")
 
         # ===== 6d. DISPEČING / ASDR (Σ AC >= 100 kW) podľa distribučky =====
-        requires_asdr = ac_kw_total >= ASDR_MIN_AC_KW
-        if requires_asdr:
-            dkey = distribucka or "ZSD"
-            if not distribucka:
-                warn("warning", "distribucka",
-                     "Zvoľ distribučku (ZSD/SSD/VSD) — dispečerské riadenie je počítané pre ZSD.")
-            r = rule("dispecing", dkey)
-            if r:
-                add_from_rule("Dispečerské riadenie", r, _rule_qty(r, kwp_actual, pocet_panelov, default=1),
-                              f"dispecing.{dkey}")
-            else:
-                missing_rule("dispecing", dkey, f"Dispečerské riadenie {dkey}")
+        build_dispecing(ac_kw_total)
 
         # ===== 7. OPTIMIZÉRY (vendor-specific!) =====
         if has_optimizery:
@@ -668,9 +818,11 @@ def calculate_bom_v2(sb, config: dict) -> dict:
                 else:
                     missing_rule("rapid_shutdown", rk, "Rapid Shutdown")
 
-        # ===== 9. BESS =====
+        # ===== 9. BESS (EMS len na výslovné has_ems) =====
         if bess_requested:
             picked_batt, bess_kwh_effective = build_battery()
+            if picked_batt:
+                build_ems(default_on=False)
         elif has_bess:
             warn("warning", "bess_missing_qty",
                  "Batéria je zapnutá, ale bez počtu, kapacity (kWh) alebo modelu — batéria nie je v ponuke.")
@@ -745,7 +897,8 @@ def calculate_bom_v2(sb, config: dict) -> dict:
         warn("warning", "out_of_scope",
              "Zemná konštrukcia je mimo bežného rozsahu kalkulačky — over položky, ktoré kalkulačka nepokrýva "
              "(výkopy, kabeláž, oplotenie).")
-    if any((p["battery"].get("battery_class") or "residential") == "industrial" for p in picked_batt) and (
+    # (režim len BESS C&I batérie rieši priamo: AC rozvádzač, kabeláž, EMS aj dispečing sú v ponuke)
+    if not bess_only and any((p["battery"].get("battery_class") or "residential") == "industrial" for p in picked_batt) and (
             bess_kwh_effective > SCOPE_MAX_BESS_KWH or any(_is_luna_ci(p["battery"]) for p in picked_batt)):
         warn("warning", "out_of_scope",
              f"C&I batéria ({bess_kwh_effective:g} kWh) je mimo bežného rozsahu kalkulačky — "
@@ -1011,8 +1164,10 @@ def ai_compatibility_checker(sb, config: dict) -> dict:
     if has_bess and bess_kwh <= 0 and bess_count <= 0 and not bess_selected:
         issues.append({"severity": "warning", "kind": "bess_missing_kwh",
                        "message": "Označená batéria ale 0 kWh — nastavte kapacitu (default 10 kWh)."})
+    # Režim len BESS (výslovne 0 panelov, bez kWp): menič/PCS kalkulačka nepridáva (varuje bess_only) → hybrid sa nehlási
+    bess_only_cfg = "pocet_panelov" in config and pocet_panelov == 0 and _num(config.get("kwp"), 0.0) <= 0
     # Batéria vyžaduje hybridný menič: výrobca bez hybridu v katalógu (napr. Sungrow) → nekompatibilná zostava
-    if has_bess and (bess_kwh > 0 or bess_count > 0 or bess_selected) and vendor:
+    if has_bess and (bess_kwh > 0 or bess_count > 0 or bess_selected) and vendor and not bess_only_cfg:
         try:
             _stack = _load_vendor_stack(sb, vendor)
         except Exception:
@@ -1157,70 +1312,3 @@ def ai_bom_validator(sb, items: list[dict], config: dict) -> dict:
                              "message": "BOM neobsahuje menič / striedač."})
 
     return {"ok": True, "missing": missing, "warnings": warnings, "present_categories": sorted(present_cats)}
-
-
-# ============================================================
-# SAVE V2 — perzistujeme final items (incl. inline edits + custom items)
-# ============================================================
-
-def save_bundle_v2(sb, payload: dict) -> dict:
-    """
-    payload:
-      config: { vendor_stack, typ_strechy, pocet_panelov, panel_sku, has_bess, bess_kwh, has_wallbox, wallbox_pocet, has_optimizery, has_rapid_shutdown, margin_pct, kwp_actual }
-      final_items: list[item]  (output BOM rows AFTER user edits + custom items)
-      customer_id, lead_id, user_id
-      payment_terms (optional)
-    """
-    config = payload.get("config") or {}
-    items = payload.get("final_items") or []
-
-    if not items:
-        raise RuntimeError("save_bundle_v2: final_items je prázdne — uložiť nemôžem.")
-
-    total_cost = sum((it.get("cost_per_unit") or 0) * (it.get("qty") or 0) for it in items)
-    total_sell = sum((it.get("price_per_unit") or 0) * (it.get("qty") or 0) for it in items)
-    margin_pct = float(config.get("margin_pct") or 25)
-    kwp = float(config.get("kwp_actual") or 0)
-
-    bom_array = []
-    for it in items:
-        qty = float(it.get("qty") or 0)
-        cost = float(it.get("cost_per_unit") or 0)
-        sell = float(it.get("price_per_unit") or 0)
-        bom_array.append({
-            "sku": it.get("rule_id") or it.get("sku") or "",
-            "name": it.get("product_name") or "",
-            "category": it.get("category") or "",
-            "qty": qty,
-            "unit": it.get("unit") or "ks",
-            "unit_purchase": cost,
-            "unit_sale": sell,
-            "total_purchase": cost * qty,
-            "total_sale": sell * qty,
-            "is_custom": bool(it.get("is_custom")),
-        })
-
-    bundle_data = {
-        "vykon_kwp": kwp,
-        "typ_ponuky": "b2b_kalkulator_v2",
-        "lead_id": payload.get("lead_id"),
-        "customer_id": payload.get("customer_id"),
-        "created_by": payload.get("user_id"),
-        "status": "draft",
-        "payment_terms": payload.get("payment_terms") or "30% pri objednávke / 30% pri dodávke / 40% pri odovzdaní",
-        "workspace": "b2b",
-        # Variant A = vypočítaný BOM s editmi
-        "variant_a_active": True,
-        "variant_a_marza_pct": margin_pct,
-        "variant_a_cost": round(total_cost, 2),
-        "variant_a_price_no_vat": round(total_sell, 2),
-        "variant_a_price_with_vat": round(total_sell * 1.23, 2),
-        "variant_a_bom": bom_array,
-        # Meta — config snapshot pre re-open editora
-        "b2b_v2_config": config,
-    }
-
-    res = sb.table("quote_bundles").insert(bundle_data).execute()
-    if not res.data:
-        raise RuntimeError("Bundle insert failed")
-    return res.data[0]

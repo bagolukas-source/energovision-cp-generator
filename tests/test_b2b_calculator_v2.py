@@ -1,11 +1,13 @@
-"""Testy výpočtového jadra B2B kalkulačky (Fáza 0, 2026-10) — stdlib unittest, bez inštalácie, bez siete.
+"""Testy výpočtového jadra B2B kalkulačky (Fáza 0 + Fáza 1, 2026-10) — stdlib unittest, bez inštalácie, bez siete.
 
 Spustenie z koreňa repa:
     python3 -m unittest discover -s tests -p 'test_b2b*.py' -v
 
 DB nahrádza FakeSB (in-memory tabuľky b2b_calc_rules a b2b_vendor_stacks). Pravidlá = cieľové pravidlá
-podľa F0-SPEC (nákup/predaj z Raynet cenníka), stacky = tests/fixtures/b2b_vendor_stacks.json
+podľa F0-SPEC (nákup/predaj z Raynet cenníka) + pravidlá Fázy 1 (ems, kabelaz_bess; docs/b2b-kalkulacka/data/
+F1-bess-pravidla.sql), stacky = tests/fixtures/b2b_vendor_stacks.json
 (Supabase b2b_vendor_stacks 2026-10-08 + doplnené Raynet nákupy, viď _meta v súbore).
+Fáza 1 (F1-SPEC "Jadro BESS"): plný režim len BESS, výber modelu podľa cieľa kWh, varovanie inverter_fallback.
 """
 import ast
 import copy
@@ -108,6 +110,10 @@ def f0_rules():
         R("batteria", "montaz_baterie", "Montáž batériového úložiska", "ks", 1750, 2000, "1"),
         R("batteria", "montaz_baterie_rez", "Montáž batérie (rezidenčná sada)", "kpl", 300, 500, "1"),
         R("doprava", "km", "Doprava materiálu", "km", 0.80, 1.04, "vzdialenost_doprava"),
+        # Fáza 1 (data/F1-bess-pravidla.sql): EMS (EnergoStation compact/full) a AC kabeláž batérie (AYKY-J 3x150+70)
+        R("ems", "compact", "EnergoStation EMS compact + licencia", "kpl", 7539.68, 9424.60, "1"),
+        R("ems", "full", "EnergoStation EMS full + licencia", "kpl", 21825.40, 27281.76, "1"),
+        R("kabelaz_bess", "ayky_3x150_70", "Kabeláž AC batérie AYKY-J 3x150+70", "m", 8.78, 10.54, "bess_kabel_m"),
         # rapid shutdown: bez nákupu v DB → odhad (testuje cost_estimated)
         R("rapid_shutdown", "bfs12", "Rapid Shutdown BFS-12", "ks", None, 50.7, "ceil(pocet_panelov / 4)"),
         R("rapid_shutdown", "esw12", "Rapid Shutdown ESW-12", "ks", None, 44.2, "ceil(pocet_panelov / 200)"),
@@ -511,8 +517,10 @@ class TestNoveRiadky(unittest.TestCase):
                     "wallbox_pocet": 1, "pocet_panelov": 112})
         allowed = {"Panely", "Striedače", "Monitoring", "Diagnostika siete", "Konštrukcia", "Rozvádzač", "Vodiče",
                    "Káblové žľaby", "Spotrebný materiál", "Projektová dokumentácia", "Statika a PBS", "Meranie",
-                   "Dispečerské riadenie", "Optimizéry", "Rapid Shutdown", "Batéria", "Wallbox", "Montáž", "Doprava"}
+                   "Dispečerské riadenie", "Optimizéry", "Rapid Shutdown", "Batéria", "Wallbox", "Montáž", "Doprava",
+                   "EMS"}   # EMS: nová kategória Fázy 1 (len pri has_ems / len BESS od 100 kWh)
         self.assertLessEqual(cats(res), allowed)
+        self.assertNotIn("EMS", cats(res))   # FVE + BESS bez výslovného has_ems: žiadny EMS
         self.assertIn("Spotrebný materiál", cats(res))
         # rule_id sú unikátne (stabilný kľúč riadku)
         ids = [i["rule_id"] for i in res["items"]]
@@ -643,13 +651,24 @@ class TestBateria(unittest.TestCase):
     IND = {"has_bess": True, "bess_class": "industrial"}
 
     def test_nemodularna_kwh_ceil_a_odchylka(self):
-        res = calc({**self.IND, "bess_kwh": 482})
-        batt = one(res, "battery.sunwoda_oasis_l261")   # najbližšia kapacita k 482 kWh = 261 kWh
-        self.assertEqual(batt["qty"], 2)   # ceil(482 / 261)
-        self.assertEqual(res["totals"]["bess_kwh_effective"], 522)
+        # cieľ 130 kWh: žiadny model nie je v tolerancii 5 % → najmenšie prekročenie cieľa = 2 × E2BR-80 (160 kWh, +23,1 %)
+        res = calc({**self.IND, "bess_kwh": 130})
+        batt = one(res, "battery.solinteg_e2br_80r")
+        self.assertEqual(batt["qty"], 2)   # ceil(130 / 80)
+        self.assertEqual(res["totals"]["bess_kwh_effective"], 160)
         w = [w for w in res["warnings"] if w["kind"] == "bess_kwh_deviation"]
         self.assertEqual(len(w), 1)
+        self.assertIn("+23.1 %", w[0]["message"])
         self.assertEqual(one(res, "battery.montaz")["qty"], 2)   # montáž za skriňu
+
+    def test_kwh_482_nemodularna_presne_2_x_241(self):
+        # F0 vybralo "najbližšiu kapacitu" 2 × L261 = 522 kWh (+8,3 %); kombinácia jedného modelu 2 × L241 = presne 482
+        res = calc({**self.IND, "bess_kwh": 482})
+        self.assertEqual(one(res, "battery.sunwoda_oasis_l241")["qty"], 2)
+        self.assertEqual(by_rule(res, "battery.sunwoda_oasis_l261"), [])
+        self.assertEqual(res["totals"]["bess_kwh_effective"], 482)
+        self.assertNotIn("bess_kwh_deviation", kinds(res))
+        self.assertEqual(one(res, "battery.montaz")["qty"], 2)
 
     def test_kwh_bez_odchylky(self):
         res = calc({**self.IND, "bess_kwh": 112})
@@ -750,21 +769,25 @@ class TestBateria(unittest.TestCase):
 class TestLenBess(unittest.TestCase):
     CFG = {"pocet_panelov": 0, "has_bess": True, "bess_class": "industrial", "bess_sku": "solinteg_e2br_112r", "bess_count": 2}
 
-    def test_len_bess_zjednodusena_vetva(self):
+    def test_len_bess_plna_skladba_cez_model(self):
+        # F1: 2 × E2BR-112R (224 kWh, 2 × 50 kW = 100 kW) → batéria, montáž, AC rozvádzač, kabeláž, PD, EMS, statika/PBS,
+        # dispečing (AC >= 100 kW), doprava — bez panelov, meničov FVE, konštrukcie, vodičov DC a montáže FVE
         res = calc(self.CFG)
         self.assertTrue(res["ok"], res)
-        self.assertEqual(cats(res), {"Batéria", "Projektová dokumentácia", "Doprava"})
+        self.assertEqual(cats(res), {"Batéria", "Rozvádzač", "Vodiče", "Projektová dokumentácia", "EMS", "Statika a PBS",
+                                     "Dispečerské riadenie", "Doprava"})
         ids = [i["rule_id"] for i in res["items"]]
-        self.assertEqual(ids, ["battery.solinteg_e2br_112r", "battery.montaz", "pd.PD50", "doprava.km"])
+        self.assertEqual(ids, ["battery.solinteg_e2br_112r", "battery.montaz", "rozvadzac.R100", "kabelaz_bess",
+                               "pd.PD100", "ems", "statika", "ppbs", "dispecing.ZSD", "doprava.km"])
         self.assertEqual(one(res, "battery.montaz")["qty"], 2)
         t = res["totals"]
         self.assertEqual((t["kwp"], t["pocet_panelov"], t["pocet_menicov"], t["ac_kw_total"], t["requires_asdr"]),
-                         (0, 0, 0, 0, False))
+                         (0, 0, 0, 100, True))
         self.assertEqual(t["bess_kwh_effective"], 224)
         w = [w for w in res["warnings"] if w["kind"] == "bess_only"]
         self.assertEqual(len(w), 1)
-        for word in ("PCS", "AC rozvádzač", "kabeláž", "EMS", "dispečing"):
-            self.assertIn(word, w[0]["message"])
+        self.assertEqual(w[0]["severity"], "info")
+        self.assertIn("PCS", w[0]["message"])   # menič/PCS kalkulačka v tomto režime nepridáva
 
     def test_len_bess_cez_kwh(self):
         res = calc({"pocet_panelov": 0, "has_bess": True, "bess_class": "industrial", "bess_kwh": 112})
@@ -966,8 +989,403 @@ class TestEvaVypnuta(unittest.TestCase):
         self.assertEqual(d, {"ok": False, "message": "B2B ponuky sa zostavujú v kalkulačke CRM (/b2b/kalkulacka)."})
 
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
+# ----------------------------------------------------------------------------------------------
+# Fáza 1 (2026-10): plný režim len BESS, výber modelu podľa cieľa kWh (N-19), fallback meničov (E-12)
+# ----------------------------------------------------------------------------------------------
+class TestLenBessF1(unittest.TestCase):
+    """F1-SPEC "Jadro BESS": pocet_panelov 0, bez kwp, has_bess → batéria, montáž, AC rozvádzač, kabeláž, PD, EMS,
+    statika + PBS, dispečing, doprava; bez panelov, meničov FVE, konštrukcie, vodičov DC, R-DC a montáže FVE."""
+    BESS = {"pocet_panelov": 0, "has_bess": True, "bess_class": "industrial", "vzdialenost_doprava": 150}
+    FVE_PREFIXES = ("panel.", "menic.", "smart_manager", "smart_meter", "accessory.", "konstrukcia.", "zatiaz",
+                    "rozvadzac_dc", "vodice.", "spotrebny", "kablove_zlaby", "mtp", "montaz.", "optimizer", "tigo",
+                    "rapid_shutdown", "wallbox")
+
+    def ids(self, res):
+        return [i["rule_id"] for i in res["items"]]
+
+    def test_482_kwh_solinteg_sunwoda_plna_skladba(self):
+        res = calc({**self.BESS, "bess_kwh": 482, "bess_kabel_m": 40, "distribucka": "SSD"})
+        self.assertTrue(res["ok"], res)
+        ids = self.ids(res)
+        self.assertEqual(ids, ["battery.sunwoda_oasis_l241", "battery.montaz", "rozvadzac.R250", "kabelaz_bess",
+                               "pd.PD500", "ems", "statika", "ppbs", "dispecing.SSD", "doprava.km"])
+        for rid in ids:   # "battery.montaz" je montáž batérie, nie "montaz.*" (FVE)
+            self.assertFalse(rid.startswith(self.FVE_PREFIXES), rid)
+        self.assertEqual(cats(res) & {"Panely", "Striedače", "Konštrukcia", "Monitoring", "Montáž", "Optimizéry"}, set())
+        self.assertEqual((one(res, "battery.sunwoda_oasis_l241")["qty"], one(res, "battery.montaz")["qty"]), (2, 2))
+        kab = one(res, "kabelaz_bess")
+        self.assertEqual((kab["qty"], kab["unit"], kab["category"], kab["cost_per_unit"]), (40, "m", "Vodiče", 8.78))
+        ems = one(res, "ems")
+        self.assertEqual((ems["category"], ems["unit"], ems["cost_per_unit"]), ("EMS", "kpl", 7539.68))
+        self.assertEqual(one(res, "dispecing.SSD")["category"], "Dispečerské riadenie")
+        t = res["totals"]
+        self.assertEqual((t["kwp"], t["pocet_panelov"], t["pocet_menicov"], t["panel_wp"]), (0, 0, 0, 0))
+        self.assertEqual((t["ac_kw_total"], t["requires_asdr"], t["bess_kwh_effective"]), (250, True, 482))
+        # nákup: 2 × 36 584 + 2 × 1 750 + R250 8 000 + 40 m × 8,78 + PD500 4 400 + EMS 7 539,68 + 500 + 350 + SSD 20 000 + 150 km × 0,8
+        self.assertEqual(t["total_cost"], 117928.88)
+        self.assertAlmostEqual(t["margin_pct_effective"], 22.0, delta=0.1)
+        # model v tolerancii, kabeláž aj distribučka zadané → jediné hlásenie je informácia o režime
+        self.assertEqual(kinds(res), ["bess_only"])
+        self.assertEqual(res["warnings"][0]["severity"], "info")
+
+    def test_defaulty_kabelaz_30_m_a_distribucka_zsd_s_varovanim(self):
+        res = calc({**self.BESS, "bess_kwh": 482})
+        self.assertEqual(one(res, "kabelaz_bess")["qty"], 30)
+        w = [w for w in res["warnings"] if w["kind"] == "bess_kabel_default"]
+        self.assertEqual(len(w), 1)
+        self.assertEqual(w[0]["severity"], "warning")
+        self.assertIn("30 m", w[0]["message"])
+        self.assertIn("dispecing.ZSD", self.ids(res))
+        self.assertIn("distribucka", kinds(res))
+        for m in (0, -5, None, ""):   # nulová / záporná / prázdna dĺžka = nezadaná
+            res = calc({**self.BESS, "bess_kwh": 482, "bess_kabel_m": m})
+            self.assertEqual(one(res, "kabelaz_bess")["qty"], 30, m)
+            self.assertIn("bess_kabel_default", kinds(res), m)
+        res = calc({**self.BESS, "bess_kwh": 482, "bess_kabel_m": 45.5})
+        self.assertEqual(one(res, "kabelaz_bess")["qty"], 45.5)
+        self.assertNotIn("bess_kabel_default", kinds(res))
+
+    def test_723_kwh_sungrow(self):
+        res = calc({**self.BESS, "vendor_stack": "sungrow", "bess_kwh": 723, "bess_kabel_m": 60, "distribucka": "ZSD"})
+        self.assertTrue(res["ok"], res)
+        # 3 × PowerKeeper 250 kWh = 750 kWh (+3,7 %) je jediný model v tolerancii 5 % (3 × ST255 = 765 → +5,8 %; 2 × ST510 = 1 024)
+        b = one(res, "battery.sungrow_powerkeeper_250")
+        self.assertEqual(b["qty"], 3)
+        self.assertEqual(res["totals"]["bess_kwh_effective"], 750)
+        self.assertNotIn("bess_kwh_deviation", kinds(res))
+        self.assertEqual(one(res, "battery.montaz")["qty"], 3)
+        self.assertEqual(res["totals"]["ac_kw_total"], 375)   # 3 × 125 kW zo stacku
+        for rid in ("rozvadzac.R500", "kabelaz_bess", "pd.PD500", "ems", "statika", "ppbs", "dispecing.ZSD", "doprava.km"):
+            one(res, rid)
+        self.assertEqual(by_rule(res, "menic"), [])
+        self.assertNotIn("no_hybrid", kinds(res))   # menič FVE sa v režime len BESS nepridáva
+
+    def test_luna_241_x3_tauris(self):
+        res = calc({**self.BESS, "vendor_stack": "huawei", "bess_sku": "luna2000_241_2s1", "bess_count": 3,
+                    "bess_kw": 324, "bess_kabel_m": 150, "distribucka": "ZSD"})
+        self.assertTrue(res["ok"], res)
+        b = one(res, "battery.luna2000_241_2s1")
+        self.assertEqual((b["qty"], b["cost_per_unit"]), (3, 40000.0))
+        self.assertEqual(one(res, "battery.montaz")["qty"], 3)
+        t = res["totals"]
+        self.assertEqual((t["ac_kw_total"], t["bess_kwh_effective"], t["requires_asdr"]), (324, 723, True))
+        self.assertEqual(self.ids(res), ["battery.luna2000_241_2s1", "battery.montaz", "rozvadzac.R500", "kabelaz_bess",
+                                         "pd.PD500", "ems", "statika", "ppbs", "dispecing.ZSD", "doprava.km"])
+        self.assertEqual(one(res, "kabelaz_bess")["qty"], 150)
+        pcs = [w for w in res["warnings"] if w["kind"] == "pcs_required"]
+        self.assertEqual((len(pcs), pcs[0]["severity"]), (1, "info"))   # otvorený bod R4 ostáva len informáciou
+        self.assertNotIn("out_of_scope", kinds(res))   # C&I batéria je v režime len BESS bežný rozsah
+        self.assertNotIn("bess_kw_below", kinds(res))   # 324 kW vs 3 × 100 kW v dátach: do +10 % bez varovania
+        # batéria je zásadná časť nákupu (Raynet TAURIS: batéria 65–70 % ceny)
+        self.assertGreater(b["total_cost"] / t["total_cost"], 0.60)
+
+    def test_ems_default_od_100_kwh_a_prebitie(self):
+        res = calc({**self.BESS, "bess_kwh": 482})
+        ems = one(res, "ems")
+        self.assertEqual((ems["category"], ems["cost_per_unit"], ems["qty"]), ("EMS", 7539.68, 1))
+        self.assertIn("compact", ems["product_name"])
+        for off in (False, "false", "0", "nie"):
+            self.assertEqual(by_rule(calc({**self.BESS, "bess_kwh": 482, "has_ems": off}), "ems"), [], off)
+        self.assertEqual(len(by_rule(calc({**self.BESS, "bess_kwh": 482, "has_ems": True}), "ems")), 1)
+        # pod 100 kWh (1 × E2BR-64R, 64 kWh / 50 kW): bez EMS, statiky, PBS a dispečingu
+        small = {**self.BESS, "bess_sku": "solinteg_e2br_64r", "bess_count": 1}
+        res = calc(small)
+        self.assertEqual(res["totals"]["bess_kwh_effective"], 64)
+        self.assertEqual(by_rule(res, "ems") + by_rule(res, "statika") + by_rule(res, "ppbs") + by_rule(res, "dispecing"), [])
+        self.assertEqual(self.ids(res), ["battery.solinteg_e2br_64r", "battery.montaz", "rozvadzac.R50", "kabelaz_bess",
+                                         "pd.PD50", "doprava.km"])
+        self.assertEqual(one(calc({**small, "has_ems": True}), "ems")["cost_per_unit"], 7539.68)
+        full = one(calc({**small, "has_ems": True, "ems_typ": "full"}), "ems.full")
+        self.assertEqual((full["cost_per_unit"], full["category"]), (21825.40, "EMS"))
+        self.assertIn("full", full["product_name"])
+        self.assertEqual(by_rule(calc({**small, "has_ems": True, "ems_typ": "full"}), "ems."), [full])   # len jeden riadok EMS
+        self.assertEqual(one(calc({**small, "has_ems": True, "ems_typ": "xyz"}), "ems")["cost_per_unit"], 7539.68)
+
+    def test_ems_pri_fve_bess_len_na_vyslovne_has_ems(self):
+        cfg = {"has_bess": True, "bess_class": "industrial", "bess_sku": "solinteg_e2br_112r", "bess_count": 1}
+        self.assertEqual(by_rule(calc(cfg), "ems"), [])   # FVE + BESS: EMS nie je predvolený
+        res = calc({**cfg, "has_ems": True})
+        ids = self.ids(res)
+        self.assertEqual(one(res, "ems")["category"], "EMS")
+        self.assertLess(ids.index("battery.solinteg_e2br_112r"), ids.index("ems"))
+        self.assertEqual(by_rule(calc({"has_ems": True}), "ems"), [])   # bez batérie has_ems nič nerobí
+
+    def test_chybajuce_pravidla_ems_a_kabelaz_su_varovanie(self):
+        rules = [r for r in f0_rules() if r["rule_type"] not in ("ems", "kabelaz_bess")]
+        res = calc({**self.BESS, "bess_kwh": 482}, rules=rules)   # dáta pred F1 (SQL ešte nenasadený)
+        self.assertTrue(res["ok"], res)
+        msgs = " ".join(w["message"] for w in res["warnings"] if w["kind"] == "missing_rule")
+        self.assertIn("ems/compact", msgs)
+        self.assertIn("kabelaz_bess/ayky_3x150_70", msgs)
+        self.assertEqual(by_rule(res, "ems") + by_rule(res, "kabelaz_bess"), [])
+        for rid in ("battery.sunwoda_oasis_l241", "rozvadzac.R250", "pd.PD500", "dispecing.ZSD", "doprava.km"):
+            one(res, rid)
+
+    def test_bess_kw_vstup_urcuje_rozvadzac_pd_a_dispecing(self):
+        # (bess_kw, rozvádzač, PD, dispečing) — PD podľa max(kW, 50) = najmenej PD50; dispečing od 100 kW AC
+        cases = [(8, "R10", "PD50", False), (20, "R20", "PD50", False), (50, "R50", "PD50", False),
+                 (80, "R100", "PD100", False), (99, "R100", "PD100", False), (100, "R100", "PD100", True),
+                 (150, "R200", "PD200", True), (250, "R250", "PD500", True), (400, "R500", "PD500", True),
+                 (800, "R1000", "PD1000", True)]
+        for kw, r_key, pd_key, disp in cases:
+            with self.subTest(bess_kw=kw):
+                res = calc({**self.BESS, "bess_kwh": 482, "bess_kw": kw, "distribucka": "ZSD"})
+                self.assertEqual(res["totals"]["ac_kw_total"], kw)
+                self.assertEqual(res["totals"]["requires_asdr"], disp)
+                self.assertEqual([i["rule_id"] for i in by_rule(res, "rozvadzac.")], [f"rozvadzac.{r_key}"])
+                self.assertEqual([i["rule_id"] for i in by_rule(res, "pd.")], [f"pd.{pd_key}"])
+                self.assertEqual([i["rule_id"] for i in by_rule(res, "dispecing.")], ["dispecing.ZSD"] if disp else [])
+                self.assertNotIn("bess_kw_odhad", kinds(res))
+        # nad 1 000 kW: ceil(AC / 1000) × R1000 a PD2000 s varovaniami
+        res = calc({**self.BESS, "bess_kwh": 482, "bess_kw": 1500, "distribucka": "ZSD"})
+        self.assertEqual(one(res, "rozvadzac.R1000")["qty"], 2)
+        self.assertIn("rozvadzac_over_range", kinds(res))
+        one(res, "pd.PD2000")
+
+    def test_dispecing_podla_distribucky_od_100_kw(self):
+        base = {**self.BESS, "bess_kwh": 482}
+        self.assertEqual(by_rule(calc({**base, "bess_kw": 99}), "dispecing."), [])
+        self.assertNotIn("distribucka", kinds(calc({**base, "bess_kw": 99})))
+        for dist in ("ZSD", "SSD", "VSD"):
+            res = calc({**base, "bess_kw": 100, "distribucka": dist})
+            self.assertEqual(one(res, f"dispecing.{dist}")["category"], "Dispečerské riadenie")
+            self.assertNotIn("distribucka", kinds(res))
+        res = calc({**base, "bess_kw": 100})   # bez distribučky: ZSD + varovanie
+        one(res, "dispecing.ZSD")
+        self.assertIn("distribucka", kinds(res))
+
+    def test_vykon_zo_stacku_a_odhad_kwh_2(self):
+        res = calc({**self.BESS, "bess_kwh": 482})
+        self.assertEqual(res["totals"]["ac_kw_total"], 250)   # 2 × Oasis L241 po 125 kW
+        self.assertNotIn("bess_kw_odhad", kinds(res))
+        stacks = load_stacks()
+        for s in stacks:
+            for b in s["batteries"]:
+                b.pop("max_power_kw", None)
+        res = calc({**self.BESS, "bess_kwh": 482}, stacks=stacks)   # výkon nikde → kWh / 2 + varovanie
+        self.assertEqual(res["totals"]["ac_kw_total"], 241)
+        w = [w for w in res["warnings"] if w["kind"] == "bess_kw_odhad"]
+        self.assertEqual((len(w), w[0]["severity"]), (1, "warning"))
+        self.assertIn("241", w[0]["message"])
+        one(res, "rozvadzac.R250")
+        one(res, "pd.PD500")
+        res = calc({**self.BESS, "bess_kwh": 482, "bess_kw": 100}, stacks=stacks)   # bess_kw odhad prebije
+        self.assertEqual(res["totals"]["ac_kw_total"], 100)
+        self.assertNotIn("bess_kw_odhad", kinds(res))
+
+    def test_bess_kw_nad_vykonom_baterii_je_varovanie(self):
+        res = calc({**self.BESS, "bess_kwh": 482, "bess_kw": 500, "distribucka": "ZSD"})   # v dátach 2 × 125 = 250 kW
+        w = [w for w in res["warnings"] if w["kind"] == "bess_kw_below"]
+        self.assertEqual((len(w), w[0]["severity"]), (1, "warning"))
+        self.assertEqual(res["totals"]["ac_kw_total"], 500)   # počíta sa požadovaný výkon
+        self.assertNotIn("bess_kw_below", kinds(calc({**self.BESS, "bess_kwh": 482, "bess_kw": 270})))   # do +10 % bez varovania
+
+    def test_statika_a_pbs_od_100_kwh(self):
+        res = calc({**self.BESS, "bess_sku": "solinteg_e2br_96r", "bess_count": 1})   # 96 kWh
+        self.assertEqual(by_rule(res, "statika") + by_rule(res, "ppbs"), [])
+        res = calc({**self.BESS, "bess_sku": "solinteg_e2br_112r", "bess_count": 1})   # 112 kWh
+        st, pb = one(res, "statika"), one(res, "ppbs")
+        self.assertEqual((st["category"], pb["category"], st["qty"], pb["qty"]), ("Statika a PBS", "Statika a PBS", 1, 1))
+        # hranica presne 100 kWh (GoodWe Dyness BF100): statika, PBS aj EMS už áno, dispečing (50 kW) nie
+        res = calc({**self.BESS, "vendor_stack": "goodwe", "bess_sku": "dyness_bf100", "bess_count": 1})
+        self.assertEqual(res["totals"]["bess_kwh_effective"], 100)
+        for rid in ("statika", "ppbs", "ems", "rozvadzac.R50", "pd.PD50"):
+            one(res, rid)
+        self.assertEqual(by_rule(res, "dispecing."), [])
+
+    def test_len_bess_s_wallboxom_a_bez_dopravy(self):
+        res = calc({**self.BESS, "bess_kwh": 112, "has_wallbox": True, "wallbox_pocet": 2, "vzdialenost_doprava": 0})
+        wb = [i for i in res["items"] if i["category"] == "Wallbox"]
+        self.assertEqual([i["qty"] for i in wb], [2])
+        self.assertEqual(by_rule(res, "doprava"), [])
+        self.assertIn("doprava_km", kinds(res))
+
+    def test_len_bess_nema_fve_polozky_pri_ziadnom_vstupe_fve(self):
+        # typ strechy, panely, optimizéry či rapid shutdown v režime len BESS nemajú vplyv
+        res = calc({**self.BESS, "bess_kwh": 112, "typ_strechy": "vychod_zapad", "has_optimizery": True,
+                    "has_rapid_shutdown": True, "has_dc_rozvadzac": True, "panel_sku": "LONGI535"})
+        for rid in self.ids(res):
+            self.assertFalse(rid.startswith(self.FVE_PREFIXES), rid)
+        self.assertNotIn("rs_recommendation", kinds(res))
+        self.assertNotIn("vendor_match", kinds(res))
+
+    def test_fve_rezim_ignoruje_vstupy_len_bess(self):
+        # s panelmi sú bess_kw / bess_kabel_m / ems_typ bezvýznamné: AC výkon určujú meniče, kabeláž ide per kWp
+        base = calc()
+        res = calc({"bess_kw": 500, "bess_kabel_m": 100, "ems_typ": "full"})
+        self.assertEqual(self.ids(res), self.ids(base))
+        self.assertEqual(res["totals"], base["totals"])
+        self.assertEqual(by_rule(res, "kabelaz_bess") + by_rule(res, "ems"), [])
+
+    def test_vyrobca_bez_baterie_v_katalogu_je_chyba(self):
+        res = calc({"pocet_panelov": 0, "has_bess": True, "bess_count": 1, "vendor_stack": "synt"},
+                   stacks=[synthetic_stack(10)])
+        self.assertFalse(res["ok"])
+        self.assertTrue(res["error"])
+
+    def test_nulovy_vyber_je_chyba(self):
+        for cfg in ({"pocet_panelov": 0, "has_bess": True}, {"pocet_panelov": 0, "has_bess": False, "bess_kwh": 482}):
+            res = calc(cfg)
+            self.assertFalse(res["ok"], cfg)
+
+    def test_save_bundle_v2_odstranena(self):
+        self.assertFalse(hasattr(eng, "save_bundle_v2"))
+
+
+class TestVyberBaterie(unittest.TestCase):
+    """Kombinácia skríň jedného modelu a N-19 (priemyselná batéria bez zvoleného modelu)."""
+    IND = {"has_bess": True, "bess_class": "industrial"}
+
+    def pick(self, res):
+        return [(i["rule_id"], i["qty"]) for i in res["items"] if i["rule_id"].startswith("battery.") and i["rule_id"] != "battery.montaz"]
+
+    def test_kwh_kombinacia_jedneho_modelu(self):
+        # (cieľ kWh, model, počet, efektívna kapacita) pre Solinteg industrial
+        cases = [(482, "sunwoda_oasis_l241", 2, 482), (300, "sunwoda_oasis_60", 5, 300), (112, "solinteg_e2br_112r", 1, 112),
+                 (250, "sunwoda_oasis_l261", 1, 261), (64, "solinteg_e2br_64r", 1, 64), (241, "sunwoda_oasis_l241", 1, 241)]
+        for kwh, key, qty, eff in cases:
+            with self.subTest(kwh=kwh):
+                res = calc({**self.IND, "pocet_panelov": 0, "bess_kwh": kwh})
+                self.assertEqual(self.pick(res), [(f"battery.{key}", qty)])
+                self.assertEqual(res["totals"]["bess_kwh_effective"], eff)
+                self.assertNotIn("bess_kwh_deviation", kinds(res))
+
+    def test_kwh_ziadny_model_v_tolerancii_najmensie_prekrocenie(self):
+        res = calc({**self.IND, "pocet_panelov": 0, "bess_kwh": 100})   # 112 kWh = +12 % (112R aj 112C → lacnejší 112R)
+        self.assertEqual(self.pick(res), [("battery.solinteg_e2br_112r", 1)])
+        self.assertIn("bess_kwh_deviation", kinds(res))
+
+    def test_kwh_modularna_rezidencna_bez_modelu(self):
+        # Huawei 15 kWh: 3 × LUNA2000-5 = 15 kWh presne (F0: 2 × LUNA2000-10 = 20 kWh, +33 %)
+        res = calc({"vendor_stack": "huawei", "has_bess": True, "bess_class": "residential", "bess_kwh": 15})
+        self.assertEqual(self.pick(res), [("battery.luna2000_5", 3)])
+        self.assertNotIn("bess_kwh_deviation", kinds(res))
+        # 20 kWh: 2 × LUNA2000-10 (menej kusov ako 4 × LUNA2000-5)
+        res = calc({"vendor_stack": "huawei", "has_bess": True, "bess_class": "residential", "bess_kwh": 20})
+        self.assertEqual(self.pick(res), [("battery.luna2000_10", 2)])
+
+    def test_trieda_nezvolena_od_60_kwh_vyberie_priemyselne_skrine(self):
+        # Huawei 200 kWh bez triedy: 1 × LUNA2000-241 (+20,5 % = varovanie), nie 20 × rezidenčný LUNA2000-10
+        res = calc({"vendor_stack": "huawei", "pocet_panelov": 0, "has_bess": True, "bess_kwh": 200})
+        self.assertEqual(self.pick(res), [("battery.luna2000_241_2s1", 1)])
+        self.assertIn("bess_kwh_deviation", kinds(res))
+        # Sungrow 225 kWh bez triedy: PowerKeeper 250 kWh (+11 %), nie 15 × SBH150
+        res = calc({"vendor_stack": "sungrow", "pocet_panelov": 0, "has_bess": True, "bess_kwh": 225})
+        self.assertEqual(self.pick(res), [("battery.sungrow_powerkeeper_250", 1)])
+        # S02c z auditu: Solinteg 112 kWh bez triedy → 1 × E2BR-112R (ako v F0)
+        res = calc({"has_bess": True, "bess_kwh": 112})
+        self.assertEqual(self.pick(res), [("battery.solinteg_e2br_112r", 1)])
+        # pod 60 kWh sa trieda neodvodzuje: Solinteg 50 kWh → 1 × Dyness Stack100 51,2 kWh
+        res = calc({"has_bess": True, "bess_kwh": 50})
+        self.assertEqual(self.pick(res), [("battery.dyness_stack100_51", 1)])
+        # výslovne zvolená trieda sa neprepisuje (ani keď je skladba nezmyselná) a zvolený model sa nestratí
+        res = calc({"vendor_stack": "huawei", "has_bess": True, "bess_class": "residential", "bess_kwh": 200})
+        self.assertEqual(self.pick(res), [("battery.luna2000_10", 20)])
+        w = [w for w in res["warnings"] if w["kind"] == "bess_many_units"]   # 20 kusov pre 200 kWh = podozrivá skladba
+        self.assertEqual((len(w), w[0]["severity"]), (1, "warning"))
+        self.assertIn("20×", w[0]["message"])
+        self.assertNotIn("bess_many_units", kinds(calc({**self.IND, "pocet_panelov": 0, "bess_kwh": 482})))
+        res = calc({"has_bess": True, "bess_sku": "dyness_stack100_51", "bess_kwh": 100})
+        self.assertEqual(self.pick(res), [("battery.dyness_stack100_51", 2)])
+        self.assertNotIn("bess_sku_unknown", kinds(res))
+
+    def test_best_bess_for_kwh_pravidla_vyberu(self):
+        a = {"key": "a", "capacity_kwh": 100, "cost": 10000}
+        b = {"key": "b", "capacity_kwh": 50, "cost": 6000}
+        c = {"key": "c", "capacity_kwh": 25, "cost": 2000}
+        best = lambda bats, kwh: (lambda r: (r["battery"]["key"], r["qty"]))(eng._best_bess_for_kwh(bats, kwh))
+        self.assertEqual(best([a, b, c], 100), ("a", 1))    # všetky presne 100 → najmenej kusov
+        self.assertEqual(best([a, b, c], 150), ("b", 3))    # a × 2 = 200 mimo tolerancie; b × 3 aj c × 6 presne → menej kusov
+        self.assertEqual(best([a, b, c], 90), ("a", 1))     # nikto v tolerancii (+11,1 %) → rovnaká odchýlka → menej kusov
+        d = {"key": "d", "capacity_kwh": 100, "cost": 8000}
+        self.assertEqual(best([a, d], 100), ("d", 1))       # rovnaký počet kusov → lacnejší
+        e = {"key": "e", "capacity_kwh": 10, "cost": 500, "max_units": 2}
+        self.assertEqual(best([e, b], 50), ("b", 1))        # e by potreboval 5 ks > max_units 2 → preskočený
+        self.assertEqual(best([e], 50), ("e", 5))           # jediný model: limit orezáva až calculate_bom_v2 (bess_limit)
+        self.assertEqual(best([{"key": "x"}], 50), ("x", 1))   # bez údajov o kapacite nepadne
+        self.assertEqual(best([{"key": "m", "capacity_kwh": 10.24}], 20.48), ("m", 2))   # bez šumu pohyblivej rádovej čiarky (nie 3 ks)
+
+    def test_n19_pocet_a_kwh_bez_modelu_cielom_je_kwh(self):
+        # UI posiela bess_count (predvolené 1–2) aj bess_kwh: model aj počet vyberie jadro podľa cieľa (nie "batteries[0]")
+        res = calc({**self.IND, "bess_count": 1, "bess_kwh": 112})
+        self.assertEqual(self.pick(res), [("battery.solinteg_e2br_112r", 1)])
+        self.assertNotIn("bess_model_missing", kinds(res))
+        res = calc({**self.IND, "pocet_panelov": 0, "bess_count": 3, "bess_kwh": 723})
+        self.assertEqual(self.pick(res), [("battery.sunwoda_oasis_l241", 3)])
+        res = calc({"vendor_stack": "huawei", **self.IND, "bess_count": 2, "bess_kwh": 482})
+        self.assertEqual(self.pick(res), [("battery.luna2000_241_2s1", 2)])
+
+    def test_n19_zvoleny_model_aj_s_kwh_pocet_je_pocet(self):
+        # model + počet zadané výslovne → počet platí (bez varovania o odchýlke); kWh bez počtu → ceil(kWh / kapacita)
+        res = calc({**self.IND, "bess_sku": "solinteg_e2br_112r", "bess_count": 3, "bess_kwh": 500})
+        self.assertEqual(self.pick(res), [("battery.solinteg_e2br_112r", 3)])
+        self.assertNotIn("bess_kwh_deviation", kinds(res))
+        res = calc({**self.IND, "bess_sku": "solinteg_e2br_112r", "bess_kwh": 500})
+        self.assertEqual(self.pick(res), [("battery.solinteg_e2br_112r", 5)])   # ceil(500 / 112) = 5 → 560 kWh (+12 %)
+        self.assertIn("bess_kwh_deviation", kinds(res))
+
+    def test_n19_bez_modelu_a_bez_ciela_je_varovanie_vyber_model(self):
+        res = calc({**self.IND, "bess_count": 1})   # S02b z auditu: UI "Priemyselná", 1 ks, bez modelu
+        w = [w for w in res["warnings"] if w["kind"] == "bess_model_missing"]
+        self.assertEqual((len(w), w[0]["severity"]), (1, "warning"))
+        self.assertIn("vyber model", w[0]["message"])
+        self.assertIn("E2BR-64K-R", w[0]["message"])   # menuje, čo sa použilo
+        self.assertEqual(self.pick(res), [("battery.solinteg_e2br_64r", 1)])   # batéria ostáva (poradie stacku), len s varovaním
+        # rezidenčná sada bez modelu (UI predvolené bess_count = 2): tiež varovanie
+        res = calc({"vendor_stack": "huawei", "has_bess": True, "bess_class": "residential", "bess_count": 2})
+        self.assertIn("bess_model_missing", kinds(res))
+        self.assertEqual(self.pick(res), [("battery.luna2000_5", 2)])
+
+    def test_n19_bez_varovania_ked_je_model_alebo_ciel(self):
+        for cfg in ({**self.IND, "bess_sku": "solinteg_e2br_112r", "bess_count": 1},
+                    {**self.IND, "bess_sku": "solinteg_e2br_112r"},
+                    {**self.IND, "bess_kwh": 112},
+                    {"vendor_stack": "huawei", **self.IND, "bess_count": 1}):   # Huawei industrial = jediný model → nie je čo vyberať
+            with self.subTest(cfg=cfg):
+                self.assertNotIn("bess_model_missing", kinds(calc(cfg)))
+
+    def test_nezname_sku_nema_dvojite_varovanie(self):
+        res = calc({**self.IND, "bess_sku": "neexistuje", "bess_count": 1})
+        self.assertIn("bess_sku_unknown", kinds(res))
+        self.assertNotIn("bess_model_missing", kinds(res))
+
+
+class TestInverterFallback(unittest.TestCase):
+    """E-12: n × najväčší menič (žiadna kombinácia do MAX_INVERTER_UNITS ks) musí mať varovanie."""
+
+    def test_fallback_ma_varovanie(self):
+        res = calc_ac(125, {"pocet_panelov": math.ceil(1800 * 1000 / 535)})   # ~1 800 kWp, jediný model 125 kW
+        n = one(res, "menic.synt.inv")["qty"]
+        self.assertGreater(n, eng.MAX_INVERTER_UNITS)
+        w = [w for w in res["warnings"] if w["kind"] == "inverter_fallback"]
+        self.assertEqual((len(w), w[0]["severity"]), (1, "warning"))
+        self.assertIn(f"{n}×", w[0]["message"])
+        self.assertIn("INV 125 kW", w[0]["message"])
+        self.assertIn(f"{res['totals']['ac_kw_total']:g} kW AC", w[0]["message"])
+
+    def test_bez_fallbacku_bez_varovania(self):
+        for res in (calc(), calc_ac(125), calc({"vendor_stack": "huawei", "pocet_panelov": 300})):
+            self.assertNotIn("inverter_fallback", kinds(res))
+
+    def test_pick_inverters_oznacuje_fallback(self):
+        invs = [{"key": "x", "name": "X", "ac_kw": 10, "max_kwp": 15, "price": 1000, "cost": 800}]
+        far = eng._pick_inverters(invs, 500)
+        self.assertEqual((len(far), far[0]["qty"] > eng.MAX_INVERTER_UNITS, far[0].get("fallback")), (1, True, True))
+        near = eng._pick_inverters(invs, 10)
+        self.assertTrue(near)
+        self.assertTrue(all("fallback" not in p for p in near))
+
+
+class TestKompatibilitaLenBess(unittest.TestCase):
+    def test_checker_len_bess_nehlasi_no_hybrid(self):
+        sb = FakeSB(f0_rules(), load_stacks())
+        cfg = {"vendor_stack": "sungrow", "has_bess": True, "bess_class": "industrial", "bess_count": 1}
+        out = eng.ai_compatibility_checker(sb, {**cfg, "pocet_panelov": 0})   # výslovne 0 panelov = len BESS
+        self.assertNotIn("no_hybrid", [i["kind"] for i in out["issues"]])
+        out = eng.ai_compatibility_checker(sb, {**cfg, "pocet_panelov": 112})   # FVE + BESS: Sungrow bez hybridu hlási
+        self.assertIn("no_hybrid", [i["kind"] for i in out["issues"]])
+        out = eng.ai_compatibility_checker(sb, {**cfg, "pocet_panelov": 0, "kwp": 30})   # kWp zadané = FVE
+        self.assertIn("no_hybrid", [i["kind"] for i in out["issues"]])
 
 
 class TestLegacyInverters(unittest.TestCase):
@@ -985,3 +1403,7 @@ class TestLegacyInverters(unittest.TestCase):
         from b2b_calculator_v2 import _pick_inverters
         invs = [{"key": "old50", "name": "Old 50K", "ac_kw": 50, "max_kwp": 75, "price": 4000, "cost": 3200, "hybrid": True, "legacy": True}]
         self.assertTrue(_pick_inverters(invs, 59.92 / 1.10, require_hybrid=True))
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
