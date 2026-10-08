@@ -108,6 +108,9 @@ ENV_NAMES = {
 
 UNIT_SYNONYMS = {"kus": "ks", "kusov": "ks", "komplet": "kpl", "kmpl": "kpl"}
 
+# ID cenníkov v ponukách 10/2026 (PON-26-1404: LZ-HU = 10, Výchozí = 1). Len na kontrolu výberu — pri inom ID príde varovanie.
+EXPECTED_PRICELIST_IDS = {"lz-hu": 10, "vychozi": 1}
+
 REASON_TEXT = {
     "over_limit": "zmena presahuje limit 30 % — len nahlásené, nezapísané",
     "diverged": "hodnota v cieli sa líši od posledného stavu katalógu (ručne upravená / kuratovaná) — nezapísané; po kontrole použi align=1",
@@ -453,6 +456,9 @@ def resolve_pricelists(lists, order):
             continue
         selected.append({"id": hit.get("id"), "label": str(want), "code": hit.get("code"), "name": hit.get("name"),
                          "primary": bool(hit.get("primary"))})
+        exp = EXPECTED_PRICELIST_IDS.get(w)
+        if exp is not None and to_int(hit.get("id")) != exp:
+            warnings.append(f"Cenník '{want}' má v Raynete id {hit.get('id')}, v ponukách 10/2026 mal id {exp} — over, že ide o správny cenník.")
     return selected, warnings
 
 

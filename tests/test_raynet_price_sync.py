@@ -517,6 +517,14 @@ class TestCatalog(unittest.TestCase):
         sel, warn = rps.resolve_pricelists(lists, ("lz-hu", "Vychozi"))
         self.assertEqual([s["id"] for s in sel], [6, 5])     # názov obsahuje token; Výchozí -> primárny
 
+    def test_ine_id_cennika_ako_v_ponukach_je_varovanie(self):
+        lists = [dict(PRICELISTS[0], id=7), dict(PRICELISTS[1], id=10)]
+        sel, warn = rps.resolve_pricelists(lists, ("LZ-HU", "Výchozí"))
+        self.assertEqual([s["id"] for s in sel], [10, 7])
+        self.assertEqual(len(warn), 1)
+        self.assertIn("id 7", warn[0])
+        self.assertEqual(rps.resolve_pricelists(PRICELISTS, ("LZ-HU", "Výchozí"))[1], [])
+
     def test_chybajuci_cennik_je_varovanie_a_nie_eur_sa_vynecha(self):
         sel, warn = rps.resolve_pricelists([PRICELISTS[0], dict(PRICELISTS[1], currency="CZK")], ("LZ-HU", "Výchozí", "NEEXISTUJE"))
         self.assertEqual([s["id"] for s in sel], [1])
@@ -757,6 +765,25 @@ class TestAlign(unittest.TestCase):
         self.assertEqual(e["code_reason"], "missing_current")
         _s, body2, db2, _x = run({"apply": "1", "align": "1"}, db=db)
         self.assertEqual(row(db2, "b2b_calc_rules", "r2")["cost_per_unit"], 20)
+
+
+class TestMapovanieRaynetId(unittest.TestCase):
+    def test_raynet_product_id_ma_prednost_pred_kodom_v_notes(self):
+        db = make_db()
+        # pravidlo bez "kód" v notes, namapované len cez raynet_product_id = 2 (VODAC); cena 24 == základ -> 26
+        db.tables["b2b_calc_rules"].append(rule("r11", "vodice", "dc2", 20, 24, "ručne pridané pravidlo", pid=2))
+        # pravidlo s nesprávnym kódom v notes, ale správnym id -> použije sa id
+        db.tables["b2b_calc_rules"].append(rule("r12", "vodice", "dc3", 20, 24, "Raynet 10/2026, kód NEEXISTUJE", pid=2))
+        _s, body, db, _x = run({"apply": "1"}, db=db)
+        self.assertEqual(row(db, "b2b_calc_rules", "r11")["price_per_unit"], 26)
+        self.assertEqual(row(db, "b2b_calc_rules", "r12")["price_per_unit"], 26)
+
+    def test_neznamy_raynet_product_id_je_unmapped(self):
+        db = make_db()
+        db.tables["b2b_calc_rules"].append(rule("r13", "vodice", "dc4", 20, 24, "kód VODAC", pid=99999))
+        _s, body, db, _x = run({"apply": "1"}, db=db)
+        self.assertEqual(row(db, "b2b_calc_rules", "r13")["price_per_unit"], 24)
+        self.assertIn("id:99999", [u["code"] for u in body["unmapped"]])
 
 
 class TestNovyProdukt(unittest.TestCase):
