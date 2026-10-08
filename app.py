@@ -660,6 +660,11 @@ def require_secret(f):
     return wrapper
 
 
+# Nočná synchronizácia cenníka z Raynetu (POST /cron/raynet-price-sync, vypnutá bez RAYNET_* env)
+import raynet_price_sync as _rps  # noqa: E402
+_rps.register(app, require_secret)
+
+
 # ============================================================
 # BRÁNA pre /webhook/b2b-* a /webhook/raynet-* — FAIL-CLOSED (Fáza 1 bezpečnosť, 2026-10)
 # Tieto webhooky vracajú nákupné ceny a marže (b2b-vendor-stacks, b2b-calc-v2-preview), volajú
