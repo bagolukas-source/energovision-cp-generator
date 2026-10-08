@@ -718,7 +718,7 @@ def calculate_bom_v2(sb, config: dict) -> dict:
     # Huawei + Tigo bug
     if vendor_key == "huawei" and has_optimizery and not bess_only:
         warn("info", "vendor_match",
-             "✓ Huawei stack používa HUAWEI MERC-1300W (native optimizer) — NIE Tigo (nekompatibilný)")
+             "✓ Huawei stack používa natívne optimizéry HUAWEI MERC — nie Tigo (nekompatibilné)")
 
     if not has_bess and kwp_actual >= 100:
         warn("info", "bess_recommendation",
