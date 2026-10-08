@@ -773,6 +773,11 @@ class TestLenBess(unittest.TestCase):
         self.assertEqual(res["totals"]["bess_kwh_effective"], 112)
         self.assertEqual(one(res, "battery.montaz")["qty"], 1)
 
+    def test_len_bess_bez_zemneho_varovania(self):
+        res = calc({**self.CFG, "typ_strechy": "zemne_skrutky"})
+        self.assertTrue(res["ok"])
+        self.assertNotIn("out_of_scope", [w["kind"] for w in res["warnings"] if "Zemná" in w["message"]])
+
     def test_bez_panelov_a_bez_baterie_je_chyba(self):
         for cfg in ({"pocet_panelov": 0}, {"pocet_panelov": 0, "has_bess": False, "bess_count": 2, "bess_class": "residential"},
                     {"pocet_panelov": 0, "has_bess": True}):

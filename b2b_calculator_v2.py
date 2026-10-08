@@ -739,7 +739,7 @@ def calculate_bom_v2(sb, config: dict) -> dict:
         warn("warning", "out_of_scope",
              f"Výkon {kwp_actual:g} kWp je nad {SCOPE_MAX_KWP:g} kWp — mimo bežného rozsahu kalkulačky, "
              f"výsledok ber ako orientačný.")
-    if typ_strechy in GROUND_ROOFS:
+    if typ_strechy in GROUND_ROOFS and not bess_only:
         warn("warning", "out_of_scope",
              "Zemná konštrukcia je mimo bežného rozsahu kalkulačky — over položky, ktoré kalkulačka nepokrýva "
              "(výkopy, kabeláž, oplotenie).")
