@@ -322,6 +322,63 @@ def _replace_dots_in_para(para, value):
 # ZMLUVA O DIELO
 # ============================================================
 
+def _nahrad_v_odseku(para, old, new):
+    """Nahradí `old` za `new` v odseku aj keď je text rozdelený do viacerých runov — mení len dotknuté runy."""
+    runs = list(para.runs)
+    text = "".join(r.text for r in runs)
+    i = text.find(old)
+    if i < 0:
+        return False
+    j = i + len(old)
+    pos, first = 0, True
+    for r in runs:
+        a, b = pos, pos + len(r.text)
+        pos = b
+        if b <= i or a >= j:
+            continue
+        s, e = max(a, i) - a, min(b, j) - a
+        r.text = r.text[:s] + (new if first else "") + r.text[e:]
+        first = False
+    return True
+
+
+_PLATBA_RE = re.compile(r"^\s*\d+\s*%\s*-")
+
+
+def _vyber_variant_platby(doc, payment_terms):
+    """
+    ZoD B2C (šablóna od 2026-10): odseky „Variant A:" + 3 riadky (60/30/10) a „Variant B:" + 2 riadky (60/40).
+    Ponechá jeden variant bez nadpisu: 60_30_10 → A, 60_40 → B, 50_50 / 30_70 → B s inými percentami.
+    Šablóna bez variantov (staršia) sa nemení.
+    """
+    paras = list(doc.paragraphs)
+    idx_a = next((k for k, p in enumerate(paras) if _norm(p.text).strip() == "Variant A:"), None)
+    idx_b = next((k for k, p in enumerate(paras) if _norm(p.text).strip() == "Variant B:"), None)
+    if idx_a is None or idx_b is None:
+        return
+    riadky_a = [p for p in paras[idx_a + 1:idx_b] if _PLATBA_RE.match(_norm(p.text))]
+    riadky_b = []
+    for p in paras[idx_b + 1:]:
+        if not _PLATBA_RE.match(_norm(p.text)):
+            break
+        riadky_b.append(p)
+
+    def zmaz(p):
+        el = p._element
+        el.getparent().remove(el)
+
+    if payment_terms == "60_30_10":
+        for p in [paras[idx_a], paras[idx_b], *riadky_b]:
+            zmaz(p)
+        return
+    for p in [paras[idx_a], *riadky_a, paras[idx_b]]:
+        zmaz(p)
+    percenta = {"50_50": ("50%", "50%"), "30_70": ("30%", "70%")}.get(payment_terms)
+    if percenta and len(riadky_b) == 2:
+        _nahrad_v_odseku(riadky_b[0], "60%", percenta[0])
+        _nahrad_v_odseku(riadky_b[1], "40%", percenta[1])
+
+
 def naplnif_zmluvu(lead_data, output_path):
     """
     Zmluva o dielo z templatu. 12 XXX placeholderov + datum.
@@ -334,7 +391,7 @@ def naplnif_zmluvu(lead_data, output_path):
     6.  cislo_cp (EV-26-XXX-A/B/C/D)
     7.  datum_cp
     8.  miesto_vykonu
-    9.  cena_eur (bez DPH)
+    9.  cena_eur (s DPH — orders.total_with_vat; šablóna: „EUR s DPH")
     10. eur (slovom — zatiaľ číslicami)
     11. cents
     12. meno_priezvisko (podpis)
@@ -383,60 +440,23 @@ def naplnif_zmluvu(lead_data, output_path):
     datum_dnes = lead_data.get('datum_dnes', '')
     doc = Document(str(output_path))
 
-    # Platobné podmienky — dynamicky z bundle.payment_terms (default 60/30/10)
-    pt = lead_data.get("payment_terms") or "60_30_10"
-    if pt == "60_40":
-        platba_riadky = [("60% - zálohová faktúra vopred", None), ("40% - po dokončení diela", None)]
-        OVERRIDES = {
-            "30% - zálohová faktúra vopred": "60% - zálohová faktúra vopred",
-            "70% - po nainštalovaní FVZ": "40% - po dokončení diela",
-            "Lehota splatnosti faktúr je 14 dní.": "Lehota splatnosti faktúr je 7 dní.",
-        }
-    elif pt == "50_50":
-        OVERRIDES = {
-            "30% - zálohová faktúra vopred": "50% - zálohová faktúra vopred",
-            "70% - po nainštalovaní FVZ": "50% - po dokončení diela",
-            "Lehota splatnosti faktúr je 14 dní.": "Lehota splatnosti faktúr je 7 dní.",
-        }
-    elif pt == "30_70":
-        OVERRIDES = {
-            "Lehota splatnosti faktúr je 14 dní.": "Lehota splatnosti faktúr je 7 dní.",
-            # 30/70 — template default je 30/70, nemení sa
-        }
-    else:  # 60_30_10 — Energovision štandard
-        OVERRIDES = {
-            "30% - zálohová faktúra vopred": "60% - zálohová faktúra vopred",
-            "70% - po nainštalovaní FVZ": "30% - po nainštalovaní FVZ\n10% - po protokolárnom odovzdaní",
-            "Lehota splatnosti faktúr je 14 dní.": "Lehota splatnosti faktúr je 7 dní.",
-        }
+    # Platobné podmienky — šablóna má Variant A (60/30/10) aj Variant B (60/40); zákazník dostane len jeden
+    # podľa bundle.payment_terms (default 60_30_10). 50_50 a 30_70 = Variant B s inými percentami.
+    _vyber_variant_platby(doc, lead_data.get("payment_terms") or "60_30_10")
 
-    # Záruka — dynamicky podľa typu panela (LONGi Hi-MO X10 = 25/30, ostatné 15/25)
-    zp = int(lead_data.get("zaruka_panely_produkt") or 12)
+    # Záruka na panely — dynamicky podľa typu panela (LONGi Hi-MO X10 = 25/30, ostatné 15/25)
+    zp = int(lead_data.get("zaruka_panely_produkt") or 15)
     zl = int(lead_data.get("zaruka_panely_linear") or 25)
-    OVERRIDES["12 rokov produktová záruka na panely"] = f"{zp} rokov produktová záruka na panely"
-    OVERRIDES["25 rokov na lineárny pokles výkonu panelov"] = f"{zl} rokov na lineárny pokles výkonu panelov"
+    OVERRIDES = {
+        "15 rokov produktová záruka na fotovoltické panely": f"{zp} rokov produktová záruka na fotovoltické panely",
+        "Minimálne 25 rokov lineárna výkonová záruka": f"Minimálne {zl} rokov lineárna výkonová záruka",
+    }
 
     for para in doc.paragraphs:
-        text = _norm(para.text)
-        # Override platobných podmienok
+        # Záruky — náhrada len v dotknutých runoch (formátovanie ostatných ostane)
         for old, new in OVERRIDES.items():
-            if old in text:
-                new_text = text.replace(old, new)
-                first_text_run = None
-                for run in para.runs:
-                    if run._element.findall(f'{NS_W}t'):
-                        first_text_run = run
-                        break
-                for run in para.runs:
-                    if run is first_text_run:
-                        continue
-                    for tt in list(run._element.findall(f'{NS_W}t')) + list(run._element.findall(f'{NS_W}tab')):
-                        run._element.remove(tt)
-                if first_text_run is not None:
-                    first_text_run.text = new_text
-                elif para.runs:
-                    para.runs[0].text = new_text
-                text = new_text
+            _nahrad_v_odseku(para, old, new)
+        text = _norm(para.text)
         # Datum v Bratislave
         if datum_dnes and "V Bratislave" in text and re.search(r'XX\.XX\.20\d{2}', text):
             full = "V Bratislave, dňa " + datum_dnes
