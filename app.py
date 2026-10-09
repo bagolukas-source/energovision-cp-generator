@@ -4761,7 +4761,17 @@ def generuj_dokumenty_supabase():
         # Bundle je naviazaný na lead — najdi cez quote_bundles.lead_id = leads.id (potrebujem lead.id)
         # Skús cez order.bundle_id ak existuje, alebo cez lead.id (order má lead_id)
         lead_id_for_bundle = order.get("lead_id")
-        if lead_id_for_bundle:
+        # cenovka, z ktorej zákazka vznikla (orders.bundle_id) — inak najnovšia cenovka leadu
+        if order.get("bundle_id"):
+            br = requests.get(
+                f"{SUPABASE_URL}/rest/v1/quote_bundles",
+                headers=headers,
+                params={"select": "*", "id": f"eq.{order['bundle_id']}", "limit": "1"},
+                timeout=15
+            )
+            if br.ok and br.json():
+                bundle = br.json()[0]
+        if not bundle and lead_id_for_bundle:
             br = requests.get(
                 f"{SUPABASE_URL}/rest/v1/quote_bundles",
                 headers=headers,
@@ -4806,6 +4816,15 @@ def generuj_dokumenty_supabase():
 
     from datetime import datetime
     today = datetime.now().strftime("%d.%m.%Y")
+    # dátum cenovej ponuky do ZoD („Cenovej ponuky … zo dňa") — odoslanie cenovky, inak jej vznik, inak dnes
+    datum_cp = today
+    for _k in ("sent_at", "created_at"):
+        if bundle.get(_k):
+            try:
+                datum_cp = datetime.strptime(str(bundle[_k])[:10], "%Y-%m-%d").strftime("%d.%m.%Y")
+                break
+            except Exception:
+                pass
 
     # Oslovenie pán/pani — derivované z mena a priezviska
     oslovenie = oslovenie_pan_pani(cust.get("first_name", ""), cust.get("last_name", ""))
@@ -4837,7 +4856,7 @@ def generuj_dokumenty_supabase():
         "vykon_kwp": vykon_kwp,
         "pocet_panelov": pocet_panelov,
         "cislo_cp": cislo_cp,
-        "datum_cp": today,
+        "datum_cp": datum_cp,
         "datum_dnes": today,
         "miesto_vykonu": adresa,
         "cena_eur": cena,
