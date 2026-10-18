@@ -133,6 +133,45 @@ def _cp_capex(analyza: dict) -> dict:
             "capex_pv_fixed_eur": PV_FIXED_DEFAULT, "capex_bess_eur_per_kwh": BESS_RATE}
 
 
+# Názvy polí enginu → čo vidí obchodník v CRM
+_FIELD_LABELS = {
+    "fakturacny_psc": "PSČ", "rk_kw": "Rezervovaná kapacita (RK)",
+    "mrk_kw": "Max. rezervovaná kapacita (MRK)", "rocna_spotreba_kwh": "Ročná spotreba",
+    "gps_lat": "Poloha (GPS)", "gps_lon": "Poloha (GPS)", "sadzba": "Sadzba (NN/VN)",
+    "distribuutor": "Distribútor", "typ_tarify": "Typ tarify", "eic_kod": "EIC kód",
+    "nazov": "Názov odberného miesta", "instalovany_kwp": "Výkon FVE (kWp)",
+    "inverter_kw_ac": "Menič AC (kW)", "sklon_stupne": "Sklon panelov",
+    "azimut_stupne": "Azimut",
+}
+
+
+def _human_error(err: Exception) -> str:
+    """Chyba enginu tak, aby jej rozumel obchodník (pydantic → 'Pole X: hodnota … je mimo')."""
+    try:
+        from pydantic import ValidationError as _PydErr
+    except ImportError:  # pragma: no cover
+        _PydErr = ()
+    if not isinstance(err, _PydErr):
+        return str(err)
+    parts = []
+    for e in err.errors():
+        field = next((str(x) for x in reversed(e.get("loc") or ()) if isinstance(x, str)), "")
+        label = _FIELD_LABELS.get(field, field or "vstup")
+        val = e.get("input")
+        typ = e.get("type", "")
+        if typ == "string_pattern_mismatch":
+            why = "má nesprávny tvar"
+        elif typ in ("missing",):
+            why = "chýba"
+        elif typ.startswith(("greater_than", "less_than")):
+            why = f"je mimo povolený rozsah ({e.get('msg', '')})"
+        else:
+            why = e.get("msg", "je neplatné")
+        parts.append(f"{label}: hodnota „{val}“ {why}" if typ != "missing" else f"{label} chýba")
+    return ("Výpočet sa nespustil — skontroluj vstupy: " + "; ".join(parts)
+            + ". Oprav ich v záložke Nastavenia (expert) a spusti prepočet znova.")
+
+
 def _om_psc(analyza: dict) -> str:
     """PSČ odberného miesta — povinné, nehádame ho.
 
@@ -143,7 +182,13 @@ def _om_psc(analyza: dict) -> str:
     """
     raw = (analyza.get("om_psc") or "").strip()
     if raw:
-        return raw
+        digits = re.sub(r"\D", "", raw)
+        if len(digits) == 5:
+            return f"{digits[:3]} {digits[3:]}"
+        raise ValueError(
+            f"PSČ odberného miesta „{raw}“ nie je platné — musí mať 5 číslic, "
+            "napr. 916 31. Oprav ho v záložke Nastavenia (expert) → pole PSČ."
+        )
     raise ValueError(
         "Chýba PSČ odberného miesta. Určuje polohu pre výpočet výroby FVE aj "
         "distribútora — bez neho by sa počítala Žilina, čo je pri inej lokalite "
@@ -847,18 +892,18 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
     # Update status
     sb.table("analyza_om").update({"status": "running"}).eq("id", analyza_id).execute()
     
-    request_dict = _build_request_from_analyza(analyza, _measured_load_profile_block(sb, analyza))
-    log.info(f"[aom-v2] Running pipeline for {analyza_id} with {len(request_dict['variants']['pv_kwp_options'])} PV × {len(request_dict['variants']['bess_kwh_options'])} BESS")
-    
     # Wrap engine call — pri chybe nastav status na 'failed' aby analyza neuviazla v running
+    # (aj zlé vstupy z build_request, napr. neplatné PSČ, inak ostala visieť v 'running')
     try:
+        request_dict = _build_request_from_analyza(analyza, _measured_load_profile_block(sb, analyza))
+        log.info(f"[aom-v2] Running pipeline for {analyza_id} with {len(request_dict['variants']['pv_kwp_options'])} PV × {len(request_dict['variants']['bess_kwh_options'])} BESS")
         raw_result = run_variants_pipeline(request_dict)
         result = build_run_variants_response(raw_result)
     except Exception as engine_err:
         log.exception("[aom-v2] engine pipeline failed for %s", analyza_id)
         sb.table("analyza_om").update({
             "status": "failed",
-            "econ_results": {"error": str(engine_err)[:500]},
+            "econ_results": {"error": _human_error(engine_err)[:500]},
             "updated_at": datetime.now().isoformat(),
         }).eq("id", analyza_id).execute()
         raise
@@ -2706,7 +2751,7 @@ def enrich_econ_full_response(sb, analyza_id: str) -> dict:
         result = build_run_variants_response(raw_result)
     except Exception as engine_err:
         log.exception("[enrich-full-response] engine pipeline failed for %s", analyza_id)
-        return {"ok": False, "error": f"engine: {engine_err}"}
+        return {"ok": False, "error": _human_error(engine_err)}
     
     # Vyber winner (top NPV variant) — to budú dáta pre posudok
     variants = result.get("variants") or []

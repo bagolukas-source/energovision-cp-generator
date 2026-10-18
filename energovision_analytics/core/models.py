@@ -9,6 +9,7 @@ Všetky polia majú slovenské popisy v description pre auto-generovanú API doc
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from enum import Enum
 from typing import Annotated, Literal, Optional
@@ -129,6 +130,13 @@ class SiteInput(EnergoBase):
                                  description="Nadmorská výška (Slovensko 80–2200 m)")
     rocna_spotreba_kwh: float = Field(..., gt=0,
                                        description="Ročná spotreba podľa faktúry (validation reference)")
+
+    @field_validator("fakturacny_psc", mode="before")
+    @classmethod
+    def normalize_psc(cls, v):
+        # '916 31.', '91631', '916-31' → '916 31'; nesprávny počet číslic nechá na pattern
+        digits = re.sub(r"\D", "", str(v or ""))
+        return f"{digits[:3]} {digits[3:]}" if len(digits) == 5 else v
 
     @model_validator(mode="after")
     def mrk_geq_rk(self) -> "SiteInput":

@@ -6857,7 +6857,7 @@ def webhook_aom_run_premium():
         return jsonify(result)
     except Exception as e:
         log.exception("[aom-run-premium] failed")
-        return jsonify({"ok": False, "error": str(e)[:500]}), 500
+        return jsonify({"ok": False, "error": _aom_v2._human_error(e)[:500]}), 500
 
 
 @app.route("/webhook/analyza-om-render-premium-docx", methods=["POST"])
