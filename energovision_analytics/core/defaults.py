@@ -105,7 +105,8 @@ class EconomicDefaults:
 
 # === SINGLETON pre lazy import ===
 _ECON_CACHE: Optional[EconomicDefaults] = None
-_DEFAULT_YAML = Path(__file__).resolve().parents[3] / "data" / "config" / "economic_defaults.yaml"
+# repo/aom_data/config — predtým parents[3]/data/config neexistovalo → ticho zabudované defaulty (audit A21)
+_DEFAULT_YAML = Path(__file__).resolve().parents[2] / "aom_data" / "config" / "economic_defaults.yaml"
 
 
 def get_econ_defaults(path: Optional[Path | str] = None) -> EconomicDefaults:

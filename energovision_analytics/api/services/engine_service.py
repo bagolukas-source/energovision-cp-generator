@@ -497,6 +497,9 @@ def build_run_variants_response(
             "total_eur": (_solar_streams + _bess_self + _arb + _peak
                           + float(s.sav_mrk_penalty_avoided_eur) + _merch),
         }
+        # A14: value streams na rovnakej báze ako cashflow / saving_y1_eur (korekčný koeficient úspory)
+        _koef = float(getattr(getattr(r, "_cf_builder", None), "savings_coefficient", 1.0) or 1.0)
+        value_streams = {k: x * _koef for k, x in value_streams.items()}
 
         # === MONTHLY SUMMARY (12) — Σ mesiacov = ročné value_streams (audit A13/G2) ===
         annual_pv = float(s.pv_total_kwh)

@@ -57,6 +57,11 @@ from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 from docx.shared import Cm, Emu, Mm, Pt, RGBColor
 
+from energovision_analytics.core.defaults import ECON
+
+# DPPO v texte posudku = sadzba výpočtu (aom_data/config/economic_defaults.yaml, audit A21)
+_DPPO_PCT = ECON.dppo.default_pct * 100
+
 # === BRAND ===
 EV_GREEN_HEX     = "92D050"
 EV_GREEN_LT_HEX  = "E8F4D5"
@@ -727,7 +732,7 @@ def generate_premium_posudok(
     _bullet(doc, "Spot ceny — OKTE DAM 2025 hodinové (priemer 103 €/MWh).")
     _bullet(doc, "Tarify — ÚRSO 2026 (distribúcia + TPS + nájomné + straty).")
     _bullet(doc, "Ekonomika — NPV 20 r., diskont 6 %, OPEX 1.5–2.0 % CAPEX/rok, degradácia FVE 0.5 %/rok, BESS 2 %/rok.")
-    _bullet(doc, "Daňový odpis — lineárny 6 r. pri DPPO 22 % (novela 2025 pre MSP).")
+    _bullet(doc, f"Daňový odpis — lineárny 6 r. pri DPPO {_DPPO_PCT:.0f} % (novela 2025 pre MSP).")
 
     # ===============================================================
     # SEKCIA 2 — VARIANT GENERATOR (NOVÉ Z ENGINE)
@@ -913,8 +918,8 @@ def generate_premium_posudok(
                 f"Dotácia {selected['dotacia_eur']:,.0f} € znižuje čistú investíciu "
                 f"na {selected['net_capex_eur']:,.0f} €.")
     _bullet(doc,
-            "Daňová optimalizácia — DPPO 22 % × 6r odpis = "
-            f"~{selected['net_capex_eur']*0.22:,.0f} € daňový štít spolu.")
+            f"Daňová optimalizácia — DPPO {_DPPO_PCT:.0f} % × 6r odpis = "
+            f"~{selected['net_capex_eur'] * _DPPO_PCT / 100:,.0f} € daňový štít spolu.")
 
     _h2(doc, "Ďalšie kroky")
     _step_table(doc, [
@@ -941,7 +946,7 @@ def generate_premium_posudok(
     p = doc.add_paragraph()
     r = p.add_run(
         "Posudok je indikatívny a vychádza z modelových predpokladov "
-        "(spot OKTE 2025, distribučné tarify ÚRSO 2026, DPPO 22 %, "
+        f"(spot OKTE 2025, distribučné tarify ÚRSO 2026, DPPO {_DPPO_PCT:.0f} %, "
         "odpis 6 rokov, diskont 6 %, degradácia LFP kalibrovaná na vendor presets). "
         "Skutočná výroba môže kolísať ±10 % v závislosti od počasia a profilu spotreby. "
         "Pred realizáciou odporúčame verifikovať PV výnos podľa PVGIS reportu a tarify "
