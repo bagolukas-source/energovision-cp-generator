@@ -35,7 +35,9 @@ check("nulové vstupy nespadnú", degradation_reserve_eur_mwh(0, 0, 0) == 0.0)
 # 2) degradácia znižuje výnos aj obchodovaný objem (nielen odpočet na konci)
 r0 = compute_merchant_arbitrage(**BASE, degradation_cost_eur_mwh=0.0, max_cycles_per_day=None)
 r1 = compute_merchant_arbitrage(**BASE, degradation_cost_eur_mwh=d6, max_cycles_per_day=None)
-check("degradácia znižuje čistý výnos", r1["merchant_net_eur"] < r0["merchant_net_eur"],
+check("degradácia sa neodpočítava ako náklad (len prah obchodu)",
+      abs(r1["merchant_net_eur"] - (r1["gross_eur"] - r1["organizer_fee_eur"] - r1["imbalance_eur"])) <= 1.0
+      and r1["degradation_deducted"] is False and r1["merchant_net_eur"] <= r0["merchant_net_eur"],
       f"{r0['merchant_net_eur']:,.0f} → {r1['merchant_net_eur']:,.0f}")
 check("degradácia znižuje aj throughput (prah, nie len odpočet)",
       r1["dc_throughput_mwh"] <= r0["dc_throughput_mwh"],

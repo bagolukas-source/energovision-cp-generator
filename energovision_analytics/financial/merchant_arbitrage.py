@@ -2,8 +2,10 @@
 
 Batéria sa NEdimenzuje na samospotrebu, ale obchoduje komoditu cez bilančnú skupinu:
 nabíja z gridu v lacných hodinách (ohraničené RK), vybíja DO gridu v drahých (ohraničené
-max exportom). Hodnota = spotový spread × účinnosť, mínus marža organizátora, odchýlka
-a degradačná rezerva.
+max exportom). Hodnota = spotový spread × účinnosť, mínus marža organizátora a odchýlka.
+Opotrebenie článkov je len PRAH obchodu (obchod, ktorý ho nepokryje, sa nespraví), ako náklad
+sa od výnosu neodpočítava — batériu zaplatil CAPEX, ekonomika sa posudzuje návratnosťou
+investície (rozhodnutie majiteľa 2026-10-24; rezerva od 9/2026 platila články druhýkrát).
 
 Čistý, samostatný model — needituje EMS samospotreby, takže žiadne dvojité počítanie.
 
@@ -200,8 +202,8 @@ def compute_merchant_arbitrage(
     ac_charge_total = 0.0     # koľko sa reálne odobralo zo siete na nabíjanie
     blocked_intervals = 0     # intervaly bez voľného miesta pod RK
     days_total = 0; days_traded = 0
-    # Náklad na DC kWh uloženú: opotrebenie článkov + minimálna marža. Marža je len prah
-    # obchodu (do výsledku sa neúčtuje), opotrebenie sa odpočíta nižšie ako degradácia.
+    # Prah na DC kWh uloženú: opotrebenie článkov + minimálna marža. Oboje len rozhoduje,
+    # či sa obchod oplatí — do výsledku sa neúčtuje (opotrebenie je informatívne nižšie).
     dc_cost = (degr + min_margin) / 1000.0
     e_cap = None if max_cycles_per_day is None else usable * float(max_cycles_per_day)
 
@@ -230,11 +232,12 @@ def compute_merchant_arbitrage(
 
     gross = sell_eur - buy_eur
     # organizer_fee (marža organizátora BS) a revenue_share (podiel klienta) sú ODDELENÉ
-    # koncepty. imbalance ide na AC obchod, degradačná rezerva na DC throughput.
+    # koncepty. imbalance ide na AC obchod. Opotrebenie (degradation) sa NEodpočítava —
+    # články zaplatil CAPEX; číslo ostáva len informatívne (koľko by stála rezerva).
     organizer_fee = gross * fee_frac
     imbalance = (ac_export_total / 1000.0) * imb
     degradation = (dc_throughput / 1000.0) * degr
-    merchant_net = gross - organizer_fee - imbalance - degradation      # čistý merchant výnos
+    merchant_net = gross - organizer_fee - imbalance                    # čistý merchant výnos
     client_value = merchant_net * float(revenue_share_pct)              # podiel klienta
     equiv_cycles = (dc_throughput / bess_kwh) if bess_kwh > 0 else 0.0
     dc_throughput_mwh = dc_throughput / 1000.0
@@ -252,6 +255,7 @@ def compute_merchant_arbitrage(
             "fee_pct": organizer_fee_pct, "gross_eur": round(gross, 0),
             "organizer_fee_eur": round(organizer_fee, 0),
             "imbalance_eur": round(imbalance, 0), "degradation_eur": round(degradation, 0),
+            "degradation_deducted": False,      # opotrebenie len prah obchodu, nie náklad
             # vstupy prahu — posudok aj CRM ich musia vedieť ukázať, inak je číslo neoveriteľné
             "degradation_cost_eur_mwh": round(degr, 2),
             "imbalance_cost_eur_mwh": round(imb, 2),

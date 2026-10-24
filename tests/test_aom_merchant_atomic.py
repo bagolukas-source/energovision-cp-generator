@@ -84,7 +84,8 @@ def test_merchant_viac_cyklov_s_degradaciou_a_mrk_rovna_sa_lp():
     for cyc, ld in ((1000 / 365, None), (2.0, load)):
         e = _merchant(max_cycles_per_day=cyc, degradation_cost_eur_mwh=degr, load_kw=ld)
         lp = _lp(SPOT, 1000, 500, 5000, 5000, 0.15, degr=degr, cycles=cyc, load=ld)
-        assert abs(e["merchant_net_eur"] - lp) <= 1.0, (cyc, e["merchant_net_eur"], lp)
+        # dispatch = LP optimum s opotrebením v prahu; opotrebenie sa od výnosu neodpočítava
+        assert abs(e["merchant_net_eur"] - e["degradation_eur"] - lp) <= 2.0, (cyc, e["merchant_net_eur"], lp)
 
 
 def test_merchant_nepreda_pred_nabitim():
