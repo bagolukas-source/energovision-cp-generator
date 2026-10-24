@@ -12,6 +12,7 @@ import re
 import io
 import logging
 import tempfile
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -785,12 +786,28 @@ def _append_rich_to_full_response(sb, analyza_id: str, rich: dict) -> None:
         log.exception("[aom-v2] zápis variantu do full_response zlyhal (%s)", analyza_id)
 
 
-def insert_variant_via_engine(sb, analyza_id: str, name: str, fve_kwp, bess_kwh, bess_kw=None, capex_per_kwp=None, capex_per_kwh_bess=None, capex_source: str = "engine_v095_quick", inverter_kw=None, persist_full_response: bool = True) -> dict:
+def _next_variant_position(sb, analyza_id: str) -> int:
+    pos_res = sb.table("analyza_om_variants").select("position").eq("analyza_id", analyza_id).order("position", desc=True).limit(1).execute()
+    return (pos_res.data[0]["position"] + 1) if pos_res.data else 1
+
+
+def _store_variant_row(sb, row: dict, insert_row: bool):
+    """Vloží riadok variantu a vráti jeho id; bez zápisu mu len pridelí id vopred."""
+    if not insert_row:
+        row["id"] = str(uuid.uuid4())
+        return row["id"]
+    _ins_row = sb.table("analyza_om_variants").insert(row).execute()
+    return ((_ins_row.data or [{}])[0] or {}).get("id") if _ins_row else None
+
+
+def insert_variant_via_engine(sb, analyza_id: str, name: str, fve_kwp, bess_kwh, bess_kw=None, capex_per_kwp=None, capex_per_kwh_bess=None, capex_source: str = "engine_v095_quick", inverter_kw=None, persist_full_response: bool = True, insert_row: bool = True) -> dict:
     """Spočíta JEDEN variant cez REÁLNY engine (rovnaký pipeline ako matica) a uloží do analyza_om_variants.
     Nahrádza fallback ekonomiku z aom_ai_strategist → konzistentné CAPEX / dotácia / dispatch.
     capex_per_kwp: voliteľný override ceny diela €/kWp (napr. zadanie s/bez optimizérov).
     Pri scenári pridanie_bess počíta DELTA ekonomiku (_bess_retrofit_delta) — FVE vo variante
-    je existujúca, investícia aj prínos sa hodnotia len za batériu."""
+    je existujúca, investícia aj prínos sa hodnotia len za batériu.
+    insert_row=False: nič nezapíše — vráti "row" s vopred prideleným id (= rich_variant.db_id),
+    aby ho run_variants_premium vložil atomicky spolu s ostatnými variantmi."""
     from energovision_analytics.api.services.engine_service import run_variants_pipeline, build_run_variants_response
     a_res = sb.table("analyza_om").select("*").eq("id", analyza_id).single().execute()
     analyza = a_res.data
@@ -830,8 +847,7 @@ def insert_variant_via_engine(sb, analyza_id: str, name: str, fve_kwp, bess_kwh,
         _cap_total = _cap_pv_new + _cap_b_new
         if vA and m:
             tp = _topology_params(analyza)
-            pos_res = sb.table("analyza_om_variants").select("position").eq("analyza_id", analyza_id).order("position", desc=True).limit(1).execute()
-            pos = (pos_res.data[0]["position"] + 1) if pos_res.data else 1
+            pos = _next_variant_position(sb, analyza_id) if insert_row else None
             row = {
                 "analyza_id": analyza_id, "name": name or "Vlastný variant", "position": pos,
                 "fve_kwp": vA.get("pv_kwp", fve_kwp), "fve_tilt_deg": int(tp[0]), "fve_azimuth_deg": int(tp[1]),
@@ -848,9 +864,8 @@ def insert_variant_via_engine(sb, analyza_id: str, name: str, fve_kwp, bess_kwh,
             }
             if inverter_kw:
                 row["inverter_kw"] = float(inverter_kw)
-            _ins_row = sb.table("analyza_om_variants").insert(row).execute()
             _rich = dict(vA) if isinstance(vA, dict) else {}
-            _rich["db_id"] = ((_ins_row.data or [{}])[0] or {}).get("id") if _ins_row else None
+            _rich["db_id"] = _store_variant_row(sb, row, insert_row)
             _rich["capex_source"] = capex_source
             _rich["label"] = name or "Vlastný variant"
             _rich["pv_kwp"] = row["fve_kwp"]; _rich["bess_kwh"] = row["bess_kwh"]; _rich["bess_kw"] = row["bess_kw"]
@@ -859,7 +874,7 @@ def insert_variant_via_engine(sb, analyza_id: str, name: str, fve_kwp, bess_kwh,
             if m.get("delta_cf"): _rich["cashflow_array"] = m["delta_cf"]
             if persist_full_response:
                 _append_rich_to_full_response(sb, analyza_id, _rich)
-            return {"ok": True, "id": _rich.get("db_id"), "position": pos, "capex_eur": row["capex_eur"], "delta_mode": True,
+            return {"ok": True, "id": _rich.get("db_id"), "position": pos, "capex_eur": row["capex_eur"], "delta_mode": True, "row": row,
                     "npv_eur": m["npv_eur"], "irr_pct": m["irr_pct"], "payback_y": m["payback_y"], "rich_variant": _rich}
         # delta zlyhala → pokračuj štandardnou cestou nižšie (celosystémová ekonomika)
         log.warning("[aom-v2] retrofit delta zlyhala pre %s — fallback na celosystémovú ekonomiku", analyza_id)
@@ -888,8 +903,7 @@ def insert_variant_via_engine(sb, analyza_id: str, name: str, fve_kwp, bess_kwh,
         return {"ok": False, "error": "engine vrátil 0 variantov"}
     v = vs[0]
     tp = _topology_params(analyza)
-    pos_res = sb.table("analyza_om_variants").select("position").eq("analyza_id", analyza_id).order("position", desc=True).limit(1).execute()
-    pos = (pos_res.data[0]["position"] + 1) if pos_res.data else 1
+    pos = _next_variant_position(sb, analyza_id) if insert_row else None
     row = {
         "analyza_id": analyza_id, "name": name or "Vlastný variant", "position": pos,
         "fve_kwp": v.get("pv_kwp", fve_kwp), "fve_tilt_deg": int(tp[0]), "fve_azimuth_deg": int(tp[1]),
@@ -906,18 +920,65 @@ def insert_variant_via_engine(sb, analyza_id: str, name: str, fve_kwp, bess_kwh,
     if inverter_kw:
         # výkon meniča zo zadania (chat ac_kw / manuálny variant) — bez neho posudok dopočíta 0,9×kWp
         row["inverter_kw"] = float(inverter_kw)
-    _ins_row = sb.table("analyza_om_variants").insert(row).execute()
+    _db_id = _store_variant_row(sb, row, insert_row)
     # rich_variant: rovnaká schéma ako matica -> pridá sa do full_response.variants, nech ho UI/posudok nájde
     _rich = dict(v)
     _rich["label"] = name or v.get("label") or "Vlastný variant"
     _rich["pv_kwp"] = row["fve_kwp"]; _rich["bess_kwh"] = row["bess_kwh"]; _rich["bess_kw"] = row["bess_kw"]
-    _rich["db_id"] = ((_ins_row.data or [{}])[0] or {}).get("id") if _ins_row else None
+    _rich["db_id"] = _db_id
     _rich["capex_source"] = capex_source
     if persist_full_response:
         _append_rich_to_full_response(sb, analyza_id, _rich)
-    return {"ok": True, "id": _rich.get("db_id"), "position": pos, "capex_eur": row["capex_eur"],
+    return {"ok": True, "id": _rich.get("db_id"), "position": pos, "capex_eur": row["capex_eur"], "row": row,
             "npv_eur": row["result_npv_eur_base"], "irr_pct": row["result_irr_pct_base"],
             "payback_y": row["result_payback_y_base"], "rich_variant": _rich}
+
+
+def _rpc_chyba(e: Exception, *znacky) -> bool:
+    _txt = f"{getattr(e, 'code', '') or ''} {getattr(e, 'message', '') or ''} {e}"
+    return any(z in _txt for z in znacky)
+
+
+def _persist_engine_result(sb, analyza_id: str, expected_updated_at, rows: list,
+                           sim_results, econ_results: dict, selected_variant_id) -> str:
+    """Nahradí varianty analýzy a zapíše výsledok behu. Primárne atomicky cez RPC
+    aom_replace_engine_result (migrations/20261024_aom_atomic_results.sql); kým migrácia
+    nie je aplikovaná, pôvodný postup DELETE → INSERT → UPDATE. Vráti "rpc" / "fallback"."""
+    try:
+        sb.rpc("aom_replace_engine_result", {
+            "p_analyza_id": analyza_id,
+            "p_expected_updated_at": expected_updated_at,
+            "p_rows": rows,
+            "p_sim_results": sim_results,
+            "p_econ_results": econ_results,
+            "p_selected_variant_id": selected_variant_id,
+        }).execute()
+        return "rpc"
+    except Exception as e:
+        if _rpc_chyba(e, "40001", "počas výpočtu zmenila"):
+            # vstupy sa zmenili počas behu → výsledok je zastaraný; updated_at nemeníme,
+            # aby sme neprebili verziu, s ktorou práve počíta novší beh
+            log.warning("[aom-v2] %s: analýza sa zmenila počas výpočtu, výsledok sa nezapísal", analyza_id)
+            sb.table("analyza_om").update({"status": "failed"}).eq("id", analyza_id).execute()
+            raise
+        if not _rpc_chyba(e, "PGRST202", "Could not find the function"):
+            raise
+        log.warning("[aom-v2] RPC aom_replace_engine_result chýba (migrácia neaplikovaná) — neatómový zápis")
+    sb.table("analyza_om_variants").delete().eq("analyza_id", analyza_id).execute()
+    # PostgREST bulk insert vyžaduje rovnaké kľúče — ručné riadky môžu mať navyše inverter_kw
+    _skupiny: dict = {}
+    for _r in rows:
+        _skupiny.setdefault(tuple(sorted(_r)), []).append(_r)
+    for _grp in _skupiny.values():
+        sb.table("analyza_om_variants").insert(_grp).execute()
+    sb.table("analyza_om").update({
+        "status": "completed",
+        "sim_results": sim_results,
+        "econ_results": econ_results,
+        "selected_variant_id": selected_variant_id,
+        "updated_at": datetime.now().isoformat(),
+    }).eq("id", analyza_id).execute()
+    return "fallback"
 
 
 def run_variants_premium(sb, analyza_id: str) -> dict:
@@ -953,15 +1014,19 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
     
     # Save variants do DB — variants sú teraz JSON-serializable dicts
     variants = result.get("variants") or []
+    rows = []
+    _new_sel = None
+    _old_sel = analyza.get("selected_variant_id")
     if variants:
         # pred delete si zapamätaj (kwp,bess) akceptovaného variantu — UUID po reinsertne neprežije
-        _old_sel = analyza.get("selected_variant_id")
         _old_sel_key = None
         if _old_sel:
             try:
-                _osr = sb.table("analyza_om_variants").select("fve_kwp,bess_kwh").eq("id", _old_sel).maybe_single().execute()
+                _osr = sb.table("analyza_om_variants").select("fve_kwp,bess_kwh,is_protected").eq("id", _old_sel).maybe_single().execute()
                 if _osr and _osr.data:
                     _old_sel_key = (float(_osr.data.get("fve_kwp") or 0), float(_osr.data.get("bess_kwh") or 0))
+                    if _osr.data.get("is_protected"):
+                        _new_sel = _old_sel   # chránený riadok DELETE prežije (trigger) → výber ostáva
             except Exception:
                 _old_sel_key = None
         # Zachovaj ručné varianty (capex_source='manual') — po prepočte ich znova spočítame cez engine,
@@ -976,13 +1041,12 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
         # Ak používateľ pridal vlastné (manuálne) varianty, generuj IBA ich — NEvkladaj 12 typových.
         _only_manual = len(_manual_keep) > 0
 
-        # Clear existing variants
-        sb.table("analyza_om_variants").delete().eq("analyza_id", analyza_id).execute()
-
-        rows = []
+        # Staré varianty sa mažú až pri zápise výsledku (_persist_engine_result) — atomicky
+        # spolu s novými, aby pád výpočtu nenechal analýzu bez variantov (audit A10/F14).
         _gen_variants = [] if _only_manual else variants
         for idx, v in enumerate(_gen_variants):
             rows.append({
+                "id": str(uuid.uuid4()),   # vopred → db_id vo full_response sedí už pri zápise
                 "analyza_id": analyza_id,
                 "name": v.get("label", f"V{idx+1}"),
                 "position": idx + 1,
@@ -1078,10 +1142,9 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
             except Exception:
                 log.exception("[aom-v2] rebuild top_picks po delte zlyhal")
 
-        _ins = sb.table("analyza_om_variants").insert(rows).execute() if rows else None
         # DB id do bohatého variantu → posudok páruje podľa id, nie podľa (kWp, kWh) (audit F01)
-        for _gv, _dbr in zip(_gen_variants, (_ins.data if _ins else None) or []):
-            _gv["db_id"] = (_dbr or {}).get("id")
+        for _gv, _row in zip(_gen_variants, rows):
+            _gv["db_id"] = _row["id"]
             _gv["capex_source"] = "engine_v095_quick"
 
         # Prepočítaj a znovu vlož ručné varianty (zachovaj marker 'manual' + daj im reálnu ekonomiku).
@@ -1109,22 +1172,20 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
                                           _fk, _bk, _mv.get("bess_kw"),
                                           capex_per_kwp=_cpk, capex_per_kwh_bess=_cpb,
                                           capex_source="manual", inverter_kw=_mv.get("inverter_kw"),
-                                          persist_full_response=False)  # result sa uloží nižšie
+                                          persist_full_response=False,  # result sa uloží nižšie
+                                          insert_row=False)             # riadok vloží _persist_engine_result
                 if _mres and _mres.get("rich_variant"):
                     _manual_rich.append(_mres["rich_variant"])
+                    rows.append(_mres["row"])
                 elif _only_manual:
                     # engine sa nepodaril — nestrať vlastný variant; vlož ho aspoň bez ekonomiky
-                    try:
-                        _pos = sb.table("analyza_om_variants").select("position").eq("analyza_id", analyza_id).order("position", desc=True).limit(1).execute()
-                        _p = (_pos.data[0]["position"] + 1) if _pos.data else 1
-                        _frow = {"analyza_id": analyza_id, "name": _mv.get("name") or "Vlastný variant", "position": _p,
-                                 "fve_kwp": _fk, "bess_kwh": _bk, "bess_kw": _mv.get("bess_kw"),
-                                 "capex_eur": _cap, "capex_source": "manual"}
-                        if _mv.get("inverter_kw"):
-                            _frow["inverter_kw"] = _mv.get("inverter_kw")
-                        sb.table("analyza_om_variants").insert(_frow).execute()
-                    except Exception:
-                        log.exception("[aom-v2] fallback insert manuálneho variantu zlyhal")
+                    _frow = {"id": str(uuid.uuid4()), "analyza_id": analyza_id,
+                             "name": _mv.get("name") or "Vlastný variant",
+                             "fve_kwp": _fk, "bess_kwh": _bk, "bess_kw": _mv.get("bess_kw"),
+                             "capex_eur": _cap, "capex_source": "manual"}
+                    if _mv.get("inverter_kw"):
+                        _frow["inverter_kw"] = _mv.get("inverter_kw")
+                    rows.append(_frow)
             except Exception:
                 log.exception("[aom-v2] prepočet ručného variantu zlyhal")
         # V režime "iba manuálne" nechaj vo full_response len vlastné varianty (žiadne typové).
@@ -1137,52 +1198,48 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
         # Pridaj rich ručné varianty do full_response -> UI/posudok ich nájde (koniec slučky bannera).
         if _manual_rich:
             result.setdefault("variants", []).extend(_manual_rich)
+        # poradie: matica, potom ručné (ako doteraz pri vkladaní na koniec)
+        for _p, _row in enumerate(rows, start=1):
+            _row["position"] = _p
         # selected_variant_id remap: delete+insert by nechal selection visieť na neexistujúcom UUID.
         # Premapuj podľa (kwp,bess) na nový riadok; ak sa rovnaký variant už negeneroval -> NULL (treba vybrať znova).
-        # audit V: hľadá sa vo VŠETKÝCH nových riadkoch (matica aj reinsertnuté manuálne cez
-        # insert_variant_via_engine), nie len v _ins.data — akceptovaný manuálny variant strácal výber.
-        if _old_sel:
-            _new_sel = None
-            if _old_sel_key:
-                _cand = list((_ins.data if _ins else []) or [])
+        # Preferuj manuálne riadky — presnejšia zhoda s tým, čo si používateľ reálne vybral (audit V).
+        if _old_sel_key and not _new_sel:
+            for r in sorted(rows, key=lambda r: 0 if r.get("capex_source") == "manual" else 1):
                 try:
-                    _allv = sb.table("analyza_om_variants").select("id,fve_kwp,bess_kwh,capex_source").eq("analyza_id", analyza_id).execute()
-                    if _allv.data:
-                        _cand = _allv.data
+                    if abs(float(r.get("fve_kwp") or 0) - _old_sel_key[0]) < 0.51 and abs(float(r.get("bess_kwh") or 0) - _old_sel_key[1]) < 1.01:
+                        _new_sel = r["id"]
+                        break
                 except Exception:
-                    pass
-                # preferuj manuálne riadky — presnejšia zhoda s tým, čo si používateľ reálne vybral
-                _cand.sort(key=lambda r: 0 if (r.get("capex_source") == "manual") else 1)
-                for r in _cand:
-                    try:
-                        if abs(float(r.get("fve_kwp") or 0) - _old_sel_key[0]) < 0.51 and abs(float(r.get("bess_kwh") or 0) - _old_sel_key[1]) < 1.01:
-                            _new_sel = r.get("id")
-                            break
-                    except Exception:
-                        continue
-            try:
-                sb.table("analyza_om").update({"selected_variant_id": _new_sel}).eq("id", analyza_id).execute()
-                analyza["selected_variant_id"] = _new_sel
-            except Exception:
-                logging.exception("selected_variant_id remap failed")
+                    continue
+
+    # A23: ani jeden spočítaný variant nie je úspešný beh — analýza nesmie skončiť ako 'completed'.
+    # Staré varianty sa v tom prípade nemažú (nič nové ich nenahrádza).
+    if not result.get("variants"):
+        sb.table("analyza_om").update({
+            "status": "failed",
+            "econ_results": {"error": "Žiadny variant sa nepodarilo spočítať — skontroluj vstupy analýzy."},
+            "updated_at": datetime.now().isoformat(),
+        }).eq("id", analyza_id).execute()
+        raise RuntimeError(f"AOM {analyza_id}: engine nevrátil ani jeden variant")
 
     # AI NARRATIVE — Claude úvaha pre posudok (energetik perspective)
     ai_narrative = _generate_ai_narrative(analyza, result.get("variants", []), result.get("top_picks", []))
 
     # Save sim + econ summary do analyza_om
     # full_response sa použije pri renderingu Premium DOCX posudku (musí mať bohatú schému variantov)
-    sb.table("analyza_om").update({
-        "status": "completed",
-        "sim_results": result.get("variants", [])[:1] if result.get("variants") else None,
-        "econ_results": {
+    _persist_engine_result(
+        sb, analyza_id, analyza.get("updated_at"), rows,
+        sim_results=result.get("variants", [])[:1] if result.get("variants") else None,
+        econ_results={
             "top_picks": result.get("top_picks", []),
             "variants_count": len(result.get("variants") or []),
             "engine_version": result.get("engine_version", "0.9.5"),
             "full_response": result,
             "ai_narrative": ai_narrative,
         },
-        "updated_at": datetime.now().isoformat(),
-    }).eq("id", analyza_id).execute()
+        selected_variant_id=_new_sel,
+    )
     
     return {
         "ok": True,

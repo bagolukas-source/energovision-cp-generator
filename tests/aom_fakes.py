@@ -49,6 +49,8 @@ class _Q:
             if self.db.get("_fail_insert", {}).get(self.table):
                 raise RuntimeError("simulated insert failure")
             items = self.payload if isinstance(self.payload, list) else [self.payload]
+            if len({tuple(sorted(it)) for it in items}) > 1:
+                raise RuntimeError("PGRST102 All object keys must match")   # ako PostgREST bulk insert
             out = []
             for it in items:
                 it = dict(it)
@@ -62,7 +64,8 @@ class _Q:
                     r.update(copy.deepcopy(self.payload))
             return _Res([copy.deepcopy(r) for r in rows if self._match(r)])
         if self.op == "delete":
-            self.db[self.table] = [r for r in rows if not self._match(r)]
+            # trigger analyza_om_variants_chran_delete: chránený riadok DELETE potichu preskočí
+            self.db[self.table] = [r for r in rows if not self._match(r) or r.get("is_protected")]
             return _Res([])
         sel = [copy.deepcopy(r) for r in rows if self._match(r)]
         if getattr(self, "_cols", None):
@@ -101,9 +104,59 @@ class _Storage:
         return _Bucket(self.store, b)
 
 
+class APIError(Exception):
+    """Tvar postgrest.exceptions.APIError (code + message)."""
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code, self.message = code, message
+
+
+class _Rpc:
+    def __init__(self, sb, name, params):
+        self.sb, self.name, self.params = sb, name, params
+    def execute(self):
+        self.sb.rpc_calls.append(self.name)
+        if self.name != "aom_replace_engine_result" or not self.sb.aom_atomic_rpc:
+            raise APIError("PGRST202", f"Could not find the function public.{self.name} in the schema cache")
+        snapshot = copy.deepcopy(self.sb.db)
+        try:
+            return _Res(self.sb._aom_replace_engine_result(**self.params))
+        except Exception:
+            self.sb.db.clear(); self.sb.db.update(snapshot)    # transakcia → rollback
+            raise
+
+
 class FakeSB:
-    def __init__(self):
+    def __init__(self, aom_atomic_rpc=False):
         self.db = {}
         self.storage = _Storage()
+        self.aom_atomic_rpc = aom_atomic_rpc   # True = migrácia 20261024_aom_atomic_results aplikovaná
+        self.rpc_calls = []
     def table(self, name):
         return _Q(self.db, name)
+    def rpc(self, name, params=None):
+        return _Rpc(self, name, params or {})
+
+    def _aom_replace_engine_result(self, p_analyza_id, p_expected_updated_at, p_rows,
+                                   p_sim_results, p_econ_results, p_selected_variant_id):
+        """Emulácia migrations/20261024_aom_atomic_results.sql."""
+        if not isinstance(p_rows, list) or not p_rows:
+            raise APIError("P0001", "AOM: prázdny výsledok — nič sa nenahrádza")
+        a = next(r for r in self.db["analyza_om"] if str(r["id"]) == str(p_analyza_id))
+        if p_expected_updated_at is not None and a.get("updated_at") != p_expected_updated_at:
+            raise APIError("40001", "AOM: analýza sa počas výpočtu zmenila, spusti prepočet znova")
+        _Q(self.db, "analyza_om_variants").eq("analyza_id", p_analyza_id).delete().execute()
+        defaults = {"fve_tilt_deg": 25, "fve_azimuth_deg": 0, "fve_topology": "south", "bess_kwh": 0,
+                    "bess_kw": 0, "bess_arbitrage_enabled": False}
+        for i, r in enumerate(copy.deepcopy(p_rows), start=1):
+            r = {**defaults, **{k: v for k, v in r.items() if v is not None}}
+            r.setdefault("position", i)
+            r["analyza_id"] = p_analyza_id
+            _Q(self.db, "analyza_om_variants").insert(r).execute()
+        sel = p_selected_variant_id if any(
+            str(v["id"]) == str(p_selected_variant_id) and str(v["analyza_id"]) == str(p_analyza_id)
+            for v in self.db["analyza_om_variants"]) else None
+        a.update({"status": "completed", "selected_variant_id": sel,
+                  "sim_results": copy.deepcopy(p_sim_results), "econ_results": copy.deepcopy(p_econ_results),
+                  "updated_at": f"rpc-{len(self.rpc_calls)}"})
+        return {"ok": True, "variants_count": len(p_rows), "selected_variant_id": sel}
