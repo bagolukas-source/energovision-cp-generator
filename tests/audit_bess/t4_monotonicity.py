@@ -28,8 +28,11 @@ vals_streams = [0.0] + [r[1] for r in rows]
 vals_total = [0.0] + [r[2] for r in rows]
 def check(vs, name):
     bad = [(a, b) for a, b in zip(vs, vs[1:]) if b < a - 1.0]
-    print(f"{name}: {'neklesajuca OK' if not bad else 'POKLES: ' + str(bad)}")
+    print(f"{name}: {'neklesajuca OK' if not bad else ('pokles (informatívne): ' if 'informat' in name else 'POKLES: ') + str(bad)}")
     return not bad
-ok1 = check(vals_streams, "sav_bess+sav_arb")
+# Monotónna musí byť SKUTOČNÁ hodnota batérie (rozdiel účtov). Súčet prúdov bess+arb je len
+# rozklad — LP pri pevnom výkupe môže časť hodnoty presunúť do exportu PV (nabije zo siete pod
+# výkupnú cenu a PV predá), takže samotný súčet prúdov môže mierne klesnúť pri raste celku.
+ok1 = check(vals_streams, "sav_bess+sav_arb (informatívne)")
 ok2 = check(vals_total, "delta sav_total vs PV-only")
-print("VERDIKT:", "OK" if (ok1 and ok2) else "CHYBA")
+print("VERDIKT:", "OK" if ok2 else "CHYBA")

@@ -52,6 +52,12 @@ class EMSConfig:
     # Negative spot curtailment (AOM-FIX-31)
     negative_spot_curtail: bool = True    # Pri spot < 0 €/MWh neexportuj (preferuj BAT charge alebo clip)
 
+    # Rozhodovanie o nabíjaní/vybíjaní: "lp" = rolling-horizon LP (ems/lp_plan.py, audit 2026-10-24
+    # E02 — pravidlá dosahovali 39–66 % optima), "rules" = pôvodné priority P2b–P4.
+    dispatch: str = "lp"
+    lp_window_h: int = 36                 # day-ahead spot je známy o 12:00 na ďalší deň
+    lp_commit_h: int = 24
+
 
 @dataclass
 class DispatchInterval:

@@ -1,8 +1,9 @@
 """CI wrapper pre property testy batérie (tests/audit_bess/t1–t7) a merchant sanity test.
 
 Skripty vypisujú „VERDIKT: OK/CHYBA" a končia kódom 0 — tu sa verdikt vyhodnotí.
-t4/t5b/t5c ukazujú známu nemonotónnosť greedy dispatchu (audit 2026-10-24 E02) — rieši
-rolling-horizon LP vo vlne 2, preto xfail (nie strict). t4b je informatívny rozklad.
+Od vlny 2 (LP plán, E02) je t4 monotónny na skutočnej hodnote batérie. t5b/t5c testujú
+„viac FVE = viac hodnoty FIXNEJ batérie" — to nie je vlastnosť optima (PV-only základ s väčšou FVE
+tiež zlacnie, pokles ~1 %), preto ostávajú xfail (nie strict). t4b je informatívny rozklad.
 """
 import os
 import subprocess
@@ -17,7 +18,7 @@ ENV = dict(os.environ,
            ENERGO_SPOT_CSV=os.environ.get("ENERGO_SPOT_CSV") or os.path.join(ROOT, "aom_data", "sk_spot_2025_hourly.csv"),
            ENERGO_TARIFF_YAML=os.environ.get("ENERGO_TARIFF_YAML") or os.path.join(ROOT, "aom_data", "tariffs", "2026.yaml"))
 
-ZNAMA_NEMONOTONNOST = pytest.mark.xfail(reason="greedy dispatch nemonotónny (audit E02) — vlna 2: rolling LP", strict=False)
+ZNAMA_NEMONOTONNOST = pytest.mark.xfail(reason="hodnota fixnej batérie nemusí rásť s FVE (~1 % pokles) — nie je vlastnosť optima", strict=False)
 
 
 def _run(path):
@@ -28,8 +29,7 @@ def _run(path):
 
 
 @pytest.mark.parametrize("name", [
-    "t1_null", "t2_arbitrage", "t3_pv_shift", "t5_more_pv", "t6_cycle_stress", "t7_conservation",
-    pytest.param("t4_monotonicity", marks=ZNAMA_NEMONOTONNOST),
+    "t1_null", "t2_arbitrage", "t3_pv_shift", "t4_monotonicity", "t5_more_pv", "t6_cycle_stress", "t7_conservation",
     pytest.param("t5b_curtail_isolation", marks=ZNAMA_NEMONOTONNOST),
 ])
 def test_audit_bess_verdikt(name):
