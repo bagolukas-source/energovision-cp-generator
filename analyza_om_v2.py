@@ -3187,7 +3187,7 @@ def _rich_variant_for_row(sb, analyza, row, econ_variants):
     return None
 
 
-def render_posudok_chocosuc(sb, analyza_id: str) -> dict:
+def render_posudok_chocosuc(sb, analyza_id: str, variant_id: str | None = None) -> dict:
     """ChocoSuc-grade posudok: deterministické fakty + AI naratív (grounded) -> HTML->PDF."""
     from posudok_chocosuc.context import build_chocosuc_context
     from posudok_chocosuc.generator import generate_chocosuc_pdf
@@ -3215,6 +3215,15 @@ def render_posudok_chocosuc(sb, analyza_id: str) -> dict:
     try:
         v_res2 = sb.table("analyza_om_variants").select("*").eq("analyza_id", analyza_id).order("position").execute()
         table_rows = v_res2.data or []
+        # Variant z požiadavky CRM má prednosť pred DB: výber v CRM sa ukladá samostatnou serverovou
+        # akciou a render ho mohol predbehnúť (Tytex 24. 10.: vybraté A, posudok vyšiel pre B).
+        if variant_id and any(str(r.get("id")) == str(variant_id) for r in table_rows):
+            if str(analyza.get("selected_variant_id")) != str(variant_id):
+                analyza["selected_variant_id"] = variant_id
+                try:
+                    sb.table("analyza_om").update({"selected_variant_id": variant_id}).eq("id", analyza_id).execute()
+                except Exception:
+                    logging.warning("posudok: uloženie variantu z požiadavky zlyhalo (%s)", variant_id)
         sel_id = analyza.get("selected_variant_id")
         sel_row = next((r for r in table_rows if str(r.get("id")) == str(sel_id)), None) if sel_id else None
         if sel_id and not sel_row:
