@@ -41,6 +41,16 @@ from pathlib import Path
 from typing import Any, Optional
 
 from docx import Document
+
+
+def _pb_txt(v, unit: str = " roka") -> str:
+    """Návratnosť: None / ≥ 99 (sentinel enginu) / ≤ 0 → „— (investícia sa nevráti)" (audit 2026-10-24 #6)."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return "— (investícia sa nevráti)"
+    return f"{f:.1f}{unit}" if 0 < f < 99 else "— (investícia sa nevráti)"
+
 from docx.enum.table import WD_ALIGN_VERTICAL, WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_TAB_ALIGNMENT
 from docx.oxml.ns import qn
@@ -608,7 +618,7 @@ def generate_premium_posudok(
     _kicker(doc, "Manažérske zhrnutie")
     _h1(doc, (
         f"Variant {selected['pv_kwp']:.0f} kWp FVE{bess_txt} dosahuje "
-        f"návratnosť {selected['payback_simple_y']:.1f} roka pri NPV +{selected['npv_eur']:,.0f} €."
+        f"návratnosť {_pb_txt(selected.get('payback_simple_y'))} pri NPV +{selected['npv_eur']:,.0f} €."
     ))
 
     # Scenario-aware úvod
@@ -661,7 +671,7 @@ def generate_premium_posudok(
          "note": "bez DPH, turn-key"},
         {"label": "Dotácia",        "value": f"{selected['dotacia_eur']:,.0f} €",
          "note": dotacia_scheme_info.get("nazov", "Žiadna") if dotacia_scheme_info else "Žiadna"},
-        {"label": "Návratnosť",     "value": f"{selected['payback_simple_y']:.1f} r",
+        {"label": "Návratnosť",     "value": _pb_txt(selected.get('payback_simple_y'), " r"),
          "note": "jednoduchá"},
         {"label": "NPV 20 r.",      "value": f"+{selected['npv_eur']:,.0f} €",
          "note": "s daň. odpisom"},
@@ -743,7 +753,7 @@ def generate_premium_posudok(
             f"{v['saving_y1_eur']:,.0f}",
             f"{v['npv_eur']:,.0f}",
             f"{v['irr_pct']:.1f}" if v.get('irr_pct') else "—",
-            f"{v['payback_simple_y']:.1f}",
+            _pb_txt(v.get('payback_simple_y'), ""),
         ])
     _data_table(doc, table_rows)
 
@@ -887,9 +897,10 @@ def generate_premium_posudok(
     ])
 
     _h3(doc, "Argumenty pre realizáciu")
-    _bullet(doc,
-            f"Návratnosť {selected['payback_simple_y']:.1f} roka — "
-            f"v rámci typického rozsahu komerčných FVE+BESS projektov.")
+    if _pb_txt(selected.get('payback_simple_y')) != _pb_txt(None):
+        _bullet(doc,
+                f"Návratnosť {_pb_txt(selected.get('payback_simple_y'))} — "
+                f"v rámci typického rozsahu komerčných FVE+BESS projektov.")
     _bullet(doc,
             f"Samospotreba FVE {selected['samospotreba_pct']:.1f} % — "
             f"vysoký podiel priamej spotreby znamená minimálnu závislosť od výkupnej ceny.")

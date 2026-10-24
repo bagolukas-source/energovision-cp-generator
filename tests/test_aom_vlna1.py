@@ -44,6 +44,13 @@ def test_01_posudok_navratnost_none():
     assert "vráti v 0.0" not in html and ">0.0<" not in html
 
 
+def test_01_web_posudok_navratnost_none():
+    from posudok_web import build_web_posudok_html
+    c = aom.build_orkestra_context(dict(_A_BASE), [dict(_V_NEVRATI)], "t")
+    html = build_web_posudok_html(c)
+    assert "nevráti sa" in html and "0.0 r" not in html
+
+
 def test_01_posudok_sentinel_99():
     v = dict(_V_NEVRATI, payback_simple_y=99.0)
     c = aom.build_orkestra_context(dict(_A_BASE), [v], "t")
@@ -98,6 +105,9 @@ def test_02_chocosuc_zaporne_npv_nie_je_vyhodne():
     assert "výhodná vo všetkých" not in ctx["summary_headline"], ctx["summary_headline"]
     assert "zostáva NPV kladné" not in ctx["recommendation_line"], ctx["recommendation_line"]
     assert "nevráti sa" in ctx["recommendation_line"]
+    from posudok_chocosuc.generator import render_chocosuc_html
+    html = render_chocosuc_html(ctx)  # grafy aj tabuľky s návratnosťou None nesmú padnúť
+    assert "nevráti sa" in html
 
 
 def test_02_chocosuc_kladne_npv_ostava_kladny_verdikt():
