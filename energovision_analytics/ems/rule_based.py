@@ -108,6 +108,11 @@ class RuleBasedEMS:
 
         # Precompute lookahead helpers — pre každý timestep top/bottom kvantily spotu
         lookahead_steps = int(self.config.lookahead_hours * 60 / timestep_min)
+        # Signály lacná/drahá hodina z RETAIL ceny, ktorú klient reálne platí (nie zo spotu):
+        # pri FIX tarife je retail konštantný → žiadne nabíjanie zo siete na arbitráž ani blokovanie
+        # vybíjania. Predtým FIX batéria „arbitrážovala" podľa spotu a strácala na RTE
+        # (audit 2026-10-24 E01/T1: FIX 300 kWp/500 kWh −595 €/r namiesto +5 719 €/r).
+        _px = np.array([self.retail.retail_buy_eur_kwh(float(_s)) * 1000.0 for _s in spot_eur_mwh])
 
         # BS-arbitraz akumulatory (spot-based, korektny model)
         _arb_charge_spot = 0.0   # nabijaci naklad z gridu @ spot
@@ -140,10 +145,11 @@ class RuleBasedEMS:
 
             # === STEP 1: Lookahead window pre arbitráž ===
             la_end = min(i + lookahead_steps, n)
-            la_spots = spot_eur_mwh[i:la_end]
-            la_mean = float(la_spots.mean()) if len(la_spots) else spot
-            la_min = float(la_spots.min()) if len(la_spots) else spot
-            la_max = float(la_spots.max()) if len(la_spots) else spot
+            px = float(_px[i])
+            la_spots = _px[i:la_end]
+            la_mean = float(la_spots.mean()) if len(la_spots) else px
+            la_min = float(la_spots.min()) if len(la_spots) else px
+            la_max = float(la_spots.max()) if len(la_spots) else px
 
             # Obchodné pásmo okna: band=0 → staré správanie (extrém ±5 €); band>0 → spodná/vrchná
             # časť rozpätia cien okna. Spread podmienka (min ekonomika po RTE) platí vždy.
@@ -151,9 +157,9 @@ class RuleBasedEMS:
             _cheap_lim = la_min + max(5.0, _band)
             _exp_lim = la_max - max(5.0, _band)
             # Je toto lacná hodina v lookahead? (na grid charge)
-            is_cheap_now = spot <= _cheap_lim and (la_max - spot) >= self.config.arb_min_spread_eur_mwh
+            is_cheap_now = px <= _cheap_lim and (la_max - px) >= self.config.arb_min_spread_eur_mwh
             # Je toto drahá hodina? (na discharge arbitráž)
-            is_expensive_now = spot >= _exp_lim and (spot - la_min) >= self.config.arb_min_spread_eur_mwh
+            is_expensive_now = px >= _exp_lim and (px - la_min) >= self.config.arb_min_spread_eur_mwh
 
             # === STEP 2: Cycle budget check (limit max_efc_per_year) ===
             cycle_budget_left = max_efc - self.efc_used_this_year

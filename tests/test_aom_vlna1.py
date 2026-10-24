@@ -345,6 +345,17 @@ def test_06_hodinove_data_diera_sa_nevyplni_konstantou():
     out = _kw_to_15min_mwh(kw)
     assert not ((out.index >= "2025-03-03 01:00") & (out.index < "2025-03-07")).any()
 
+
+# ---------- 9) FIX tarifa: batéria neobchoduje podľa spotu ----------
+def test_09_fix_bateria_nearbitrazuje_spot():
+    # kancelária 500 MWh, FVE 300 kWp, FIX tarifa (audit E01/T1: BESS 500 kWh −595 €/r)
+    rq = lambda: _req(consumption_annual_mwh=500, om_tarif_typ="fix", om_mrk_kw=300, om_rk_kw=300)
+    pv_only = _engine(rq(), 300, 0)
+    with_bess = _engine(rq(), 300, 500)
+    assert with_bess["energy_flow"].get("grid_to_bat_mwh", 0) < 0.5, with_bess["energy_flow"]
+    hodnota = with_bess["saving_y1_eur"] - pv_only["saving_y1_eur"]
+    assert hodnota > 6000, hodnota  # pred opravou 3 174 €/r (spot arbitráž s RTE stratou), po 8 130 €/r
+
 if __name__ == "__main__":
     import traceback
     fails = 0
