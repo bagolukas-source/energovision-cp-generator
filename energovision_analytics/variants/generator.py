@@ -224,9 +224,6 @@ class VariantGenerator:
     # nezmysel a kazilo to porovnávacie tabuľky v posudkoch.
     CAPEX_FIX_FULL_KWP = 150.0
 
-    # Strop merchant cyklov za deň — viď komentár pri compute_merchant_arbitrage (audit M1).
-    MERCHANT_MAX_CYKLOV_DENNE = 1.0
-
     def _capex_pv_fixed_for(self, pv_kwp: float) -> float:
         """Fixná zložka FVE CAPEXu škálovaná podľa veľkosti inštalácie.
 
@@ -420,15 +417,12 @@ class VariantGenerator:
             # Koľko cyklov denne smie merchant odobchodovať. Doteraz bola v module
             # natvrdo 1 (jeden pár nabitie/vybitie za okno) a limit z UI sa ignoroval —
             # batéria, ktorá sa nabije za 2 h, tak obchodovala raz denne.
-            # DOČASNE (audit 2026-10-24 M1): párovanie lacných/drahých hodín nesleduje chronológiu
-            # SoC — pri > 1 cykle denne predáva energiu, ktorú ešte nenabil (+43 až +100 % výnosu,
-            # default CRM 1000 EFC/r = 2,74 cyklu/deň). Kým merchant nedostane chronologický SoC
-            # (LP, vlna 2), strop je 1 cyklus denne aj pri „bez limitu".
+            # Merchant má chronologický SoC (denný MILP, audit 2026-10-24 M1) — viac cyklov
+            # denne už nepredáva energiu, ktorú ešte nenabil, takže limit z UI platí naplno.
             if self.merchant_unlimited_cycles:
-                _max_cyklov_denne = self.MERCHANT_MAX_CYKLOV_DENNE
+                _max_cyklov_denne = None                       # strop dá len výkon, RK, export a SoC
             elif self.ems_max_efc_per_year:
-                _max_cyklov_denne = min(self.MERCHANT_MAX_CYKLOV_DENNE,
-                                        max(0.1, float(self.ems_max_efc_per_year) / 365.0))
+                _max_cyklov_denne = max(0.1, float(self.ems_max_efc_per_year) / 365.0)
             else:
                 _max_cyklov_denne = 1.0
             # DEGRADAČNÁ REZERVA (oprava 9/2026, kalibrácia voči Energe)
