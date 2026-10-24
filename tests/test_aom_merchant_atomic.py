@@ -151,6 +151,21 @@ def test_prepocet_nahradi_varianty_a_rucny_prepocita(rpc):
     _assert_db_ids_sedia(sb)
 
 
+def test_prepocet_rucneho_fve_bess_rozdeli_capex_podla_suroden_fve():
+    # Röchling vzor: ponuka FVE + ponuka FVE+BESS s rovnakým kWp → BESS = rozdiel cien,
+    # nie natvrdo 480 €/kWh (predtým 200 kWh × 480 = 96 000 € a FVE 156 000 €)
+    sb = _sb(True)
+    for vid, kwh, cap in (("man-fve", 0, 182000), ("man-bess", 200, 252000)):
+        sb.db["analyza_om_variants"].append({"id": vid, "analyza_id": _AID, "name": vid, "position": 2,
+                                             "fve_kwp": 280, "bess_kwh": kwh, "bess_kw": 100 if kwh else 0,
+                                             "capex_eur": cap, "capex_source": "manual"})
+    aom.run_variants_premium(sb, _AID)
+    rich = [v for v in _analyza(sb)["econ_results"]["full_response"]["variants"]
+            if v.get("capex_source") == "manual" and v.get("bess_kwh")]
+    assert rich and abs(rich[0]["capex_bess_eur"] - 70000) < 1.0, rich[0].get("capex_bess_eur")
+    assert abs(rich[0]["capex_total_eur"] - 252000) < 1.0
+
+
 def test_rpc_zlyhanie_zapisu_nenecha_analyzu_bez_variantov():
     sb = _sb(True)
     sb.db["_fail_insert"] = {"analyza_om_variants": True}
