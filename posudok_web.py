@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Pekny interaktivny HTML posudok (Chart.js) — zdroj pre verejny link AJ Chromium PDF."""
 import json
+from html import escape
 
 
 def _num(v, d=0):
@@ -8,6 +9,15 @@ def _num(v, d=0):
         return round(float(v or 0), d)
     except Exception:
         return 0
+
+
+def _pb(v):
+    """Návratnosť: None / ≥ 99 (sentinel enginu) / ≤ 0 → „nevráti sa" (audit 2026-10-24 #6)."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return "nevráti sa"
+    return "%s r" % round(f, 1) if 0 < f < 99 else "nevráti sa"
 
 
 def _eur(x):
@@ -20,12 +30,13 @@ def _eur(x):
 def build_web_posudok_html(ctx, meta=None):
     meta = meta or {}
     g = lambda k, d=0: _num(ctx.get(k), d)
-    client = meta.get("client_name") or ctx.get("client_name") or "Vazeny zakaznik"
+    # verejné HTML: meno klienta a názvy scenárov sú text, nie markup (audit 2026-10-24 A29)
+    client = escape(str(meta.get("client_name") or ctx.get("client_name") or "Vazeny zakaznik"))
     fve_kwp = g("fve_kwp") or g("pv_kwp")
     if not fve_kwp:
         fve_kwp = _num((ctx.get("scenarios") or [{}])[0].get("fve_kwp"))
     bess_kwh = g("bess_kwh")
-    npv = g("npv_eur"); payback = g("payback_years", 1); irr = g("irr_pct", 1)
+    npv = g("npv_eur"); payback = ctx.get("payback_years"); irr = g("irr_pct", 1)
     capex = g("capex_total_eur"); net_capex = g("net_capex_eur") or capex
     saving = g("saving_y1_eur")
     samosp = g("samospotreba_pct", 1); samostat = g("samostatnost_pct", 1)
@@ -79,10 +90,10 @@ def build_web_posudok_html(ctx, meta=None):
                 return s.get(k)
         return 0
     scen_rows = "".join(
-        '<tr><td>%s</td><td class="num">%s</td><td class="num">%s r</td><td class="num">%s</td><td class="num">%s %%</td></tr>'
-        % (s.get("name", ""),
+        '<tr><td>%s</td><td class="num">%s</td><td class="num">%s</td><td class="num">%s</td><td class="num">%s %%</td></tr>'
+        % (escape(str(s.get("name") or "")),
            _eur(sg(s, "annual_save_eur", "save_total")),
-           _num(sg(s, "payback_years", "payback"), 1),
+           _pb(s.get("payback_years", s.get("payback"))),
            _eur(sg(s, "npv_eur", "npv")),
            _num(sg(s, "irr_pct", "irr"), 1)) for s in scen)
     bess_txt = (" + BESS %s kWh" % _num(bess_kwh)) if bess_kwh else ""
@@ -91,7 +102,7 @@ def build_web_posudok_html(ctx, meta=None):
         "@@NPV@@": _eur(npv),
         "@@INVEST@@": _eur(capex),
         "@@SAVING@@": _eur(saving),
-        "@@PAYBACK@@": "%s r" % _num(payback, 1), "@@IRR@@": "%s %%" % _num(irr, 1),
+        "@@PAYBACK@@": _pb(payback), "@@IRR@@": "%s %%" % _num(irr, 1),
         "@@SAMOSP@@": "%s %%" % _num(samosp, 1), "@@SAMOSTAT@@": "%s %%" % _num(samostat, 1),
         "@@TAXY@@": _eur(tax_y),
         "@@TAXTOT@@": _eur(tax_tot),

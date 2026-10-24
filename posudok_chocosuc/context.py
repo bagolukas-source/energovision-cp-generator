@@ -10,6 +10,24 @@ from profile_classifier import classify_profile
 
 DEG=0.005; INFL=0.025; DISC=0.06; LIFE=20; OPEX_RATE=0.015; ODPIS=6; DPPO=0.21; RESID=0.10
 
+def _pb(v):
+    """Návratnosť alebo None (= nevráti sa); 99 je sentinel enginu, 0/None chýbajúca hodnota."""
+    try: f=float(v)
+    except (TypeError, ValueError): return None
+    return f if 0 < f < 99 else None
+
+def pb_txt(v, d=1):
+    v=_pb(v)
+    return "nevráti sa" if v is None else (f"{v:.{d}f} r").replace(".",",")
+
+def _pb_range(lo, hi):
+    """„7,8–9,0 r" / „7,8 r (báza: nevráti sa)" / „nevráti sa"."""
+    lo, hi = _pb(lo), _pb(hi)
+    if lo is None and hi is None: return "nevráti sa"
+    if hi is None: return f"{pb_txt(lo)} (báza: nevráti sa)"
+    if lo is None: return pb_txt(hi)
+    return f"{lo:.1f}–{hi:.1f} r".replace(".",",")
+
 def _npv(save_total, capex, opex, annual_tax):
     npv=-capex
     for y in range(1,LIFE+1):
@@ -139,7 +157,7 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None, selected_
 
     # Báza ukotvená na ENGINE (validované), scenáre odvodené od nej (žiadny druhý NPV systém)
     eng_npv = float(base.get("npv_eur") or 0)
-    eng_pb  = float(base.get("payback_years") or 0)
+    eng_pb  = _pb(base.get("payback_years"))  # None = nevráti sa
     eng_irr = float(base.get("irr_pct") or 0)
     _annuity = sum(1.0/((1+DISC)**y) for y in range(1, LIFE+1))  # diskontovaná anuita úspor
     def scen(name, short, save_mult):
@@ -148,7 +166,7 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None, selected_
         npv = eng_npv + d_save * _annuity          # posun NPV o delta úspory (diskontovaná)
         # Payback aj IRR ODVODENÉ od engine bázy proporcionálne k úspore — JEDNA metodika pre všetky 3 scenáre.
         # Garantuje monotónnosť: viac úspor → kratšia návratnosť + vyššia IRR (žiadny paradox).
-        pb  = (eng_pb / save_mult) if (eng_pb > 0 and save_mult > 0) else 99
+        pb  = _pb(eng_pb / save_mult) if (eng_pb is not None and save_mult > 0) else None
         irr = (eng_irr * save_mult) if eng_irr > 0 else 0
         return {"name":name,"short":short,"save_total":stot,"opex":opex,"annual_tax":annual_tax,
                 "payback":pb,"npv":npv,"irr":irr,"save_self":save_self,"save_export":save_export}
@@ -183,6 +201,26 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None, selected_
         res.append(eng_npv + (base_saving*sm - base_saving)*_annuity - (net_capex*cm - net_capex))
     res.sort(); P=lambda q:res[int(q*len(res))]
 
+    # --- verdikt podľa znamienka NPV (báza) a P10 — nikdy natvrdo kladný (audit 2026-10-24 #10) ---
+    _p10 = P(0.10)
+    _prob_pos = sum(1 for x in res if x > 0) / len(res)
+    _pb_rng = _pb_range(opti["payback"], S[0]["payback"])
+    _e = lambda v: f"{v:,.0f}".replace(",", " ")  # tisíce medzerou; čiarky vo vete ostanú
+    if full["npv"] > 0 and _p10 > 0:
+        summary_headline = "Audit odberu: investícia je ekonomicky výhodná vo všetkých scenároch"
+        recommendation_line = (f"Realizovať — návratnosť {_pb_rng}, NPV {_e(full['npv'])} € (báza); "
+                               f"aj v pesimistickom scenári P10 zostáva NPV kladné ({_e(_p10)} €).")
+    elif full["npv"] > 0:
+        summary_headline = "Audit odberu: investícia je v báze výhodná, pri nepriaznivom vývoji môže byť stratová"
+        recommendation_line = (f"Realizovať s rezervou — návratnosť {_pb_rng}, NPV {_e(full['npv'])} € (báza); "
+                               f"v pesimistickom scenári P10 klesá NPV pod nulu ({_e(_p10)} €), "
+                               f"pravdepodobnosť kladného NPV {_prob_pos*100:.0f} %.")
+    else:
+        summary_headline = "Audit odberu: investícia sa v navrhnutej konfigurácii neoplatí"
+        recommendation_line = (f"V tejto konfigurácii neodporúčame realizovať — NPV {_e(full['npv'])} € (báza), "
+                               f"návratnosť {_pb_rng}; pravdepodobnosť kladného NPV {_prob_pos*100:.0f} %. "
+                               f"Odporúčame preveriť menšiu batériu, inú veľkosť FVE alebo cenu diela.")
+
     # --- cena nečinnosti ---
     ina_y1=self_mwh*1000*p_avoided_eff   # BUG 3 FIX: plný retail (konzistentne s engine úsporou)
     ina_flat=sum(ina_y1*((1-DEG)**y) for y in range(LIFE))
@@ -213,7 +251,7 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None, selected_
         "client_name":base.get("client_name"),"om_address":base.get("site_address") or "—",
         "eic_om":analyza.get("eic_om"),"cislo_om":analyza.get("cislo_om"),
         "distrib_oblast":analyza.get("distrib_oblast") or analyza.get("om_sadzba"),
-        "om_sadzba":base.get("tarif_typ") and ("VN" ) or "VN","om_mrk_kw":mrk,"om_rk_kw":rk,
+        "om_sadzba":(str(analyza.get("om_sadzba") or "").strip().upper() or "—"),"om_mrk_kw":mrk,"om_rk_kw":rk,
         "posudok_number":analyza.get("posudok_number") or f"P-AOM-{str(analyza.get('id',''))[:6]}","pon_number":analyza.get("pon_number"),
         "posudok_date":datetime.now().strftime("%d.%m.%Y"),
         "prepared_by_name":base.get("prepared_by_name"),"prepared_by_email":base.get("prepared_by_email"),"prepared_by_phone":base.get("prepared_by_phone"),
@@ -259,15 +297,15 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None, selected_
         "variant_title":(f"Navrhnutý variant — batériové úložisko {bess_kwh:.0f} kWh k existujúcej FVE {base.get('pv_kwp',0):.0f} kWp"
                          if _retrofit_bess else
                          f"Navrhnutý variant — FVE {base.get('pv_kwp',0):.0f} kWp" + (f" + BESS {bess_kwh:.0f} kWh" if bess_kwh else "")),
-        "summary_headline":"Audit odberu: investícia je ekonomicky výhodná vo všetkých scenároch",
-        "recommendation_line":f"Realizovať — návratnosť {opti['payback']:.1f}–{S[0]['payback']:.1f} r, NPV {full['npv']:,.0f} € (báza); aj v pesimistickom scenári P10 zostáva NPV kladné ({P(0.10):,.0f} €).".replace(","," "),
+        "summary_headline":summary_headline,
+        "recommendation_line":recommendation_line,
         "cover_subtitle":"Analýza odberu, simulácia výroby a dispatch, ekonomické posúdenie v 3 scenároch s rizikovou analýzou.",
         "podklady":({"measured":"15-min profil · ","extrapolated":"15-min profil (časť roka) · ","synthesized":"profil z faktúry · "}.get(analyza.get("consumption_strategy"), "15-min profil · " if analyza.get("consumption_15min_path") else ""))+"PVGIS · OKTE 2025"+(" · faktúra" if tarif_real else ""),
         "zaver_headline":"Odporúčanie pre klienta",
         "zaver_text":((f"Investícia {capex:,.0f} € do batériového úložiska {bess_kwh:.0f} kWh k existujúcej FVE {base.get('pv_kwp',0):.0f} kWp".replace(","," "))
                       if _retrofit_bess else
                       (f"Investícia {capex:,.0f} € do FVE {base.get('pv_kwp',0):.0f} kWp".replace(","," ")+(f" + BESS {bess_kwh:.0f} kWh" if bess_kwh else "")))
-                     +f" prinesie ročné úspory {S[0]['save_total']:,.0f} € (báza) až {opti['save_total']:,.0f} € (optimistický scenár). Návratnosť {opti['payback']:.1f}–{S[0]['payback']:.1f} r, NPV 20 r. {full['npv']:,.0f} € (báza), IRR {full['irr']:.1f} %.".replace(","," "),
+                     +f" prinesie ročné úspory {_e(S[0]['save_total'])} € (báza) až {_e(opti['save_total'])} € (optimistický scenár). Návratnosť {_pb_rng}, NPV 20 r. {_e(full['npv'])} € (báza), IRR {full['irr']:.1f} %.",
         "recommendations":[],  # doplní AI/deterministic neskôr
     }
     _build_deterministic_narratives(ctx, S, full, prof, pm)
@@ -347,8 +385,8 @@ def _build_deterministic_narratives(ctx, S, full, prof, pm):
 
     # --- 3) SCENÁRE (3 bullety s výkladom) ---
     sb = []
-    sb.append((S[0]["name"], f"Najkonzervatívnejší — iba FVE samospotreba a export, bez dodatočných opatrení. Ročná úspora {n(S[0]['save_total'])} €, návratnosť {n(S[0]['payback'],1)} r."))
-    sb.append((S[1]["name"], f"Stresový pohľad — nižší výkup prebytkov a opatrnejšie ceny energie. Ukazuje odolnosť investície: úspora {n(S[1]['save_total'])} €/r, návratnosť {n(S[1]['payback'],1)} r."))
+    sb.append((S[0]["name"], f"Bázový výpočet z hodinovej simulácie (ceny ÚRSO 2026 + spot OKTE). Ročná úspora {n(S[0]['save_total'])} €, návratnosť {pb_txt(S[0]['payback'])}."))
+    sb.append((S[1]["name"], f"Stresový pohľad — nižší výkup prebytkov a opatrnejšie ceny energie. Ukazuje odolnosť investície: úspora {n(S[1]['save_total'])} €/r, návratnosť {pb_txt(S[1]['payback'])}."))
     sb.append((S[2]["name"], f"Pri raste trhových cien energie hodnota vlastnej výroby rastie — úspora {n(S[2]['save_total'])} €/r, NPV 20 r. {n(S[2]['npv'])} €, IRR {n(S[2]['irr'],1)} %."))
     ctx["scenarios_bullets"] = sb
 

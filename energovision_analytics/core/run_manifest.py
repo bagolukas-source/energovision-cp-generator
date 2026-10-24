@@ -98,9 +98,8 @@ def build_run_manifest(
     """Postaví manifest pre aktuálny run."""
     tariff_path = Path(tariff_yaml)
     spot_path = Path(spot_csv)
-    econ_path = Path(economic_defaults_yaml) if economic_defaults_yaml else (
-        Path(__file__).resolve().parents[3] / "data" / "config" / "economic_defaults.yaml"
-    )
+    from energovision_analytics.core.defaults import _DEFAULT_YAML
+    econ_path = Path(economic_defaults_yaml) if economic_defaults_yaml else _DEFAULT_YAML
 
     return RunManifest(
         engine_version=__version__,

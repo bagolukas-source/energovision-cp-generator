@@ -5,6 +5,8 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from energovision_analytics.core.defaults import ECON
+
 
 class AutoFillSiteRequest(BaseModel):
     """Vstup pre POST /auto-fill-site."""
@@ -49,7 +51,7 @@ class CapexConfig(BaseModel):
 
 class FinancialConfig(BaseModel):
     """Finančné parametre."""
-    dppo_pct: float = 0.22
+    dppo_pct: float = ECON.dppo.default_pct  # 21 % — jeden zdroj: aom_data/config/economic_defaults.yaml
     discount_rate: float = 0.06
     horizon_years: int = 20
     depr_years: int = 6

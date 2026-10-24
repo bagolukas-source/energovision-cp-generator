@@ -129,13 +129,16 @@ class BatteryPack:
         max_by_capacity_ac = (self.soc_kwh - self.soc_min_kwh * self.soh) * eta_discharge  # DC→AC-out
         return max(0.0, min(max_by_power, max_by_capacity_ac))
 
-    def charge(self, requested_kwh: float, dt_hours: float, temp_c: Optional[float] = None) -> DispatchResult:
+    def charge(self, requested_kwh: float, dt_hours: float, temp_c: Optional[float] = None,
+               advance_calendar: bool = True) -> DispatchResult:
         """Nabite batériu (požadovaná energia z AC strany).
 
         Args:
             requested_kwh: kWh AC z grid/PV
             dt_hours: Trvanie (15-min = 0.25)
             temp_c: Aktuálna teplota (default = bess.avg_ambient_temp_c)
+            advance_calendar: False = len cyklové starnutie; kalendár krok posunie volajúci
+                cez hold() presne raz za interval (audit 2026-10-24 A16/E09)
         """
         result = DispatchResult(requested_charge_kwh=requested_kwh, soc_kwh_before=self.soc_kwh)
         if requested_kwh <= 0:
@@ -169,7 +172,7 @@ class BatteryPack:
 
         # Degradation update
         deg = self.degradation.update(
-            dt_hours=dt_hours,
+            dt_hours=dt_hours if advance_calendar else 0.0,
             energy_throughput_kwh=actual_ac,
             avg_soc=self.soc_pct,
             temp_c=t,
@@ -186,8 +189,9 @@ class BatteryPack:
         result.soc_kwh_after = self.soc_kwh
         return result
 
-    def discharge(self, requested_kwh: float, dt_hours: float, temp_c: Optional[float] = None) -> DispatchResult:
-        """Vybite batériu (požadovaná energia AC do load/grid)."""
+    def discharge(self, requested_kwh: float, dt_hours: float, temp_c: Optional[float] = None,
+                  advance_calendar: bool = True) -> DispatchResult:
+        """Vybite batériu (požadovaná energia AC do load/grid). advance_calendar viď charge()."""
         result = DispatchResult(requested_discharge_kwh=requested_kwh, soc_kwh_before=self.soc_kwh)
         if requested_kwh <= 0:
             result.soc_kwh_after = self.soc_kwh
@@ -216,7 +220,7 @@ class BatteryPack:
         self.lifetime_discharge_kwh += actual_ac
 
         deg = self.degradation.update(
-            dt_hours=dt_hours,
+            dt_hours=dt_hours if advance_calendar else 0.0,
             energy_throughput_kwh=actual_ac,
             avg_soc=self.soc_pct,
             temp_c=t,
@@ -233,7 +237,7 @@ class BatteryPack:
         return result
 
     def hold(self, dt_hours: float, temp_c: Optional[float] = None) -> DispatchResult:
-        """Idle — žiadny dispatch, len calendar aging."""
+        """Kalendárne starnutie za jeden časový krok (bez throughputu). EMS volá raz za interval."""
         t = temp_c if temp_c is not None else self.bess.avg_ambient_temp_c
         result = DispatchResult(soc_kwh_before=self.soc_kwh, soc_kwh_after=self.soc_kwh)
         deg = self.degradation.update(
@@ -242,5 +246,8 @@ class BatteryPack:
             avg_soc=self.soc_pct,
             temp_c=t,
         )
+        if deg["replaced"]:
+            self.soc_kwh = self.soc_min_kwh   # rovnako ako charge/discharge
+            result.soc_kwh_after = self.soc_kwh
         result.degradation_delta = deg["soh_delta"]
         return result

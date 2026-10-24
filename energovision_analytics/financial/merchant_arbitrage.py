@@ -7,13 +7,17 @@ a degradačná rezerva.
 
 Čistý, samostatný model — needituje EMS samospotreby, takže žiadne dvojité počítanie.
 
-Dispatch: po DENNÝCH blokoch (window intervalov). V rámci dňa páruje NAJLACNEJŠIE hodiny
-(nabíjanie) s NAJDRAHŠÍMI (vybíjanie) — greedy podľa cenového poradia, nie chronologicky.
-Tým je zisk monotónny v export/RK/výkon limitoch (viac kapacity = viac zisku) a zodpovedá
-tomu, ako reálny operátor vyberá najlepšie hodiny. Batéria sa každý deň vyprázdni (denný cyklus).
+Dispatch: po DENNÝCH blokoch (window intervalov), každý deň samostatný MILP s CHRONOLOGICKÝM
+SoC (audit 2026-10-24 M1, prevzaté z Codex 1.0.0rc1). Deň začína aj končí s prázdnou batériou
+(SoC = soc_min), takže sa nedá predať energia, ktorá sa ešte nenabila, a nič neprechádza
+nezaplatené do ďalšieho dňa. Binárna premenná na interval zakazuje súčasné nabíjanie
+a vybíjanie (pri zápornom spote by inak model „pálil" energiu cez straty). Riešenie je
+perfektná predpoveď v rámci dňa — horný odhad pre operátora, nie garantovaný výnos.
+Predchádzajúci greedy (najlacnejšie × najdrahšie hodiny bez chronológie) pri > 1 cykle denne
+nadhodnotil výnos o 43–100 %.
 
-Počet cyklov za deň riadi max_cycles_per_day: 1.0 = konzervatívne (jedno nabitie/vybitie),
-vyššia hodnota = viac obchodovaných dvojíc, None = bez limitu (obmedzí len výkon a sieť).
+Počet cyklov za deň riadi max_cycles_per_day: strop DC energie uloženej za deň = usable × cykly.
+1.0 = jedno plné nabitie, None = bez stropu (obmedzí len výkon, sieť a chronológia SoC).
 
 PRAH ZISKOVOSTI (oprava 9/2026 — kalibrácia voči Energe):
 Do 9/2026 sa pár testoval len na round-trip stratu (`p_dis*√rte > p_chg/√rte`) a degradácia
@@ -39,6 +43,11 @@ Energetická bilancia (DC = energia v batérii):
 """
 from __future__ import annotations
 import numpy as np
+from scipy.optimize import Bounds, LinearConstraint, milp
+from scipy.sparse import coo_matrix
+
+# Značka metódy vo výstupe — posudok aj CRM vedia, z akého dispatchu je číslo.
+MODEL = "denny_milp_chronologicky_soc"
 
 
 def degradation_reserve_eur_mwh(capex_bess_eur_per_kwh: float,
@@ -70,6 +79,45 @@ def degradation_reserve_eur_mwh(capex_bess_eur_per_kwh: float,
     if cap <= 0 or cyc <= 0 or frac <= 0:
         return 0.0
     return cap / (cyc * frac) * 1000.0
+
+
+def _solve_day(w, cap_c, cap_d, usable, e_cap, eta, fee, imb, dc_cost):
+    """Denný MILP s chronologickým SoC → (c, d) v AC kWh/interval, None = obchod sa neoplatí.
+
+    Premenné [c, d, s, z] po k intervaloch: c = AC nabíjanie (≤ voľné miesto pod RK),
+    d = AC vybíjanie (≤ min(výkon, export)), s = DC energia nad soc_min na konci intervalu
+    (≤ usable, posledný interval = 0), z = 1 nabíja / 0 vybíja.
+    """
+    k = len(w)
+    j = np.arange(k)
+    p = w / 1000.0 * (1.0 - fee)
+    obj = np.r_[p + eta * dc_cost, -p + imb / 1000.0, np.zeros(2 * k)]
+    # s_j − s_{j−1} − η·c_j + d_j/η = 0 (s_{−1} = 0: deň začína prázdny)
+    rows = [j, j, j, j[1:]]
+    cols = [j, k + j, 2 * k + j, 2 * k + j[1:] - 1]
+    vals = [np.full(k, -eta), np.full(k, 1.0 / eta), np.ones(k), -np.ones(k - 1)]
+    # c_j ≤ cap_c_j·z_j ;  d_j ≤ cap_d·(1 − z_j)
+    rows += [k + j, k + j, 2 * k + j, 2 * k + j]
+    cols += [j, 3 * k + j, k + j, 3 * k + j]
+    vals += [np.ones(k), -np.asarray(cap_c, dtype=float), np.ones(k), np.full(k, cap_d)]
+    lo = np.r_[np.zeros(k), np.full(2 * k, -np.inf)]
+    hi = np.r_[np.zeros(2 * k), np.full(k, cap_d)]
+    m = 3 * k
+    if e_cap is not None:                          # denný strop DC energie uloženej
+        rows.append(np.full(k, m)); cols.append(j); vals.append(np.full(k, eta))
+        lo = np.r_[lo, -np.inf]; hi = np.r_[hi, e_cap]; m += 1
+    a = coo_matrix((np.concatenate(vals), (np.concatenate(rows), np.concatenate(cols))),
+                   shape=(m, 4 * k)).tocsc()
+    ub = np.r_[cap_c, np.full(k, cap_d), np.full(k, usable), np.ones(k)]
+    ub[3 * k - 1] = 0.0                            # koniec dňa prázdny
+    sol = milp(obj, integrality=np.r_[np.zeros(3 * k), np.ones(k)],
+               bounds=Bounds(np.zeros(4 * k), ub), constraints=LinearConstraint(a, lo, hi),
+               options={"mip_rel_gap": 1e-9, "time_limit": 30})
+    if not sol.success or sol.x is None:
+        raise RuntimeError(f"Merchant solver zlyhal: {sol.message}")
+    if sol.fun >= -1e-8:                           # nič ziskové → batéria stojí
+        return None
+    return np.maximum(0.0, sol.x[:k]), np.maximum(0.0, sol.x[k:2 * k])
 
 
 def compute_merchant_arbitrage(
@@ -115,7 +163,8 @@ def compute_merchant_arbitrage(
              "min_margin_eur_mwh": round(min_margin, 2),
              "breakeven_spread_eur_mwh": round(breakeven, 1),
              "days_traded": 0, "days_total": 0,
-             "merchant_net_eur": 0.0, "revenue_share_pct": revenue_share_pct}
+             "merchant_net_eur": 0.0, "revenue_share_pct": revenue_share_pct,
+             "model": MODEL}
     if n == 0 or bess_kwh <= 0 or power_kw_ac <= 0:
         return empty
 
@@ -125,7 +174,6 @@ def compute_merchant_arbitrage(
     dis_ac_cap = min(power_kw_ac, export_kw) * dt_h               # AC export / interval
     if dis_ac_cap <= 0:
         return empty
-    dis_dc_per = dis_ac_cap / sqrt_rte                           # DC odobraté / vybíjací interval
 
     # Nabíjanie je per-interval: batéria a odber OM zdieľajú tú istú prípojku, takže
     # strop je RK MÍNUS súbežný odber. Bez profilu záťaže sa (kompatibilne so starým
@@ -147,69 +195,38 @@ def compute_merchant_arbitrage(
         blocked["intervals_blocked_by_mrk"] = int(n)
         blocked["days_total"] = int(np.ceil(n / max(1, window)))
         return blocked
-    chg_dc_arr = chg_ac_arr * sqrt_rte                            # DC uložené / nabíjací interval
-
     sell_eur = 0.0; buy_eur = 0.0
     ac_export_total = 0.0; dc_throughput = 0.0
     ac_charge_total = 0.0     # koľko sa reálne odobralo zo siete na nabíjanie
-    blocked_intervals = 0     # intervaly, kde headroom nestačil na plný výkon
+    blocked_intervals = 0     # intervaly bez voľného miesta pod RK
     days_total = 0; days_traded = 0
+    # Náklad na DC kWh uloženú: opotrebenie článkov + minimálna marža. Marža je len prah
+    # obchodu (do výsledku sa neúčtuje), opotrebenie sa odpočíta nižšie ako degradácia.
+    dc_cost = (degr + min_margin) / 1000.0
+    e_cap = None if max_cycles_per_day is None else usable * float(max_cycles_per_day)
 
     for start in range(0, n, window):
         w = spot[start:start + window]
         if len(w) < 2:
             continue
         days_total += 1
-        # zostav nabíjacie a vybíjacie kandidátne hodiny (oddelené množiny — extrémy)
-        order = np.argsort(w)                                     # rastúco podľa ceny
-        # nabíjanie: najlacnejšie hodiny VRÁTANE záporného spotu (pri cene < 0 grid platí za
-        # odber → náklad je záporné číslo, znižuje buy_eur); vybíjanie: najdrahšie hodiny.
-        # Kapacita nabíjania je per-interval (voľné miesto pod RK), preto sa berie z poľa.
-        chg_w = chg_dc_arr[start:start + window]
-        charge_cand = [(float(w[k]), float(chg_w[k])) for k in order if chg_w[k] > 1e-9]
-        blocked_intervals += int((chg_w <= 1e-9).sum())
-        if not charge_cand:
+        cap_c = chg_ac_arr[start:start + len(w)]
+        blocked_intervals += int((cap_c <= 1e-9).sum())
+        if float(cap_c.max()) <= 1e-9:
             continue
-        discharge_cand = [(float(w[k]), dis_dc_per) for k in order[::-1]]
-
-        ci = 0; di = 0
-        # Denný energetický strop. None = bez limitu → strop dá už len výkon, RK a max export.
-        if max_cycles_per_day is None:
-            rem_usable = dis_dc_per * len(w)
-        else:
-            rem_usable = usable * float(max_cycles_per_day)
-        chg_left = charge_cand[ci][1] if charge_cand else 0.0
-        dis_left = discharge_cand[di][1] if discharge_cand else 0.0
-        day_dc = 0.0
-        while ci < len(charge_cand) and di < len(discharge_cand) and rem_usable > 1e-9:
-            p_chg = charge_cand[ci][0]; p_dis = discharge_cand[di][0]
-            # ČISTÁ marginálna ziskovosť páru na DC MWh — po round-trip strate, marži
-            # organizátora, odchýlke a opotrebení článkov. Kandidáti sú zoradení podľa
-            # ceny, takže prvý nevyhovujúci pár ukončuje deň (ďalšie sú horšie).
-            gross_dc = p_dis * sqrt_rte - p_chg / sqrt_rte
-            net_dc = gross_dc * (1.0 - fee_frac) - imb * sqrt_rte - degr
-            if net_dc <= min_margin:
-                break
-            move_dc = min(rem_usable, chg_left, dis_left)
-            if move_dc <= 1e-9:
-                break
-            buy_eur  += (move_dc / sqrt_rte) * p_chg / 1000.0    # AC odber × cena
-            sell_eur += (move_dc * sqrt_rte) * p_dis / 1000.0    # AC export × cena
-            ac_charge_total += move_dc / sqrt_rte
-            ac_export_total += move_dc * sqrt_rte
-            dc_throughput   += move_dc
-            day_dc          += move_dc
-            rem_usable -= move_dc
-            chg_left   -= move_dc
-            dis_left   -= move_dc
-            if chg_left <= 1e-9:
-                ci += 1
-                if ci < len(charge_cand): chg_left = charge_cand[ci][1]
-            if dis_left <= 1e-9:
-                di += 1
-                if di < len(discharge_cand): dis_left = discharge_cand[di][1]
-        if day_dc > 1e-9:
-            days_traded += 1
+        x = _solve_day(w, cap_c, dis_ac_cap, usable, e_cap, sqrt_rte, fee_frac, imb, dc_cost)
+        if x is None:
+            continue
+        c, d = x
+        day_dc = float(c.sum()) * sqrt_rte        # = DC vybité (deň končí prázdny)
+        if day_dc <= 1e-9:
+            continue
+        buy_eur += float(c @ w) / 1000.0          # AC odber × cena (záporný spot znižuje náklad)
+        sell_eur += float(d @ w) / 1000.0         # AC export × cena
+        ac_charge_total += float(c.sum())
+        ac_export_total += float(d.sum())
+        dc_throughput += day_dc
+        days_traded += 1
 
     gross = sell_eur - buy_eur
     # organizer_fee (marža organizátora BS) a revenue_share (podiel klienta) sú ODDELENÉ
@@ -241,4 +258,5 @@ def compute_merchant_arbitrage(
             "min_margin_eur_mwh": round(min_margin, 2),
             "breakeven_spread_eur_mwh": round(breakeven, 1),
             "days_traded": days_traded, "days_total": days_total,
-            "merchant_net_eur": round(merchant_net, 0), "revenue_share_pct": revenue_share_pct}
+            "merchant_net_eur": round(merchant_net, 0), "revenue_share_pct": revenue_share_pct,
+            "model": MODEL}

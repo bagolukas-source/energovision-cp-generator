@@ -9,6 +9,9 @@ Spustenie (z tohto adresára, potrebné numpy/pandas/pydantic/pyyaml/openpyxl/re
     ENERGO_TARIFF_YAML=../../aom_data/tariffs/2026.yaml \
     python3 t7_conservation.py   # atď.
 
+CI: `pytest tests/test_audit_bess.py` (verdikty t1–t7 + merchant; t4/t5b/t5c = známa
+nemonotónnosť greedy dispatchu, xfail do vlny 2 — audit 2026-10-24 E02).
+
 - t1 nulový test (batéria bez príležitosti nesmie nič zarobiť/pokaziť)
 - t2 učebnicová arbitráž (2-cenový deň vs ručný výpočet, tolerancia 15 %)
 - t3 čistý PV posun (samospotreba ≈ RTE)

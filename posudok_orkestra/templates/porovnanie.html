@@ -164,7 +164,7 @@
       <div class="pick-metrics">
         <div class="pick-metric"><div class="pick-metric-value">{{ pick_npv.npv_eur|format_currency }}</div><div class="pick-metric-label">NPV</div></div>
         <div class="pick-metric"><div class="pick-metric-value">{{ pick_npv.irr_pct|round(1) }} %</div><div class="pick-metric-label">IRR</div></div>
-        <div class="pick-metric"><div class="pick-metric-value">{{ pick_npv.payback_y|round(1) }} r</div><div class="pick-metric-label">Návratnosť</div></div>
+        <div class="pick-metric"><div class="pick-metric-value">{{ pick_npv.payback_y|navratnost }}</div><div class="pick-metric-label">Návratnosť</div></div>
       </div>
     </div>
     {% if not same_winner %}
@@ -174,7 +174,7 @@
       <div class="pick-metrics">
         <div class="pick-metric"><div class="pick-metric-value">{{ pick_payback.npv_eur|format_currency }}</div><div class="pick-metric-label">NPV</div></div>
         <div class="pick-metric"><div class="pick-metric-value">{{ pick_payback.irr_pct|round(1) }} %</div><div class="pick-metric-label">IRR</div></div>
-        <div class="pick-metric"><div class="pick-metric-value">{{ pick_payback.payback_y|round(1) }} r</div><div class="pick-metric-label">Návratnosť</div></div>
+        <div class="pick-metric"><div class="pick-metric-value">{{ pick_payback.payback_y|navratnost }}</div><div class="pick-metric-label">Návratnosť</div></div>
       </div>
     </div>
     {% endif %}
@@ -209,7 +209,7 @@
         <td class="num">{{ v.capex_eur|format_currency }}</td>
         <td class="num">{{ v.npv_eur|format_currency }}</td>
         <td class="num">{{ v.irr_pct|round(1) }} %</td>
-        <td class="num">{{ v.payback_y|round(1) }} r</td>
+        <td class="num">{{ v.payback_y|navratnost }}</td>
         <td class="choice-col"><span class="choice-box"></span></td>
       </tr>
       {% endfor %}
@@ -239,7 +239,7 @@
       <span class="assess-title">{{ v.short_label }}</span>
       {% if v.is_selected %}<span class="winner-badge">VYBRANÉ</span>{% endif %}
       {% if v.dominated_by %}<span class="assess-dominated-tag">dominovaná ponuka</span>{% endif %}
-      <span class="assess-kpis">{{ v.capex_eur|format_currency }} · NPV {{ v.npv_eur|format_currency }} · IRR {{ v.irr_pct|round(1) }} % · {{ v.payback_y|round(1) }} r</span>
+      <span class="assess-kpis">{{ v.capex_eur|format_currency }} · NPV {{ v.npv_eur|format_currency }} · IRR {{ v.irr_pct|round(1) }} % · {{ v.payback_y|navratnost }}</span>
     </div>
     {% if v.assessment.verdict %}<p class="assess-verdict">{{ v.assessment.verdict }}</p>{% endif %}
     <div class="assess-cols">

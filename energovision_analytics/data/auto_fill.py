@@ -34,17 +34,16 @@ def psc_to_distribuutor(psc: str) -> Distribuutor:
     psc_norm = psc.replace(" ", "").strip()
     if len(psc_norm) < 3:
         raise ValueError(f"PSČ '{psc}' je príliš krátke")
-    first3 = int(psc_norm[:3])
-
-    # VSD — Košický + Prešovský kraj (04xxx–09xxx)
-    if 40 <= first3 <= 99 and not (90 <= first3 <= 99 and first3 not in (91, 92, 93, 94, 95)):
-        if first3 >= 40 and first3 <= 87:
-            return Distribuutor.VSD
-
-    # SSE — Žilinský + Banskobystrický kraj (01xxx–03xxx, 96xxx–98xxx)
-    if 10 <= first3 <= 38:
+    first3 = psc_norm[:3]
+    if not first3.isdigit():
+        raise ValueError(f"PSČ '{psc}' nie je číselné")
+    # Reťazcové prefixy — int(psc[:3]) zahodil úvodnú nulu a 088–099 (Svidník,
+    # Stropkov, Vranov) skončili na ZSD (audit 2026-10-24 A26/V10).
+    if "010" <= first3 <= "039":  # SSE — Žilinský kraj (01xxx–03xxx)
         return Distribuutor.SSE
-    if 960 <= first3 <= 998:
+    if "040" <= first3 <= "099":  # VSD — Košický + Prešovský kraj (04xxx–09xxx)
+        return Distribuutor.VSD
+    if "960" <= first3 <= "998":  # SSE — Banskobystrický kraj + Prievidza
         return Distribuutor.SSE
 
     # ZSD — Bratislavský + Trnavský + Trenčiansky + Nitriansky (8xxxx, 9xxxx zvyšok)
@@ -62,14 +61,17 @@ PSC_LOCATION_MAP: list[tuple[range, str, float, float]] = [
     (range(910, 915), "Trenčín", 48.891, 18.043),
     (range(917, 921), "Trnava", 48.378, 17.587),
     (range(921, 924), "Piešťany", 48.594, 17.829),
+    (range(924, 927), "Galanta", 48.190, 17.726),
     (range(927, 929), "Šaľa", 48.149, 17.880),
-    (range(930, 933), "Dunajská Streda", 47.992, 17.611),
+    (range(929, 933), "Dunajská Streda", 47.992, 17.611),
     (range(934, 937), "Levice", 48.218, 18.604),
     (range(940, 952), "Nitra", 48.314, 18.087),
     (range(953, 956), "Topoľčany", 48.560, 18.172),
     (range(958, 960), "Partizánske", 48.628, 18.388),
     (range(960, 977), "Banská Bystrica", 48.736, 19.146),
-    (range(977, 982), "Brezno", 48.808, 19.638),
+    (range(971, 973), "Prievidza", 48.774, 18.627),
+    (range(977, 979), "Brezno", 48.808, 19.638),
+    (range(979, 982), "Rimavská Sobota", 48.382, 20.022),
     (range(982, 987), "Lučenec", 48.331, 19.668),
     (range(987, 995), "Veľký Krtíš", 48.207, 19.350),
     (range(10, 17), "Žilina", 49.224, 18.740),
@@ -79,15 +81,24 @@ PSC_LOCATION_MAP: list[tuple[range, str, float, float]] = [
     (range(31, 35), "Ružomberok", 49.078, 19.305),
     (range(35, 39), "Martin", 49.066, 18.924),
     (range(40, 50), "Košice", 48.722, 21.258),
-    (range(50, 54), "Spišská Nová Ves", 48.948, 20.567),
-    (range(54, 58), "Poprad", 49.057, 20.298),
-    (range(58, 60), "Stará Ľubovňa", 49.296, 20.687),
-    (range(60, 69), "Prešov", 49.000, 21.243),
-    (range(69, 73), "Vranov nad Topľou", 48.890, 21.685),
-    (range(73, 76), "Humenné", 48.937, 21.913),
-    (range(76, 80), "Snina", 48.987, 22.158),
-    (range(80, 88), "Bardejov", 49.293, 21.275),
+    # Východ: rozsahy boli posunuté (080 Prešov → „Bardejov", 066 Humenné → „Prešov",
+    # 089–094 → stred SK) — opravené podľa okresných PSČ (audit 2026-10-24 V10/V11).
+    (range(50, 58), "Spišská Nová Ves", 48.948, 20.567),
+    (range(58, 64), "Poprad", 49.057, 20.298),
+    (range(64, 66), "Stará Ľubovňa", 49.296, 20.687),
+    (range(66, 69), "Humenné", 48.937, 21.913),
+    (range(69, 71), "Snina", 48.987, 22.158),
+    (range(71, 80), "Michalovce", 48.755, 21.918),
+    (range(80, 85), "Prešov", 49.000, 21.243),
+    (range(85, 89), "Bardejov", 49.293, 21.275),
+    (range(89, 91), "Svidník", 49.306, 21.568),
+    (range(91, 93), "Stropkov", 49.202, 21.652),
+    (range(93, 100), "Vranov nad Topľou", 48.890, 21.685),
 ]
+# Najšpecifickejší (najkratší) rozsah vyhráva: Pezinok/Trenčín/Trnava ležia vnútri
+# širokého rozsahu „Bratislava" 900–920 a Prievidza vnútri „Banská Bystrica" — pri
+# „prvá zhoda vyhráva" dostali GPS Bratislavy/BB (audit 2026-10-24 V11).
+_PSC_LOCATIONS_SPECIFIC_FIRST = sorted(PSC_LOCATION_MAP, key=lambda row: len(row[0]))
 
 
 def psc_to_gps(psc: str) -> tuple[float, float, str]:
@@ -100,7 +111,7 @@ def psc_to_gps(psc: str) -> tuple[float, float, str]:
         return (48.5, 19.0, "Slovensko (default)")
     first3 = int(psc_norm[:3])
 
-    for psc_range, nazov, lat, lon in PSC_LOCATION_MAP:
+    for psc_range, nazov, lat, lon in _PSC_LOCATIONS_SPECIFIC_FIRST:
         if first3 in psc_range:
             return (lat, lon, nazov)
     return (48.5, 19.0, "Slovensko (default)")

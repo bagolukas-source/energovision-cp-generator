@@ -12,6 +12,7 @@ import re
 import io
 import logging
 import tempfile
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -88,6 +89,18 @@ def _measured_load_profile_block(sb, analyza):
         log.warning(f"[measured_profile] spracovanie zlyhalo ({path}): {e}")
         return None
 
+def _num(d: dict, key: str, default: float) -> float:
+    """Číselné pole z DB riadku; default LEN pri chýbajúcej hodnote — 0 je platná voľba
+    (výkup 0 €, poplatok 0 %, diskont 0). `x or default` nulu prepisoval (audit 2026-10-24 V13)."""
+    v = d.get(key)
+    if v is None or v == "":
+        return float(default)
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return float(default)
+
+
 def _cp_capex(analyza: dict) -> dict:
     """CAPEX pre engine — REÁLNE jednotkové ceny z ponúk Energovision (2026).
 
@@ -114,14 +127,19 @@ def _cp_capex(analyza: dict) -> dict:
         cpK = float(analyza.get("cp_kwp") or 0)
         cpB = float(analyza.get("cp_bess_kwh") or 0)
         if cpP > 0 and cpK > 0:
+            # Engine fixnú zložku pod 150 kWp škáluje ×kWp/150 (VariantGenerator._capex_pv_fixed_for).
+            # Aby konfigurácia z ponuky vyšla presne na cenu ponuky, vrátime plný fix = potrebný / škála
+            # (audit 2026-10-24 V03: 100 kWp / 200 k€ dávalo 163 067 €).
+            from energovision_analytics.variants.generator import VariantGenerator
+            scale = min(1.0, cpK / VariantGenerator.CAPEX_FIX_FULL_KWP)
             fix = cpP - cpK * PV_MARG - cpB * BESS_RATE
             if FIX_MIN <= fix <= FIX_MAX:
                 return {"mode": "cp_kalibrovany", "capex_pv_eur_per_kwp": PV_MARG,
-                        "capex_pv_fixed_eur": round(fix, 2),
+                        "capex_pv_fixed_eur": round(fix / scale, 2),
                         "capex_bess_eur_per_kwh": BESS_RATE}
             # Fix mimo pásma → ponuka má inú štruktúru (pozemná stavba, VN prípojka,
             # veľkoobjemová zľava). Prepočítame marginál pri štandardnom fixe.
-            marg = (cpP - PV_FIXED_DEFAULT - cpB * BESS_RATE) / cpK
+            marg = (cpP - PV_FIXED_DEFAULT * scale - cpB * BESS_RATE) / cpK
             if 300.0 <= marg <= 1500.0:
                 return {"mode": "cp_kalibrovany_marginal",
                         "capex_pv_eur_per_kwp": round(marg, 2),
@@ -229,10 +247,7 @@ def _export_config(analyza: dict) -> dict:
     mode = (analyza.get("vykup_model") or "").strip().lower()
     if mode not in ("fix", "spot_minus"):
         mode = "spot_minus" if (analyza.get("om_tarif_typ") or "spot").lower() == "spot" else "fix"
-    try:
-        disk = float(analyza.get("vykup_spot_diskont_eur_mwh") or 10.0)
-    except (TypeError, ValueError):
-        disk = 10.0
+    disk = _num(analyza, "vykup_spot_diskont_eur_mwh", 10.0)
     return {"mode": mode, "spot_diskont_eur_mwh": max(0.0, disk)}
 
 
@@ -444,7 +459,7 @@ def _build_request_from_analyza(analyza: dict, measured_block: dict = None) -> d
             # Merchant režim — batéria ako podpora bilančnej skupiny (grid-to-grid arbitráž
             # plnou paľbou, nie samospotreba). Default OFF.
             "merchant_mode": bool(analyza.get("merchant_mode", False)),
-            "merchant_organizer_fee_pct": float(analyza.get("merchant_organizer_fee_pct") or 15.0),
+            "merchant_organizer_fee_pct": _num(analyza, "merchant_organizer_fee_pct", 15.0),
             # Bez stropu cyklov: batéria obchoduje koľko zvládne výkon, RK a max export.
             # Predtým bol v merchant module natvrdo 1 cyklus denne a limit z UI sa ignoroval.
             "merchant_unlimited_cycles": bool(analyza.get("merchant_unlimited_cycles", False)),
@@ -476,12 +491,12 @@ def _build_request_from_analyza(analyza: dict, measured_block: dict = None) -> d
             "scheme_id": analyza.get("dotacia_scheme") or "zelena_podnikom",
         },
         "ems_config": {
-            "arb_min_spread_eur_mwh": float(analyza.get("arb_min_spread_eur_mwh") or 30),
+            "arb_min_spread_eur_mwh": _num(analyza, "arb_min_spread_eur_mwh", 30),
             "max_efc_per_year": float(analyza.get("max_efc_per_year") or 1000),
             "negative_spot_curtail": bool(analyza.get("negative_spot_curtail", True)),
-            "mrk_export_penalty_eur_kwh": float(analyza.get("mrk_export_penalty_eur_kwh") or 0.03),
+            "mrk_export_penalty_eur_kwh": _num(analyza, "mrk_export_penalty_eur_kwh", 0.03),
         },
-        "export_price_eur_kwh": float(analyza.get("tarif_sell") or 0.06),
+        "export_price_eur_kwh": _num(analyza, "tarif_sell", 0.06),
         "export_config": _export_config(analyza),
         "tariff_overrides": {
             "obchodnik_eur_mwh": analyza.get("tarif_obchodnik_eur_mwh"),
@@ -750,12 +765,49 @@ def _bess_retrofit_delta(req_base: dict, fve_kwp: float, bess_kwh: float, bess_k
     return _retrofit_delta(req_base, fve_kwp, bess_kwh, bess_kw, fve_kwp, 0.0, 0.0, capex_bess_total, baseline_cache)
 
 
-def insert_variant_via_engine(sb, analyza_id: str, name: str, fve_kwp, bess_kwh, bess_kw=None, capex_per_kwp=None, capex_per_kwh_bess=None, capex_source: str = "engine_v095_quick", inverter_kw=None) -> dict:
+def _append_rich_to_full_response(sb, analyza_id: str, rich: dict) -> None:
+    """Variant pridaný mimo behu matice (chat, UI, cenová ponuka) zapíše aj do
+    econ_results.full_response.variants — inak ho posudok/Orkestra/Web nenájdu a ukážu
+    iný variant (audit 2026-10-24 F12). Párovanie cez db_id = UUID riadku analyza_om_variants."""
+    try:
+        a = sb.table("analyza_om").select("econ_results").eq("id", analyza_id).single().execute().data or {}
+        econ = a.get("econ_results") or {}
+        fr = econ.get("full_response")
+        if not isinstance(fr, dict):
+            return  # analýza ešte nebežala — posudok si variant postaví z DB riadku
+        _id = str(rich.get("db_id") or "")
+        vs = [v for v in (fr.get("variants") or []) if not (_id and str(v.get("db_id")) == _id)]
+        vs.append(rich)
+        fr["variants"] = vs
+        econ["full_response"] = fr
+        econ["variants_count"] = len(vs)
+        sb.table("analyza_om").update({"econ_results": econ}).eq("id", analyza_id).execute()
+    except Exception:
+        log.exception("[aom-v2] zápis variantu do full_response zlyhal (%s)", analyza_id)
+
+
+def _next_variant_position(sb, analyza_id: str) -> int:
+    pos_res = sb.table("analyza_om_variants").select("position").eq("analyza_id", analyza_id).order("position", desc=True).limit(1).execute()
+    return (pos_res.data[0]["position"] + 1) if pos_res.data else 1
+
+
+def _store_variant_row(sb, row: dict, insert_row: bool):
+    """Vloží riadok variantu a vráti jeho id; bez zápisu mu len pridelí id vopred."""
+    if not insert_row:
+        row["id"] = str(uuid.uuid4())
+        return row["id"]
+    _ins_row = sb.table("analyza_om_variants").insert(row).execute()
+    return ((_ins_row.data or [{}])[0] or {}).get("id") if _ins_row else None
+
+
+def insert_variant_via_engine(sb, analyza_id: str, name: str, fve_kwp, bess_kwh, bess_kw=None, capex_per_kwp=None, capex_per_kwh_bess=None, capex_source: str = "engine_v095_quick", inverter_kw=None, persist_full_response: bool = True, insert_row: bool = True) -> dict:
     """Spočíta JEDEN variant cez REÁLNY engine (rovnaký pipeline ako matica) a uloží do analyza_om_variants.
     Nahrádza fallback ekonomiku z aom_ai_strategist → konzistentné CAPEX / dotácia / dispatch.
     capex_per_kwp: voliteľný override ceny diela €/kWp (napr. zadanie s/bez optimizérov).
     Pri scenári pridanie_bess počíta DELTA ekonomiku (_bess_retrofit_delta) — FVE vo variante
-    je existujúca, investícia aj prínos sa hodnotia len za batériu."""
+    je existujúca, investícia aj prínos sa hodnotia len za batériu.
+    insert_row=False: nič nezapíše — vráti "row" s vopred prideleným id (= rich_variant.db_id),
+    aby ho run_variants_premium vložil atomicky spolu s ostatnými variantmi."""
     from energovision_analytics.api.services.engine_service import run_variants_pipeline, build_run_variants_response
     a_res = sb.table("analyza_om").select("*").eq("id", analyza_id).single().execute()
     analyza = a_res.data
@@ -795,8 +847,7 @@ def insert_variant_via_engine(sb, analyza_id: str, name: str, fve_kwp, bess_kwh,
         _cap_total = _cap_pv_new + _cap_b_new
         if vA and m:
             tp = _topology_params(analyza)
-            pos_res = sb.table("analyza_om_variants").select("position").eq("analyza_id", analyza_id).order("position", desc=True).limit(1).execute()
-            pos = (pos_res.data[0]["position"] + 1) if pos_res.data else 1
+            pos = _next_variant_position(sb, analyza_id) if insert_row else None
             row = {
                 "analyza_id": analyza_id, "name": name or "Vlastný variant", "position": pos,
                 "fve_kwp": vA.get("pv_kwp", fve_kwp), "fve_tilt_deg": int(tp[0]), "fve_azimuth_deg": int(tp[1]),
@@ -813,14 +864,17 @@ def insert_variant_via_engine(sb, analyza_id: str, name: str, fve_kwp, bess_kwh,
             }
             if inverter_kw:
                 row["inverter_kw"] = float(inverter_kw)
-            sb.table("analyza_om_variants").insert(row).execute()
             _rich = dict(vA) if isinstance(vA, dict) else {}
+            _rich["db_id"] = _store_variant_row(sb, row, insert_row)
+            _rich["capex_source"] = capex_source
             _rich["label"] = name or "Vlastný variant"
             _rich["pv_kwp"] = row["fve_kwp"]; _rich["bess_kwh"] = row["bess_kwh"]; _rich["bess_kw"] = row["bess_kw"]
             _rich["npv_eur"] = m["npv_eur"]; _rich["irr_pct"] = m["irr_pct"]; _rich["payback_simple_y"] = m["payback_y"]
             _rich["capex_total_eur"] = row["capex_eur"]; _rich["dotacia_eur"] = 0
             if m.get("delta_cf"): _rich["cashflow_array"] = m["delta_cf"]
-            return {"ok": True, "position": pos, "capex_eur": row["capex_eur"], "delta_mode": True,
+            if persist_full_response:
+                _append_rich_to_full_response(sb, analyza_id, _rich)
+            return {"ok": True, "id": _rich.get("db_id"), "position": pos, "capex_eur": row["capex_eur"], "delta_mode": True, "row": row,
                     "npv_eur": m["npv_eur"], "irr_pct": m["irr_pct"], "payback_y": m["payback_y"], "rich_variant": _rich}
         # delta zlyhala → pokračuj štandardnou cestou nižšie (celosystémová ekonomika)
         log.warning("[aom-v2] retrofit delta zlyhala pre %s — fallback na celosystémovú ekonomiku", analyza_id)
@@ -849,8 +903,7 @@ def insert_variant_via_engine(sb, analyza_id: str, name: str, fve_kwp, bess_kwh,
         return {"ok": False, "error": "engine vrátil 0 variantov"}
     v = vs[0]
     tp = _topology_params(analyza)
-    pos_res = sb.table("analyza_om_variants").select("position").eq("analyza_id", analyza_id).order("position", desc=True).limit(1).execute()
-    pos = (pos_res.data[0]["position"] + 1) if pos_res.data else 1
+    pos = _next_variant_position(sb, analyza_id) if insert_row else None
     row = {
         "analyza_id": analyza_id, "name": name or "Vlastný variant", "position": pos,
         "fve_kwp": v.get("pv_kwp", fve_kwp), "fve_tilt_deg": int(tp[0]), "fve_azimuth_deg": int(tp[1]),
@@ -867,14 +920,65 @@ def insert_variant_via_engine(sb, analyza_id: str, name: str, fve_kwp, bess_kwh,
     if inverter_kw:
         # výkon meniča zo zadania (chat ac_kw / manuálny variant) — bez neho posudok dopočíta 0,9×kWp
         row["inverter_kw"] = float(inverter_kw)
-    sb.table("analyza_om_variants").insert(row).execute()
+    _db_id = _store_variant_row(sb, row, insert_row)
     # rich_variant: rovnaká schéma ako matica -> pridá sa do full_response.variants, nech ho UI/posudok nájde
     _rich = dict(v)
     _rich["label"] = name or v.get("label") or "Vlastný variant"
     _rich["pv_kwp"] = row["fve_kwp"]; _rich["bess_kwh"] = row["bess_kwh"]; _rich["bess_kw"] = row["bess_kw"]
-    return {"ok": True, "position": pos, "capex_eur": row["capex_eur"],
+    _rich["db_id"] = _db_id
+    _rich["capex_source"] = capex_source
+    if persist_full_response:
+        _append_rich_to_full_response(sb, analyza_id, _rich)
+    return {"ok": True, "id": _rich.get("db_id"), "position": pos, "capex_eur": row["capex_eur"], "row": row,
             "npv_eur": row["result_npv_eur_base"], "irr_pct": row["result_irr_pct_base"],
             "payback_y": row["result_payback_y_base"], "rich_variant": _rich}
+
+
+def _rpc_chyba(e: Exception, *znacky) -> bool:
+    _txt = f"{getattr(e, 'code', '') or ''} {getattr(e, 'message', '') or ''} {e}"
+    return any(z in _txt for z in znacky)
+
+
+def _persist_engine_result(sb, analyza_id: str, expected_updated_at, rows: list,
+                           sim_results, econ_results: dict, selected_variant_id) -> str:
+    """Nahradí varianty analýzy a zapíše výsledok behu. Primárne atomicky cez RPC
+    aom_replace_engine_result (migrations/20261024_aom_atomic_results.sql); kým migrácia
+    nie je aplikovaná, pôvodný postup DELETE → INSERT → UPDATE. Vráti "rpc" / "fallback"."""
+    try:
+        sb.rpc("aom_replace_engine_result", {
+            "p_analyza_id": analyza_id,
+            "p_expected_updated_at": expected_updated_at,
+            "p_rows": rows,
+            "p_sim_results": sim_results,
+            "p_econ_results": econ_results,
+            "p_selected_variant_id": selected_variant_id,
+        }).execute()
+        return "rpc"
+    except Exception as e:
+        if _rpc_chyba(e, "40001", "počas výpočtu zmenila"):
+            # vstupy sa zmenili počas behu → výsledok je zastaraný; updated_at nemeníme,
+            # aby sme neprebili verziu, s ktorou práve počíta novší beh
+            log.warning("[aom-v2] %s: analýza sa zmenila počas výpočtu, výsledok sa nezapísal", analyza_id)
+            sb.table("analyza_om").update({"status": "failed"}).eq("id", analyza_id).execute()
+            raise
+        if not _rpc_chyba(e, "PGRST202", "Could not find the function"):
+            raise
+        log.warning("[aom-v2] RPC aom_replace_engine_result chýba (migrácia neaplikovaná) — neatómový zápis")
+    sb.table("analyza_om_variants").delete().eq("analyza_id", analyza_id).execute()
+    # PostgREST bulk insert vyžaduje rovnaké kľúče — ručné riadky môžu mať navyše inverter_kw
+    _skupiny: dict = {}
+    for _r in rows:
+        _skupiny.setdefault(tuple(sorted(_r)), []).append(_r)
+    for _grp in _skupiny.values():
+        sb.table("analyza_om_variants").insert(_grp).execute()
+    sb.table("analyza_om").update({
+        "status": "completed",
+        "sim_results": sim_results,
+        "econ_results": econ_results,
+        "selected_variant_id": selected_variant_id,
+        "updated_at": datetime.now().isoformat(),
+    }).eq("id", analyza_id).execute()
+    return "fallback"
 
 
 def run_variants_premium(sb, analyza_id: str) -> dict:
@@ -910,15 +1014,19 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
     
     # Save variants do DB — variants sú teraz JSON-serializable dicts
     variants = result.get("variants") or []
+    rows = []
+    _new_sel = None
+    _old_sel = analyza.get("selected_variant_id")
     if variants:
         # pred delete si zapamätaj (kwp,bess) akceptovaného variantu — UUID po reinsertne neprežije
-        _old_sel = analyza.get("selected_variant_id")
         _old_sel_key = None
         if _old_sel:
             try:
-                _osr = sb.table("analyza_om_variants").select("fve_kwp,bess_kwh").eq("id", _old_sel).maybe_single().execute()
+                _osr = sb.table("analyza_om_variants").select("fve_kwp,bess_kwh,is_protected").eq("id", _old_sel).maybe_single().execute()
                 if _osr and _osr.data:
                     _old_sel_key = (float(_osr.data.get("fve_kwp") or 0), float(_osr.data.get("bess_kwh") or 0))
+                    if _osr.data.get("is_protected"):
+                        _new_sel = _old_sel   # chránený riadok DELETE prežije (trigger) → výber ostáva
             except Exception:
                 _old_sel_key = None
         # Zachovaj ručné varianty (capex_source='manual') — po prepočte ich znova spočítame cez engine,
@@ -933,13 +1041,12 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
         # Ak používateľ pridal vlastné (manuálne) varianty, generuj IBA ich — NEvkladaj 12 typových.
         _only_manual = len(_manual_keep) > 0
 
-        # Clear existing variants
-        sb.table("analyza_om_variants").delete().eq("analyza_id", analyza_id).execute()
-
-        rows = []
+        # Staré varianty sa mažú až pri zápise výsledku (_persist_engine_result) — atomicky
+        # spolu s novými, aby pád výpočtu nenechal analýzu bez variantov (audit A10/F14).
         _gen_variants = [] if _only_manual else variants
         for idx, v in enumerate(_gen_variants):
             rows.append({
+                "id": str(uuid.uuid4()),   # vopred → db_id vo full_response sedí už pri zápise
                 "analyza_id": analyza_id,
                 "name": v.get("label", f"V{idx+1}"),
                 "position": idx + 1,
@@ -1035,7 +1142,10 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
             except Exception:
                 log.exception("[aom-v2] rebuild top_picks po delte zlyhal")
 
-        _ins = sb.table("analyza_om_variants").insert(rows).execute() if rows else None
+        # DB id do bohatého variantu → posudok páruje podľa id, nie podľa (kWp, kWh) (audit F01)
+        for _gv, _row in zip(_gen_variants, rows):
+            _gv["db_id"] = _row["id"]
+            _gv["capex_source"] = "engine_v095_quick"
 
         # Prepočítaj a znovu vlož ručné varianty (zachovaj marker 'manual' + daj im reálnu ekonomiku).
         # Ich rich výsledok pridáme aj do full_response.variants, aby ich posudok/UI našiel — inak
@@ -1061,22 +1171,21 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
                 _mres = insert_variant_via_engine(sb, analyza_id, _mv.get("name") or "Vlastný variant",
                                           _fk, _bk, _mv.get("bess_kw"),
                                           capex_per_kwp=_cpk, capex_per_kwh_bess=_cpb,
-                                          capex_source="manual", inverter_kw=_mv.get("inverter_kw"))
+                                          capex_source="manual", inverter_kw=_mv.get("inverter_kw"),
+                                          persist_full_response=False,  # result sa uloží nižšie
+                                          insert_row=False)             # riadok vloží _persist_engine_result
                 if _mres and _mres.get("rich_variant"):
                     _manual_rich.append(_mres["rich_variant"])
+                    rows.append(_mres["row"])
                 elif _only_manual:
                     # engine sa nepodaril — nestrať vlastný variant; vlož ho aspoň bez ekonomiky
-                    try:
-                        _pos = sb.table("analyza_om_variants").select("position").eq("analyza_id", analyza_id).order("position", desc=True).limit(1).execute()
-                        _p = (_pos.data[0]["position"] + 1) if _pos.data else 1
-                        _frow = {"analyza_id": analyza_id, "name": _mv.get("name") or "Vlastný variant", "position": _p,
-                                 "fve_kwp": _fk, "bess_kwh": _bk, "bess_kw": _mv.get("bess_kw"),
-                                 "capex_eur": _cap, "capex_source": "manual"}
-                        if _mv.get("inverter_kw"):
-                            _frow["inverter_kw"] = _mv.get("inverter_kw")
-                        sb.table("analyza_om_variants").insert(_frow).execute()
-                    except Exception:
-                        log.exception("[aom-v2] fallback insert manuálneho variantu zlyhal")
+                    _frow = {"id": str(uuid.uuid4()), "analyza_id": analyza_id,
+                             "name": _mv.get("name") or "Vlastný variant",
+                             "fve_kwp": _fk, "bess_kwh": _bk, "bess_kw": _mv.get("bess_kw"),
+                             "capex_eur": _cap, "capex_source": "manual"}
+                    if _mv.get("inverter_kw"):
+                        _frow["inverter_kw"] = _mv.get("inverter_kw")
+                    rows.append(_frow)
             except Exception:
                 log.exception("[aom-v2] prepočet ručného variantu zlyhal")
         # V režime "iba manuálne" nechaj vo full_response len vlastné varianty (žiadne typové).
@@ -1089,52 +1198,48 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
         # Pridaj rich ručné varianty do full_response -> UI/posudok ich nájde (koniec slučky bannera).
         if _manual_rich:
             result.setdefault("variants", []).extend(_manual_rich)
+        # poradie: matica, potom ručné (ako doteraz pri vkladaní na koniec)
+        for _p, _row in enumerate(rows, start=1):
+            _row["position"] = _p
         # selected_variant_id remap: delete+insert by nechal selection visieť na neexistujúcom UUID.
         # Premapuj podľa (kwp,bess) na nový riadok; ak sa rovnaký variant už negeneroval -> NULL (treba vybrať znova).
-        # audit V: hľadá sa vo VŠETKÝCH nových riadkoch (matica aj reinsertnuté manuálne cez
-        # insert_variant_via_engine), nie len v _ins.data — akceptovaný manuálny variant strácal výber.
-        if _old_sel:
-            _new_sel = None
-            if _old_sel_key:
-                _cand = list((_ins.data if _ins else []) or [])
+        # Preferuj manuálne riadky — presnejšia zhoda s tým, čo si používateľ reálne vybral (audit V).
+        if _old_sel_key and not _new_sel:
+            for r in sorted(rows, key=lambda r: 0 if r.get("capex_source") == "manual" else 1):
                 try:
-                    _allv = sb.table("analyza_om_variants").select("id,fve_kwp,bess_kwh,capex_source").eq("analyza_id", analyza_id).execute()
-                    if _allv.data:
-                        _cand = _allv.data
+                    if abs(float(r.get("fve_kwp") or 0) - _old_sel_key[0]) < 0.51 and abs(float(r.get("bess_kwh") or 0) - _old_sel_key[1]) < 1.01:
+                        _new_sel = r["id"]
+                        break
                 except Exception:
-                    pass
-                # preferuj manuálne riadky — presnejšia zhoda s tým, čo si používateľ reálne vybral
-                _cand.sort(key=lambda r: 0 if (r.get("capex_source") == "manual") else 1)
-                for r in _cand:
-                    try:
-                        if abs(float(r.get("fve_kwp") or 0) - _old_sel_key[0]) < 0.51 and abs(float(r.get("bess_kwh") or 0) - _old_sel_key[1]) < 1.01:
-                            _new_sel = r.get("id")
-                            break
-                    except Exception:
-                        continue
-            try:
-                sb.table("analyza_om").update({"selected_variant_id": _new_sel}).eq("id", analyza_id).execute()
-                analyza["selected_variant_id"] = _new_sel
-            except Exception:
-                logging.exception("selected_variant_id remap failed")
+                    continue
+
+    # A23: ani jeden spočítaný variant nie je úspešný beh — analýza nesmie skončiť ako 'completed'.
+    # Staré varianty sa v tom prípade nemažú (nič nové ich nenahrádza).
+    if not result.get("variants"):
+        sb.table("analyza_om").update({
+            "status": "failed",
+            "econ_results": {"error": "Žiadny variant sa nepodarilo spočítať — skontroluj vstupy analýzy."},
+            "updated_at": datetime.now().isoformat(),
+        }).eq("id", analyza_id).execute()
+        raise RuntimeError(f"AOM {analyza_id}: engine nevrátil ani jeden variant")
 
     # AI NARRATIVE — Claude úvaha pre posudok (energetik perspective)
     ai_narrative = _generate_ai_narrative(analyza, result.get("variants", []), result.get("top_picks", []))
 
     # Save sim + econ summary do analyza_om
     # full_response sa použije pri renderingu Premium DOCX posudku (musí mať bohatú schému variantov)
-    sb.table("analyza_om").update({
-        "status": "completed",
-        "sim_results": result.get("variants", [])[:1] if result.get("variants") else None,
-        "econ_results": {
+    _persist_engine_result(
+        sb, analyza_id, analyza.get("updated_at"), rows,
+        sim_results=result.get("variants", [])[:1] if result.get("variants") else None,
+        econ_results={
             "top_picks": result.get("top_picks", []),
             "variants_count": len(result.get("variants") or []),
             "engine_version": result.get("engine_version", "0.9.5"),
             "full_response": result,
             "ai_narrative": ai_narrative,
         },
-        "updated_at": datetime.now().isoformat(),
-    }).eq("id", analyza_id).execute()
+        selected_variant_id=_new_sel,
+    )
     
     return {
         "ok": True,
@@ -1455,6 +1560,25 @@ def _generate_ai_expert_commentary(context: dict, analyza: dict) -> dict:
         }
 
 
+def _payback_or_none(*vals):
+    """Návratnosť v rokoch, alebo None = „nevráti sa".
+    Engine vracia 99.0 (compute_payback), delta varianty None; chýbajúca/0 hodnota sa
+    nesmie zobraziť ako „0,0 r" (audit 2026-10-24 #6). Berie prvú nie-None hodnotu."""
+    for v in vals:
+        if v is None:
+            continue
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            continue
+        return f if 0 < f < 99 else None
+    return None
+
+
+def _fmt_pb(pb) -> str:
+    return f"{pb:.1f} r" if pb is not None else "nevráti sa"
+
+
 def _validate_orkestra(context: dict) -> list:
     """Autonomia: sanity-check kontextu pred renderom. Vrati list warningov (logovane).
     Posudok generuje obchodnik bez kontroly -> server musi zachytit nezmysly."""
@@ -1467,7 +1591,7 @@ def _validate_orkestra(context: dict) -> list:
     if num("capex_total_eur") <= 0: w.append("CAPEX <= 0")
     if not (0 <= num("samospotreba_pct") <= 100): w.append(f"samospotreba mimo 0-100: {num('samospotreba_pct')}")
     if not (0 <= num("samostatnost_pct") <= 100): w.append(f"samostatnost mimo 0-100: {num('samostatnost_pct')}")
-    if num("payback_years") <= 0: w.append("payback <= 0")
+    if context.get("payback_years") is None: w.append("investícia sa nevráti (payback None)")
     cf = context.get("cf_array") or []
     if len(cf) < 21: w.append(f"cf_array len {len(cf)} < 21")
     # energy balance konzistencia: pv_to_load+pv_to_grid+pv_to_bat ~ pv_total (±5 %)
@@ -1484,6 +1608,22 @@ def _validate_orkestra(context: dict) -> list:
     return w
 
 
+def _azimut_engine(az):
+    """Azimut do konvencie enginu (0 = sever, 90 = východ, 180 = juh, 270 = západ).
+    Záporné hodnoty sú konvencia PVGIS/formulára (0 = juh, −90 = východ) → +180;
+    inak −45 zhodilo variant na ValidationError a „0" znamenalo sever (audit 2026-10-24 PV-4)."""
+    if az is None:
+        return None
+    az = float(az)
+    if az < 0:
+        az += 180.0
+    return az % 360.0
+
+
+def _azimut_je_sever(az) -> bool:
+    return az is not None and (az < 90.0 or az > 270.0)
+
+
 def _topology_params(analyza: dict) -> tuple[float, float, str]:
     """Mapuje fve_topology + tilt/azimut na (sklon, azimut, konfiguracia) pre engine.
     konfiguracia: '2xP' (juh/carport), 'EW' (východ-západ), 'tracker'."""
@@ -1492,7 +1632,7 @@ def _topology_params(analyza: dict) -> tuple[float, float, str]:
     azim = analyza.get("fve_azimuth_deg")
     try: tilt = float(tilt) if tilt not in (None, "") else None
     except Exception: tilt = None
-    try: azim = float(azim) if azim not in (None, "") else None
+    try: azim = _azimut_engine(azim) if azim not in (None, "") else None
     except Exception: azim = None
     if topo in ("east_west", "ew", "vychod_zapad", "v-z", "východ-západ"):
         return (tilt if tilt is not None else 10.0), 180.0, "EW"
@@ -1545,7 +1685,8 @@ def build_orkestra_context(analyza: dict, variants: list, analyza_id: str = "", 
     selected = None
     if selected_id:
         for v in variants:
-            if v.get("variant_id") == selected_id or v.get("id") == selected_id:
+            if (v.get("variant_id") == selected_id or v.get("id") == selected_id
+                    or (v.get("db_id") and str(v.get("db_id")) == str(selected_id))):
                 selected = v
                 break
         # audit K3: match podľa konfigurácie vybraného DB riadku (tolerancia zaokrúhlenia)
@@ -1610,12 +1751,12 @@ def build_orkestra_context(analyza: dict, variants: list, analyza_id: str = "", 
     saving_y1 = float(selected.get("saving_y1_eur") or 0)
     # Ak chýba saving_y1, odvod z payback (saving = net_capex / payback)
     if saving_y1 <= 0:
-        payback_raw = float(selected.get("payback_simple_y") or selected.get("payback_y") or 0)
-        if payback_raw > 0:
+        payback_raw = _payback_or_none(selected.get("payback_simple_y"), selected.get("payback_y"))
+        if payback_raw:
             saving_y1 = net_capex / payback_raw
     npv = float(selected.get("npv_eur") or 0)
     irr = float(selected.get("irr_pct") or 0)
-    payback = float(selected.get("payback_simple_y") or selected.get("payback_y") or 0)
+    payback = _payback_or_none(selected.get("payback_simple_y"), selected.get("payback_y"))
     samosp_pct = float(selected.get("samospotreba_pct") or 0)
     samostat_pct = float(selected.get("samostatnost_pct") or 0)
 
@@ -1741,13 +1882,16 @@ def build_orkestra_context(analyza: dict, variants: list, analyza_id: str = "", 
         return npv + delta_pv
     saving_low = saving_y1 * 0.75
     npv_low = _npv_scenario(saving_low)
-    payback_low = (net_capex / saving_low) if saving_low > 0 else 99
+    payback_low = _payback_or_none(net_capex / saving_low) if saving_low > 0 else None
     irr_low = max(0, irr - 5)
     arb_uplift = 0.10 if bess_kwh > 0 else 0
     saving_arb = saving_y1 * (1 + arb_uplift)
     npv_arb = _npv_scenario(saving_arb)
-    payback_arb = (net_capex / saving_arb) if saving_arb > 0 else 99
+    payback_arb = _payback_or_none(net_capex / saving_arb) if saving_arb > 0 else None
     irr_arb = irr + (arb_uplift * 100 * 0.5)
+    if payback is None:
+        # báza sa podľa enginu nevráti → statická návratnosť scenára by klamala („17 r")
+        payback_low = payback_arb = None
 
     scenarios_ctx = [
         {
@@ -1799,7 +1943,8 @@ def build_orkestra_context(analyza: dict, variants: list, analyza_id: str = "", 
     # vychádzal záporný. Dotácia je príjem roku 0 (diskont 1,0), takže NPV bez nej = NPV − dotácia.
     if dotacia > 0:
         npv_without_dotacia = npv - dotacia
-        payback_without_dotacia = (capex_total / saving_y1) if saving_y1 > 0 else 99
+        payback_without_dotacia = (_payback_or_none(capex_total / saving_y1)
+                                   if (saving_y1 > 0 and payback is not None) else None)
         irr_without_dotacia = max(0, irr - 4)
     else:
         npv_without_dotacia = npv
@@ -1820,8 +1965,8 @@ def build_orkestra_context(analyza: dict, variants: list, analyza_id: str = "", 
             "npv_eur": v.get("npv_eur", 0),
             "irr_pct": v.get("irr_pct", 0),
             # template (posudok.html) cita v.payback_simple_y - pole musi mat tento nazov
-            "payback_simple_y": v.get("payback_simple_y", v.get("payback_y", 0)),
-            "payback_years": v.get("payback_simple_y", v.get("payback_y", 0)),
+            "payback_simple_y": _payback_or_none(v.get("payback_simple_y"), v.get("payback_y")),
+            "payback_years": _payback_or_none(v.get("payback_simple_y"), v.get("payback_y")),
         })
 
     # === Cena necinnosti (cost of inaction) — eskalujuca cena energie ktoru by FVE pokryla ===
@@ -2045,17 +2190,22 @@ def _short_variant_label(name: str, client_name: str) -> str:
     return s or "Variant"
 
 
+def _pb_rank(r: dict) -> float:
+    """Návratnosť na porovnávanie — None (nevráti sa) je najhoršia."""
+    return r["payback_y"] if r.get("payback_y") is not None else float("inf")
+
+
 def _variant_dominates(a: dict, b: dict) -> bool:
     """True ak varianta `a` dominuje variantu `b` — aspoň rovnako dobrá vo všetkom
     (CAPEX nižší/rovnaký, NPV/IRR vyššie/rovnaké, návratnosť kratšia/rovnaká)
     a v aspoň jednom ukazovateli prísne lepšia."""
     at_least_as_good = (
         a["capex_eur"] <= b["capex_eur"] and a["npv_eur"] >= b["npv_eur"]
-        and a["irr_pct"] >= b["irr_pct"] and a["payback_y"] <= b["payback_y"]
+        and a["irr_pct"] >= b["irr_pct"] and _pb_rank(a) <= _pb_rank(b)
     )
     strictly_better = (
         a["capex_eur"] < b["capex_eur"] or a["npv_eur"] > b["npv_eur"]
-        or a["irr_pct"] > b["irr_pct"] or a["payback_y"] < b["payback_y"]
+        or a["irr_pct"] > b["irr_pct"] or _pb_rank(a) < _pb_rank(b)
     )
     return at_least_as_good and strictly_better
 
@@ -2065,13 +2215,13 @@ def _porovnanie_fallback_assessments(rows: list, mrk_kw: float) -> list:
     Dokument NIKDY nesmie odísť s prázdnou sekciou hodnotenia."""
     out = []
     best_npv = max(r["npv_eur"] for r in rows)
-    best_pb = min(r["payback_y"] for r in rows if r["payback_y"] > 0)
+    best_pb = min((r["payback_y"] for r in rows if r["payback_y"] is not None), default=None)
     lowest_capex = min(r["capex_eur"] for r in rows)
     for r in rows:
         pros, cons = [], []
         if r["npv_eur"] >= best_npv - 1:
             pros.append(f"Najvyšší čistý zisk za 20 rokov zo všetkých porovnávaných ponúk ({round(r['npv_eur']):,} €).".replace(",", " "))
-        if r["payback_y"] > 0 and r["payback_y"] <= best_pb + 0.05:
+        if r["payback_y"] is not None and r["payback_y"] <= best_pb + 0.05:
             pros.append(f"Najrýchlejšia návratnosť v porovnaní ({r['payback_y']:.1f} roka).")
         if r["capex_eur"] <= lowest_capex + 1:
             pros.append(f"Najnižšia vstupná investícia ({round(r['capex_eur']):,} €).".replace(",", " "))
@@ -2220,7 +2370,7 @@ def render_porovnanie(sb, analyza_id: str, variant_ids: list | None = None) -> d
     rows = []
     for v in picked:
         capex = float(v.get("capex_eur") or 0)
-        payback = float(v.get("result_payback_y_base") or 0)
+        payback = _payback_or_none(v.get("result_payback_y_base"))  # None = nevráti sa
         rows.append({
             "id": str(v.get("id")),
             "short_label": _short_variant_label(v.get("name"), client_name),
@@ -2236,7 +2386,7 @@ def render_porovnanie(sb, analyza_id: str, variant_ids: list | None = None) -> d
             "vyroba_mwh": float(v.get("result_vyroba_mwh") or 0),
             "export_mwh": float(v.get("result_export_mwh") or 0),
             "import_mwh": float(v.get("result_import_mwh") or 0),
-            "annual_saving_eur": (capex / payback) if payback > 0 else 0,
+            "annual_saving_eur": (capex / payback) if payback else 0,
             "is_selected": str(v.get("id")) == selected_id,
             "dominated_by": None,
         })
@@ -2249,7 +2399,9 @@ def render_porovnanie(sb, analyza_id: str, variant_ids: list | None = None) -> d
 
     viable = [r for r in rows if not r["dominated_by"]]
     pick_npv = max(viable, key=lambda r: r["npv_eur"])
-    pick_payback = min(viable, key=lambda r: r["payback_y"])
+    # „Najrýchlejšia návratnosť" len z variantov, ktoré sa vrátia; inak niet čo odporúčať zvlášť
+    _returning = [r for r in viable if r["payback_y"] is not None]
+    pick_payback = min(_returning, key=lambda r: r["payback_y"]) if _returning else pick_npv
     pick_npv["is_pick_npv"] = True
     same_winner = pick_npv["id"] == pick_payback["id"]
 
@@ -2307,7 +2459,7 @@ def render_porovnanie(sb, analyza_id: str, variant_ids: list | None = None) -> d
                 "capex_eur": round(r["capex_eur"]),
                 "npv_20r_eur": round(r["npv_eur"]),
                 "irr_pct": round(r["irr_pct"], 1),
-                "payback_y": round(r["payback_y"], 1),
+                "payback_y": round(r["payback_y"], 1) if r["payback_y"] is not None else "nevráti sa",
                 "samospotreba_pct": round(r["samosp_pct"], 1),
                 "rocna_vyroba_mwh": round(r["vyroba_mwh"], 1),
                 "export_mwh": round(r["export_mwh"], 1),
@@ -2333,14 +2485,14 @@ def render_porovnanie(sb, analyza_id: str, variant_ids: list | None = None) -> d
     if not context.get("ai_recommendation") or not context["ai_recommendation"].get("detail"):
         if same_winner:
             rec_detail = (f"Ponuka „{pick_npv['short_label']}“ má súčasne najvyšší čistý zisk za 20 rokov "
-                          f"({round(pick_npv['npv_eur']):,} €) aj najrýchlejšiu návratnosť ({pick_npv['payback_y']:.1f} r) — "
+                          f"({round(pick_npv['npv_eur']):,} €) aj najrýchlejšiu návratnosť ({_fmt_pb(pick_npv['payback_y'])}) — "
                           f"jednoznačná voľba v tomto porovnaní.").replace(",", " ")
         else:
             rec_detail = (f"Ponuka „{pick_npv['short_label']}“ prinesie za 20 rokov najvyšší čistý zisk "
-                          f"({round(pick_npv['npv_eur']):,} € pri návratnosti {pick_npv['payback_y']:.1f} r). "
+                          f"({round(pick_npv['npv_eur']):,} € pri návratnosti {_fmt_pb(pick_npv['payback_y'])}). "
                           f"Ak preferujete nižšiu vstupnú investíciu a najrýchlejší návrat peňazí, zvoľte "
                           f"„{pick_payback['short_label']}“ ({round(pick_payback['capex_eur']):,} €, návratnosť "
-                          f"{pick_payback['payback_y']:.1f} r).").replace(",", " ")
+                          f"{_fmt_pb(pick_payback['payback_y'])}).").replace(",", " ")
         context["ai_recommendation"] = {"title": "Odporúčanie Energovision", "detail": rec_detail}
 
     pdf_bytes = generate_porovnanie_pdf(context)
@@ -2852,10 +3004,10 @@ def _generate_chocosuc_ai(ctx: dict) -> dict:
                      "self_use_mwh": round(ctx.get("self_use_mwh") or 0, 1),
                      "export_mwh": round(ctx.get("export_mwh") or 0, 1),
                      "import_mwh": round(ctx.get("grid_import_mwh") or 0, 0)},
-        "scenare": [{"nazov": x["name"], "uspora_eur_rok": round(x["save_total"]), "navratnost_r": round(x["payback"], 1),
+        "scenare": [{"nazov": x["name"], "uspora_eur_rok": round(x["save_total"]), "navratnost_r": (round(x["payback"], 1) if x["payback"] is not None else "nevráti sa"),
                      "npv20_eur": round(x["npv"]), "irr_pct": round(x["irr"], 1)} for x in S],
         "ekonomika": {"capex_eur": round(ctx.get("capex_total_eur") or 0),
-                      "navratnost_r": round(full["payback"], 1), "npv20_eur": round(full["npv"]),
+                      "navratnost_r": (round(full["payback"], 1) if full["payback"] is not None else "nevráti sa"), "npv20_eur": round(full["npv"]),
                       "irr_pct": round(full["irr"], 1), "mc_prob_npv_kladne_pct": round(ctx.get("mc_prob_pos", 0) * 100),
                       "mc_p10_eur": round(ctx.get("mc_p10") or 0), "mc_p90_eur": round(ctx.get("mc_p90") or 0),
                       "danovy_stit_rok_eur": round(full.get("annual_tax", 0))},
@@ -2880,10 +3032,10 @@ def _generate_chocosuc_ai(ctx: dict) -> dict:
         # deterministický fallback — summary (ekonomický) ≠ expert (technicko-rizikový)
         e = facts["ekonomika"]
         summ = (ctx.get("balance_narrative","") +
-                f"<p>Ekonomicky vychádza investícia priaznivo vo všetkých troch scenároch: ročná úspora "
-                f"{bza['save_total']:,.0f} € (báza) až {full['save_total']:,.0f} € (plný scenár), návratnosť {e['navratnost_r']} r, "
-                f"NPV 20 r. {e['npv20_eur']:,.0f} € a IRR {e['irr_pct']} %. Monte Carlo potvrdzuje kladné NPV s pravdepodobnosťou "
-                f"{e['mc_prob_npv_kladne_pct']} %.</p>").replace(",", " ")
+                f"<p>{ctx.get('recommendation_line', '')} "
+                + (f"Ročná úspora {bza['save_total']:,.0f} € (báza) až {full['save_total']:,.0f} € (plný scenár), "
+                   f"NPV 20 r. {e['npv20_eur']:,.0f} € a IRR {e['irr_pct']} %. Pravdepodobnosť kladného NPV (Monte Carlo) "
+                   f"{e['mc_prob_npv_kladne_pct']} %.</p>").replace(",", " "))
         exp = (f"<p>Z technického hľadiska je navrhnutý variant {facts['fve_bess']['fve_kwp']:.0f} kWp primeraný profilu OM — "
                f"pri samospotrebe {facts['fve_bess']['samospotreba_pct']} % sa vyrobená energia využije takmer celá. "
                f"Rozhodujúce predpoklady sú špecifický výnos {facts['fve_bess']['specificky_vynos_kwh_kwp']} kWh/kWp (PVGIS) a "
@@ -2891,7 +3043,7 @@ def _generate_chocosuc_ai(ctx: dict) -> dict:
                f"<p>Citlivosť: medzi defenzívnym a optimistickým scenárom je rozpätie NPV {S[1]['npv']:,.0f} – {S[2]['npv']:,.0f} €. "
                f"Pred realizáciou odporúčam overiť finálnu tarifu (faktúra), podmienky pripojenia u prevádzkovateľa distribučnej "
                f"sústavy a presnú konštrukciu z cenovej ponuky.</p>").replace(",", " ")
-        recs = [("Realizovať navrhnutý variant", ctx.get("recommendation_line", ""))]
+        recs = [("Odporúčanie k navrhnutému variantu", ctx.get("recommendation_line", ""))]
         if not facts["ceny_realne_z_faktury"]:
             recs.append(("Doplniť faktúru za elektrinu", "Spresní silovú aj distribučnú cenu — posudok prejde z orientačného na presný."))
         if not facts["fve_bess"].get("bess_kwh"):
@@ -2962,9 +3114,25 @@ def _rich_variant_for_row(sb, analyza, row, econ_variants):
         return None
     if kwp <= 0:
         return None
+    # 1a) presne podľa DB id (uložené pri insert-e) — dva varianty rovnakej konfigurácie
+    #     s inou cenou (s/bez optimizérov) sa už nezamenia (audit 2026-10-24 F01)
+    _rid = str(row.get("id") or "")
+    for v in econ_variants or []:
+        if _rid and str(v.get("db_id") or "") == _rid:
+            rv = dict(v)
+            rv["id"] = row.get("id")
+            return rv
+    # 1b) staršie full_response bez db_id: konfigurácia + CAPEX musia sedieť
+    try:
+        _row_cap = float(row.get("capex_eur") or 0)
+    except Exception:
+        _row_cap = 0.0
     for v in econ_variants or []:
         try:
-            if abs(float(v.get("pv_kwp") or 0) - kwp) < 0.51 and abs(float(v.get("bess_kwh") or 0) - bess) < 1.01:
+            if v.get("db_id"):
+                continue  # patrí inému riadku
+            if abs(float(v.get("pv_kwp") or 0) - kwp) < 0.51 and abs(float(v.get("bess_kwh") or 0) - bess) < 1.01 \
+                    and (_row_cap <= 0 or abs(float(v.get("capex_total_eur") or 0) - _row_cap) < 1.0):
                 rv = dict(v)
                 rv["id"] = row.get("id")
                 return rv
@@ -3156,7 +3324,7 @@ def aom_chat(sb, analyza_id: str, message: str, history=None) -> dict:
         '     "ac_kw": číslo|null,            // výkon meniča v kW ak ho zadal\n'
         '     "bess_kwh": číslo|0,\n'
         '     "orientation": "juh"|"vychod_zapad"|"carport"|"tracker"|null,\n'
-        '     "tilt_deg": číslo|null, "azimuth_deg": číslo|null,\n'
+        '     "tilt_deg": číslo|null, "azimuth_deg": číslo|null,  // azimut v konvencii 180 = juh, 90 = východ, 270 = západ, 0 = sever; ak používateľ píše 0 = juh / −90 = východ, prepočítaj +180\n'
         '     "capex_per_kwp_s_opt": číslo|null, "capex_per_kwp_bez_opt": číslo|null,\n'
         '     "capex_total_s_opt": číslo|null, "capex_total_bez_opt": číslo|null,\n'
         '     "compare_optimizers": true|false  // chce porovnať s optimizérmi a bez\n'
@@ -3219,12 +3387,16 @@ def aom_chat(sb, analyza_id: str, message: str, history=None) -> dict:
                     "carport": "carport", "tracker": "tracker"}
         if topo_raw and topo_map.get(topo_raw):
             upd["fve_topology"] = topo_map[topo_raw]
+        _az_warn = None
         for src, col in (("tilt_deg", "fve_tilt_deg"), ("azimuth_deg", "fve_azimuth_deg")):
             if spec.get(src) is not None:
                 try:
-                    upd[col] = float(spec[src])
+                    upd[col] = _azimut_engine(spec[src]) if col == "fve_azimuth_deg" else float(spec[src])
                 except Exception:
                     pass
+        if _azimut_je_sever(upd.get("fve_azimuth_deg")):
+            _az_warn = (f"Pozor: azimut {upd['fve_azimuth_deg']:g}° smeruje na sever (180° = juh, 90° = východ, "
+                        "270° = západ) — ak si myslel juh, napíš azimut 180.")
         if upd:
             try:
                 sb.table("analyza_om").update(upd).eq("id", analyza_id).execute()
@@ -3278,9 +3450,11 @@ def aom_chat(sb, analyza_id: str, message: str, history=None) -> dict:
         _f = lambda x: f"{round(float(x or 0)):,}".replace(",", " ")
         lines = [f"Spočítané presne podľa zadania (sklon {tp[0]:g}°, azimut {tp[1]:g}°, topológia {a.get('fve_topology') or 'south'}):"]
         for nm, r in results:
-            lines.append(f"• {nm}: cena diela {_f(r.get('capex_eur'))} €, NPV {_f(r.get('npv_eur'))} €, návratnosť {float(r.get('payback_y') or 0):.1f} r")
+            lines.append(f"• {nm}: cena diela {_f(r.get('capex_eur'))} €, NPV {_f(r.get('npv_eur'))} €, návratnosť {_fmt_pb(_payback_or_none(r.get('payback_y')))}")
         if adder_assumed:
             lines.append(f"(Cenu druhého variantu som odvodil prirážkou {OPT_ADDER_EUR_KWP:g} €/kWp za optimizéry — ak máš presnú cenu, napíš ju a prepočítam.)")
+        if _az_warn:
+            lines.append(_az_warn)
         lines.append("Varianty sú uložené v záložke Výsledky.")
         return {"ok": True, "intent": "exact_variant", "rerender": False, "refresh": True,
                 "reply": "\n".join(lines)}

@@ -27,7 +27,7 @@
 
   <div class="cover-pillars">
     <div class="pillar">
-      <div class="pillar-value">{{ payback_years|round(1) }}<span class="pillar-unit"> r</span></div>
+      <div class="pillar-value">{% if payback_years is not none %}{{ payback_years|round(1) }}<span class="pillar-unit"> r</span>{% else %}nevráti sa{% endif %}</div>
       <div class="pillar-label">návratnosť</div>
     </div>
     <div class="pillar">
@@ -116,7 +116,7 @@
         <div class="kpi-label">Ročné úspory</div>
       </div>
       <div class="kpi-cell">
-        <div class="kpi-value">{{ payback_years|round(1) }} <span class="kpi-unit">rokov</span></div>
+        <div class="kpi-value">{% if payback_years is not none %}{{ payback_years|round(1) }} <span class="kpi-unit">rokov</span>{% else %}nevráti sa{% endif %}</div>
         <div class="kpi-label">Návratnosť</div>
       </div>
       <div class="kpi-cell">
@@ -150,7 +150,7 @@
   </div>
   <div class="callout">
     <strong>Kumulovaný cash flow na konci {{ analysis_years }}. roka: {{ accumulated_cf_final|format_currency }}.</strong>
-    Investícia sa vráti v {{ payback_years|round(1) }}. roku prevádzky; po tomto bode generuje variant čistý zisk.
+    {% if payback_years is not none %}Investícia sa vráti v {{ payback_years|round(1) }}. roku prevádzky; po tomto bode generuje variant čistý zisk.{% else %}Investícia sa počas {{ analysis_years }} rokov nevráti — kumulovaný cash flow zostáva záporný.{% endif %}
   </div>
 </section>
 
@@ -275,7 +275,7 @@
         <td class="num">{{ dotacia_eur|format_currency }}</td>
         <td class="num">+{{ npv_eur|format_currency }}</td>
         <td class="num">{{ irr_pct|round(1) }} %</td>
-        <td class="num">{{ payback_years|round(1) }} r</td>
+        <td class="num">{{ payback_years|navratnost }}</td>
       </tr>
       {% for v in other_variants %}
       <tr>
@@ -286,7 +286,7 @@
         <td class="num">{{ v.dotacia_eur|format_currency }}</td>
         <td class="num">{{ v.npv_eur|format_currency }}</td>
         <td class="num">{{ v.irr_pct|default(0)|round(1) }} %</td>
-        <td class="num">{{ v.payback_simple_y|default(0)|round(1) }} r</td>
+        <td class="num">{{ v.payback_simple_y|navratnost }}</td>
       </tr>
       {% endfor %}
     </tbody>
@@ -325,7 +325,7 @@
         <td class="num">{{ sc.tarif_buy_eur_kwh|round(3) }} €/kWh</td>
         <td class="num">{{ sc.tarif_sell_eur_kwh|round(3) }} €/kWh</td>
         <td class="num">{{ sc.annual_save_eur|format_currency }}</td>
-        <td class="num">{{ sc.payback_years|round(1) }} r</td>
+        <td class="num">{{ sc.payback_years|navratnost }}</td>
         <td class="num">{{ sc.npv_eur|format_currency }}</td>
         <td class="num">{{ sc.irr_pct|round(1) }} %</td>
       </tr>
@@ -382,9 +382,9 @@
       </tr>
       <tr>
         <td>Návratnosť</td>
-        <td class="num">{{ payback_without_dotacia|round(1) }} r</td>
-        <td class="num">{{ payback_years|round(1) }} r</td>
-        <td class="num">−{{ (payback_without_dotacia - payback_years)|round(1) }} r</td>
+        <td class="num">{{ payback_without_dotacia|navratnost }}</td>
+        <td class="num">{{ payback_years|navratnost }}</td>
+        <td class="num">{% if payback_without_dotacia is not none and payback_years is not none %}−{{ (payback_without_dotacia - payback_years)|round(1) }} r{% else %}—{% endif %}</td>
       </tr>
       <tr>
         <td>NPV 20 r</td>
@@ -432,7 +432,7 @@
       <strong>Pri raste cien energie o {{ energy_inflation_pct }} % ročne:</strong> {{ inaction_infl3_20y|format_currency }} za 20 rokov — energia bez vlastného zdroja zdražuje každý rok.
     </div>
     <div class="zaver-item">
-      <strong>Investícia do riešenia:</strong> {{ net_capex_eur|format_currency }} (Net CAPEX). Návratnosť {{ payback_years|round(1) }} rokov — po tomto bode generuje riešenie čistú úsporu počas zvyšných {{ (analysis_years - payback_years)|round|int }} rokov životnosti.
+      <strong>Investícia do riešenia:</strong> {{ net_capex_eur|format_currency }} (Net CAPEX). {% if payback_years is not none %}Návratnosť {{ payback_years|round(1) }} rokov — po tomto bode generuje riešenie čistú úsporu počas zvyšných {{ (analysis_years - payback_years)|round|int }} rokov životnosti.{% else %}Investícia sa počas {{ analysis_years }} rokov životnosti nevráti.{% endif %}
     </div>
   </div>
 
@@ -497,7 +497,7 @@
       <strong>Ročná úspora roku 1:</strong> {{ saving_y1_eur|format_currency }} pri báze, citlivosť ±15 % podľa scenárov vyššie.
     </div>
     <div class="zaver-item">
-      <strong>Návratnosť:</strong> {{ payback_years|round(1) }} rokov{% if payback_without_dotacia and payback_without_dotacia > 0 %} (bez dotácie {{ payback_without_dotacia|round(1) }} r){% endif %}.
+      <strong>Návratnosť:</strong> {% if payback_years is not none %}{{ payback_years|round(1) }} rokov{% if payback_without_dotacia and payback_without_dotacia > 0 %} (bez dotácie {{ payback_without_dotacia|round(1) }} r){% endif %}{% else %}investícia sa nevráti{% endif %}.
     </div>
     <div class="zaver-item">
       <strong>NPV 20 r:</strong> {{ npv_eur|format_currency }} pri diskonte 6 %, IRR {{ irr_pct|round(1) }} %.

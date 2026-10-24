@@ -86,7 +86,7 @@ def chart_energy_balance(ctx):
     return _b64(fig)
 
 def chart_scenarios(ctx):
-    S=ctx["scenarios3"]; short=[s["short"] for s in S]; npv=[s["npv"] for s in S]; pb=[s["payback"] for s in S]; irr=[s["irr"] for s in S]
+    S=ctx["scenarios3"]; short=[s["short"] for s in S]; npv=[s["npv"] for s in S]; pb=[s["payback"] if s["payback"] is not None else float("nan") for s in S]; irr=[s["irr"] for s in S]
     fig,(a1,a2)=plt.subplots(1,2,figsize=(9,3.0)); x=np.arange(len(S)); cols=["#CBD5E1",GRID,GREEN][:len(S)]
     b=a1.bar(x,[v/1000 for v in npv],color=cols,width=0.62,zorder=3)
     for bb,v in zip(b,npv): a1.text(bb.get_x()+bb.get_width()/2,v/1000+max(npv)/1000*0.03,f"{v/1000:.0f} k€",ha="center",fontsize=9.5,weight="bold",color="#1E293B")
@@ -96,9 +96,9 @@ def chart_scenarios(ctx):
     a2.set_xticks(x); a2.set_xticklabels(short,fontsize=9.5); a2.set_ylabel("Návratnosť (r)",color=AMBER); a2b.set_ylabel("IRR (%)",color=GREEN)
     a2.grid(False); a2b.grid(False); a2.tick_params(length=0); a2b.tick_params(length=0); a2.spines["left"].set_visible(False); a2b.spines["right"].set_visible(False)
     bb=dict(boxstyle="round,pad=0.18",fc="white",ec="none",alpha=0.92)
-    for xi,v in zip(x,pb): a2.annotate(f"{v:.1f} r",(xi,v),textcoords="offset points",xytext=(0,-15),ha="center",fontsize=9,color="#D97706",weight="bold",bbox=bb,zorder=6)
+    for xi,v in zip(x,pb): a2.annotate((f"{v:.1f} r" if v==v else "nevráti sa"),(xi,v),textcoords="offset points",xytext=(0,-15),ha="center",fontsize=9,color="#D97706",weight="bold",bbox=bb,zorder=6)
     for xi,v in zip(x,irr): a2b.annotate(f"{v:.0f} %",(xi,v),textcoords="offset points",xytext=(0,11),ha="center",fontsize=9,color=GREEN,weight="bold",bbox=bb,zorder=6)
-    a2.set_ylim(0,max(pb)*1.55); a2b.set_ylim(0,max(irr)*1.45)
+    a2.set_ylim(0,max([v for v in pb if v==v] or [20])*1.55); a2b.set_ylim(0,max(irr)*1.45)
     return _b64(fig)
 
 def chart_cumcf(ctx):

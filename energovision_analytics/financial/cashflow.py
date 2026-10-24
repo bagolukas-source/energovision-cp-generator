@@ -101,7 +101,8 @@ class FinancialResult:
     lcos_eur_mwh: Optional[float] = None
 
     # Annual averages
-    annual_saving_y1_eur: float = 0.0
+    annual_saving_y1_eur: float = 0.0          # po korekčnom koeficiente = príjem roku 1 v cashflow
+    annual_saving_y1_raw_eur: float = 0.0      # pred koeficientom (surový výstup dispatchu)
     annual_saving_lifetime_avg_eur: float = 0.0
     total_lifetime_revenue_eur: float = 0.0
 
@@ -204,7 +205,9 @@ class CashflowBuilder:
             dotacia_eur=dotacia_eur,
             vat_refund_eur=vat_refund,
             capex_net_eur=net_capex,
-            annual_saving_y1_eur=annual_saving_y1_eur,
+            # A14: prezentovaná úspora na rovnakej báze ako cashflow (korekčný koeficient)
+            annual_saving_y1_eur=annual_saving_y1_eur * self.savings_coefficient,
+            annual_saving_y1_raw_eur=annual_saving_y1_eur,
         )
 
         tax_shield_schedule = sk_tax_shield_schedule(net_capex, self.dppo_pct, self.depr_years, self.has_sufficient_profit)
@@ -258,7 +261,8 @@ class CashflowBuilder:
             cy.cost_solar_opex = self.capex_solar * self.opex_solar_pct
             cy.cost_bess_opex = self.capex_bess * self.opex_bess_pct
             cy.cost_insurance = (self.capex_solar + self.capex_bess) * self.insurance_pct
-            cy.cost_monitoring = self.monitoring_eur_per_year
+            # A19: bez technológie (nulový CAPEX) niet čo monitorovať
+            cy.cost_monitoring = self.monitoring_eur_per_year if gross > 0 else 0.0
 
             # Replacement events
             if y == self.bess_inverter_replacement_year:

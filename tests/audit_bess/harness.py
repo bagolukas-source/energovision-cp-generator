@@ -1,6 +1,7 @@
 """Audit harness — priame volanie RuleBasedEMS.run_year s vlastným spotom."""
 import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "cpgen"))
+_REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+sys.path.insert(0, _REPO)
 
 import numpy as np
 import pandas as pd
@@ -14,7 +15,7 @@ from energovision_analytics.ems.rule_based import RuleBasedEMS
 from energovision_analytics.ems.dispatch_state import EMSConfig
 from energovision_analytics.tariff.retail_calculator import RetailCalculator
 
-SPOT_CSV = os.path.join(os.path.dirname(__file__), "..", "cpgen", "aom_data", "sk_spot_2025_hourly.csv")
+SPOT_CSV = os.environ.get("ENERGO_SPOT_CSV") or os.path.join(_REPO, "aom_data", "sk_spot_2025_hourly.csv")
 
 def real_spot():
     df = pd.read_csv(SPOT_CSV)
