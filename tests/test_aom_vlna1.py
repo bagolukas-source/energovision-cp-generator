@@ -178,6 +178,94 @@ def test_07_cp_capex_pod_150_kwp():
         v = _engine(rq, kwp, kwh)
         assert abs(v["capex_total_eur"] - price) < 1.0, (price, kwp, kwh, rq["capex"], v["capex_total_eur"])
 
+
+# ---------- e2e cez FakeSB: run_variants_premium → tabuľka → full_response → posudok ----------
+_AID = "aid-1"
+_A_E2E = {"id": _AID, "name": "Audit s.r.o.", "om_psc": "94901", "om_sadzba": "VN", "om_tarif_typ": "spot",
+          "om_mrk_kw": 400, "om_rk_kw": 300, "consumption_annual_mwh": 900, "scenario_type": "nova_fve",
+          "dotacia_enabled": False, "tarif_buy": 0.146, "tarif_sell": 0.06, "selected_variant_id": None,
+          "consumption_profile_path": None, "customers": None, "econ_results": None}
+
+
+def _sb(**kw):
+    sb = FakeSB()
+    sb.db["analyza_om"] = [dict(_A_E2E, **kw)]
+    sb.db["analyza_om_variants"] = []
+    return sb
+
+
+def _rows(sb):
+    return sorted(sb.db["analyza_om_variants"], key=lambda r: r.get("position") or 0)
+
+
+def _render_capture(sb, which):
+    """Spustí render_posudok_* s vypnutým PDF/DOCX a AI; vráti kontext, ktorý by išiel do PDF."""
+    import posudok_orkestra
+    import posudok_chocosuc.generator as cg
+    import posudok_chocosuc.generator_docx as cd
+    cap = {}
+    saved = (posudok_orkestra.generate_orkestra_pdf, cg.generate_chocosuc_pdf, cd.generate_chocosuc_docx)
+    posudok_orkestra.generate_orkestra_pdf = lambda ctx: cap.setdefault("ctx", ctx) and b"%PDF"
+    cg.generate_chocosuc_pdf = lambda ctx: cap.setdefault("ctx", ctx) and b"%PDF"
+    cd.generate_chocosuc_docx = lambda ctx: b"DOCX"
+    _key = os.environ.pop("ANTHROPIC_API_KEY", None)
+    try:
+        getattr(aom, f"render_posudok_{which}")(sb, _AID)
+    finally:
+        posudok_orkestra.generate_orkestra_pdf, cg.generate_chocosuc_pdf, cd.generate_chocosuc_docx = saved
+        if _key:
+            os.environ["ANTHROPIC_API_KEY"] = _key
+    return cap["ctx"]
+
+
+# ---------- 5) Variant z cenovej ponuky / aom-custom-variant prežije prepočet ----------
+def test_05_custom_variant_webhook_je_manual():
+    import ast
+    tree = ast.parse(open(os.path.join(ROOT, "app.py"), encoding="utf-8").read())
+    fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "webhook_aom_custom_variant")
+    call = next(n for n in ast.walk(fn) if isinstance(n, ast.Call)
+                and getattr(n.func, "attr", "") == "insert_variant_via_engine")
+    kw = {k.arg: k.value for k in call.keywords}
+    assert "capex_source" in kw and getattr(kw["capex_source"], "value", None) == "manual"
+
+
+def test_05_cp_variant_prezije_prepocet():
+    sb = _sb()
+    aom.run_variants_premium(sb, _AID)
+    # CP→Analýza: 280 kWp + 200 kWh za 252 000 € (audit F03), ako ho volá webhook
+    aom.insert_variant_via_engine(sb, _AID, "CP 280 kWp", 280, 200, 100, capex_per_kwp=(252000 - 200 * 318) / 280,
+                                  capex_per_kwh_bess=318, capex_source="manual")
+    aom.run_variants_premium(sb, _AID)
+    cp = [r for r in _rows(sb) if r["name"] == "CP 280 kWp"]
+    assert cp and abs(cp[0]["capex_eur"] - 252000) < 1.0, [(r["name"], r["capex_eur"]) for r in _rows(sb)]
+
+
+# ---------- 8) Posudok páruje variant podľa DB id; chat/UI varianty sú vo full_response ----------
+def test_08_posudok_paruje_podla_id_nie_konfiguracie():
+    sb = _sb()
+    aom.run_variants_premium(sb, _AID)
+    # chat „s/bez optimizérov": 2 varianty rovnakej konfigurácie, iná cena (audit F01/T3)
+    aom.insert_variant_via_engine(sb, _AID, "300 kWp — s optimizérmi", 300, 0, capex_per_kwp=700, capex_source="manual")
+    aom.insert_variant_via_engine(sb, _AID, "300 kWp — bez optimizérov", 300, 0, capex_per_kwp=650, capex_source="manual")
+    sel = next(r for r in _rows(sb) if r["name"] == "300 kWp — bez optimizérov")
+    sb.db["analyza_om"][0]["selected_variant_id"] = sel["id"]
+    for which in ("chocosuc", "orkestra"):
+        ctx = _render_capture(sb, which)
+        assert abs(float(ctx["capex_total_eur"]) - sel["capex_eur"]) < 1.0, (which, ctx["capex_total_eur"], sel["capex_eur"])
+
+
+def test_08_chat_variant_je_vo_full_response():
+    sb = _sb()
+    aom.run_variants_premium(sb, _AID)
+    r = aom.insert_variant_via_engine(sb, _AID, "310 kWp — podľa zadania", 310, 0, capex_per_kwp=620, capex_source="manual")
+    fr = sb.db["analyza_om"][0]["econ_results"]["full_response"]["variants"]
+    assert any(str(v.get("db_id")) == str(r["id"]) for v in fr), [v.get("db_id") for v in fr]
+    # Orkestra/Web vezme presne tento variant, nie najbližší maticový 300 kWp (audit F12/T14)
+    sb.db["analyza_om"][0]["selected_variant_id"] = r["id"]
+    ctx = _render_capture(sb, "orkestra")
+    assert abs(float(ctx["pv_kwp"]) - 310) < 0.01 and abs(float(ctx["capex_total_eur"]) - 310 * 620) < 1.0, (
+        ctx["pv_kwp"], ctx["capex_total_eur"])
+
 if __name__ == "__main__":
     import traceback
     fails = 0
