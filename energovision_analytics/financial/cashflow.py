@@ -260,7 +260,7 @@ class CashflowBuilder:
             # OPEX
             cy.cost_solar_opex = self.capex_solar * self.opex_solar_pct
             cy.cost_bess_opex = self.capex_bess * self.opex_bess_pct
-            cy.cost_insurance = (self.capex_solar + self.capex_bess) * self.insurance_pct
+            cy.cost_insurance = self.capex_solar * self.insurance_pct   # batéria bez poistenia (2026-10-24)
             # A19: bez technológie (nulový CAPEX) niet čo monitorovať
             cy.cost_monitoring = self.monitoring_eur_per_year if gross > 0 else 0.0
 

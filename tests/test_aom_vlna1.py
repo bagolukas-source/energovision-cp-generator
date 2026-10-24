@@ -420,6 +420,17 @@ def test_12_capex_split_nezmyselny_zvysok_povodne_pravidlo():
     assert aom._manual_capex_split(300000.0, 1000.0, 0, {}, []) == (300.0, None)
 
 
+def test_13_ziadne_naklady_ani_pokles_vynosu():
+    # rozhodnutie majiteľa 2026-10-24: hodnotí sa návratnosť investície — žiadna prevádzka, poistenie,
+    # monitoring, výmena meničov (FVE r. 13, batéria r. 12) ani pokles výnosu FVE/batérie
+    import numpy as np
+    kw = dict(price_escalation_pct=0, load_growth_pct_y=0)
+    for bess in (0, 200):
+        v = _engine(_req(**kw), 200, bess)
+        cf = np.array(v["cashflow_array"])
+        assert np.allclose(cf[7:], cf[7], atol=1.0), (bess, cf[7:])      # po odpisoch rovnaký každý rok
+        assert abs(cf[7] - v["saving_y1_eur"]) < 1.0, (bess, cf[7], v["saving_y1_eur"])  # = úspora, bez nákladov
+
 if __name__ == "__main__":
     import traceback
     fails = 0
