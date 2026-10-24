@@ -163,6 +163,38 @@ _FIELD_LABELS = {
 }
 
 
+def _manual_capex_split(cap: float, fve_kwp: float, bess_kwh: float, analyza: dict,
+                        manual_rows: list) -> tuple:
+    """Rozdelí celkový CAPEX ručného variantu na €/kWp (FVE) a €/kWh (BESS) pre prepočet.
+
+    DB drží len capex_eur, rozklad sa musí odvodiť. Predtým sa BESS oceňovala natvrdo
+    480 €/kWh a zvyšok dostala FVE (Röchling PON-26-1464: BESS 1,16 M€ namiesto 682 k€,
+    FVE 203 €/kWp) → nadsadené opotrebenie, OPEX a výmena meniča batérie.
+    Poradie: (1) FVE časť = CAPEX ručného variantu iba-FVE s rovnakým kWp (typicky ponuka
+    FVE vs FVE+BESS), (2) FVE podľa modelu _cp_capex (fix × škála + marginál), zvyšok BESS.
+    """
+    if bess_kwh <= 0:
+        return cap / fve_kwp, None
+    pv_part = None
+    for r in manual_rows or []:
+        try:
+            if (abs(float(r.get("fve_kwp") or 0) - fve_kwp) < 0.01 and float(r.get("bess_kwh") or 0) <= 0
+                    and 0 < float(r.get("capex_eur") or 0) < cap):
+                pv_part = float(r["capex_eur"])
+                break
+        except (TypeError, ValueError):
+            continue
+    if pv_part is None:
+        cp = _cp_capex(analyza)
+        scale = min(1.0, fve_kwp / 150.0)
+        pv_part = float(cp["capex_pv_fixed_eur"]) * scale + float(cp["capex_pv_eur_per_kwp"]) * fve_kwp
+    cpb = (cap - pv_part) / bess_kwh
+    if not 100.0 <= cpb <= 1500.0:
+        # nezmyselný zvyšok (napr. CAPEX nižší než model FVE) → pôvodné pravidlo, súčet sedí s cap
+        cpb = min(480.0, cap / bess_kwh)
+    return max(0.0, cap - bess_kwh * cpb) / fve_kwp, cpb
+
+
 def _human_error(err: Exception) -> str:
     """Chyba enginu tak, aby jej rozumel obchodník (pydantic → 'Pole X: hodnota … je mimo')."""
     try:
@@ -1161,13 +1193,7 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
                 _cpk = None
                 _cpb = None
                 if _cap > 0:
-                    if _bk > 0:
-                        # rozklad musí dať presne _cap: pri malom CAPEX (< 480×kWh) stlač BESS zložku,
-                        # nie PV na 0 — inak engine total nesedí so zadaním používateľa
-                        _cpb = min(480.0, _cap / _bk)
-                        _cpk = max(0.0, _cap - _bk * _cpb) / _fk
-                    else:
-                        _cpk = _cap / _fk
+                    _cpk, _cpb = _manual_capex_split(_cap, _fk, _bk, analyza, _manual_keep)
                 _mres = insert_variant_via_engine(sb, analyza_id, _mv.get("name") or "Vlastný variant",
                                           _fk, _bk, _mv.get("bess_kw"),
                                           capex_per_kwp=_cpk, capex_per_kwh_bess=_cpb,

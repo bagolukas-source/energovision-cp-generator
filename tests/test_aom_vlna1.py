@@ -393,6 +393,33 @@ def test_11_azimut_zaporny_variant_nezmizne():
     v = _engine(_req(fve_azimuth_deg=-45), 200, 0)
     assert v["pv_kwp"] == 200 and v["energy_flow"]["pv_total_mwh"] > 150
 
+
+# Röchling PON-26-1463 (FVE) / PON-26-1464 (FVE+BESS): prepočet ručného variantu ocenil BESS
+# natvrdo 480 €/kWh (1,16 M€ namiesto 682 k€) → nadsadené opotrebenie, OPEX a výmena meniča.
+_ROCH_FVE = {"fve_kwp": 1114.94, "bess_kwh": 0, "capex_eur": 700853.18}
+_ROCH_BESS = {"fve_kwp": 1114.94, "bess_kwh": 2410, "capex_eur": 1383340.68}
+
+
+def test_12_capex_split_zo_suroden_variantu_fve():
+    cpk, cpb = aom._manual_capex_split(1383340.68, 1114.94, 2410, {}, [_ROCH_FVE, _ROCH_BESS])
+    assert abs(cpb * 2410 - 682487.50) < 0.01 and abs(cpk * 1114.94 - 700853.18) < 0.01
+    assert abs(cpk * 1114.94 + cpb * 2410 - 1383340.68) < 0.01
+
+
+def test_12_capex_split_bez_suroden_variantu_model_fve():
+    cpk, cpb = aom._manual_capex_split(1383340.68, 1114.94, 2410, {}, [_ROCH_BESS])
+    pv_model = 38000.0 + 574.0 * 1114.94                      # _cp_capex "real", nad 150 kWp plný fix
+    assert abs(cpk * 1114.94 - pv_model) < 0.01 and 250 < cpb < 320   # nie natvrdo 480 €/kWh
+    assert abs(cpk * 1114.94 + cpb * 2410 - 1383340.68) < 0.01
+
+
+def test_12_capex_split_nezmyselny_zvysok_povodne_pravidlo():
+    # CAPEX nižší než model FVE → zvyšok pre BESS záporný → pôvodné min(480, cap/kWh), súčet sedí
+    cpk, cpb = aom._manual_capex_split(300000.0, 1000.0, 500, {}, [])
+    assert cpb == 480.0 and abs(cpk * 1000 + cpb * 500 - 300000.0) < 0.01
+    assert aom._manual_capex_split(300000.0, 1000.0, 0, {}, []) == (300.0, None)
+
+
 if __name__ == "__main__":
     import traceback
     fails = 0
