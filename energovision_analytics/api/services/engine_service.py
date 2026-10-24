@@ -26,6 +26,11 @@ from energovision_analytics.variants import VariantGenerator, pick_top_variants
 log = get_logger(__name__)
 
 
+def _num_or(v, default: float) -> float:
+    """float(v), default LEN pri None/"" — 0 je platná hodnota (výkup 0 €, diskont 0)."""
+    return float(default) if v is None or v == "" else float(v)
+
+
 def _calendar_align(load_kw, spot, ts, n_max: int = 8760):
     """Zarovná load na kalendárny rok pred POZIČNÝM párovaním s PV a spotom.
 
@@ -230,9 +235,9 @@ def run_variants_pipeline(request_dict: dict, progress_cb=None) -> dict:
         price_escalation_pct=fin.get("price_escalation_pct", 0.0),
         savings_coefficient=fin.get("savings_coefficient", 1.0),
         has_sufficient_profit=fin.get("has_sufficient_profit", True),
-        export_price_eur_kwh=float(request_dict.get("export_price_eur_kwh") or 0.06),
+        export_price_eur_kwh=_num_or(request_dict.get("export_price_eur_kwh"), 0.06),
         export_mode=str((request_dict.get("export_config") or {}).get("mode") or "fix"),
-        export_spot_diskont_eur_mwh=float((request_dict.get("export_config") or {}).get("spot_diskont_eur_mwh") or 10.0),
+        export_spot_diskont_eur_mwh=_num_or((request_dict.get("export_config") or {}).get("spot_diskont_eur_mwh"), 10.0),
         spot_koeficient=float((request_dict.get("tariff_overrides") or {}).get("spot_koeficient") or 1.0),
         merchant_mode=bool(v.get("merchant_mode", False)),
         merchant_organizer_fee_pct=float(v.get("merchant_organizer_fee_pct", 15.0)),
@@ -328,7 +333,7 @@ def run_variants_pipeline(request_dict: dict, progress_cb=None) -> dict:
             "mrk_kapacita_eur_kw_mes": round(float(_t.mrk_kapacita_eur_mw_mes) / 1000.0, 3),
             "rk_kapacita_eur_kw_mes": round(float(_t.rk_kapacita_eur_mw_mes) / 1000.0, 3),
             "mrk_export_penalty_eur_mwh": round(float(_t.mrk_export_penalty_eur_kwh) * 1000, 2),
-            "export_price_eur_mwh": round(float(request_dict.get("export_price_eur_kwh") or 0.06) * 1000, 2),
+            "export_price_eur_mwh": round(_num_or(request_dict.get("export_price_eur_kwh"), 0.06) * 1000, 2),
         }
     except Exception as _e:  # tarify sú „nice to have" — nesmú zhodiť celý beh
         log.warning("tariff_detail sa nepodarilo zostaviť: %s", _e)
@@ -501,7 +506,9 @@ def build_run_variants_response(
             "bess_kwh": r.bess_kwh,
             "bess_kw": r.bess_kw,
             "ems_strategy": r.ems_strategy,
-            "capex_pv_eur": r.pv_kwp * r.capex_pv_eur_per_kwp,
+            # FVE časť = celok − batéria → obsahuje aj fixnú zložku (projekt, pripojenie);
+            # rozpis PV + BESS tak vždy sedí na capex_total (audit 2026-10-24 F19)
+            "capex_pv_eur": r.capex_total_eur - r.bess_kwh * r.capex_bess_eur_per_kwh,
             "capex_bess_eur": r.bess_kwh * r.capex_bess_eur_per_kwh,
             "capex_total_eur": r.capex_total_eur,
             "dotacia_eur": r.dotacia_eur,
@@ -617,9 +624,9 @@ def export_variant_intervals(request_dict: dict, pv_kwp: float, bess_kwh: float,
         count_battery_replacement=bool(fin.get("count_battery_replacement", False)),
         price_escalation_pct=fin.get("price_escalation_pct", 0.0), savings_coefficient=fin.get("savings_coefficient", 1.0),
         has_sufficient_profit=fin.get("has_sufficient_profit", True),
-        export_price_eur_kwh=float(request_dict.get("export_price_eur_kwh") or 0.06),
+        export_price_eur_kwh=_num_or(request_dict.get("export_price_eur_kwh"), 0.06),
         export_mode=str((request_dict.get("export_config") or {}).get("mode") or "fix"),
-        export_spot_diskont_eur_mwh=float((request_dict.get("export_config") or {}).get("spot_diskont_eur_mwh") or 10.0),
+        export_spot_diskont_eur_mwh=_num_or((request_dict.get("export_config") or {}).get("spot_diskont_eur_mwh"), 10.0),
         spot_koeficient=float((request_dict.get("tariff_overrides") or {}).get("spot_koeficient") or 1.0),
         merchant_mode=bool(v.get("merchant_mode", False)),
         merchant_organizer_fee_pct=float(v.get("merchant_organizer_fee_pct", 15.0)),

@@ -114,6 +114,70 @@ def test_02_chocosuc_sadzba_z_analyzy():
     assert _chocosuc(dict(_V_NEVRATI), om_sadzba="vn")["om_sadzba"] == "VN"
 
 
+# ---------- spoločné: request z DB riadku → engine ----------
+_A_ENGINE = {"name": "Test OM", "om_psc": "949 01", "om_sadzba": "VN", "consumption_annual_mwh": 600,
+             "om_mrk_kw": 400, "om_rk_kw": 300, "om_tarif_typ": "fix"}
+
+
+def _req(**kw):
+    return aom._build_request_from_analyza(dict(_A_ENGINE, **kw))
+
+
+def _engine(rq, pv, bess, merchant=False):
+    from energovision_analytics.api.services.engine_service import (
+        run_variants_pipeline, build_run_variants_response)
+    rq["variants"]["pv_kwp_options"] = [pv]
+    rq["variants"]["bess_kwh_options"] = [bess]
+    rq["variants"]["merchant_mode"] = merchant
+    return build_run_variants_response(run_variants_pipeline(rq))["variants"][0]
+
+
+# ---------- 3) Falošné nuly: 0 je platná hodnota, nie „chýba" ----------
+def test_03_request_nuly_ostanu_nulou():
+    r = _req(tarif_sell=0, merchant_organizer_fee_pct=0, arb_min_spread_eur_mwh=0,
+             mrk_export_penalty_eur_kwh=0, om_tarif_typ="spot", vykup_spot_diskont_eur_mwh=0)
+    assert r["export_price_eur_kwh"] == 0.0
+    assert r["variants"]["merchant_organizer_fee_pct"] == 0.0
+    assert r["ems_config"]["arb_min_spread_eur_mwh"] == 0.0
+    assert r["ems_config"]["mrk_export_penalty_eur_kwh"] == 0.0
+    assert r["export_config"]["spot_diskont_eur_mwh"] == 0.0
+    # chýbajúca hodnota → default
+    r = _req()
+    assert r["export_price_eur_kwh"] == 0.06 and r["variants"]["merchant_organizer_fee_pct"] == 15.0
+
+
+def test_03_engine_vykup_0_nezarobi():
+    v = _engine(_req(tarif_sell=0, max_export_kw=None), 300, 0)
+    assert v["value_streams"]["solar_export_eur"] == 0.0, v["value_streams"]
+
+
+def test_03_pv_only_export_zakazany_mrk_0():
+    # max_export_kw = 0 (pretoky zakázané) → PV-only baseline nesmie exportovať (audit E05/GPT A02)
+    v = _engine(_req(max_export_kw=0), 300, 0)
+    assert v["value_streams"]["solar_export_eur"] == 0.0, v["value_streams"]
+
+
+def test_03_merchant_export_zakazany_mrk_0():
+    # merchant pri zakázanom exporte nesmie predávať do siete (audit M2: 42 357 €/r fiktívne)
+    v = _engine(_req(max_export_kw=0, om_tarif_typ="spot"), 0, 500, merchant=True)
+    assert float(v.get("merchant_eur") or v["value_streams"].get("merchant_eur") or 0) <= 1.0, v["value_streams"]
+
+
+# ---------- 4) capex_pv_eur obsahuje fixnú zložku ----------
+def test_04_rozpis_capex_sedi_na_celok():
+    v = _engine(_req(), 300, 200)
+    assert abs(v["capex_pv_eur"] + v["capex_bess_eur"] - v["capex_total_eur"]) < 0.01, (
+        v["capex_pv_eur"], v["capex_bess_eur"], v["capex_total_eur"])
+    assert v["capex_pv_eur"] > 300 * 574  # vrátane fixu 38 000 €
+
+
+# ---------- 7) Konfigurácia z cenovej ponuky = cena ponuky aj pod 150 kWp ----------
+def test_07_cp_capex_pod_150_kwp():
+    for price, kwp, kwh in [(200000, 100, 100), (120000, 120, 0), (95000, 60, 50), (180000, 250, 200)]:
+        rq = _req(cp_price_eur=price, cp_kwp=kwp, cp_bess_kwh=kwh)
+        v = _engine(rq, kwp, kwh)
+        assert abs(v["capex_total_eur"] - price) < 1.0, (price, kwp, kwh, rq["capex"], v["capex_total_eur"])
+
 if __name__ == "__main__":
     import traceback
     fails = 0

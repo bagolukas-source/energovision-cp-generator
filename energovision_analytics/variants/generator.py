@@ -187,7 +187,7 @@ class VariantGenerator:
         self.price_escalation_pct = price_escalation_pct or 0.0
         self.savings_coefficient = savings_coefficient if (savings_coefficient and savings_coefficient > 0) else 1.0
         self.has_sufficient_profit = bool(has_sufficient_profit)
-        self.export_price = float(export_price_eur_kwh) if export_price_eur_kwh else 0.06
+        self.export_price = float(export_price_eur_kwh) if export_price_eur_kwh is not None else 0.06
         # Výkup prebytkov: "fix" = pevná cena vyššie, "spot_minus" = max(0, spot − diskont)
         self.export_mode = str(export_mode or "fix")
         self.export_spot_diskont = float(export_spot_diskont_eur_mwh or 0.0)
@@ -403,7 +403,9 @@ class VariantGenerator:
             # Fallback: predpokladaj, že prípojka zvládne aspoň výkon batérie — inak batéria „zmizne" z posudku.
             if _rk_kw <= 0:
                 _rk_kw = _power_kw
-            if _export_kw <= 0:
+            # export 0 = pretoky zakázané → merchant nesmie predávať do siete (audit 2026-10-24 M2/E05);
+            # fallback na výkon batérie len keď limit vôbec nie je zadaný
+            if self.site.mrk_kw is None and _export_kw <= 0:
                 _export_kw = _power_kw
             _dt_h = 1.0
             try:
@@ -584,8 +586,10 @@ class VariantGenerator:
             pv_to_grid = pv_to_grid.copy()
             pv_to_grid[_neg] = 0.0
             # parita aj pre MRK clip exportu (BESS vetva clipuje na mrk_kw — baseline musí tiež)
-            _mrk_lim = float(self.site.mrk_kw or 0.0)
-            if _mrk_lim > 0:
+            # mrk_kw = 0 znamená export zakázaný (rovnako ako BESS vetva), nie „bez limitu"
+            _mrk_lim = self.site.mrk_kw
+            if _mrk_lim is not None:
+                _mrk_lim = float(_mrk_lim)
                 _over = np.maximum(pv_to_grid - _mrk_lim, 0.0)
                 _curtailed += float(_over.sum())
                 pv_to_grid = np.minimum(pv_to_grid, _mrk_lim)

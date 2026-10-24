@@ -88,6 +88,18 @@ def _measured_load_profile_block(sb, analyza):
         log.warning(f"[measured_profile] spracovanie zlyhalo ({path}): {e}")
         return None
 
+def _num(d: dict, key: str, default: float) -> float:
+    """Číselné pole z DB riadku; default LEN pri chýbajúcej hodnote — 0 je platná voľba
+    (výkup 0 €, poplatok 0 %, diskont 0). `x or default` nulu prepisoval (audit 2026-10-24 V13)."""
+    v = d.get(key)
+    if v is None or v == "":
+        return float(default)
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return float(default)
+
+
 def _cp_capex(analyza: dict) -> dict:
     """CAPEX pre engine — REÁLNE jednotkové ceny z ponúk Energovision (2026).
 
@@ -114,14 +126,19 @@ def _cp_capex(analyza: dict) -> dict:
         cpK = float(analyza.get("cp_kwp") or 0)
         cpB = float(analyza.get("cp_bess_kwh") or 0)
         if cpP > 0 and cpK > 0:
+            # Engine fixnú zložku pod 150 kWp škáluje ×kWp/150 (VariantGenerator._capex_pv_fixed_for).
+            # Aby konfigurácia z ponuky vyšla presne na cenu ponuky, vrátime plný fix = potrebný / škála
+            # (audit 2026-10-24 V03: 100 kWp / 200 k€ dávalo 163 067 €).
+            from energovision_analytics.variants.generator import VariantGenerator
+            scale = min(1.0, cpK / VariantGenerator.CAPEX_FIX_FULL_KWP)
             fix = cpP - cpK * PV_MARG - cpB * BESS_RATE
             if FIX_MIN <= fix <= FIX_MAX:
                 return {"mode": "cp_kalibrovany", "capex_pv_eur_per_kwp": PV_MARG,
-                        "capex_pv_fixed_eur": round(fix, 2),
+                        "capex_pv_fixed_eur": round(fix / scale, 2),
                         "capex_bess_eur_per_kwh": BESS_RATE}
             # Fix mimo pásma → ponuka má inú štruktúru (pozemná stavba, VN prípojka,
             # veľkoobjemová zľava). Prepočítame marginál pri štandardnom fixe.
-            marg = (cpP - PV_FIXED_DEFAULT - cpB * BESS_RATE) / cpK
+            marg = (cpP - PV_FIXED_DEFAULT * scale - cpB * BESS_RATE) / cpK
             if 300.0 <= marg <= 1500.0:
                 return {"mode": "cp_kalibrovany_marginal",
                         "capex_pv_eur_per_kwp": round(marg, 2),
@@ -229,10 +246,7 @@ def _export_config(analyza: dict) -> dict:
     mode = (analyza.get("vykup_model") or "").strip().lower()
     if mode not in ("fix", "spot_minus"):
         mode = "spot_minus" if (analyza.get("om_tarif_typ") or "spot").lower() == "spot" else "fix"
-    try:
-        disk = float(analyza.get("vykup_spot_diskont_eur_mwh") or 10.0)
-    except (TypeError, ValueError):
-        disk = 10.0
+    disk = _num(analyza, "vykup_spot_diskont_eur_mwh", 10.0)
     return {"mode": mode, "spot_diskont_eur_mwh": max(0.0, disk)}
 
 
@@ -444,7 +458,7 @@ def _build_request_from_analyza(analyza: dict, measured_block: dict = None) -> d
             # Merchant režim — batéria ako podpora bilančnej skupiny (grid-to-grid arbitráž
             # plnou paľbou, nie samospotreba). Default OFF.
             "merchant_mode": bool(analyza.get("merchant_mode", False)),
-            "merchant_organizer_fee_pct": float(analyza.get("merchant_organizer_fee_pct") or 15.0),
+            "merchant_organizer_fee_pct": _num(analyza, "merchant_organizer_fee_pct", 15.0),
             # Bez stropu cyklov: batéria obchoduje koľko zvládne výkon, RK a max export.
             # Predtým bol v merchant module natvrdo 1 cyklus denne a limit z UI sa ignoroval.
             "merchant_unlimited_cycles": bool(analyza.get("merchant_unlimited_cycles", False)),
@@ -476,12 +490,12 @@ def _build_request_from_analyza(analyza: dict, measured_block: dict = None) -> d
             "scheme_id": analyza.get("dotacia_scheme") or "zelena_podnikom",
         },
         "ems_config": {
-            "arb_min_spread_eur_mwh": float(analyza.get("arb_min_spread_eur_mwh") or 30),
+            "arb_min_spread_eur_mwh": _num(analyza, "arb_min_spread_eur_mwh", 30),
             "max_efc_per_year": float(analyza.get("max_efc_per_year") or 1000),
             "negative_spot_curtail": bool(analyza.get("negative_spot_curtail", True)),
-            "mrk_export_penalty_eur_kwh": float(analyza.get("mrk_export_penalty_eur_kwh") or 0.03),
+            "mrk_export_penalty_eur_kwh": _num(analyza, "mrk_export_penalty_eur_kwh", 0.03),
         },
-        "export_price_eur_kwh": float(analyza.get("tarif_sell") or 0.06),
+        "export_price_eur_kwh": _num(analyza, "tarif_sell", 0.06),
         "export_config": _export_config(analyza),
         "tariff_overrides": {
             "obchodnik_eur_mwh": analyza.get("tarif_obchodnik_eur_mwh"),
