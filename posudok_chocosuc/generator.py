@@ -19,6 +19,11 @@ def _logo_b64():
 def eur(v):
     try: return f"{float(v):,.0f} €".replace(","," ")
     except Exception: return "—"
+def pbt(v):
+    """Návratnosť: None/99 (sentinel) → „nevráti sa"."""
+    try: f=float(v)
+    except Exception: return "nevráti sa"
+    return f"{num(f,1)} r" if 0 < f < 99 else "nevráti sa"
 def num(v,d=0):
     try: return (f"{float(v):,.{d}f}").replace(","," ").replace(".",",")
     except Exception: return "—"
@@ -292,8 +297,8 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
   <div style="font-size:11pt; color:#374151;">FVE {num(ctx.get('fve_kwp'),0)} kWp{(' + BESS '+num(ctx.get('bess_kwh'),0)+' kWh') if ctx.get('bess_kwh') else ''}</div>
   <div style="font-size:9pt; color:#9CA3AF; font-style:italic; margin-top:8px;">{ctx.get('cover_subtitle','Analýza odberu, simulácia výroby a ekonomické posúdenie v 3 scenároch s rizikovou analýzou.')}</div>
   <div style="display:flex; gap:36px; margin-top:30px; align-items:flex-end;">
-    <div><div class="kick">Čistý prínos · NPV 20 r.</div><div style="font-size:32pt; font-weight:bold; color:#5E8E2A; line-height:1.0;">+{eur(full['npv'])}</div></div>
-    <div><div class="kick">Návratnosť</div><div style="font-size:32pt; font-weight:bold; color:#1A1A1A; line-height:1.0;">{num(full['payback'],1)} r</div></div>
+    <div><div class="kick">Čistý prínos · NPV 20 r.</div><div style="font-size:32pt; font-weight:bold; color:{'#5E8E2A' if full['npv']>0 else '#B91C1C'}; line-height:1.0;">{'+' if full['npv']>0 else ''}{eur(full['npv'])}</div></div>
+    <div><div class="kick">Návratnosť</div><div style="font-size:32pt; font-weight:bold; color:#1A1A1A; line-height:1.0;">{pbt(full['payback'])}</div></div>
     <div><div class="kick">IRR</div><div style="font-size:32pt; font-weight:bold; color:#1A1A1A; line-height:1.0;">{num(full['irr'],0)} %</div></div>
   </div>
   <div class="two" style="margin-top:40px;">
@@ -318,7 +323,7 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
   <div class="kpis">
     <div class="kpi"><div class="l">Investícia</div><div class="v">{eur(ctx.get('capex_total_eur'))}</div><div class="n">bez DPH</div></div>
     <div class="kpi"><div class="l">Ročný prínos · rok 1</div><div class="v">{num(bza['save_total']/1000,0)}–{num(opti['save_total']/1000,0)} tis. €</div><div class="n">báza → optimistický</div></div>
-    <div class="kpi"><div class="l">Návratnosť</div><div class="v">{num(opti['payback'],1)}–{num(bza['payback'],1)} r</div><div class="n">s daňovým odpisom</div></div>
+    <div class="kpi"><div class="l">Návratnosť</div><div class="v">{(num(opti['payback'],1)+'–'+num(bza['payback'],1)+' r') if (opti['payback'] and bza['payback']) else pbt(opti['payback'])}</div><div class="n">s daňovým odpisom</div></div>
     <div class="kpi"><div class="l">IRR · NPV</div><div class="v">{num(full['irr'],0)} %</div><div class="n">NPV {eur(full['npv'])}</div></div>
   </div>
   <div class="kick" style="margin-top:10px;">Čo získate</div>
@@ -414,7 +419,7 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
   <h2 style="margin-top:8px;">Tri scenáre prínosu</h2>
   <div class="narr">{ctx.get('scenarios_intro_html','')}</div>
   <table>{trow(["Scenár","Úspora €/r","Návratnosť","NPV 20 r.","IRR"],head=True,align=['l','r','r','r','r'])}
-    {"".join(trow([s['name'],eur(s['save_total']),f"{num(s['payback'],1)} r",eur(s['npv']),f"{num(s['irr'],1)} %"],em=("em" if s is full else None)) for s in S)}
+    {"".join(trow([s['name'],eur(s['save_total']),pbt(s['payback']),eur(s['npv']),f"{num(s['irr'],1)} %"],em=("em" if s is full else None)) for s in S)}
   </table>
   <div class="scenexpl">{"".join(f'<div class="rec"><b>{nm}</b><span>{tx}</span></div>' for nm,tx in ctx.get('scenarios_bullets',[]))}</div>
   <div class="kick">Štruktúra investície</div>

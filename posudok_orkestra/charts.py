@@ -407,8 +407,9 @@ def chart_payback_ranking(
     ax.set_yticklabels(names_o, fontsize=8.5)
     ax.invert_yaxis()  # najrýchlejšia hore
     max_pb = max(payback_o) if payback_o else 1
-    for yi, v in zip(y, payback_o):
-        ax.text(v + max_pb * 0.015, yi, f"{v:.1f} r", va="center", fontsize=8.5, color=COLOR_TEXT)
+    for yi, i, v in zip(y, order, payback_o):
+        _lbl = f"{v:.1f} r" if payback[i] is not None else "nevráti sa"
+        ax.text(v + max_pb * 0.015, yi, _lbl, va="center", fontsize=8.5, color=COLOR_TEXT)
     ax.set_xlabel("Návratnosť (roky) — kratšia je lepšia", fontsize=9, color=COLOR_TEXT)
     ax.spines["left"].set_visible(False)
     ax.tick_params(left=False)

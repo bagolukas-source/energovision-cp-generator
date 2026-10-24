@@ -112,6 +112,17 @@ class _SafeUndefined(Undefined):
     def __ge__(self, o): return 0 >= o if isinstance(o,(int,float)) else False
 
 
+def _format_navratnost(value, unit: str = " r") -> str:
+    """Návratnosť pre šablóny: None / ≥ 99 (sentinel enginu) / ≤ 0 → „nevráti sa"."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return "nevráti sa"
+    if not (0 < v < 99):
+        return "nevráti sa"
+    return f"{v:.1f}{unit}"
+
+
 def _make_env() -> Environment:
     env = Environment(
         loader=FileSystemLoader(str(_TEMPLATES_DIR)),
@@ -120,6 +131,7 @@ def _make_env() -> Environment:
     )
     env.filters["format_currency"] = _format_currency
     env.filters["format_kwh"] = _format_kwh
+    env.filters["navratnost"] = _format_navratnost
     return env
 
 
@@ -162,7 +174,7 @@ def _build_context(user_ctx: dict[str, Any]) -> dict[str, Any]:
         "dotacia_eur": 0,
         "net_capex_eur": 0,
         "saving_y1_eur": 0,
-        "payback_years": 0,
+        "payback_years": None,
         "irr_pct": 0,
         "npv_eur": 0,
         "label": "Variant",
@@ -200,7 +212,7 @@ def _build_context(user_ctx: dict[str, Any]) -> dict[str, Any]:
         "dotacia_max_eur": 50000,
         "dotacia_intensity_pct": 45,
         # Porovnanie s/bez dotácie (vplyv dotácie sekcia)
-        "payback_without_dotacia": 0,
+        "payback_without_dotacia": None,
         "npv_without_dotacia": 0,
         "irr_without_dotacia": 0,
 
@@ -372,7 +384,7 @@ def _build_porovnanie_context(user_ctx: dict[str, Any]) -> dict[str, Any]:
     names = [r["short_label"] for r in rows]
     capex = [float(r.get("capex_eur") or 0) for r in rows]
     npv = [float(r.get("npv_eur") or 0) for r in rows]
-    payback = [float(r.get("payback_y") or 0) for r in rows]
+    payback = [r.get("payback_y") for r in rows]  # None = nevráti sa
     dominated_mask = [bool(r.get("dominated_by")) for r in rows]
     highlight_idx = next((i for i, r in enumerate(rows) if r.get("is_pick_npv")), None)
 

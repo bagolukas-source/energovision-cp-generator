@@ -15,6 +15,11 @@ GREEN=RGBColor(0x16,0xA3,0x4A); LIME=RGBColor(0x92,0xD0,0x50); DARK=RGBColor(0x1
 def eur(v):
     try: return f"{float(v):,.0f} €".replace(","," ")
     except Exception: return "—"
+def pbt(v):
+    """Návratnosť: None/99 (sentinel) → „nevráti sa"."""
+    try: f=float(v)
+    except Exception: return "nevráti sa"
+    return f"{num(f,1)} r" if 0 < f < 99 else "nevráti sa"
 def num(v,d=0):
     try: return (f"{float(v):,.{d}f}").replace(","," ").replace(".",",")
     except Exception: return "—"
@@ -74,7 +79,7 @@ def generate_chocosuc_docx(ctx: dict) -> bytes:
     _table(doc,["Ukazovateľ","Hodnota"],[
         ["Investícia (Net CAPEX)",eur(ctx.get("net_capex_eur") or ctx.get("capex_total_eur"))],
         ["Ročný prínos (rok 1)",eur(full["save_total"])],
-        ["Návratnosť",f"{num(full['payback'],1)} r"],
+        ["Návratnosť",pbt(full['payback'])],
         ["NPV 20 r. / IRR",f"{eur(full['npv'])} / {num(full['irr'],1)} %"],
         ["Pokrytie spotreby / samospotreba",f"{num(ctx.get('coverage_pct'),1)} % / {num(ctx.get('samosp_pct'),1)} %"],
     ],aligns=["l","r"])
@@ -132,7 +137,7 @@ def generate_chocosuc_docx(ctx: dict) -> bytes:
     ],aligns=["l","r","l"])
     _h(doc,"Tri scenáre prínosu",size=12)
     _table(doc,["Scenár","Úspora €/r","Návratnosť","NPV 20 r.","IRR"],
-        [[s["name"],eur(s["save_total"]),f"{num(s['payback'],1)} r",eur(s["npv"]),f"{num(s['irr'],1)} %"] for s in S],
+        [[s["name"],eur(s["save_total"]),pbt(s['payback']),eur(s["npv"]),f"{num(s['irr'],1)} %"] for s in S],
         aligns=["l","r","r","r","r"])
     _img(doc,C.chart_scenarios(ctx),cap="Graf 4: Porovnanie 3 scenárov.")
     _img(doc,C.chart_cumcf(ctx),cap="Graf 5: Kumulatívny cashflow 20 rokov.")

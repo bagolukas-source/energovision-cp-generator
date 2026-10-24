@@ -1455,6 +1455,25 @@ def _generate_ai_expert_commentary(context: dict, analyza: dict) -> dict:
         }
 
 
+def _payback_or_none(*vals):
+    """Návratnosť v rokoch, alebo None = „nevráti sa".
+    Engine vracia 99.0 (compute_payback), delta varianty None; chýbajúca/0 hodnota sa
+    nesmie zobraziť ako „0,0 r" (audit 2026-10-24 #6). Berie prvú nie-None hodnotu."""
+    for v in vals:
+        if v is None:
+            continue
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            continue
+        return f if 0 < f < 99 else None
+    return None
+
+
+def _fmt_pb(pb) -> str:
+    return f"{pb:.1f} r" if pb is not None else "nevráti sa"
+
+
 def _validate_orkestra(context: dict) -> list:
     """Autonomia: sanity-check kontextu pred renderom. Vrati list warningov (logovane).
     Posudok generuje obchodnik bez kontroly -> server musi zachytit nezmysly."""
@@ -1467,7 +1486,7 @@ def _validate_orkestra(context: dict) -> list:
     if num("capex_total_eur") <= 0: w.append("CAPEX <= 0")
     if not (0 <= num("samospotreba_pct") <= 100): w.append(f"samospotreba mimo 0-100: {num('samospotreba_pct')}")
     if not (0 <= num("samostatnost_pct") <= 100): w.append(f"samostatnost mimo 0-100: {num('samostatnost_pct')}")
-    if num("payback_years") <= 0: w.append("payback <= 0")
+    if context.get("payback_years") is None: w.append("investícia sa nevráti (payback None)")
     cf = context.get("cf_array") or []
     if len(cf) < 21: w.append(f"cf_array len {len(cf)} < 21")
     # energy balance konzistencia: pv_to_load+pv_to_grid+pv_to_bat ~ pv_total (±5 %)
@@ -1610,12 +1629,12 @@ def build_orkestra_context(analyza: dict, variants: list, analyza_id: str = "", 
     saving_y1 = float(selected.get("saving_y1_eur") or 0)
     # Ak chýba saving_y1, odvod z payback (saving = net_capex / payback)
     if saving_y1 <= 0:
-        payback_raw = float(selected.get("payback_simple_y") or selected.get("payback_y") or 0)
-        if payback_raw > 0:
+        payback_raw = _payback_or_none(selected.get("payback_simple_y"), selected.get("payback_y"))
+        if payback_raw:
             saving_y1 = net_capex / payback_raw
     npv = float(selected.get("npv_eur") or 0)
     irr = float(selected.get("irr_pct") or 0)
-    payback = float(selected.get("payback_simple_y") or selected.get("payback_y") or 0)
+    payback = _payback_or_none(selected.get("payback_simple_y"), selected.get("payback_y"))
     samosp_pct = float(selected.get("samospotreba_pct") or 0)
     samostat_pct = float(selected.get("samostatnost_pct") or 0)
 
@@ -1741,13 +1760,16 @@ def build_orkestra_context(analyza: dict, variants: list, analyza_id: str = "", 
         return npv + delta_pv
     saving_low = saving_y1 * 0.75
     npv_low = _npv_scenario(saving_low)
-    payback_low = (net_capex / saving_low) if saving_low > 0 else 99
+    payback_low = _payback_or_none(net_capex / saving_low) if saving_low > 0 else None
     irr_low = max(0, irr - 5)
     arb_uplift = 0.10 if bess_kwh > 0 else 0
     saving_arb = saving_y1 * (1 + arb_uplift)
     npv_arb = _npv_scenario(saving_arb)
-    payback_arb = (net_capex / saving_arb) if saving_arb > 0 else 99
+    payback_arb = _payback_or_none(net_capex / saving_arb) if saving_arb > 0 else None
     irr_arb = irr + (arb_uplift * 100 * 0.5)
+    if payback is None:
+        # báza sa podľa enginu nevráti → statická návratnosť scenára by klamala („17 r")
+        payback_low = payback_arb = None
 
     scenarios_ctx = [
         {
@@ -1799,7 +1821,8 @@ def build_orkestra_context(analyza: dict, variants: list, analyza_id: str = "", 
     # vychádzal záporný. Dotácia je príjem roku 0 (diskont 1,0), takže NPV bez nej = NPV − dotácia.
     if dotacia > 0:
         npv_without_dotacia = npv - dotacia
-        payback_without_dotacia = (capex_total / saving_y1) if saving_y1 > 0 else 99
+        payback_without_dotacia = (_payback_or_none(capex_total / saving_y1)
+                                   if (saving_y1 > 0 and payback is not None) else None)
         irr_without_dotacia = max(0, irr - 4)
     else:
         npv_without_dotacia = npv
@@ -1820,8 +1843,8 @@ def build_orkestra_context(analyza: dict, variants: list, analyza_id: str = "", 
             "npv_eur": v.get("npv_eur", 0),
             "irr_pct": v.get("irr_pct", 0),
             # template (posudok.html) cita v.payback_simple_y - pole musi mat tento nazov
-            "payback_simple_y": v.get("payback_simple_y", v.get("payback_y", 0)),
-            "payback_years": v.get("payback_simple_y", v.get("payback_y", 0)),
+            "payback_simple_y": _payback_or_none(v.get("payback_simple_y"), v.get("payback_y")),
+            "payback_years": _payback_or_none(v.get("payback_simple_y"), v.get("payback_y")),
         })
 
     # === Cena necinnosti (cost of inaction) — eskalujuca cena energie ktoru by FVE pokryla ===
@@ -2045,17 +2068,22 @@ def _short_variant_label(name: str, client_name: str) -> str:
     return s or "Variant"
 
 
+def _pb_rank(r: dict) -> float:
+    """Návratnosť na porovnávanie — None (nevráti sa) je najhoršia."""
+    return r["payback_y"] if r.get("payback_y") is not None else float("inf")
+
+
 def _variant_dominates(a: dict, b: dict) -> bool:
     """True ak varianta `a` dominuje variantu `b` — aspoň rovnako dobrá vo všetkom
     (CAPEX nižší/rovnaký, NPV/IRR vyššie/rovnaké, návratnosť kratšia/rovnaká)
     a v aspoň jednom ukazovateli prísne lepšia."""
     at_least_as_good = (
         a["capex_eur"] <= b["capex_eur"] and a["npv_eur"] >= b["npv_eur"]
-        and a["irr_pct"] >= b["irr_pct"] and a["payback_y"] <= b["payback_y"]
+        and a["irr_pct"] >= b["irr_pct"] and _pb_rank(a) <= _pb_rank(b)
     )
     strictly_better = (
         a["capex_eur"] < b["capex_eur"] or a["npv_eur"] > b["npv_eur"]
-        or a["irr_pct"] > b["irr_pct"] or a["payback_y"] < b["payback_y"]
+        or a["irr_pct"] > b["irr_pct"] or _pb_rank(a) < _pb_rank(b)
     )
     return at_least_as_good and strictly_better
 
@@ -2065,13 +2093,13 @@ def _porovnanie_fallback_assessments(rows: list, mrk_kw: float) -> list:
     Dokument NIKDY nesmie odísť s prázdnou sekciou hodnotenia."""
     out = []
     best_npv = max(r["npv_eur"] for r in rows)
-    best_pb = min(r["payback_y"] for r in rows if r["payback_y"] > 0)
+    best_pb = min((r["payback_y"] for r in rows if r["payback_y"] is not None), default=None)
     lowest_capex = min(r["capex_eur"] for r in rows)
     for r in rows:
         pros, cons = [], []
         if r["npv_eur"] >= best_npv - 1:
             pros.append(f"Najvyšší čistý zisk za 20 rokov zo všetkých porovnávaných ponúk ({round(r['npv_eur']):,} €).".replace(",", " "))
-        if r["payback_y"] > 0 and r["payback_y"] <= best_pb + 0.05:
+        if r["payback_y"] is not None and r["payback_y"] <= best_pb + 0.05:
             pros.append(f"Najrýchlejšia návratnosť v porovnaní ({r['payback_y']:.1f} roka).")
         if r["capex_eur"] <= lowest_capex + 1:
             pros.append(f"Najnižšia vstupná investícia ({round(r['capex_eur']):,} €).".replace(",", " "))
@@ -2220,7 +2248,7 @@ def render_porovnanie(sb, analyza_id: str, variant_ids: list | None = None) -> d
     rows = []
     for v in picked:
         capex = float(v.get("capex_eur") or 0)
-        payback = float(v.get("result_payback_y_base") or 0)
+        payback = _payback_or_none(v.get("result_payback_y_base"))  # None = nevráti sa
         rows.append({
             "id": str(v.get("id")),
             "short_label": _short_variant_label(v.get("name"), client_name),
@@ -2236,7 +2264,7 @@ def render_porovnanie(sb, analyza_id: str, variant_ids: list | None = None) -> d
             "vyroba_mwh": float(v.get("result_vyroba_mwh") or 0),
             "export_mwh": float(v.get("result_export_mwh") or 0),
             "import_mwh": float(v.get("result_import_mwh") or 0),
-            "annual_saving_eur": (capex / payback) if payback > 0 else 0,
+            "annual_saving_eur": (capex / payback) if payback else 0,
             "is_selected": str(v.get("id")) == selected_id,
             "dominated_by": None,
         })
@@ -2249,7 +2277,9 @@ def render_porovnanie(sb, analyza_id: str, variant_ids: list | None = None) -> d
 
     viable = [r for r in rows if not r["dominated_by"]]
     pick_npv = max(viable, key=lambda r: r["npv_eur"])
-    pick_payback = min(viable, key=lambda r: r["payback_y"])
+    # „Najrýchlejšia návratnosť" len z variantov, ktoré sa vrátia; inak niet čo odporúčať zvlášť
+    _returning = [r for r in viable if r["payback_y"] is not None]
+    pick_payback = min(_returning, key=lambda r: r["payback_y"]) if _returning else pick_npv
     pick_npv["is_pick_npv"] = True
     same_winner = pick_npv["id"] == pick_payback["id"]
 
@@ -2307,7 +2337,7 @@ def render_porovnanie(sb, analyza_id: str, variant_ids: list | None = None) -> d
                 "capex_eur": round(r["capex_eur"]),
                 "npv_20r_eur": round(r["npv_eur"]),
                 "irr_pct": round(r["irr_pct"], 1),
-                "payback_y": round(r["payback_y"], 1),
+                "payback_y": round(r["payback_y"], 1) if r["payback_y"] is not None else "nevráti sa",
                 "samospotreba_pct": round(r["samosp_pct"], 1),
                 "rocna_vyroba_mwh": round(r["vyroba_mwh"], 1),
                 "export_mwh": round(r["export_mwh"], 1),
@@ -2333,14 +2363,14 @@ def render_porovnanie(sb, analyza_id: str, variant_ids: list | None = None) -> d
     if not context.get("ai_recommendation") or not context["ai_recommendation"].get("detail"):
         if same_winner:
             rec_detail = (f"Ponuka „{pick_npv['short_label']}“ má súčasne najvyšší čistý zisk za 20 rokov "
-                          f"({round(pick_npv['npv_eur']):,} €) aj najrýchlejšiu návratnosť ({pick_npv['payback_y']:.1f} r) — "
+                          f"({round(pick_npv['npv_eur']):,} €) aj najrýchlejšiu návratnosť ({_fmt_pb(pick_npv['payback_y'])}) — "
                           f"jednoznačná voľba v tomto porovnaní.").replace(",", " ")
         else:
             rec_detail = (f"Ponuka „{pick_npv['short_label']}“ prinesie za 20 rokov najvyšší čistý zisk "
-                          f"({round(pick_npv['npv_eur']):,} € pri návratnosti {pick_npv['payback_y']:.1f} r). "
+                          f"({round(pick_npv['npv_eur']):,} € pri návratnosti {_fmt_pb(pick_npv['payback_y'])}). "
                           f"Ak preferujete nižšiu vstupnú investíciu a najrýchlejší návrat peňazí, zvoľte "
                           f"„{pick_payback['short_label']}“ ({round(pick_payback['capex_eur']):,} €, návratnosť "
-                          f"{pick_payback['payback_y']:.1f} r).").replace(",", " ")
+                          f"{_fmt_pb(pick_payback['payback_y'])}).").replace(",", " ")
         context["ai_recommendation"] = {"title": "Odporúčanie Energovision", "detail": rec_detail}
 
     pdf_bytes = generate_porovnanie_pdf(context)
@@ -2852,10 +2882,10 @@ def _generate_chocosuc_ai(ctx: dict) -> dict:
                      "self_use_mwh": round(ctx.get("self_use_mwh") or 0, 1),
                      "export_mwh": round(ctx.get("export_mwh") or 0, 1),
                      "import_mwh": round(ctx.get("grid_import_mwh") or 0, 0)},
-        "scenare": [{"nazov": x["name"], "uspora_eur_rok": round(x["save_total"]), "navratnost_r": round(x["payback"], 1),
+        "scenare": [{"nazov": x["name"], "uspora_eur_rok": round(x["save_total"]), "navratnost_r": (round(x["payback"], 1) if x["payback"] is not None else "nevráti sa"),
                      "npv20_eur": round(x["npv"]), "irr_pct": round(x["irr"], 1)} for x in S],
         "ekonomika": {"capex_eur": round(ctx.get("capex_total_eur") or 0),
-                      "navratnost_r": round(full["payback"], 1), "npv20_eur": round(full["npv"]),
+                      "navratnost_r": (round(full["payback"], 1) if full["payback"] is not None else "nevráti sa"), "npv20_eur": round(full["npv"]),
                       "irr_pct": round(full["irr"], 1), "mc_prob_npv_kladne_pct": round(ctx.get("mc_prob_pos", 0) * 100),
                       "mc_p10_eur": round(ctx.get("mc_p10") or 0), "mc_p90_eur": round(ctx.get("mc_p90") or 0),
                       "danovy_stit_rok_eur": round(full.get("annual_tax", 0))},
@@ -2880,10 +2910,10 @@ def _generate_chocosuc_ai(ctx: dict) -> dict:
         # deterministický fallback — summary (ekonomický) ≠ expert (technicko-rizikový)
         e = facts["ekonomika"]
         summ = (ctx.get("balance_narrative","") +
-                f"<p>Ekonomicky vychádza investícia priaznivo vo všetkých troch scenároch: ročná úspora "
-                f"{bza['save_total']:,.0f} € (báza) až {full['save_total']:,.0f} € (plný scenár), návratnosť {e['navratnost_r']} r, "
-                f"NPV 20 r. {e['npv20_eur']:,.0f} € a IRR {e['irr_pct']} %. Monte Carlo potvrdzuje kladné NPV s pravdepodobnosťou "
-                f"{e['mc_prob_npv_kladne_pct']} %.</p>").replace(",", " ")
+                f"<p>{ctx.get('recommendation_line', '')} "
+                + (f"Ročná úspora {bza['save_total']:,.0f} € (báza) až {full['save_total']:,.0f} € (plný scenár), "
+                   f"NPV 20 r. {e['npv20_eur']:,.0f} € a IRR {e['irr_pct']} %. Pravdepodobnosť kladného NPV (Monte Carlo) "
+                   f"{e['mc_prob_npv_kladne_pct']} %.</p>").replace(",", " "))
         exp = (f"<p>Z technického hľadiska je navrhnutý variant {facts['fve_bess']['fve_kwp']:.0f} kWp primeraný profilu OM — "
                f"pri samospotrebe {facts['fve_bess']['samospotreba_pct']} % sa vyrobená energia využije takmer celá. "
                f"Rozhodujúce predpoklady sú špecifický výnos {facts['fve_bess']['specificky_vynos_kwh_kwp']} kWh/kWp (PVGIS) a "
@@ -2891,7 +2921,7 @@ def _generate_chocosuc_ai(ctx: dict) -> dict:
                f"<p>Citlivosť: medzi defenzívnym a optimistickým scenárom je rozpätie NPV {S[1]['npv']:,.0f} – {S[2]['npv']:,.0f} €. "
                f"Pred realizáciou odporúčam overiť finálnu tarifu (faktúra), podmienky pripojenia u prevádzkovateľa distribučnej "
                f"sústavy a presnú konštrukciu z cenovej ponuky.</p>").replace(",", " ")
-        recs = [("Realizovať navrhnutý variant", ctx.get("recommendation_line", ""))]
+        recs = [("Odporúčanie k navrhnutému variantu", ctx.get("recommendation_line", ""))]
         if not facts["ceny_realne_z_faktury"]:
             recs.append(("Doplniť faktúru za elektrinu", "Spresní silovú aj distribučnú cenu — posudok prejde z orientačného na presný."))
         if not facts["fve_bess"].get("bess_kwh"):
