@@ -80,6 +80,39 @@ def _typical_week_kw(series_15: pd.Series) -> pd.DataFrame:
     return df.groupby(["dow", "hour", "q"])["kw"].mean()
 
 
+def _last_12_months(series_15: pd.Series) -> pd.Series:
+    """Viac rokov / 13 mesiacov → len posledných 12 mesiacov. Inak sa ročná spotreba
+    rovnala súčtu všetkých rokov (audit 2026-10-24 V01: 2 roky = 5 565 namiesto 2 790 MWh)."""
+    if len(series_15) == 0:
+        return series_15
+    cut = series_15.index.max() - pd.DateOffset(years=1)
+    return series_15[series_15.index > cut] if series_15.index.min() <= cut else series_15
+
+
+def _fill_gaps(series_15: pd.Series) -> tuple[pd.Series, int]:
+    """Diery v meraní (výpadok) → typický týždeň z nameraných dát namiesto 0 kWh
+    (audit V05: 14 dní výpadku = −3,7 % spotreby a falošný export). Neexistujúca hodina
+    pri prechode na letný čas sa nedopĺňa. Vráti (séria na 15-min mriežke, počet doplnených)."""
+    s = series_15[~series_15.index.duplicated(keep="first")].sort_index()
+    if len(s) == 0:
+        return s, 0
+    grid = pd.date_range(s.index.min(), s.index.max(), freq="15min")
+    try:
+        loc = grid.tz_localize("Europe/Bratislava", ambiguous="NaT", nonexistent="NaT")
+        grid = grid[~loc.isna() | grid.isin(s.index)]
+    except Exception:
+        pass
+    full = s.reindex(grid)
+    miss = full.isna().to_numpy()
+    n = int(miss.sum())
+    if n:
+        tw = _typical_week_kw(s)
+        gi = grid[miss]
+        fill_kw = [tw.get(k, float(tw.mean())) for k in zip(gi.dayofweek, gi.hour, gi.minute // 15)]
+        full[miss] = np.asarray(fill_kw, dtype=float) * 0.25 / 1000.0
+    return full, n
+
+
 # ============================================================
 # Stratégie doplnenia na celý rok
 # ============================================================
@@ -202,6 +235,13 @@ def run_agent(files: list[dict], context: dict | None = None, year: int = 2025, 
             warnings.append(f"{f['filename']}: {res.get('error')} → na ručné spracovanie (dvojča)")
 
     measured = _combine(series_list) if series_list else pd.Series(dtype=float)
+    if len(measured):
+        _span_d = (measured.index.max() - measured.index.min()).total_seconds() / 86400.0
+        _trimmed = _last_12_months(measured)
+        if len(_trimmed) < len(measured):
+            warnings.append(f"Dáta pokrývajú {_span_d:.0f} dní — do výpočtu ide len posledných 12 mesiacov "
+                            f"({_trimmed.index.min():%d.%m.%Y} – {_trimmed.index.max():%d.%m.%Y}).")
+            measured = _trimmed
     coverage = _covered_fraction(measured) if len(measured) else 0.0
     # úplnosť roka: všetkých 12 kalendárnych mesiacov musí byť prítomných, inak doplniť extrapoláciou
     _months_present = set(int(m) for m in pd.Series(measured.index).dt.month.unique()) if len(measured) else set()
@@ -219,7 +259,12 @@ def run_agent(files: list[dict], context: dict | None = None, year: int = 2025, 
                     "per_file": per_file, "warnings": warnings}
     elif coverage >= 0.90 and _full_year:
         strategy = "measured"
-        final = measured
+        final, _n_fill = _fill_gaps(measured)
+        if _n_fill:
+            _pct = 100.0 * _n_fill / max(1, len(final))
+            strat_meta = {"imputed_intervals": _n_fill, "imputed_pct": round(_pct, 2)}
+            warnings.append(f"V meraní chýba {_n_fill} štvrťhodín ({_pct:.1f} %) — doplnené typickým týždňom "
+                            "z nameraných dát (nie 0 kWh).")
     else:
         strategy = "extrapolated"
         final, strat_meta = _extrapolate_to_year(measured, invoice_annual, year)
@@ -227,7 +272,7 @@ def run_agent(files: list[dict], context: dict | None = None, year: int = 2025, 
     final = final[~final.index.duplicated(keep="first")].sort_index()
     annual_kwh = float(final.sum()) * 1000.0
     peak_kw_15 = float(final.max()) * 4 * 1000.0
-    hourly = final.resample("1h").sum() * 1000.0   # kWh/h
+    hourly = final.resample("1h").sum(min_count=1) * 1000.0   # kWh/h; prázdna hodina = NaN, nie 0
     peak_kw_h = float(hourly.max())
     avg_kw = float(hourly.mean())
 

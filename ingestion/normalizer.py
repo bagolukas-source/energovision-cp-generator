@@ -260,7 +260,10 @@ def _kw_to_15min_mwh(kw: pd.Series) -> pd.Series:
     gran = _infer_gran(kw.index)
     grid = pd.date_range(kw.index.min().floor("15min"), kw.index.max().ceil("15min"), freq="15min")
     if gran > 15:
-        p15 = kw.reindex(kw.index.union(grid)).sort_index().ffill().reindex(grid)
+        # ffill len v rámci jedného intervalu merania — výpadok sa nesmie vyplniť konštantou
+        # (audit 2026-10-24 V06); diery dopĺňa intake typickým týždňom
+        p15 = (kw.reindex(kw.index.union(grid)).sort_index()
+               .ffill(limit=max(1, int(round(gran / 15)) - 1)).reindex(grid))
     elif gran < 15:
         p15 = kw.resample("15min").mean()
     else:

@@ -266,6 +266,85 @@ def test_08_chat_variant_je_vo_full_response():
     assert abs(float(ctx["pv_kwp"]) - 310) < 0.01 and abs(float(ctx["capex_total_eur"]) - 310 * 620) < 1.0, (
         ctx["pv_kwp"], ctx["capex_total_eur"])
 
+
+# ---------- 6) Intake: posledných 12 mesiacov, diery nie sú 0 kWh ----------
+def _local_15min(start, end_excl):
+    import pandas as pd
+    tz = "Europe/Bratislava"
+    utc = pd.date_range(pd.Timestamp(start, tz=tz).tz_convert("UTC"), pd.Timestamp(end_excl, tz=tz).tz_convert("UTC"),
+                        freq="15min", inclusive="left")
+    return utc.tz_convert(tz).tz_localize(None)  # lokálny čas ako export distribútora (DST)
+
+
+def _kw_shape(idx):
+    import numpy as np
+    h, wd, m = idx.hour.values, idx.dayofweek.values, idx.month.values
+    kw = np.full(len(idx), 200.0)
+    kw[(h >= 6) & (h < 18) & (wd < 5)] += 300.0
+    kw[(m <= 2) | (m >= 11)] *= 1.10
+    return kw
+
+
+def _sse_csv(idx, kw):
+    lines = ["Odberné miesto:;X", "Názov:;TEST", "Dátum od:;x", "Dátum do:;y", ";", "Čas;Spotreba [MWh]"]
+    for t, v in zip(idx, kw * 0.25 / 1000.0):
+        lines.append(f"{t.day}.{t.month}.{t.year} {t.hour}:{t.minute:02d};{str(round(v, 6)).replace('.', ',')}")
+    return "\n".join(lines).encode("utf-8")
+
+
+def _intake(files):
+    from ingestion import intake_agent
+    _key = os.environ.pop("ANTHROPIC_API_KEY", None)
+    try:
+        res = intake_agent.run_agent([{"filename": f"f{i}.csv", "bytes": b} for i, b in enumerate(files)], {}, year=2025)
+    finally:
+        if _key:
+            os.environ["ANTHROPIC_API_KEY"] = _key
+    assert res.get("ok"), res.get("reason")
+    return res
+
+
+def _true_mwh(idx):
+    return float((_kw_shape(idx) * 0.25).sum() / 1000.0)
+
+
+def test_06_dva_roky_nie_su_dvojnasobok():
+    i1, i2 = _local_15min("2023-01-01", "2024-01-01"), _local_15min("2024-01-01", "2025-01-01")
+    res = _intake([_sse_csv(i1, _kw_shape(i1)), _sse_csv(i2, _kw_shape(i2))])
+    assert abs(res["annual_mwh"] / _true_mwh(i2) - 1) < 0.01, (res["annual_mwh"], _true_mwh(i2))
+
+
+def test_06_trinast_mesiacov_je_rok():
+    i = _local_15min("2024-01-01", "2025-02-01")
+    res = _intake([_sse_csv(i, _kw_shape(i))])
+    ref = _true_mwh(_local_15min("2024-02-01", "2025-02-01"))
+    assert abs(res["annual_mwh"] / ref - 1) < 0.01, (res["annual_mwh"], ref)
+
+
+def test_06_diera_v_merani_nie_je_nula():
+    i = _local_15min("2025-01-01", "2026-01-01")
+    mask = ~((i >= "2025-06-01") & (i < "2025-06-15"))
+    res = _intake([_sse_csv(i[mask], _kw_shape(i[mask]))])
+    assert abs(res["annual_mwh"] / _true_mwh(i) - 1) < 0.01, (res["annual_mwh"], _true_mwh(i))
+    gap = res["hourly"][(res["hourly"].index >= "2025-06-01") & (res["hourly"].index < "2025-06-15")]
+    assert len(gap) and float(gap.min()) > 0, "diera v meraní nesmie byť 0 kWh"
+
+
+def test_06_kalendarny_rok_bez_zmeny():
+    i = _local_15min("2025-01-01", "2026-01-01")
+    res = _intake([_sse_csv(i, _kw_shape(i))])
+    assert abs(res["annual_mwh"] / _true_mwh(i) - 1) < 0.001, (res["annual_mwh"], _true_mwh(i))
+
+
+def test_06_hodinove_data_diera_sa_nevyplni_konstantou():
+    import pandas as pd
+    from ingestion.normalizer import _kw_to_15min_mwh
+    idx = pd.date_range("2025-03-01", periods=24 * 10, freq="1h")
+    kw = pd.Series(100.0, index=idx)
+    kw = kw[(kw.index < "2025-03-03") | (kw.index >= "2025-03-07")]  # 4 dni výpadok
+    out = _kw_to_15min_mwh(kw)
+    assert not ((out.index >= "2025-03-03 01:00") & (out.index < "2025-03-07")).any()
+
 if __name__ == "__main__":
     import traceback
     fails = 0
