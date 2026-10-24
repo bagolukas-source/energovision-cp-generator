@@ -5,10 +5,10 @@
 # === DPPO — daň z príjmov právnických osôb (SK) ===
 # Platné od 2025-01-01 podľa zákona 595/2003 Z.z. v znení 2024 novely
 dppo:
-  small_co_pct: 0.10        # do 60 000 € zdaniteľný obrat
-  standard_pct: 0.22        # 60 000 € – 50 mil. €
-  large_co_pct: 0.24        # nad 50 mil. €
-  default_pct: 0.22         # default pre väčšinu Energovision klientov (MSP)
+  small_co_pct: 0.10        # do 100 000 € zdaniteľných príjmov
+  standard_pct: 0.21        # nad 100 000 € do 5 mil. € zdaniteľných príjmov
+  large_co_pct: 0.24        # nad 5 mil. € zdaniteľných príjmov
+  default_pct: 0.21         # default pre väčšinu Energovision klientov (MSP)
 
 # === DAŇOVÉ ODPISY ===
 depreciation:

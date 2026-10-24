@@ -183,7 +183,7 @@ def generate_one_pager(
     disc = doc.add_paragraph()
     disc_r = disc.add_run(
         "Posudok je indikatívny a vychádza z modelových predpokladov "
-        "(spot OKTE 2025, distribučné tarify ÚRSO 2026, DPPO 22 %, "
+        "(spot OKTE 2025, distribučné tarify ÚRSO 2026, DPPO 21 %, "
         "odpis 6 rokov, diskont 6 %). Skutočná výroba môže kolísať ±10 % "
         "v závislosti od počasia a profilu spotreby."
     )

@@ -154,9 +154,9 @@ def apply_dotacia(
             ),
         }
 
-    # Calculate — SIEA: základ 40 %, zvýšená 45 % ak samospotreba > 80 %
+    # Calculate — SIEA: základ 40 %, zvýšená 45 % ak samospotreba >= 80 % (min. 80 %, audit A20)
     eff_intensity = s.intensity_pct
-    if s.scheme_id == "zelena_podnikom" and samospotreba_pct > 80:
+    if s.scheme_id == "zelena_podnikom" and samospotreba_pct >= 80:
         eff_intensity = max(eff_intensity, 45.0)
     by_intensity = capex_eur * (eff_intensity / 100)
     amount = min(by_intensity, s.max_eur)

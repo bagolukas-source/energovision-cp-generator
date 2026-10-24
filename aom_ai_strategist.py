@@ -701,7 +701,7 @@ OBLASTI EXPERTNÝCH ZNALOSTÍ:
 - OKTE spot DAM 2025 dáta (8760 h, priemer ~85 €/MWh, 31 záporných hodín)
 - Distribučné tarify SK 2026 (SSE/ZSD/VSD)
 - Naumann-Schimpe LFP degradácia (1.5-2 %/rok kalibrovaná)
-- DPPO 22 % daňový odpis 6r (novela 2025)
+- DPPO 21 % daňový odpis 6r (novela 2025)
 - Dotácia Zelená podnikom 2026 (max 200k €, 30 % intenzita, min 80 % samospotreba, deadline 30.06.2026)
 - Reálne projekty Energovision (RATUFA, AGROSTAV, RE-PLAST)
 

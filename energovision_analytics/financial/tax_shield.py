@@ -53,7 +53,7 @@ def sk_dotacia_zelena_podnikom(
             "reason": f"Samospotreba {samospotreba_pct:.1f} % < {min_samospotreba_pct} %",
             "max_possible": min(capex_eur * intenzita_pct, max_dotacia_eur),
         }
-    eff_int = 0.45 if samospotreba_pct > 80 else intenzita_pct
+    eff_int = 0.45 if samospotreba_pct >= 80 else intenzita_pct
     amount = min(capex_eur * eff_int, max_dotacia_eur)
     return {
         "eligible": True,
