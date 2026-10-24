@@ -114,6 +114,15 @@ class RuleBasedEMS:
         # (audit 2026-10-24 E01/T1: FIX 300 kWp/500 kWh −595 €/r namiesto +5 719 €/r).
         _px = np.array([self.retail.retail_buy_eur_kwh(float(_s)) * 1000.0 for _s in spot_eur_mwh])
 
+        # LP plán (E02): rozhodnutia o nabíjaní/vybíjaní z rolling-horizon LP nad retail cenou OM;
+        # pravidlá nižšie ostávajú ako záloha (dispatch="rules" alebo zlyhanie LP v okne).
+        _use_lp = getattr(self.config, "dispatch", "lp") == "lp" and self.bat.bess.nominal_kwh > 0
+        _lp_win = max(1, int(getattr(self.config, "lp_window_h", 36) / dt_h))
+        _lp_com = max(1, int(getattr(self.config, "lp_commit_h", 24) / dt_h))
+        _exp_kwh = np.array([self.export_price_for(float(_s)) for _s in spot_eur_mwh])
+        _plan = None          # (pv_to_bat, grid_to_bat, bat_to_load) v kWh/krok od indexu _plan_i0
+        _plan_i0 = 0
+
         # BS-arbitraz akumulatory (spot-based, korektny model)
         _arb_charge_spot = 0.0   # nabijaci naklad z gridu @ spot
         _disch_spot = 0.0        # vybitie @ spot (pre grid-arbitraz)
@@ -181,10 +190,75 @@ class RuleBasedEMS:
             remaining_pv_kwh = (pv - pv_to_load) * dt_h
             remaining_load_kwh = (load - pv_to_load) * dt_h
 
+            # LP plán: prepočítaj na začiatku každého commit bloku zo SKUTOČNÉHO SoC
+            _lp_step = None
+            if _use_lp:
+                if _plan is None or i - _plan_i0 >= _lp_com:
+                    from energovision_analytics.ems.lp_plan import lp_okno
+                    _e = min(n, i + _lp_win)
+                    _eta = float(self.bat.bess.rte_ac_ac) ** 0.5
+                    _soc0 = float(self.bat.soc_kwh)
+                    _smin = min(float(self.bat.soc_min_kwh * self.bat.soh), _soc0)
+                    _smax = max(float(self.bat.soc_max_kwh * self.bat.soh), _soc0)
+                    # rozpočet cyklov: zvyšok ročného limitu, v okne najviac max_cycles_per_day denne
+                    _bud = min(max(0.0, max_efc - self.efc_used_this_year),
+                               float(self.config.max_cycles_per_day) * (_e - i) * dt_h / 24.0
+                               ) * self.bat.usable_capacity_kwh
+                    _plan = lp_okno(
+                        np.asarray(load_kw[i:_e], float) * dt_h, np.asarray(pv_kw[i:_e], float) * dt_h,
+                        _px[i:_e] / 1000.0, _exp_kwh[i:_e], np.asarray(spot_eur_mwh[i:_e], float),
+                        soc0=_soc0, smin=_smin, smax=_smax,
+                        p_kwh=float(self.bat.bess.power_kw_ac) * dt_h, eta=_eta,
+                        rk_kwh=float(self.site.rk_kw or self.site.mrk_kw) * dt_h,
+                        mrk_kwh=float(self.site.mrk_kw) * dt_h,
+                        budget_dc_kwh=_bud,
+                        grid_charge_eur_kwh=float(self.config.arb_min_spread_eur_mwh) / 1000.0,
+                        curtail_neg=bool(getattr(self.config, "negative_spot_curtail", True)),
+                    )
+                    _plan_i0 = i
+                if _plan is not None:
+                    _k = i - _plan_i0
+                    _lp_step = (float(_plan[0][_k]), float(_plan[1][_k]), float(_plan[2][_k]))
+
+            if _lp_step is not None:
+                # vykonaj plán cez fyzický model batérie; účtovanie nižšie je spoločné s pravidlami
+                _pb, _ib, _d = _lp_step
+                action = DispatchAction.NORMAL
+                bat_to_load_peak = bat_to_load_arb = bat_to_load_self = 0.0
+                if _d > 1e-9 and remaining_load_kwh > 0 and self.bat.soc_kwh > self.bat.soc_min_kwh * self.bat.soh:
+                    _over = (max(0.0, remaining_load_kwh / dt_h - mrk_target) * dt_h
+                             if self.config.peak_shave_enabled else 0.0)
+                    _dk = self.bat.discharge(min(_d, remaining_load_kwh), dt_h,
+                                             advance_calendar=False).actual_discharge_kwh
+                    bat_to_load_peak = min(_dk, _over)
+                    bat_to_load_self = _dk - bat_to_load_peak
+                    remaining_load_kwh -= _dk
+                    action = DispatchAction.PEAK_SHAVE if bat_to_load_peak > 0 else DispatchAction.DISCHARGE_BAT
+                # LP môže dať „PV→bat + sieť→záťaž" namiesto „PV→záťaž + sieť→bat" — na meraní OM je
+                # to to isté. Nabíja sa preto CELKOVÉ plánované množstvo: najprv zvyšok PV, potom sieť.
+                pv_to_bat = 0.0
+                _ch_plan = _pb + _ib
+                if _ch_plan > 1e-9 and remaining_pv_kwh > 0 and budget_ac_kwh > 1e-9:
+                    pv_to_bat = self.bat.charge(min(_ch_plan, remaining_pv_kwh, budget_ac_kwh), dt_h,
+                                                advance_calendar=False).actual_charge_kwh
+                    remaining_pv_kwh -= pv_to_bat
+                    budget_ac_kwh = max(0.0, budget_ac_kwh - pv_to_bat)
+                _ib = max(0.0, _ch_plan - pv_to_bat)
+                grid_to_bat = 0.0
+                if _ib > 1e-9 and budget_ac_kwh > 1e-9:
+                    _free_rk = max(0.0, self.site.rk_kw - remaining_load_kwh / dt_h) * dt_h
+                    _pcs_left = max(0.0, self.bat.bess.power_kw_ac * dt_h - pv_to_bat)
+                    _q = min(_ib, _free_rk, _pcs_left, budget_ac_kwh)
+                    if _q > 1e-9:
+                        grid_to_bat = self.bat.charge(_q, dt_h, advance_calendar=False).actual_charge_kwh
+                        if grid_to_bat > 0 and action == DispatchAction.NORMAL:
+                            action = DispatchAction.CHARGE_GRID
+
             # Priorita 2a: Peak shaving (prah mrk_target je v kW → porovnávaj výkon)
-            action = DispatchAction.NORMAL
-            bat_to_load_peak = 0.0
-            if (self.config.peak_shave_enabled
+            if _lp_step is None:
+                action = DispatchAction.NORMAL
+                bat_to_load_peak = 0.0
+            if (_lp_step is None and self.config.peak_shave_enabled
                     and remaining_load_kwh / dt_h > mrk_target
                     and self.bat.soc_kwh > self.bat.soc_min_kwh * self.bat.soh):
                 # Vyber dostatok BAT power na peak shave
@@ -195,8 +269,9 @@ class RuleBasedEMS:
                 action = DispatchAction.PEAK_SHAVE
 
             # Priorita 2b: PV → BAT charge (ak surplus PV a BAT má miesto)
-            pv_to_bat = 0.0
-            if remaining_pv_kwh > 0 and self.bat.soc_kwh < self.bat.soc_max_kwh * self.bat.soh:
+            if _lp_step is None:
+                pv_to_bat = 0.0
+            if _lp_step is None and remaining_pv_kwh > 0 and self.bat.soc_kwh < self.bat.soc_max_kwh * self.bat.soh:
                 # cycle budget čerpá len NABÍJANIE (AUDIT N4); A17: PV prebytok sa ukladá až do
                 # vyčerpania budgetu (predtým stop už pri 90 %), orezaný na jeho zvyšok
                 if budget_ac_kwh > 1e-9:
@@ -209,8 +284,9 @@ class RuleBasedEMS:
             # Priorita 3a: BAT arbitráž discharge (drahá hodina + ešte ostal load)
             # AUDIT N4: vybíjanie NEgatovať cycle budgetom — EFC sa čerpá len nabíjaním;
             # blokovanie discharge nešetrilo cykly, len väznilo už nabitú (zaplatenú) energiu.
-            bat_to_load_arb = 0.0
-            if (action != DispatchAction.PEAK_SHAVE
+            if _lp_step is None:
+                bat_to_load_arb = 0.0
+            if (_lp_step is None and action != DispatchAction.PEAK_SHAVE
                     and is_expensive_now
                     and remaining_load_kwh > 0
                     and self.bat.soc_kwh > self.bat.soc_min_kwh * self.bat.soh):
@@ -220,8 +296,9 @@ class RuleBasedEMS:
                 action = DispatchAction.DISCHARGE_BAT
 
             # Priorita 3b: BESS self-consumption (ak deficit a stale je SoC > min)
-            bat_to_load_self = 0.0
-            if (self.config.enable_bess_self_cons
+            if _lp_step is None:
+                bat_to_load_self = 0.0
+            if (_lp_step is None and self.config.enable_bess_self_cons
                     and remaining_load_kwh > 0
                     and self.bat.soc_kwh > self.bat.soc_min_kwh * self.bat.soh
                     and not is_cheap_now  # nevybíjaj keď je lacné teraz
@@ -231,9 +308,10 @@ class RuleBasedEMS:
                 remaining_load_kwh -= bat_to_load_self
 
             # Priorita 4: Grid → BAT charge (lacná hodina, BAT má miesto, RK voľná)
-            grid_to_bat = 0.0
+            if _lp_step is None:
+                grid_to_bat = 0.0
             free_rk = max(0.0, self.site.rk_kw - remaining_load_kwh / dt_h) * dt_h  # kWh voľné na grid charge
-            if (is_cheap_now
+            if (_lp_step is None and is_cheap_now
                     and self.bat.soc_kwh < self.bat.soc_max_kwh * self.bat.soh
                     and free_rk > 0.1
                     and allow_extra_cycles):

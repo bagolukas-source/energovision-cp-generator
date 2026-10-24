@@ -30,8 +30,10 @@ _SPOT = [-100.0, 100.0, 100.0]   # retail h0 = −39,86 €/MWh → nabitie je p
 
 
 def _a15(dyn):
+    # pravidlová cesta: test drží presnú sumu z vlny 1b; účtovanie (register so znamienkom) je
+    # spoločné pre pravidlá aj LP plán
     return run_ems(_LOAD, [0.0] * 3, _SPOT, 100.0, initial_soc_pct=0.08, use_dynamic_rte=dyn,
-                   arb_min_spread_eur_mwh=30)
+                   arb_min_spread_eur_mwh=30, dispatch="rules")
 
 
 def test_a15_zaporna_cena_nabitia_staticke_rte():
@@ -70,7 +72,8 @@ def test_a16_aktivny_profil_15min_raz_za_krok():
     h = (np.arange(n) // 4) % 24
     spot = np.array([100.0, 0.0, 200.0] * 64)
     load = np.where((h >= 7) & (h <= 20), 30.0, 5.0)
-    iv, s, bat, _ = run_ems(load, np.zeros(n), spot, 100.0, timestep_min=15, arb_band_pct=0.5)
+    iv, s, bat, _ = run_ems(load, np.zeros(n), spot, 100.0, timestep_min=15, arb_band_pct=0.5,
+                            dispatch="rules")   # súčasné nabíjanie+vybíjanie v kroku robia len pravidlá
     both = sum(1 for i in iv if i.bat_to_load_kwh > 0 and i.grid_to_bat_kwh > 0)
     idle = sum(1 for i in iv if i.bat_to_load_kwh == 0 and i.grid_to_bat_kwh == 0 and i.pv_to_bat_kwh == 0)
     assert both > 0 and idle > 0, (both, idle)
