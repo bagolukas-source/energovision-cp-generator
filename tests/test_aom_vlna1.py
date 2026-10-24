@@ -356,6 +356,15 @@ def test_09_fix_bateria_nearbitrazuje_spot():
     hodnota = with_bess["saving_y1_eur"] - pv_only["saving_y1_eur"]
     assert hodnota > 6000, hodnota  # pred opravou 3 174 €/r (spot arbitráž s RTE stratou), po 8 130 €/r
 
+
+# ---------- 10) Merchant: dočasne max 1 cyklus denne (bez chronologického SoC) ----------
+def test_10_merchant_max_1_cyklus_denne():
+    for extra in ({}, {"merchant_unlimited_cycles": True}):
+        v = _engine(_req(om_tarif_typ="spot", **extra), 0, 1000, merchant=True)  # DB default 1000 EFC/r
+        md = v["merchant_detail"]
+        assert md.get("max_cycles_per_day") is not None and md["max_cycles_per_day"] <= 1.0, (extra, md.get("max_cycles_per_day"))
+        assert md.get("equiv_cycles", 0) <= 366, (extra, md.get("equiv_cycles"))
+
 if __name__ == "__main__":
     import traceback
     fails = 0
