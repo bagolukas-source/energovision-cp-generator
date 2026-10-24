@@ -1551,6 +1551,22 @@ def _validate_orkestra(context: dict) -> list:
     return w
 
 
+def _azimut_engine(az):
+    """Azimut do konvencie enginu (0 = sever, 90 = východ, 180 = juh, 270 = západ).
+    Záporné hodnoty sú konvencia PVGIS/formulára (0 = juh, −90 = východ) → +180;
+    inak −45 zhodilo variant na ValidationError a „0" znamenalo sever (audit 2026-10-24 PV-4)."""
+    if az is None:
+        return None
+    az = float(az)
+    if az < 0:
+        az += 180.0
+    return az % 360.0
+
+
+def _azimut_je_sever(az) -> bool:
+    return az is not None and (az < 90.0 or az > 270.0)
+
+
 def _topology_params(analyza: dict) -> tuple[float, float, str]:
     """Mapuje fve_topology + tilt/azimut na (sklon, azimut, konfiguracia) pre engine.
     konfiguracia: '2xP' (juh/carport), 'EW' (východ-západ), 'tracker'."""
@@ -1559,7 +1575,7 @@ def _topology_params(analyza: dict) -> tuple[float, float, str]:
     azim = analyza.get("fve_azimuth_deg")
     try: tilt = float(tilt) if tilt not in (None, "") else None
     except Exception: tilt = None
-    try: azim = float(azim) if azim not in (None, "") else None
+    try: azim = _azimut_engine(azim) if azim not in (None, "") else None
     except Exception: azim = None
     if topo in ("east_west", "ew", "vychod_zapad", "v-z", "východ-západ"):
         return (tilt if tilt is not None else 10.0), 180.0, "EW"
@@ -3251,7 +3267,7 @@ def aom_chat(sb, analyza_id: str, message: str, history=None) -> dict:
         '     "ac_kw": číslo|null,            // výkon meniča v kW ak ho zadal\n'
         '     "bess_kwh": číslo|0,\n'
         '     "orientation": "juh"|"vychod_zapad"|"carport"|"tracker"|null,\n'
-        '     "tilt_deg": číslo|null, "azimuth_deg": číslo|null,\n'
+        '     "tilt_deg": číslo|null, "azimuth_deg": číslo|null,  // azimut v konvencii 180 = juh, 90 = východ, 270 = západ, 0 = sever; ak používateľ píše 0 = juh / −90 = východ, prepočítaj +180\n'
         '     "capex_per_kwp_s_opt": číslo|null, "capex_per_kwp_bez_opt": číslo|null,\n'
         '     "capex_total_s_opt": číslo|null, "capex_total_bez_opt": číslo|null,\n'
         '     "compare_optimizers": true|false  // chce porovnať s optimizérmi a bez\n'
@@ -3314,12 +3330,16 @@ def aom_chat(sb, analyza_id: str, message: str, history=None) -> dict:
                     "carport": "carport", "tracker": "tracker"}
         if topo_raw and topo_map.get(topo_raw):
             upd["fve_topology"] = topo_map[topo_raw]
+        _az_warn = None
         for src, col in (("tilt_deg", "fve_tilt_deg"), ("azimuth_deg", "fve_azimuth_deg")):
             if spec.get(src) is not None:
                 try:
-                    upd[col] = float(spec[src])
+                    upd[col] = _azimut_engine(spec[src]) if col == "fve_azimuth_deg" else float(spec[src])
                 except Exception:
                     pass
+        if _azimut_je_sever(upd.get("fve_azimuth_deg")):
+            _az_warn = (f"Pozor: azimut {upd['fve_azimuth_deg']:g}° smeruje na sever (180° = juh, 90° = východ, "
+                        "270° = západ) — ak si myslel juh, napíš azimut 180.")
         if upd:
             try:
                 sb.table("analyza_om").update(upd).eq("id", analyza_id).execute()
@@ -3376,6 +3396,8 @@ def aom_chat(sb, analyza_id: str, message: str, history=None) -> dict:
             lines.append(f"• {nm}: cena diela {_f(r.get('capex_eur'))} €, NPV {_f(r.get('npv_eur'))} €, návratnosť {_fmt_pb(_payback_or_none(r.get('payback_y')))}")
         if adder_assumed:
             lines.append(f"(Cenu druhého variantu som odvodil prirážkou {OPT_ADDER_EUR_KWP:g} €/kWp za optimizéry — ak máš presnú cenu, napíš ju a prepočítam.)")
+        if _az_warn:
+            lines.append(_az_warn)
         lines.append("Varianty sú uložené v záložke Výsledky.")
         return {"ok": True, "intent": "exact_variant", "rerender": False, "refresh": True,
                 "reply": "\n".join(lines)}

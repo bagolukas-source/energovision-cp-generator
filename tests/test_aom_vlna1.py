@@ -365,6 +365,20 @@ def test_10_merchant_max_1_cyklus_denne():
         assert md.get("max_cycles_per_day") is not None and md["max_cycles_per_day"] <= 1.0, (extra, md.get("max_cycles_per_day"))
         assert md.get("equiv_cycles", 0) <= 366, (extra, md.get("equiv_cycles"))
 
+
+# ---------- 11) Azimut: konvencia enginu 180 = juh ----------
+def test_11_azimut_zaporny_sa_prevedie():
+    assert aom._azimut_engine(-45) == 135.0 and aom._azimut_engine(-90) == 90.0
+    assert aom._azimut_engine(180) == 180.0 and aom._azimut_engine(270) == 270.0
+    assert aom._azimut_je_sever(aom._azimut_engine(0)) and not aom._azimut_je_sever(180.0)
+    assert aom._topology_params({"fve_topology": "south", "fve_azimuth_deg": -45})[1] == 135.0
+
+
+def test_11_azimut_zaporny_variant_nezmizne():
+    # predtým −45 → ValidationError a variant ticho zahodený (generator.py:674-675)
+    v = _engine(_req(fve_azimuth_deg=-45), 200, 0)
+    assert v["pv_kwp"] == 200 and v["energy_flow"]["pv_total_mwh"] > 150
+
 if __name__ == "__main__":
     import traceback
     fails = 0
