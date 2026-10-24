@@ -431,21 +431,15 @@ class VariantGenerator:
             # na nich zarobí. Ak používateľ nezadal vlastnú hodnotu, odvodíme ju z ceny
             # batérie a záruky cyklov. Ak sa v cashflow účtuje EXPLICITNÁ výmena článkov,
             # rezervu nepoužijeme — inak by sa to isté opotrebenie započítalo dvakrát.
-            from energovision_analytics.financial.merchant_arbitrage import degradation_reserve_eur_mwh
             _degr_eur_mwh = float(self.merchant_degradation_eur_mwh or 0.0)
             _degr_source = "manual" if _degr_eur_mwh > 0 else None
             if _degr_eur_mwh <= 0:
-                if getattr(self, "count_battery_replacement", False):
-                    _degr_source = "vymena_clankov"          # opotrebenie rieši výmena v cashflow
-                else:
-                    _warr_cyc = int(self.bess_warranty_cycles or getattr(bess, "warranty_cycles", 0) or 6000)
-                    _usable_frac = 0.90
-                    try:
-                        _usable_frac = float(bess.soc_max_pct - bess.soc_min_pct)
-                    except Exception:
-                        pass
-                    _degr_eur_mwh = degradation_reserve_eur_mwh(self.capex_bess, _warr_cyc, _usable_frac)
-                    _degr_source = "auto"
+                # Rozhodnutie majiteľa 2026-10-24: opotrebenie nie je náklad ani filter obchodu —
+                # automatický prah (cena článkov / záručné cykly) sa NEpoužíva; batéria robí všetky
+                # obchody so ziskom po RTE, marži a odchýlke (Röchling +~2 k€/r, 98 → ~100 % optima).
+                # Vlastná hodnota z CRM (merchant_degradation_eur_mwh) ostáva ako minimálny zisk obchodu.
+                _degr_source = ("vymena_clankov" if getattr(self, "count_battery_replacement", False)
+                                else "bez_prahu")
             _m = compute_merchant_arbitrage(
                 spot_eur_mwh=self.spot,
                 dt_h=_dt_h,

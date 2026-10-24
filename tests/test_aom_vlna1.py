@@ -431,6 +431,12 @@ def test_13_ziadne_naklady_ani_pokles_vynosu():
         assert np.allclose(cf[7:], cf[7], atol=1.0), (bess, cf[7:])      # po odpisoch rovnaký každý rok
         assert abs(cf[7] - v["saving_y1_eur"]) < 1.0, (bess, cf[7], v["saving_y1_eur"])  # = úspora, bez nákladov
 
+def test_14_merchant_bez_automatickeho_prahu_opotrebenia():
+    # rozhodnutie 2026-10-24: opotrebenie nie je náklad ani filter obchodu (bez vlastnej hodnoty z CRM)
+    md = _engine(_req(), 200, 400, merchant=True)["merchant_detail"]
+    assert md["degradation_cost_eur_mwh"] == 0 and md["degradation_source"] == "bez_prahu", md
+
+
 if __name__ == "__main__":
     import traceback
     fails = 0
