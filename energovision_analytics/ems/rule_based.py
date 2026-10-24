@@ -122,6 +122,7 @@ class RuleBasedEMS:
         _exp_kwh = np.array([self.export_price_for(float(_s)) for _s in spot_eur_mwh])
         _plan = None          # (pv_to_bat, grid_to_bat, bat_to_load) v kWh/krok od indexu _plan_i0
         _plan_i0 = 0
+        _planovace = {}       # dĺžka okna → LpPlanovac (HiGHS model sa stavia raz, potom len aktualizuje)
 
         # BS-arbitraz akumulatory (spot-based, korektny model)
         _arb_charge_spot = 0.0   # nabijaci naklad z gridu @ spot
@@ -204,17 +205,22 @@ class RuleBasedEMS:
                     _bud = min(max(0.0, max_efc - self.efc_used_this_year),
                                float(self.config.max_cycles_per_day) * (_e - i) * dt_h / 24.0
                                ) * self.bat.usable_capacity_kwh
-                    _plan = lp_okno(
-                        np.asarray(load_kw[i:_e], float) * dt_h, np.asarray(pv_kw[i:_e], float) * dt_h,
-                        _px[i:_e] / 1000.0, _exp_kwh[i:_e], np.asarray(spot_eur_mwh[i:_e], float),
-                        soc0=_soc0, smin=_smin, smax=_smax,
-                        p_kwh=float(self.bat.bess.power_kw_ac) * dt_h, eta=_eta,
-                        rk_kwh=float(self.site.rk_kw or self.site.mrk_kw) * dt_h,
-                        mrk_kwh=float(self.site.mrk_kw) * dt_h,
-                        budget_dc_kwh=_bud,
-                        grid_charge_eur_kwh=float(self.config.arb_min_spread_eur_mwh) / 1000.0,
-                        curtail_neg=bool(getattr(self.config, "negative_spot_curtail", True)),
-                    )
+                    _args = (np.asarray(load_kw[i:_e], float) * dt_h, np.asarray(pv_kw[i:_e], float) * dt_h,
+                             _px[i:_e] / 1000.0, _exp_kwh[i:_e], np.asarray(spot_eur_mwh[i:_e], float))
+                    _kw = dict(soc0=_soc0, smin=_smin, smax=_smax, mrk_kwh=float(self.site.mrk_kw) * dt_h,
+                               budget_dc_kwh=_bud,
+                               curtail_neg=bool(getattr(self.config, "negative_spot_curtail", True)))
+                    _stat = dict(eta=_eta, p_kwh=float(self.bat.bess.power_kw_ac) * dt_h,
+                                 rk_kwh=float(self.site.rk_kw or self.site.mrk_kw) * dt_h,
+                                 grid_charge_eur_kwh=float(self.config.arb_min_spread_eur_mwh) / 1000.0)
+                    _plan = None
+                    try:
+                        from energovision_analytics.ems.lp_plan import LpPlanovac
+                        if (_e - i) not in _planovace:
+                            _planovace[_e - i] = LpPlanovac(_e - i, **_stat)
+                        _plan = _planovace[_e - i].plan(*_args, **_kw)
+                    except ImportError:
+                        _plan = lp_okno(*_args, **_kw, **_stat)   # bez highspy: pomalší scipy.linprog
                     _plan_i0 = i
                 if _plan is not None:
                     _k = i - _plan_i0
