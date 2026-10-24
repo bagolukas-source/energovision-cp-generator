@@ -452,6 +452,40 @@ def test_15_merchant_na_15min_cenach_okte():
     assert G._spot15_kalendar() is not None
 
 
+def test_16_posudok_pre_variant_z_poziadavky_crm():
+    # Tytex 24. 10.: v CRM vybraté A, posudok vyšiel pre B — výber sa ukladá samostatnou serverovou
+    # akciou a render si prečítal ešte starý stav. Variant z požiadavky má prednosť a uloží sa.
+    import posudok_chocosuc.context as PC
+    aid, va, vb = "a-tytex", "var-a", "var-b"
+    sb = FakeSB()
+    sb.db["analyza_om"] = [{"id": aid, "name": "Tytex", "selected_variant_id": vb, "econ_results": {"full_response": {"variants": [
+        {"db_id": va, "label": "A", "pv_kwp": 725.46, "bess_kwh": 0.0, "capex_total_eur": 560496, "npv_eur": 495567},
+        {"db_id": vb, "label": "B", "pv_kwp": 725.46, "bess_kwh": 482.0, "capex_total_eur": 701483, "npv_eur": 639613}]}}}]
+    sb.db["analyza_om_variants"] = [
+        {"id": va, "analyza_id": aid, "name": "A", "position": 1, "fve_kwp": 725.46, "bess_kwh": 0, "capex_eur": 560496},
+        {"id": vb, "analyza_id": aid, "name": "B", "position": 2, "fve_kwp": 725.46, "bess_kwh": 482, "capex_eur": 701483}]
+    seen = {}
+
+    class _Stop(Exception):
+        pass
+
+    def fake_ctx(analyza, variants, hourly=None, selected_row=None):
+        seen.update(first=variants[0]["id"], sel=(selected_row or {}).get("id"))
+        raise _Stop
+
+    orig = PC.build_chocosuc_context
+    PC.build_chocosuc_context = fake_ctx
+    try:
+        try:
+            aom.render_posudok_chocosuc(sb, aid, variant_id=va)
+        except _Stop:
+            pass
+    finally:
+        PC.build_chocosuc_context = orig
+    assert seen == {"first": va, "sel": va}, seen
+    assert sb.db["analyza_om"][0]["selected_variant_id"] == va
+
+
 if __name__ == "__main__":
     import traceback
     fails = 0
