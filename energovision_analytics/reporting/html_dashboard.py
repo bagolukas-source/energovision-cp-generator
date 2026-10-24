@@ -12,6 +12,7 @@ Vylepšenia oproti v0.2:
 from __future__ import annotations
 
 from datetime import datetime
+from html import escape
 from typing import Optional
 
 import numpy as np
@@ -333,7 +334,7 @@ class HTMLDashboard:
         <div class="card">
             <h4>Odberné miesto</h4>
             <dl class="dl">
-                <dt>Klient</dt><dd>{self.client_name}</dd>
+                <dt>Klient</dt><dd>{escape(str(self.client_name))}</dd>
                 <dt>Distribútor</dt><dd>{self.site.distribuutor.value} · {self.site.sadzba.value}</dd>
                 <dt>Tarif</dt><dd>{self.site.typ_tarify.value}</dd>
                 <dt>RK / MRK</dt><dd>{self.site.rk_kw} / {self.site.mrk_kw} kW</dd>
@@ -354,7 +355,7 @@ class HTMLDashboard:
             bess_rows = f"""
                 <dt>BESS kapacita</dt><dd><b>{self.bess.nominal_kwh} kWh</b></dd>
                 <dt>BESS výkon</dt><dd>{self.bess.power_kw_ac} kW AC</dd>
-                <dt>Výrobca</dt><dd>{self.bess.vyrobca.value} {self.bess.typ}</dd>
+                <dt>Výrobca</dt><dd>{self.bess.vyrobca.value} {escape(str(self.bess.typ))}</dd>
                 <dt>RTE</dt><dd>{self.bess.rte_ac_ac*100:.0f}% (field)</dd>"""
         return f"""
         <div class="card">
@@ -845,7 +846,7 @@ class HTMLDashboard:
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{self.client_name} — Posudok FVE+BESS</title>
+<title>{escape(str(self.client_name))} — Posudok FVE+BESS</title>
 <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
@@ -976,10 +977,10 @@ body{{margin:0;font-family:{THEME.font_sans};color:{THEME.ink};background:{THEME
 <body>
 <div class="wrap">
     <div class="hero">
-        <h1>{self.client_name}</h1>
+        <h1>{escape(str(self.client_name))}</h1>
         <div class="sub">Posudok fotovoltickej elektrárne a batériového úložiska</div>
         <div class="meta">
-            <span>{self.scenario_name}</span>
+            <span>{escape(str(self.scenario_name))}</span>
             <span>{now}</span>
             <span>OKTE 2025 · diskont {self.financial.discount_rate*100:.0f}%</span>
             <span>Horizon {self.financial.horizon_years} rokov</span>

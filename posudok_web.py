@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Pekny interaktivny HTML posudok (Chart.js) — zdroj pre verejny link AJ Chromium PDF."""
 import json
+from html import escape
 
 
 def _num(v, d=0):
@@ -29,7 +30,8 @@ def _eur(x):
 def build_web_posudok_html(ctx, meta=None):
     meta = meta or {}
     g = lambda k, d=0: _num(ctx.get(k), d)
-    client = meta.get("client_name") or ctx.get("client_name") or "Vazeny zakaznik"
+    # verejné HTML: meno klienta a názvy scenárov sú text, nie markup (audit 2026-10-24 A29)
+    client = escape(str(meta.get("client_name") or ctx.get("client_name") or "Vazeny zakaznik"))
     fve_kwp = g("fve_kwp") or g("pv_kwp")
     if not fve_kwp:
         fve_kwp = _num((ctx.get("scenarios") or [{}])[0].get("fve_kwp"))
@@ -89,7 +91,7 @@ def build_web_posudok_html(ctx, meta=None):
         return 0
     scen_rows = "".join(
         '<tr><td>%s</td><td class="num">%s</td><td class="num">%s</td><td class="num">%s</td><td class="num">%s %%</td></tr>'
-        % (s.get("name", ""),
+        % (escape(str(s.get("name") or "")),
            _eur(sg(s, "annual_save_eur", "save_total")),
            _pb(s.get("payback_years", s.get("payback"))),
            _eur(sg(s, "npv_eur", "npv")),
