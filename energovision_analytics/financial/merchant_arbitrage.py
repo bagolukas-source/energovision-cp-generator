@@ -48,6 +48,12 @@ import numpy as np
 from scipy.optimize import Bounds, LinearConstraint, milp
 from scipy.sparse import coo_matrix
 
+# Výsledky podľa presných vstupov obchodu (ceny, nabíjací strop per interval, parametre batérie).
+# Matica variantov počíta merchant pre každú veľkosť FVE zvlášť — keď RK nabíjanie neobmedzí,
+# sú vstupy identické a druhý výpočet je zbytočný (na Renderi ~25 s za beh).
+_CACHE: dict = {}
+_CACHE_MAX = 64
+
 # Značka metódy vo výstupe — posudok aj CRM vedia, z akého dispatchu je číslo.
 MODEL = "denny_milp_chronologicky_soc"
 
@@ -112,9 +118,14 @@ def _solve_day(w, cap_c, cap_d, usable, e_cap, eta, fee, imb, dc_cost):
                    shape=(m, 4 * k)).tocsc()
     ub = np.r_[cap_c, np.full(k, cap_d), np.full(k, usable), np.ones(k)]
     ub[3 * k - 1] = 0.0                            # koniec dňa prázdny
-    sol = milp(obj, integrality=np.r_[np.zeros(3 * k), np.ones(k)],
-               bounds=Bounds(np.zeros(4 * k), ub), constraints=LinearConstraint(a, lo, hi),
-               options={"mip_rel_gap": 1e-9, "time_limit": 30})
+    bnd, con = Bounds(np.zeros(4 * k), ub), LinearConstraint(a, lo, hi)
+    # Najprv LP relaxácia (rýchla). Ak v žiadnom intervale nenabíja a nevybíja súčasne, je jej
+    # riešenie prípustné aj pre MILP, a teda optimálne — binárky treba len pri súbehu (záporný spot).
+    # Pri 15-min cenách bol plný MILP každý deň ~5 s/rok lokálne, na Renderi > 120 s na maticu.
+    sol = milp(obj, integrality=np.zeros(4 * k), bounds=bnd, constraints=con)
+    if sol.success and sol.x is not None and float(np.max(np.minimum(sol.x[:k], sol.x[k:2 * k]))) > 1e-6:
+        sol = milp(obj, integrality=np.r_[np.zeros(3 * k), np.ones(k)], bounds=bnd, constraints=con,
+                   options={"mip_rel_gap": 1e-6, "time_limit": 10})
     if not sol.success or sol.x is None:
         raise RuntimeError(f"Merchant solver zlyhal: {sol.message}")
     if sol.fun >= -1e-8:                           # nič ziskové → batéria stojí
@@ -197,6 +208,14 @@ def compute_merchant_arbitrage(
         blocked["intervals_blocked_by_mrk"] = int(n)
         blocked["days_total"] = int(np.ceil(n / max(1, window)))
         return blocked
+    import hashlib
+    _key = (hashlib.sha1(np.ascontiguousarray(spot).tobytes()).hexdigest(),
+            hashlib.sha1(np.ascontiguousarray(chg_ac_arr).tobytes()).hexdigest(),
+            float(dt_h), float(bess_kwh), float(power_kw_ac), float(export_kw), float(rte),
+            float(organizer_fee_pct), imb, degr, float(revenue_share_pct), min_margin,
+            float(soc_min_frac), float(soc_max_frac), int(window), max_cycles_per_day, mrk_aware)
+    if _key in _CACHE:
+        return dict(_CACHE[_key])
     sell_eur = 0.0; buy_eur = 0.0
     ac_export_total = 0.0; dc_throughput = 0.0
     ac_charge_total = 0.0     # koľko sa reálne odobralo zo siete na nabíjanie
@@ -241,7 +260,7 @@ def compute_merchant_arbitrage(
     client_value = merchant_net * float(revenue_share_pct)              # podiel klienta
     equiv_cycles = (dc_throughput / bess_kwh) if bess_kwh > 0 else 0.0
     dc_throughput_mwh = dc_throughput / 1000.0
-    return {"annual_profit_eur": round(client_value, 0),
+    res = {"annual_profit_eur": round(client_value, 0),
             # koľko sa NAOZAJ odobralo zo siete na nabíjanie — to je energia, ktorá
             # ide cez fakturačné meranie OM navyše k spotrebe (posudok to musí ukázať)
             "grid_charge_mwh": round(ac_charge_total / 1000.0, 1),
@@ -264,3 +283,7 @@ def compute_merchant_arbitrage(
             "days_traded": days_traded, "days_total": days_total,
             "merchant_net_eur": round(merchant_net, 0), "revenue_share_pct": revenue_share_pct,
             "model": MODEL}
+    if len(_CACHE) >= _CACHE_MAX:
+        _CACHE.clear()
+    _CACHE[_key] = dict(res)
+    return res
