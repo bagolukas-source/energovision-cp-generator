@@ -121,6 +121,126 @@ def _decode_csv_to_load_kw(csv_b64: str, granularity_min: int, expected_kwh: flo
         tmp.unlink(missing_ok=True)
 
 
+def _apply_tariff_overrides(tariff_engine, tariff_overrides: Optional[dict]) -> None:
+    """UX-AOM-6: per-analýza tariff_overrides → sadzby v TariffEngine (in-place).
+
+    Jediné miesto pre hlavný beh aj export intervalov — export doteraz nepoznal
+    obchodnik_eur_mwh a grafy intervalov tak ukazovali iné ceny než ekonomika (audit F24).
+    """
+    tov = tariff_overrides or {}
+    if not tov:
+        return
+    for ty in tariff_engine._tariffs.values():
+        if tov.get("silova_eur_mwh") is not None:
+            ty.fix_silova_eur_mwh = float(tov["silova_eur_mwh"])
+        # Marža obchodníka k spotu (€/MWh) — jedno číslo, engine ho drží v dvoch
+        # poliach kvôli spätnej kompatibilite, tak prirážku vynulujeme.
+        if tov.get("obchodnik_eur_mwh") is not None:
+            ty.obchodnik_aditiv_eur_mwh = float(tov["obchodnik_eur_mwh"])
+            ty.obchodnik_prirazka_eur_mwh = 0.0
+        if tov.get("distribucia_eur_mwh") is not None:
+            ty.distrib_eur_mwh = float(tov["distribucia_eur_mwh"])
+        if tov.get("tps_eur_mwh") is not None:
+            ty.tps_eur_mwh = float(tov["tps_eur_mwh"])
+        if tov.get("oze_eur_mwh") is not None:
+            ty.njf_eur_mwh = float(tov["oze_eur_mwh"])
+        if tov.get("ostatne_eur_mwh") is not None:
+            # Spotrebná daň + TSS dohromady; engine ich má oddelené, takže rozdelíme 50/50
+            half = float(tov["ostatne_eur_mwh"]) / 2
+            ty.spotrebna_dan_eur_mwh = half
+            ty.tss_eur_mwh = half
+        if tov.get("mrk_kapacita_eur_mw_mes") is not None:
+            ty.mrk_kapacita_eur_mw_mes = float(tov["mrk_kapacita_eur_mw_mes"])
+
+
+# PVGIS Slovakia mesačné váhy (% z ročnej výroby) — Bratislava 48.15°N, PVGIS-SARAH2, sklon 35°, juh
+_PVGIS_SK_MONTHLY_WEIGHTS = [
+    0.038, 0.057, 0.088, 0.108, 0.119, 0.124,
+    0.124, 0.116, 0.091, 0.067, 0.040, 0.028,
+]
+# SK B2B mesačné distribúcie spotreby (rovnomerné s miernym profilom Z/L)
+_SK_LOAD_MONTHLY_WEIGHTS = [
+    0.092, 0.088, 0.086, 0.080, 0.076, 0.078,
+    0.080, 0.080, 0.082, 0.086, 0.088, 0.084,
+]
+
+
+def _norm12(w) -> list[float]:
+    w = [max(0.0, float(x)) for x in w]
+    t = sum(w)
+    return [x / t for x in w] if t > 0 else [1.0 / 12] * 12
+
+
+def _merchant_monthly_weights(merchant_detail: Optional[dict]) -> tuple[list[float], str]:
+    """Mesačný rozpad merchantu: z merchant_detail["monthly_eur"] (12 hodnôt), ak ho modul
+    dodá; inak rovnomerne /12 (merchant modul dnes drží len ročný súčet)."""
+    m = (merchant_detail or {}).get("monthly_eur")
+    if isinstance(m, dict):
+        m = [m.get(k, m.get(str(k), 0.0)) for k in range(1, 13)]
+    if isinstance(m, (list, tuple)) and len(m) == 12 and sum(abs(float(x)) for x in m) > 0:
+        return _norm12(m), "merchant_detail.monthly_eur"
+    return [1.0 / 12] * 12, "rovnomerne /12"
+
+
+def _monthly_summary(s, value_streams: dict, merchant_detail: Optional[dict] = None) -> tuple[list[dict], dict]:
+    """12 mesiacov, ktorých € sa PRESNE sčítajú na ročné value_streams (audit A13/G2).
+
+    Engine drží € len ročne (rule_based nemá mesačné sav_*), preto každý ročný stream
+    rozpočítame mesačnou váhou z reálnych mesačných tokov EMS (summary.monthly_flows):
+      solar_to_load ∝ pv_to_load, solar_export ∝ export, peak_shaving ∝ load,
+      bess_self + mrk_penalty ∝ PV prebytok nad samospotrebou a exportom (= PV→batéria + orez),
+      arbitráž rovnomerne /12, merchant viď _merchant_monthly_weights.
+    Bez EMS behu (PV-only, merchant) sú toky modelované PVGIS SK / SK B2B váhami.
+    Vracia (mesiace, basis) — basis = ako vznikol rozpad každého streamu (modelované rozdelenie).
+    """
+    annual_pv = float(s.pv_total_kwh)
+    annual_load = float(s.load_total_kwh)
+    annual_export = float(s.pv_to_grid_kwh)
+    annual_import = float(s.grid_import_kwh)
+    mf = getattr(s, "monthly_flows", None)
+    if mf:
+        months = [mf[m] for m in range(1, 13)]
+        flows = [{"pv_kwh": mm["pv"], "load_kwh": mm["load"], "export_kwh": mm["export"],
+                  "import_kwh": mm["import"]} for mm in months]
+        w_ptl = _norm12([mm["pv_to_load"] for mm in months])
+        w_exp = _norm12([mm["export"] for mm in months])
+        w_load = _norm12([mm["load"] for mm in months])
+        w_surplus = _norm12([mm["pv"] - mm["pv_to_load"] - mm["export"] for mm in months])
+        flow_basis = "monthly_flows (EMS)"
+    else:
+        flows = [{"pv_kwh": annual_pv * pw, "load_kwh": annual_load * lw,
+                  "export_kwh": annual_export * pw, "import_kwh": annual_import * lw}
+                 for pw, lw in zip(_PVGIS_SK_MONTHLY_WEIGHTS, _SK_LOAD_MONTHLY_WEIGHTS)]
+        w_ptl = w_exp = w_surplus = _norm12(_PVGIS_SK_MONTHLY_WEIGHTS)
+        w_load = _norm12(_SK_LOAD_MONTHLY_WEIGHTS)
+        flow_basis = "PVGIS SK / SK B2B váhy (bez EMS behu)"
+    w_merch, merch_basis = _merchant_monthly_weights(merchant_detail)
+    uniform = [1.0 / 12] * 12
+    plan = [  # (mesačný kľúč, ročný stream, váhy)
+        ("solar_to_load_eur", "solar_self_consumption_eur", w_ptl),
+        ("solar_export_eur", "solar_export_eur", w_exp),
+        ("bess_self_consumption_eur", "bess_self_consumption_eur", w_surplus),
+        ("arbitrage_eur", "arbitrage_eur", uniform),
+        ("peak_shaving_eur", "peak_shaving_eur", w_load),
+        ("mrk_penalty_avoided_eur", "mrk_penalty_avoided_eur", w_surplus),
+        ("merchant_eur", "merchant_eur", w_merch),
+    ]
+    out = []
+    for i in range(12):
+        row = {"month": i + 1, **flows[i]}
+        for key, stream, w in plan:
+            row[key] = float(value_streams.get(stream, 0.0)) * w[i]
+        row["total_eur"] = sum(row[key] for key, _, _ in plan)
+        out.append(row)
+    basis = {
+        "flows": flow_basis,
+        "eur": "ročné value_streams × mesačná váha (Σ 12 mesiacov = ročný total_eur)",
+        "arbitrage_eur": "rovnomerne /12",
+        "merchant_eur": merch_basis,
+    }
+    return out, basis
+
+
 def _dotacia_npv_delta(delta_eur: float, fin) -> float:
     """Správny NPV dopad zmeny dotácie o delta: +delta (nižší CAPEX rok 0)
     MÍNUS stratený daňový štít (nižší net CAPEX = menej odpisu).
@@ -178,30 +298,7 @@ def run_variants_pipeline(request_dict: dict, progress_cb=None) -> dict:
     spot = spot_df["price_eur_per_mwh"].to_numpy()
     tariff_engine = TariffEngine.from_yaml(TARIFF_YAML)
 
-    # UX-AOM-6: aplikuj per-analyza tariff_overrides ak existujú
-    tariff_overrides = request_dict.get("tariff_overrides") or {}
-    if tariff_overrides:
-        for ty in tariff_engine._tariffs.values():
-            if tariff_overrides.get("silova_eur_mwh") is not None:
-                ty.fix_silova_eur_mwh = float(tariff_overrides["silova_eur_mwh"])
-            # Marža obchodníka k spotu (€/MWh) — jedno číslo, engine ho drží v dvoch
-            # poliach kvôli spätnej kompatibilite, tak prirážku vynulujeme.
-            if tariff_overrides.get("obchodnik_eur_mwh") is not None:
-                ty.obchodnik_aditiv_eur_mwh = float(tariff_overrides["obchodnik_eur_mwh"])
-                ty.obchodnik_prirazka_eur_mwh = 0.0
-            if tariff_overrides.get("distribucia_eur_mwh") is not None:
-                ty.distrib_eur_mwh = float(tariff_overrides["distribucia_eur_mwh"])
-            if tariff_overrides.get("tps_eur_mwh") is not None:
-                ty.tps_eur_mwh = float(tariff_overrides["tps_eur_mwh"])
-            if tariff_overrides.get("oze_eur_mwh") is not None:
-                ty.njf_eur_mwh = float(tariff_overrides["oze_eur_mwh"])
-            if tariff_overrides.get("ostatne_eur_mwh") is not None:
-                # Spotrebná daň + TSS dohromady; engine ich má oddelené, takže rozdelíme 50/50
-                half = float(tariff_overrides["ostatne_eur_mwh"]) / 2
-                ty.spotrebna_dan_eur_mwh = half
-                ty.tss_eur_mwh = half
-            if tariff_overrides.get("mrk_kapacita_eur_mw_mes") is not None:
-                ty.mrk_kapacita_eur_mw_mes = float(tariff_overrides["mrk_kapacita_eur_mw_mes"])
+    _apply_tariff_overrides(tariff_engine, request_dict.get("tariff_overrides"))
 
     load_kw, spot, ts = _calendar_align(load_kw, spot, ts)
     load_df = pd.DataFrame({"load_kw": load_kw}, index=ts)
@@ -360,29 +457,12 @@ def build_run_variants_response(
     for label, v in top_picks:
         rank_map.setdefault(v.variant_id, []).append(label)
 
-    # PVGIS Slovakia mesačné váhy (% z ročnej výroby) — Bratislava 48.15°N
-    # Zdroj: PVGIS-SARAH2, sklon 35°, juh
-    PVGIS_SK_MONTHLY_WEIGHTS = [
-        0.038, 0.057, 0.088, 0.108, 0.119, 0.124,
-        0.124, 0.116, 0.091, 0.067, 0.040, 0.028,
-    ]
-    # SK B2B mesačné distribúcie spotreby (rovnomerné s miernym profilom Z/L)
-    SK_LOAD_MONTHLY_WEIGHTS = [
-        0.092, 0.088, 0.086, 0.080, 0.076, 0.078,
-        0.080, 0.080, 0.082, 0.086, 0.088, 0.084,
-    ]
-
     variants_out = []
     for r in results:
         # === CASHFLOW ARRAY ===
         # rok 0 = -net capex + dotácia, rok 1..N = revenue - opex (+ tax shield 1-6)
-        cf_array = []
-        for cy in r.financial.yearly_cashflows:
-            cf_array.append(cy.net_cashflow)
-        # Zaisti že máme aspoň 21 hodnôt (rok 0..20)
-        while len(cf_array) < 21:
-            cf_array.append(cf_array[-1] if cf_array else 0.0)
-        cf_array = cf_array[:25]  # max 25 rokov
+        # Presne roky 0..horizon (audit A07: doplnenie na 21 / orez na 25 menilo NPV z poľa).
+        cf_array = [cy.net_cashflow for cy in r.financial.yearly_cashflows]
 
         # === VALUE STREAMS BREAKDOWN (annual €) ===
         # Engine rule_based teraz počíta arbitráž round-trip správne (real hodinový tarif_buy
@@ -418,44 +498,11 @@ def build_run_variants_response(
                           + float(s.sav_mrk_penalty_avoided_eur) + _merch),
         }
 
-        # === MONTHLY SUMMARY (12) — odhad z PVGIS SK distribúcie ===
-        # Engine spočíta annual; mesačný breakdown derivovaný z PVGIS váh + load profilu.
-        # Real per-hour breakdown by vyžadoval engine refactor (track per-month).
+        # === MONTHLY SUMMARY (12) — Σ mesiacov = ročné value_streams (audit A13/G2) ===
         annual_pv = float(s.pv_total_kwh)
         annual_load = float(s.load_total_kwh)
-        annual_export = float(s.pv_to_grid_kwh)
-        annual_import = float(s.grid_import_kwh)
-        annual_savings = float(s.sav_total_eur)
-        _mf = getattr(s, "monthly_flows", None)   # reálne mesačné toky z EMS behu
-        _ann_ptl = float(s.pv_to_load_kwh) or 1.0
-        monthly_summary = []
-        for m in range(12):
-            if _mf:
-                mm = _mf[m + 1]
-                _ptl = mm["pv_to_load"]
-                s2l = value_streams["solar_self_consumption_eur"] * (_ptl / _ann_ptl) if _ann_ptl else 0.0
-                sexp = value_streams["solar_export_eur"] * (mm["export"] / annual_export) if annual_export > 0 else 0.0
-                ps = value_streams["peak_shaving_eur"] * (mm["load"] / annual_load) if annual_load > 0 else 0.0
-                arb = value_streams["arbitrage_eur"] / 12.0
-                monthly_summary.append({
-                    "month": m + 1, "pv_kwh": mm["pv"], "load_kwh": mm["load"],
-                    "export_kwh": mm["export"], "import_kwh": mm["import"],
-                    "solar_to_load_eur": s2l, "solar_export_eur": sexp,
-                    "arbitrage_eur": arb, "peak_shaving_eur": ps,
-                    "total_eur": s2l + sexp + arb + ps,
-                })
-            else:
-                # PVGIS odhad — len pri PV-only ceste (bez EMS behu)
-                pv_w = PVGIS_SK_MONTHLY_WEIGHTS[m]; load_w = SK_LOAD_MONTHLY_WEIGHTS[m]
-                monthly_summary.append({
-                    "month": m + 1, "pv_kwh": annual_pv * pv_w, "load_kwh": annual_load * load_w,
-                    "export_kwh": annual_export * pv_w, "import_kwh": annual_import * load_w,
-                    "solar_to_load_eur": value_streams["solar_self_consumption_eur"] * pv_w,
-                    "solar_export_eur": value_streams["solar_export_eur"] * pv_w,
-                    "arbitrage_eur": value_streams["arbitrage_eur"] / 12.0,
-                    "peak_shaving_eur": value_streams["peak_shaving_eur"] * load_w,
-                    "total_eur": annual_savings * ((pv_w + load_w) / 2),
-                })
+        monthly_summary, monthly_basis = _monthly_summary(
+            s, value_streams, getattr(r, "merchant_detail", None))
 
         # === ENERGY FLOW (Sankey-style — pre 4-circle diagram) ===
         # MASS-BALANCE uzáverou: grid_to_load = load − pv_to_load − bat_to_load (strana odberu
@@ -532,6 +579,7 @@ def build_run_variants_response(
             "merchant_revenue_eur": value_streams["merchant_revenue_eur"],
             "total_project_value_eur": value_streams["total_project_value_eur"],
             "monthly_summary": monthly_summary,
+            "monthly_summary_basis": monthly_basis,
             "energy_flow": energy_flow,
             "solar_consumption_pct": solar_consumption_pct,
             "carbon": carbon,
@@ -591,16 +639,7 @@ def export_variant_intervals(request_dict: dict, pv_kwp: float, bess_kwh: float,
         load_kw = df_syn["load_kw"].to_numpy(); ts = df_syn.index
     spot_df = pd.read_csv(SPOT_CSV); spot = spot_df["price_eur_per_mwh"].to_numpy()
     tariff_engine = TariffEngine.from_yaml(TARIFF_YAML)
-    tov = request_dict.get("tariff_overrides") or {}
-    if tov:
-        for ty in tariff_engine._tariffs.values():
-            if tov.get("silova_eur_mwh") is not None: ty.fix_silova_eur_mwh = float(tov["silova_eur_mwh"])
-            if tov.get("distribucia_eur_mwh") is not None: ty.distrib_eur_mwh = float(tov["distribucia_eur_mwh"])
-            if tov.get("tps_eur_mwh") is not None: ty.tps_eur_mwh = float(tov["tps_eur_mwh"])
-            if tov.get("oze_eur_mwh") is not None: ty.njf_eur_mwh = float(tov["oze_eur_mwh"])
-            if tov.get("ostatne_eur_mwh") is not None:
-                _h = float(tov["ostatne_eur_mwh"]) / 2; ty.spotrebna_dan_eur_mwh = _h; ty.tss_eur_mwh = _h
-            if tov.get("mrk_kapacita_eur_mw_mes") is not None: ty.mrk_kapacita_eur_mw_mes = float(tov["mrk_kapacita_eur_mw_mes"])
+    _apply_tariff_overrides(tariff_engine, request_dict.get("tariff_overrides"))
 
     load_kw, spot, ts = _calendar_align(load_kw, spot, ts)
     load_df = pd.DataFrame({"load_kw": load_kw}, index=ts)
