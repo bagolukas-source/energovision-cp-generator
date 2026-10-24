@@ -504,12 +504,14 @@ class VariantGenerator:
         builder = CashflowBuilder(
             capex_solar_eur=capex_pv_total,
             capex_bess_eur=capex_bess_total,
-            opex_solar_pct=self.opex_pct,
-            # Batéria bez prevádzkových nákladov, výmeny meniča a poklesu výnosu (rozhodnutie
-            # majiteľa 2026-10-24: hodnotí sa návratnosť investície, tieto položky sa neúčtujú).
+            # Žiadne prevádzkové náklady ani výmeny (rozhodnutie majiteľa 2026-10-24: hodnotí sa
+            # návratnosť investície — prevádzka, poistenie, monitoring, výmena meničov FVE aj
+            # batérie a pokles výnosu sa neúčtujú). Výmena článkov ostáva opt-in.
+            opex_solar_pct=0.0,
             opex_bess_pct=0.0,
-            insurance_pct=0.003,            # poistenie len z CAPEX FVE (cashflow.py)
-            monitoring_eur_per_year=300,
+            insurance_pct=0.0,
+            monitoring_eur_per_year=0.0,
+            pv_inverter_replacement_year=None,
             bess_inverter_replacement_year=None,
             bess_inverter_replacement_pct=0.10,
             bess_cells_replacement_interval_years=_cells_repl_interval,
@@ -526,8 +528,8 @@ class VariantGenerator:
         _cf_kwargs = dict(
             annual_saving_y1_eur=sum(saving_decomp.values()),  # = sav_total (non-merchant) / konzistentné (merchant)
             saving_decomp_y1=saving_decomp,
-            annual_degradation_pct=0.5,
-            bess_degradation_pct=0.0,       # výnos batérie neklesá v čase (rozhodnutie 2026-10-24)
+            annual_degradation_pct=0.0,     # výnos FVE ani batérie neklesá v čase (rozhodnutie 2026-10-24)
+            bess_degradation_pct=0.0,
             annual_bess_discharge_kwh=_bess_throughput_kwh,
             # AUDIT N8: bez annual_pv_kwh bol LCOE vždy None; LCOS bežal bez nákladov nabíjania
             annual_pv_kwh=float(getattr(summary, "pv_total_kwh", 0.0) or 0.0),

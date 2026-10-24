@@ -1830,8 +1830,8 @@ def build_orkestra_context(analyza: dict, variants: list, analyza_id: str = "", 
         direct_to_load_pct = charging_battery_pct = exported_pct = curtailed_pct = 0.0
 
     # === Cashflow array (21 hodnôt: y0..y20) ===
-    PV_DEGRADATION = 0.005
-    OPEX_RATE = 0.015
+    PV_DEGRADATION = 0.0   # bez poklesu výnosu a bez prevádzkových nákladov (rozhodnutie 2026-10-24)
+    OPEX_RATE = 0.0
     annual_opex = capex_total * OPEX_RATE
     engine_cf = selected.get("cashflow_array")
     if engine_cf and len(engine_cf) >= 21:

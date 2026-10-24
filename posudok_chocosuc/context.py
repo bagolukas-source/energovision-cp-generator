@@ -8,7 +8,7 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from profile_classifier import classify_profile
 
-DEG=0.005; INFL=0.025; DISC=0.06; LIFE=20; OPEX_RATE=0.015; ODPIS=6; DPPO=0.21; RESID=0.10
+DEG=0.0; INFL=0.025; DISC=0.06; LIFE=20; OPEX_RATE=0.0; ODPIS=6; DPPO=0.21; RESID=0.10   # DEG/OPEX 0: bez poklesu výnosu a prevádzkových nákladov (2026-10-24)
 
 def _pb(v):
     """Návratnosť alebo None (= nevráti sa); 99 je sentinel enginu, 0/None chýbajúca hodnota."""
@@ -414,5 +414,5 @@ def _build_deterministic_narratives(ctx, S, full, prof, pm):
     args.append(("ESG profil a CSRD reporting",
                  f"Ročná úspora ~{n(co2)} t CO₂ (pri SK emisnej intenzite ~0,25 kg/kWh) — doložiteľný podklad pre EU Taxonómiu a CSRD disclosures."))
     args.append(("Reziduálna hodnota po 20 rokoch",
-                 f"Po 20 rokoch má FVE ešte ~90 % výkonu (degradácia 0,5 %/r); konzervatívne 10 % CAPEX = {n(capex*0.10)} € reziduálnej hodnoty."))
+                 f"Ekonomika neráta s poklesom výkonu FVE; konzervatívne 10 % CAPEX = {n(capex*0.10)} € reziduálnej hodnoty."))
     ctx["zaver_arguments"] = args

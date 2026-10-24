@@ -731,7 +731,7 @@ def generate_premium_posudok(
     _bullet(doc, "EMS — rule-based dispatch s multi-cycle stratégiou (samospotreba + arbitráž BS + peak shaving).")
     _bullet(doc, "Spot ceny — OKTE DAM 2025 hodinové (priemer 103 €/MWh).")
     _bullet(doc, "Tarify — ÚRSO 2026 (distribúcia + TPS + nájomné + straty).")
-    _bullet(doc, "Ekonomika — NPV 20 r., diskont 6 %, OPEX 1.5–2.0 % CAPEX/rok, degradácia FVE 0.5 %/rok, BESS 2 %/rok.")
+    _bullet(doc, "Ekonomika — NPV 20 r., diskont 6 %, bez prevádzkových nákladov a bez poklesu výnosu v čase.")
     _bullet(doc, f"Daňový odpis — lineárny 6 r. pri DPPO {_DPPO_PCT:.0f} % (novela 2025 pre MSP).")
 
     # ===============================================================

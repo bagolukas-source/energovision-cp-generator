@@ -108,7 +108,7 @@ def chart_cumcf(ctx):
         cf=[-capex]; acc=-capex
         for y in range(1,21):
             sv=s["save_total"]*((1-0.005)**(y-1))*((1+0.025)**(y-1)); tax=s.get("annual_tax",0) if y<=6 else 0
-            acc+=sv-s.get("opex",capex*0.015)+tax; cf.append(acc)
+            acc+=sv-s.get("opex",0.0)+tax; cf.append(acc)
         ax.plot(yrs,[c/1000 for c in cf],lw=2.8,color=cols[i%3],label=s["short"],zorder=3,solid_capstyle="round")
     ax.axhline(0,color="#CBD5E1",lw=1.2); ax.set_xlabel("Rok prevádzky"); ax.set_ylabel("Kumulatívny CF (k€)")
     ax.legend(frameon=False,fontsize=10,loc="upper left"); ax.set_xlim(0,20); _clean(ax)

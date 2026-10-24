@@ -611,7 +611,7 @@
     <p><strong>Spot ceny</strong> — OKTE DAM 2025 hodinové (priemer {{ spot_avg_eur_mwh|round|int }} €/MWh).
       {% if tarif_typ == "fix" %}Klient má fixnú zmluvu, takže spot neurčuje jeho nákupnú cenu — vstupuje len do ocenenia výkupu prebytkov.{% endif %}</p>
     <p><strong>Tarify</strong> — ÚRSO 2026 (distribúcia + TPS + nájomné + straty).</p>
-    <p><strong>Ekonomika</strong> — NPV {{ analysis_years }} r., diskont 6 %, OPEX 1.5–2.0 % CAPEX/rok, degradácia FVE 0.5 %/rok, BESS 2 %/rok.</p>
+    <p><strong>Ekonomika</strong> — NPV {{ analysis_years }} r., diskont 6 %, bez prevádzkových nákladov a bez poklesu výnosu v čase.</p>
     <p><strong>Daňový odpis</strong> — lineárny 6 r. pri DPPO 21 % (štandard do 5 mil. € obratu).</p>
   </div>
 
@@ -626,7 +626,6 @@
     <tbody>
       <tr><td style="padding:5px 8px;">Diskontná sadzba</td><td style="padding:5px 8px; text-align:right;">{{ discount_rate_pct }} %</td><td style="padding:5px 8px;">Interný WACC predpoklad</td></tr>
       <tr><td style="padding:5px 8px;">Horizont hodnotenia</td><td style="padding:5px 8px; text-align:right;">{{ analysis_years }} rokov</td><td style="padding:5px 8px;">Životnosť FVE</td></tr>
-      <tr><td style="padding:5px 8px;">Degradácia FVE</td><td style="padding:5px 8px; text-align:right;">0,5 %/rok</td><td style="padding:5px 8px;">Výrobca panelov</td></tr>
       <tr><td style="padding:5px 8px;">Priemerná spotová cena</td><td style="padding:5px 8px; text-align:right;">{{ spot_avg_eur_mwh|round|int }} €/MWh</td><td style="padding:5px 8px;">OKTE DAM 2025{% if tarif_typ == "fix" %} — len pre ocenenie výkupu{% endif %}</td></tr>
       <tr><td style="padding:5px 8px;">Distribučné tarify</td><td style="padding:5px 8px; text-align:right;">ÚRSO 2026</td><td style="padding:5px 8px;">Cenové rozhodnutie ÚRSO</td></tr>
       <tr><td style="padding:5px 8px;">Daňový odpis (štít)</td><td style="padding:5px 8px; text-align:right;">6 r. · {{ tax_shield_annual_eur|format_currency }}/rok</td><td style="padding:5px 8px;">Zákon o dani z príjmov</td></tr>

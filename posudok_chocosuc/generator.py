@@ -489,7 +489,7 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
     {trow(["Bilančná simulácia","8 760 h",ctx.get('consumption_source','15-min dáta')])}
     {trow(["Špecifický výnos FVE",f"{num(ctx.get('yield'))} kWh/kWp","PVGIS"])}
     {trow(["Diskont / horizont / odpis","6 % / 20 r / 6 r","WACC / životnosť / zákon"])}
-    {trow(["Degradácia FVE / inflácia energie","0,5 % / 2,5 % ročne","výrobca / makro"])}
+    {trow(["Inflácia energie","2,5 % ročne","makro"])}
     {trow(["Tarify a ceny",ctx.get('tarif_source','—') if ctx.get('tarif_real') else "orientačné (faktúra nedodaná)","faktúra / ÚRSO 2026"])}
     {trow(["Komponenty a CAPEX",ctx.get('pon_number','—') if comp_real else "orientačné","cenová ponuka"])}
   </table>
