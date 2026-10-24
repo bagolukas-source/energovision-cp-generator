@@ -84,6 +84,38 @@ class VariantResult:
         return f"{self.pv_kwp:.0f} kWp FVE {bess_part}"
 
 
+_SPOT15_CACHE: dict = {}
+
+
+def _spot15_kalendar():
+    """Reálne 15-min ceny SK denného trhu OKTE (od 1. 10. 2025 je trh 15-minútový), 365 dní
+    v kalendárnom poradí 1. 1. → 31. 12. Zdroj: aom_data/sk_spot_15min_2025-10_2026-09.csv
+    (OKTE isot API /dam/results), prepísateľné cez ENERGO_SPOT15_CSV. None, ak súbor chýba.
+
+    Hodinové ceny 2025 merchant batériu podhodnocovali o ~18 % (Röchling 2 410 kWh:
+    96,5 k€ hodinovo vs 113,6 k€ na 15-min cenách tých istých mesiacov)."""
+    import os
+    from pathlib import Path
+    path = os.environ.get("ENERGO_SPOT15_CSV") or str(
+        Path(__file__).resolve().parents[2] / "aom_data" / "sk_spot_15min_2025-10_2026-09.csv")
+    if path in _SPOT15_CACHE:
+        return _SPOT15_CACHE[path]
+    arr = None
+    try:
+        df = pd.read_csv(path)
+        d = pd.to_datetime(df["delivery_day"])
+        df = df.assign(_m=d.dt.month, _d=d.dt.day, _o=np.arange(len(df)))
+        df = df[~((df["_m"] == 2) & (df["_d"] == 29))]
+        df = df.sort_values(["_m", "_d", "_o"])                      # kalendárne poradie, v dni chronologicky
+        v = df["price_eur_mwh"].to_numpy(float)
+        if len(v) == 365 * 96 and np.isfinite(v).all():
+            arr = v
+    except Exception:
+        arr = None
+    _SPOT15_CACHE[path] = arr
+    return arr
+
+
 class VariantGenerator:
     """Matrix runner — vyrobí všetky kombinácie PV × BESS × EMS a spustí každý."""
 
@@ -440,8 +472,17 @@ class VariantGenerator:
                 # Vlastná hodnota z CRM (merchant_degradation_eur_mwh) ostáva ako minimálny zisk obchodu.
                 _degr_source = ("vymena_clankov" if getattr(self, "count_battery_replacement", False)
                                 else "bez_prahu")
+            _spot_m, _load_m, _spot_zdroj = self.spot, np.maximum(0.0, load_kw - pv_kw), "hodinový spot (vstup analýzy)"
+            _s15 = _spot15_kalendar()
+            if _s15 is not None and abs(_dt_h - 1.0) < 1e-9 and len(load_kw) == 8760:
+                # posun na kalendárny začiatok profilu (rovnako ako _calendar_align pri hodinovom spote)
+                _off = (int(pd.Timestamp(self.timestamps[0]).dayofyear) - 1) % 365
+                _spot_m = np.roll(_s15, -_off * 96)
+                _load_m = np.repeat(_load_m, 4)
+                _dt_h, _window = 0.25, 96
+                _spot_zdroj = "OKTE 15-min 10/2025–9/2026"
             _m = compute_merchant_arbitrage(
-                spot_eur_mwh=self.spot,
+                spot_eur_mwh=_spot_m,
                 dt_h=_dt_h,
                 bess_kwh=bess_kwh,
                 power_kw_ac=_power_kw,
@@ -457,8 +498,9 @@ class VariantGenerator:
                 # obchodoval plným výkonom aj v hodinách, keď je prípojka takmer plná,
                 # a v realite by to znamenalo prekročenie MRK s penále.
                 # Posielame ČISTÝ odber po FVE: cez deň FVE uvoľní miesto pod RK.
-                load_kw=np.maximum(0.0, load_kw - pv_kw),
+                load_kw=_load_m,
             )
+            _m["spot_zdroj"] = _spot_zdroj
             # Batéria neslúži záťaži → vynuluj jej samospotrebné/arbitráž/peak streamy
             saving_decomp["sav_bess_self_cons_eur"] = 0.0
             saving_decomp["sav_arbitrage_eur"] = 0.0

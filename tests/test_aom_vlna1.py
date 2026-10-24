@@ -437,6 +437,21 @@ def test_14_merchant_bez_automatickeho_prahu_opotrebenia():
     assert md["degradation_cost_eur_mwh"] == 0 and md["degradation_source"] == "bez_prahu", md
 
 
+def test_15_merchant_na_15min_cenach_okte():
+    # od 1. 10. 2025 je SK denný trh 15-minútový — hodinové ceny merchant batériu podhodnocovali (~18 %)
+    import energovision_analytics.variants.generator as G
+    v15 = _engine(_req(), 200, 400, merchant=True)
+    assert v15["merchant_detail"]["spot_zdroj"].startswith("OKTE 15-min"), v15["merchant_detail"]
+    os.environ["ENERGO_SPOT15_CSV"] = "/neexistuje.csv"
+    try:
+        v60 = _engine(_req(), 200, 400, merchant=True)
+    finally:
+        del os.environ["ENERGO_SPOT15_CSV"]
+    assert v60["merchant_detail"]["spot_zdroj"].startswith("hodinový")
+    assert v15["value_streams"]["merchant_eur"] > 1.05 * v60["value_streams"]["merchant_eur"]
+    assert G._spot15_kalendar() is not None
+
+
 if __name__ == "__main__":
     import traceback
     fails = 0
