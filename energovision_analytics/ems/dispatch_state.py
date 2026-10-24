@@ -54,7 +54,9 @@ class EMSConfig:
 
     # Rozhodovanie o nabíjaní/vybíjaní: "lp" = rolling-horizon LP (ems/lp_plan.py, audit 2026-10-24
     # E02 — pravidlá dosahovali 39–66 % optima), "rules" = pôvodné priority P2b–P4.
-    dispatch: str = "lp"
+    # Default "rules": LP matica 4×3 s rastom spotreby trvala na Renderi ~85 s + ručné varianty
+    # → gunicorn WORKER TIMEOUT 120 s (2026-10-24 18:15). LP sa zapne po zrýchlení.
+    dispatch: str = "rules"
     lp_window_h: int = 36                 # day-ahead spot je známy o 12:00 na ďalší deň
     lp_commit_h: int = 24
 

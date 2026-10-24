@@ -15,7 +15,7 @@ print("=== S4 MONOTONNOST KAPACITY (realny spot) ===")
 print(f"baseline PV-only sav_total = {base['sav_total']:.0f} EUR")
 rows = []
 for kwh in [25, 50, 100, 200, 400]:
-    iv, s, bat, ems = run_ems(load, pv, spot, bess_kwh=float(kwh))
+    iv, s, bat, ems = run_ems(load, pv, spot, bess_kwh=float(kwh), dispatch="lp")  # monotónnosť garantuje LP plán
     v_streams = batt_value(s)
     v_total = s.sav_total_eur - base['sav_total']
     rows.append((kwh, v_streams, v_total, s.sav_arbitrage_eur, s.sav_bess_self_cons_eur,
