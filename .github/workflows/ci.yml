@@ -1,8 +1,7 @@
 name: Render CI
 
 on:
-  pull_request:
-    branches: [main]
+  pull_request:   # všetky PR (aj stohované vetvy auditu AOM), nie len do main
   push:
     branches: [main]
 
@@ -44,7 +43,7 @@ jobs:
           pip install --dry-run -r requirements.txt 2>&1 | tail -5 || true
 
   aom-tests:
-    # Výpočtové testy AOM enginu: audit 2026-10-24 vlna 1 + property testy batérie (t1–t7) + merchant.
+    # Výpočtové testy AOM enginu: audit 2026-10-24 vlna 1 + 1b + property testy batérie (t1–t7) + merchant.
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -64,4 +63,4 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
           ENERGO_SPOT_CSV: ${{ github.workspace }}/aom_data/sk_spot_2025_hourly.csv
           ENERGO_TARIFF_YAML: ${{ github.workspace }}/aom_data/tariffs/2026.yaml
-        run: python -m pytest -q -p no:cacheprovider tests/test_aom_vlna1.py tests/test_audit_bess.py
+        run: python -m pytest -q -p no:cacheprovider tests/test_aom_vlna1.py tests/test_aom_vlna1b_ems.py tests/test_aom_vlna1b_engine.py tests/test_aom_vlna1b_fin.py tests/test_aom_vlna1b_report.py tests/test_audit_bess.py

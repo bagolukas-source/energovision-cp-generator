@@ -120,6 +120,17 @@ def test_a26_v11_psc_gps_najspecifickejsi_rozsah():
     assert not zle, zle
 
 
+
+def test_a33_engine_desatinne_velkosti_dve_id():
+    # napojenie v generator.py: 100.4 a 100.6 kWp sú dva varianty s rôznym ID (predtým oba „PV100_…")
+    import test_aom_vlna1 as T
+    from energovision_analytics.api.services.engine_service import run_variants_pipeline, build_run_variants_response
+    rq = T._req()
+    rq["variants"]["pv_kwp_options"] = [100.4, 100.6]
+    rq["variants"]["bess_kwh_options"] = [0]
+    ids = [v["variant_id"] for v in build_run_variants_response(run_variants_pipeline(rq))["variants"]]
+    assert len(ids) == 2 and len(set(ids)) == 2, ids
+
 if __name__ == "__main__":
     import traceback
     fails = 0

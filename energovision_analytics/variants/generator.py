@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
+from energovision_analytics.variants.variant_id import make_variant_id
 import numpy as np
 import pandas as pd
 
@@ -321,7 +322,7 @@ class VariantGenerator:
         keep_intervals: bool = False,
     ) -> VariantResult:
         """Spustí 1 variant cez celý pipeline."""
-        variant_id = f"PV{pv_kwp:.0f}_BESS{bess_kwh:.0f}_{ems_strategy}"
+        variant_id = make_variant_id(pv_kwp, bess_kwh, ems_strategy)  # audit A33: desatinné veľkosti bez kolízie
         pv = self._make_pv(pv_kwp)
         bess = self._make_bess(bess_kwh)
 
