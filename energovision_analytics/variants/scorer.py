@@ -10,7 +10,12 @@ def pick_top_variants(
     variants: list[VariantResult],
     n: int = 6,
 ) -> list[tuple[str, VariantResult]]:
-    """Vyber top N variantov podľa 6 kritérií (jeden variant na kritérium).
+    """Vyber top N variantov podľa 6 kritérií.
+
+    Každý štítok dostane skutočného víťaza svojej metriky (audit 2026-10-24 A27/F26:
+    deduplikácia predtým dala „Najvyššie IRR" druhému najlepšiemu). Ak jeden variant
+    vyhrá viac kritérií, je v zozname raz so spojenými štítkami („Najvyššie NPV ·
+    Najvyššie IRR") — žiadny variant sa neopakuje pod dvoma položkami.
 
     Returns:
         List (label, VariantResult) párov:
@@ -29,7 +34,8 @@ def pick_top_variants(
     # Sortuj podľa rôznych metrik
     by_npv = sorted(valid, key=lambda v: -v.npv_eur)
     by_irr = sorted([v for v in valid if v.irr_pct], key=lambda v: -v.irr_pct)
-    by_payback = sorted([v for v in valid if 0 < v.payback_y < 99], key=lambda v: v.payback_y)
+    by_payback = sorted([v for v in valid if v.payback_y is not None and 0 < v.payback_y < 99],
+                        key=lambda v: v.payback_y)
     by_samospotreba = sorted(valid, key=lambda v: -v.samospotreba_pct)
     by_samostatnost = sorted(valid, key=lambda v: -v.samostatnost_pct)
 
@@ -38,17 +44,18 @@ def pick_top_variants(
     by_cheapest_positive = sorted(positive_npv, key=lambda v: v.capex_total_eur)
 
     chosen: list[tuple[str, VariantResult]] = []
-    seen_ids: set[str] = set()
+    pos: dict[str, int] = {}  # variant_id → index v chosen
 
     def add(label, candidates):
-        for v in candidates:
-            if v.variant_id not in seen_ids:
-                chosen.append((label, v))
-                seen_ids.add(v.variant_id)
-                return
-        # Fallback — pridaj prvý ak nič nové
-        if candidates:
-            chosen.append((label, candidates[0]))
+        if not candidates:
+            return
+        best = candidates[0]
+        i = pos.get(best.variant_id)
+        if i is None:
+            pos[best.variant_id] = len(chosen)
+            chosen.append((label, best))
+        else:
+            chosen[i] = (f"{chosen[i][0]} · {label}", chosen[i][1])
 
     add("Najvyššie NPV", by_npv)
     add("Najvyššie IRR", by_irr)
