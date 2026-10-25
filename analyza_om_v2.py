@@ -2530,6 +2530,13 @@ def render_porovnanie(sb, analyza_id: str, variant_ids: list | None = None, lang
         }
         ai = _generate_porovnanie_ai(ai_input)
         context.update(ai)
+        # AI niekedy vráti recommendation ako reťazec a hodnotenia ako reťazce (mimo schémy) → 500 na .get()
+        _rec = context.get("ai_recommendation")
+        if isinstance(_rec, str):
+            context["ai_recommendation"] = {"detail": _rec} if _rec.strip() else {}
+        elif not isinstance(_rec, dict):
+            context["ai_recommendation"] = {}
+        context["ai_variant_assessments"] = [x for x in (context.get("ai_variant_assessments") or []) if isinstance(x, dict)]
         # Fallback: hodnotenia ponúk nikdy nesmú chýbať
         if not context.get("ai_variant_assessments"):
             context["ai_variant_assessments"] = _porovnanie_fallback_assessments(rows, mrk_kw)
