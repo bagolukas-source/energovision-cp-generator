@@ -7081,6 +7081,7 @@ def webhook_aom_render_chocosuc():
     if not aid:
         return jsonify({"ok": False, "error": "analyza_id required"}), 400
     vid = body.get("variant_id") or None   # variant zvolený v CRM (má prednosť pred DB — súbeh uloženia)
+    lang = body.get("lang") or None        # sk/en/de z CRM; bez neho analyza_om.doc_lang → customers.lang → sk
     import threading
     try:
         _sb().table("analyza_om").update({"posudok_job_status": "running"}).eq("id", aid).execute()
@@ -7088,7 +7089,7 @@ def webhook_aom_render_chocosuc():
         pass
     def _bg(_aid):
         try:
-            _aom_v2.render_posudok_chocosuc(_sb(), _aid, variant_id=vid)
+            _aom_v2.render_posudok_chocosuc(_sb(), _aid, variant_id=vid, lang=lang)
             try: _sb().table("analyza_om").update({"posudok_job_status": "done"}).eq("id", _aid).execute()
             except Exception: pass
         except Exception:

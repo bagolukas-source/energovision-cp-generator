@@ -29,16 +29,28 @@ os.environ.setdefault("ENERGO_TARIFF_YAML", str(TARIFF_YAML))
 log = logging.getLogger(__name__)
 
 
-def _record_doc(sb, analyza_id, doc_type, title, filename, file_url, storage_path, size_kb=None, variant_label=None):
-    """Zapíše dokument do histórie analyza_om_documents (idempotentne podľa storage_path)."""
+def _record_doc(sb, analyza_id, doc_type, title, filename, file_url, storage_path, size_kb=None, variant_label=None, lang="sk"):
+    """Zapíše dokument do histórie analyza_om_documents (idempotentne podľa storage_path).
+    `lang` sa posiela len pre en/de (sk = DB default); kým stĺpec lang neexistuje, zápis sa zopakuje bez neho."""
+    row = {
+        "analyza_id": analyza_id, "doc_type": doc_type, "title": title,
+        "filename": filename, "file_url": file_url, "storage_path": storage_path,
+        "size_kb": size_kb, "variant_label": variant_label,
+        "generated_at": datetime.now().isoformat(),
+    }
+    if lang and lang != "sk":
+        row["lang"] = lang
     try:
-        sb.table("analyza_om_documents").upsert({
-            "analyza_id": analyza_id, "doc_type": doc_type, "title": title,
-            "filename": filename, "file_url": file_url, "storage_path": storage_path,
-            "size_kb": size_kb, "variant_label": variant_label,
-            "generated_at": datetime.now().isoformat(),
-        }, on_conflict="storage_path").execute()
+        sb.table("analyza_om_documents").upsert(row, on_conflict="storage_path").execute()
     except Exception as _e:
+        if "lang" in row and "lang" in str(_e):
+            row.pop("lang")
+            logging.warning("record_doc: stĺpec analyza_om_documents.lang chýba — zápis bez jazyka")
+            try:
+                sb.table("analyza_om_documents").upsert(row, on_conflict="storage_path").execute()
+                return
+            except Exception as _e2:
+                _e = _e2
         logging.warning("record_doc failed (%s): %s", doc_type, _e)
 
 
@@ -3002,6 +3014,9 @@ def _generate_chocosuc_ai(ctx: dict) -> dict:
     """Celý posudok píše AI po sekciách, PRÍSNE grounded (len engine čísla).
     Vráti dict s HTML per sekcia + recommendations. Fail-safe -> deterministické narativy."""
     import json
+    from aom_i18n import get_lang
+    from aom_i18n.glossary import glossary_prompt
+    _lang_tail = glossary_prompt(get_lang())  # sk: "" → prompt bez zmeny; vlákna poolu ContextVar nededia
     # audit V: AI naratív dostával "ekonomiku" z Optimistického scenára (S[-1]), kým cover a
     # tabuľky ukazujú odporúčaný (default Báza) — čísla v texte nesedeli so zvyškom posudku.
     S = ctx["scenarios3"]
@@ -3089,7 +3104,7 @@ def _generate_chocosuc_ai(ctx: dict) -> dict:
         ('{"recommendations":[{"title":"krátky","detail":"1-2 vety, KVALITATÍVNE alebo s číslom z JSON"}, ... 4-6 položiek]}'),
     ]
     def _call_group(schema):
-        sysp_g = _grounding + ("VÝSTUP: striktný JSON (žiadny markdown, žiadny text okolo). Každá hodnota je HTML s <p> odsekmi. "
+        sysp_g = _grounding + _lang_tail + ("VÝSTUP: striktný JSON (žiadny markdown, žiadny text okolo). Každá hodnota je HTML s <p> odsekmi. "
                                "Vyplň PRÁVE tieto kľúče:\n" + schema)
         try:
             from anthropic import Anthropic
@@ -3187,15 +3202,27 @@ def _rich_variant_for_row(sb, analyza, row, econ_variants):
     return None
 
 
-def render_posudok_chocosuc(sb, analyza_id: str, variant_id: str | None = None) -> dict:
-    """ChocoSuc-grade posudok: deterministické fakty + AI naratív (grounded) -> HTML->PDF."""
-    from posudok_chocosuc.context import build_chocosuc_context
-    from posudok_chocosuc.generator import generate_chocosuc_pdf
+def render_posudok_chocosuc(sb, analyza_id: str, variant_id: str | None = None, lang: str | None = None) -> dict:
+    """ChocoSuc-grade posudok: deterministické fakty + AI naratív (grounded) -> HTML->PDF.
+    Jazyk: `lang` z požiadavky → analyza_om.doc_lang → customers.lang → sk (aom_i18n.resolve_lang)."""
+    from aom_i18n import resolve_lang, use_lang
 
-    a_res = sb.table("analyza_om").select("*, customers(first_name, last_name, company_name, email, ico)").eq("id", analyza_id).single().execute()
+    a_res = sb.table("analyza_om").select("*, customers(first_name, last_name, company_name, email, ico, lang)").eq("id", analyza_id).single().execute()
     analyza = a_res.data
     if not analyza:
         raise ValueError(f"Analyza {analyza_id} not found")
+    lang = resolve_lang(lang, analyza)
+    with use_lang(lang):
+        return _render_posudok_chocosuc(sb, analyza_id, analyza, variant_id, lang)
+
+
+_POSUDOK_FILE_PREFIX = {"sk": "Posudok_FVE", "en": "Assessment_PV", "de": "Gutachten_PV"}
+
+
+def _render_posudok_chocosuc(sb, analyza_id: str, analyza: dict, variant_id, lang: str) -> dict:
+    from posudok_chocosuc.context import build_chocosuc_context
+    from posudok_chocosuc.generator import generate_chocosuc_pdf
+
     econ = analyza.get("econ_results") or {}
     variants = (econ.get("full_response") or {}).get("variants", [])
     if not variants:
@@ -3281,7 +3308,8 @@ def render_posudok_chocosuc(sb, analyza_id: str, variant_id: str | None = None) 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     import re as _re
     _slug = _re.sub(r"[^A-Za-z0-9]+", "_", (ctx.get("client_name") or "OM")).strip("_")[:40] or "OM"
-    _fbase = f"Posudok_FVE_{_slug}_{ts}"
+    _lsuf = "" if lang == "sk" else f"_{lang.upper()}"
+    _fbase = f"{_POSUDOK_FILE_PREFIX[lang]}_{_slug}{_lsuf}_{ts}"
     pdf_path = f"analyza_om/{analyza_id}/{_fbase}.pdf"
     sb.storage.from_("documents").upload(pdf_path, pdf_bytes, {"content-type": "application/pdf", "upsert": "true"})
     pdf_url = sb.storage.from_("documents").get_public_url(pdf_path)
@@ -3299,10 +3327,10 @@ def render_posudok_chocosuc(sb, analyza_id: str, variant_id: str | None = None) 
 
     sb.table("analyza_om").update({"posudok_orkestra_pdf_url": pdf_url, "posudok_orkestra_docx_url": docx_url, "posudok_orkestra_generated_at": datetime.now().isoformat()}).eq("id", analyza_id).execute()
     _vlabel = ctx.get("variant_title") or None
-    _record_doc(sb, analyza_id, "posudok_pdf", "Technický posudok (PDF)", f"{_fbase}.pdf", pdf_url, pdf_path, len(pdf_bytes)//1024, _vlabel)
+    _record_doc(sb, analyza_id, "posudok_pdf", "Technický posudok (PDF)", f"{_fbase}.pdf", pdf_url, pdf_path, len(pdf_bytes)//1024, _vlabel, lang=lang)
     if docx_url:
-        _record_doc(sb, analyza_id, "posudok_docx", "Technický posudok (DOCX)", f"{_fbase}.docx", docx_url, docx_path, (len(docx_bytes)//1024 if "docx_bytes" in dir() else None), _vlabel)
-    return {"ok": True, "pdf_url": pdf_url, "docx_url": docx_url, "size_kb": len(pdf_bytes) // 1024, "engine": "chocosuc-v1", "client": ctx.get("client_name")}
+        _record_doc(sb, analyza_id, "posudok_docx", "Technický posudok (DOCX)", f"{_fbase}.docx", docx_url, docx_path, (len(docx_bytes)//1024 if "docx_bytes" in dir() else None), _vlabel, lang=lang)
+    return {"ok": True, "pdf_url": pdf_url, "docx_url": docx_url, "size_kb": len(pdf_bytes) // 1024, "engine": "chocosuc-v1", "client": ctx.get("client_name"), "lang": lang}
 
 
 def aom_chat(sb, analyza_id: str, message: str, history=None) -> dict:
