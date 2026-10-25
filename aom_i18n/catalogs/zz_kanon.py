@@ -2,6 +2,7 @@
 Test test_aom_i18n_catalog.test_no_conflicting_translations vyžaduje, aby tu bol každý taký kľúč."""
 EN = {
     "FVE": "PV",
+    "Batéria (BESS)": "BESS (battery storage)",
     "Priamo do odberu": "Direct use",
     "Špecifický výnos FVE": "Specific PV yield",
     "Max 15-min odber": "Max. 15-min demand",
@@ -21,6 +22,7 @@ EN = {
 }
 DE = {
     "FVE": "PV",
+    "Batéria (BESS)": "BESS (Batteriespeicher)",
     "Priamo do odberu": "Direktverbrauch",
     "Cez batériu": "Über Batterie",
     "Špecifický výnos FVE": "Spezifischer PV-Ertrag",
