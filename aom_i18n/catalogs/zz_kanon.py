@@ -22,6 +22,7 @@ EN = {
 }
 DE = {
     "FVE": "PV",
+    "Vystavené": "Ausgestellt am",
     "Batéria (BESS)": "BESS (Batteriespeicher)",
     "Priamo do odberu": "Direktverbrauch",
     "Cez batériu": "Über Batterie",
