@@ -16822,7 +16822,9 @@ def webhook_prezentacia_b2b():
     body = request.get_json(force=True, silent=True) or {}
     try:
         import generuj_prezentaciu
-        pdf = generuj_prezentaciu.generuj_prezentaciu_b2b(body)
+        from aom_i18n import norm_lang, use_lang
+        with use_lang(norm_lang(body.get("lang"))):
+            pdf = generuj_prezentaciu.generuj_prezentaciu_b2b(body)
         return jsonify({"ok": True, "pdf_base64": _b.b64encode(pdf).decode()})
     except Exception as e:
         log.exception("prezentacia-b2b failed"); return jsonify({"ok": False, "error": str(e)}), 500
