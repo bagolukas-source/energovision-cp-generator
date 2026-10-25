@@ -1,0 +1,110 @@
+TECHNICKO-EKONOMICKÝ POSUDOK · P-AOM-000000
+Testovacia firma s.r.o.
+FVE 725 kWp + BESS 1 000 kWh
+Analýza odberu, simulácia výroby a dispatch, ekonomické posúdenie v 3 scenároch s rizikovou analýzou.
+MANAŽÉRSKE ZHRNUTIE
+Audit odberu: investícia je ekonomicky výhodná vo všetkých scenároch
+Odporúčanie: Realizovať — návratnosť 5,7–6,4 r, NPV 610 000 € (báza); aj v pesimistickom scenári P10 zostáva NPV kladné (458 219 €).
+1 — VÝCHODISKÁ A IDENTIFIKÁCIA OM
+Stav odberného miesta a vstupné dáta
+Charakteristika prevádzky (odvodená z dát): Profil je charakteristický ako nepravidelný profil s výraznými výkyvmi odberu; minimálna sezónnosť, rovnomerná spotreba počas roka. Špička: poludňajší špic. vysoká vhodnosť pre FVE — odber sa kryje s dennou výrobou.
+
+2 — PROFIL ODBERU
+Charakteristika spotreby
+
+Graf 1: Denný profil odberu — pracovný deň vs víkend, s PV produkciou.
+
+Graf 2: Mesačná spotreba.
+
+3 — TECHNICKÉ RIEŠENIE
+Navrhnutý variant — FVE 725 kWp + BESS 1000 kWh
+ENERGETICKÁ BILANCIA
+
+Graf 3: Energetická bilancia.
+
+4 — EKONOMICKÉ POSÚDENIE
+Cenové predpoklady
+Tri scenáre prínosu
+
+Graf 4: Porovnanie 3 scenárov.
+
+Graf 5: Kumulatívny cashflow 20 rokov.
+
+5 — SKLADBA PRÍNOSU A RIZIKOVÁ ANALÝZA
+Skladba ročného prínosu
+
+Graf 6: Skladba ročného prínosu.
+
+Graf 7: Tornado — citlivosť NPV.
+
+Graf 8: Monte Carlo — P10 458 219 €, medián 582 287 €, P90 700 100 €; pravdepodobnosť kladného NPV 100 %.
+
+6 — CENA NEČINNOSTI
+Koľko stojí ponechať súčasný stav
+7 — EXPERT POSÚDENIE A ODPORÚČANIA
+Odporúčané kroky
+
+8 — ZÁVER
+Odporúčanie pre klienta
+Investícia 738 000 € do FVE 725 kWp + BESS 1000 kWh prinesie ročné úspory 112 000 € (báza) až 125 440 € (optimistický scenár). Návratnosť 5,7–6,4 r, NPV 20 r. 610 000 € (báza), IRR 15.2 %.
+ZÁRUKY A ISTOTY
+Výkonová záruka na panely (25–30 r.) a záruka výrobcu na meniče a batériu.
+Realizácia, revízie a uvedenie do prevádzky pod jednou zodpovednosťou Energovision.
+Monitoring výroby a úspor po spustení; servis počas celej životnosti.
+Skúsenosť s riešeniami pre porovnateľné priemyselné prevádzky.
+9 — PREDPOKLADY A ZDROJE
+Metodika a východiská
+Model má neistotu ±10–15 %. Čísla pochádzajú zo simulácie dispatchu (energetická bilancia validovaná). Posudok je nezáväzný odborný odhad.
+Kontakt: Lukáš Bago · lukas.bago@energovision.sk · 0918 187 762
+Ukazovateľ | Hodnota
+Investícia (Net CAPEX) | 738 000 €
+Ročný prínos (rok 1) | 112 000 €
+Návratnosť | 6,4 r
+NPV 20 r. / IRR | 610 000 € / 15,2 %
+Pokrytie spotreby / samospotreba | 25,7 % / 66,0 %
+Údaj | Hodnota
+Klient | Testovacia firma s.r.o.
+Adresa OM | Priemyselná 1, 972 43 Testovo
+Distribučná oblasť | VN
+Sadzba / tarif | VN
+Ročná spotreba | 2 400 MWh
+Max 15-min odber | 980 kW
+Priemerný odber / load factor | 274 kW / 0,28
+MRK / RK | 1 200 / 1 000 kW
+Parameter | Hodnota
+Inštalovaný výkon FVE | 725,46 kWp DC
+Moduly | ~1251 ks modulov á ~580 Wp (orientačne — spresní cenová ponuka)
+Meniče / optimizéry | meniče ~689 kW AC + optimizéry
+Batériové úložisko | batéria 1000 kWh
+Konštrukcia | Juh 13°
+Predpokladaná ročná výroba | 751 MWh
+Veličina | Hodnota | Podiel
+Ročná výroba FVE | 751 MWh | 100 %
+Samospotreba | 496 MWh | 66,0 %
+Export prebytkov | 225 MWh | 30,0 %
+Import zo siete | 1 596 MWh | —
+Pokrytie spotreby OM | 25,7 % | FVE vs spotreba
+Zložka ceny | Hodnota | Zdroj
+Silová zložka | 134,87 €/MWh | faktúra
+Variabilná distribúcia | 16,55 €/MWh | VSD tarif
+TPS + systémové služby | 14,07 €/MWh | pásmo 2
+Avoided cost samospotreby | 151,4 €/MWh | kompozit
+Pevná zložka distribúcie | 8,02 €/kW/mes | × RK 1 000 kW
+Scenár | Úspora €/r | Návratnosť | NPV 20 r. | IRR
+Báza (ÚRSO 2026 + spot OKTE) | 112 000 € | 6,4 r | 610 000 € | 15,2 %
+Defenzívny (nižší výkup/cena) | 95 200 € | 7,5 r | 417 305 € | 12,9 %
+Optimistický (rast cien energie) | 125 440 € | 5,7 r | 764 156 € | 17,0 %
+Zdroj prínosu | Detail | Hodnota
+FVE priama samospotreba | 466 MWh priamo do odberu | 100 800 €
+FVE export prebytkov | 225 MWh do siete | 4 480 €
+Batéria — posun PV do odberu | 30 MWh PV uskladnené a využité neskôr | 1 100 €
+BESS obchodovanie v BS (merchant) | spotové obchodovanie batérie cez bilančnú skupinu | 26 350 €
+Ročná úspora SPOLU |  | 112 000 €
+Scenár cien energie | Náklad za 20 rokov | Rok 1
+Konštantné ceny | 2 133 058 € | 106 653 €
+Rast cien o 2,5 %/r | 2 724 412 € | 106 653 €
+Predpoklad / vstup | Hodnota | Zdroj
+Bilančná simulácia | 8 760 h | skutočné namerané 15-min dáta
+Špecifický výnos FVE | 1 035 kWh/kWp | PVGIS
+Diskont / horizont / odpis | 6 % / 20 r / 6 r | WACC / životnosť / zákon
+Tarify | faktúra | faktúra / ÚRSO 2026

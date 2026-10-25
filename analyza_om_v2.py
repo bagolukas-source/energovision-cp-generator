@@ -29,16 +29,28 @@ os.environ.setdefault("ENERGO_TARIFF_YAML", str(TARIFF_YAML))
 log = logging.getLogger(__name__)
 
 
-def _record_doc(sb, analyza_id, doc_type, title, filename, file_url, storage_path, size_kb=None, variant_label=None):
-    """Zapíše dokument do histórie analyza_om_documents (idempotentne podľa storage_path)."""
+def _record_doc(sb, analyza_id, doc_type, title, filename, file_url, storage_path, size_kb=None, variant_label=None, lang="sk"):
+    """Zapíše dokument do histórie analyza_om_documents (idempotentne podľa storage_path).
+    `lang` sa posiela len pre en/de (sk = DB default); kým stĺpec lang neexistuje, zápis sa zopakuje bez neho."""
+    row = {
+        "analyza_id": analyza_id, "doc_type": doc_type, "title": title,
+        "filename": filename, "file_url": file_url, "storage_path": storage_path,
+        "size_kb": size_kb, "variant_label": variant_label,
+        "generated_at": datetime.now().isoformat(),
+    }
+    if lang and lang != "sk":
+        row["lang"] = lang
     try:
-        sb.table("analyza_om_documents").upsert({
-            "analyza_id": analyza_id, "doc_type": doc_type, "title": title,
-            "filename": filename, "file_url": file_url, "storage_path": storage_path,
-            "size_kb": size_kb, "variant_label": variant_label,
-            "generated_at": datetime.now().isoformat(),
-        }, on_conflict="storage_path").execute()
+        sb.table("analyza_om_documents").upsert(row, on_conflict="storage_path").execute()
     except Exception as _e:
+        if "lang" in row and "lang" in str(_e):
+            row.pop("lang")
+            logging.warning("record_doc: stĺpec analyza_om_documents.lang chýba — zápis bez jazyka")
+            try:
+                sb.table("analyza_om_documents").upsert(row, on_conflict="storage_path").execute()
+                return
+            except Exception as _e2:
+                _e = _e2
         logging.warning("record_doc failed (%s): %s", doc_type, _e)
 
 
@@ -1672,19 +1684,20 @@ def _topology_params(analyza: dict) -> tuple[float, float, str]:
 
 def _construction_str(analyza: dict) -> str:
     """Konštrukcia z cenovej ponuky: Juh 13° alebo Východ-Západ 10°. Nikdy 35°.
-    Default keď CP neudáva: Juh 13°."""
+    Default keď CP neudáva: Juh 13°. Text v jazyku aom_i18n (sk bez zmeny)."""
+    from aom_i18n import _
     topo = (analyza.get("fve_topology") or "").strip().lower()
     tilt = analyza.get("fve_tilt_deg")
     try: tilt = int(float(tilt)) if tilt not in (None, "") else None
     except Exception: tilt = None
     if tilt == 35: tilt = None  # 35° nepoužívame
     if any(k in topo for k in ("east", "e-w", "ew", "v-z", "vz", "východ", "zapad", "západ")):
-        return f"Východ-Západ {tilt or 10}°"
+        return _("Východ-Západ {t}°").format(t=tilt or 10)
     if any(k in topo for k in ("juh", "south", "jih")):
-        return f"Juh {tilt or 13}°"
+        return _("Juh {t}°").format(t=tilt or 13)
     if topo and "35" not in topo:
         return analyza.get("fve_topology")  # voľný text z CP
-    return f"Juh {tilt or 13}°"
+    return _("Juh {t}°").format(t=tilt or 13)
 
 
 
@@ -2238,7 +2251,15 @@ def _variant_dominates(a: dict, b: dict) -> bool:
 
 def _porovnanie_fallback_assessments(rows: list, mrk_kw: float) -> list:
     """Deterministické výhody/nevýhody per ponuka z čísel — fail-safe keď AI nejde.
-    Dokument NIKDY nesmie odísť s prázdnou sekciou hodnotenia."""
+    Dokument NIKDY nesmie odísť s prázdnou sekciou hodnotenia. Texty v jazyku aom_i18n (sk bez zmeny)."""
+    from aom_i18n import _, fmt, get_lang
+    sk = get_lang() == "sk"
+
+    def d1(x):  # sk: pôvodná desatinná bodka („8.4 roka", „IRR 9.0 %")
+        return f"{x:.1f}" if sk else fmt.num(x, 1)
+
+    def i0(x):
+        return str(round(x)) if sk else fmt.num(x, 0)
     out = []
     best_npv = max(r["npv_eur"] for r in rows)
     best_pb = min((r["payback_y"] for r in rows if r["payback_y"] is not None), default=None)
@@ -2246,21 +2267,21 @@ def _porovnanie_fallback_assessments(rows: list, mrk_kw: float) -> list:
     for r in rows:
         pros, cons = [], []
         if r["npv_eur"] >= best_npv - 1:
-            pros.append(f"Najvyšší čistý zisk za 20 rokov zo všetkých porovnávaných ponúk ({round(r['npv_eur']):,} €).".replace(",", " "))
+            pros.append(_("Najvyšší čistý zisk za 20 rokov zo všetkých porovnávaných ponúk ({npv}).").format(npv=fmt.eur(round(r["npv_eur"]))))
         if r["payback_y"] is not None and r["payback_y"] <= best_pb + 0.05:
-            pros.append(f"Najrýchlejšia návratnosť v porovnaní ({r['payback_y']:.1f} roka).")
+            pros.append(_("Najrýchlejšia návratnosť v porovnaní ({pb} roka).").format(pb=d1(r["payback_y"])))
         if r["capex_eur"] <= lowest_capex + 1:
-            pros.append(f"Najnižšia vstupná investícia ({round(r['capex_eur']):,} €).".replace(",", " "))
+            pros.append(_("Najnižšia vstupná investícia ({capex}).").format(capex=fmt.eur(round(r["capex_eur"]))))
         if r["bess_kwh"] > 0:
-            pros.append(f"Batéria {round(r['bess_kwh'])} kWh chráni pred prekročením MRK {round(mrk_kw)} kW a umožňuje arbitráž na spotovom trhu.")
-            cons.append("Vyššia vstupná investícia oproti variantu bez batérie a dodatočná technológia na údržbu.")
+            pros.append(_("Batéria {kwh} kWh chráni pred prekročením MRK {mrk} kW a umožňuje arbitráž na spotovom trhu.").format(kwh=i0(r["bess_kwh"]), mrk=i0(mrk_kw)))
+            cons.append(_("Vyššia vstupná investícia oproti variantu bez batérie a dodatočná technológia na údržbu."))
         else:
-            pros.append("Jednoduchšie riešenie bez batériového úložiska — menej technológie, nižší CAPEX.")
-            cons.append(f"Bez ochrany pred prekročením MRK {round(mrk_kw)} kW a bez výnosu z arbitráže.")
+            pros.append(_("Jednoduchšie riešenie bez batériového úložiska — menej technológie, nižší CAPEX."))
+            cons.append(_("Bez ochrany pred prekročením MRK {mrk} kW a bez výnosu z arbitráže.").format(mrk=i0(mrk_kw)))
         if r["dominated_by"]:
-            cons.append(f"Vo všetkých ukazovateľoch horšia než „{r['dominated_by']}“ — nemá zmysel ju vybrať.")
+            cons.append(_("Vo všetkých ukazovateľoch horšia než „{name}“ — nemá zmysel ju vybrať.").format(name=r["dominated_by"]))
         if r["irr_pct"] and r["irr_pct"] == max(x["irr_pct"] for x in rows):
-            pros.append(f"Najvyššie ročné zhodnotenie investície (IRR {r['irr_pct']:.1f} %).")
+            pros.append(_("Najvyššie ročné zhodnotenie investície (IRR {irr} %).").format(irr=d1(r["irr_pct"])))
         out.append({"id": r["id"], "verdict": "", "pros": pros[:4], "cons": cons[:3]})
     return out
 
@@ -2269,6 +2290,9 @@ def _generate_porovnanie_ai(input_data: dict) -> dict:
     """AI naratív pre porovnávací súhrn — Claude, grounded na dátach porovnania.
     Rovnaký vzor ako _generate_ai_expert_commentary (fail-safe: prázdne defaults)."""
     import json
+    from aom_i18n import get_lang
+    from aom_i18n.glossary import glossary_prompt
+    _lang_tail = glossary_prompt(get_lang())  # sk: "" → prompt bez zmeny
     try:
         from anthropic import Anthropic
         client = Anthropic()
@@ -2286,7 +2310,7 @@ def _generate_porovnanie_ai(input_data: dict) -> dict:
             "- Každé číslo v texte sa MUSÍ presne zhodovať s číslom z JSON.\n"
             "- Neuvádzaj ceny komponentov, marže ani interné údaje.\n\n"
             "Výstup odovzdaj VÝHRADNE volaním nástroja porovnanie_report."
-        )
+        ) + _lang_tail
         # Vynútený tool-use — SDK vráti hotový dict (žiadne parsovanie textu,
         # ktoré padalo na neescapovanej úvodzovke v slovenskom texte).
         report_tool = {
@@ -2360,7 +2384,7 @@ def _generate_porovnanie_ai(input_data: dict) -> dict:
         }
 
 
-def render_porovnanie(sb, analyza_id: str, variant_ids: list | None = None) -> dict:
+def render_porovnanie(sb, analyza_id: str, variant_ids: list | None = None, lang: str | None = None) -> dict:
     """Porovnávací súhrn ponúk — rieši sťažnosť, že zákazník dostane viac samostatných
     posudkov (napr. SOLINTEG/HUAWEI × s/bez BESS) a nevie sa v nich zorientovať.
 
@@ -2368,178 +2392,195 @@ def render_porovnanie(sb, analyza_id: str, variant_ids: list | None = None) -> d
     ich do 1 branded PDF s dominance-analýzou, AI naratívom (grounded, fail-safe fallback),
     výhodami/nevýhodami per ponuka, technickými faktami a odporúčaním — v duchu Orkestra
     posudku (grafy, WeasyPrint, Energovision branding).
+    Jazyk: `lang` z požiadavky → analyza_om.doc_lang → customers.lang → sk (aom_i18n.resolve_lang).
     """
+    from aom_i18n import _, fmt, resolve_lang, use_lang
     from posudok_orkestra import generate_porovnanie_pdf
 
     a_res = sb.table("analyza_om").select(
-        "*, customers(first_name, last_name, company_name, email, ico)"
+        "*, customers(first_name, last_name, company_name, email, ico, lang)"
     ).eq("id", analyza_id).single().execute()
     analyza = a_res.data
     if not analyza:
         raise ValueError(f"Analyza {analyza_id} not found")
 
-    cust = analyza.get("customers") or {}
-    client_name = cust.get("company_name") or f"{cust.get('first_name') or ''} {cust.get('last_name') or ''}".strip() or analyza.get("name") or "Klient"
+    lang = resolve_lang(lang, analyza)
+    with use_lang(lang):
+        sk = lang == "sk"
+        cust = analyza.get("customers") or {}
+        client_name = cust.get("company_name") or f"{cust.get('first_name') or ''} {cust.get('last_name') or ''}".strip() or analyza.get("name") or _("Klient")
 
-    v_res = sb.table("analyza_om_variants").select("*").eq("analyza_id", analyza_id).order("position").execute()
-    all_variants = v_res.data or []
-    if variant_ids:
-        wanted = {str(x) for x in variant_ids}
-        picked = [v for v in all_variants if str(v.get("id")) in wanted]
-    else:
-        picked = all_variants
-    if len(picked) < 2:
-        raise ValueError("Potrebné aspoň 2 varianty na porovnanie")
-
-    selected_id = str(analyza.get("selected_variant_id") or "")
-
-    rows = []
-    for v in picked:
-        capex = float(v.get("capex_eur") or 0)
-        payback = _payback_or_none(v.get("result_payback_y_base"))  # None = nevráti sa
-        rows.append({
-            "id": str(v.get("id")),
-            "short_label": _short_variant_label(v.get("name"), client_name),
-            "pv_kwp": float(v.get("fve_kwp") or 0),
-            "bess_kwh": float(v.get("bess_kwh") or 0),
-            "bess_kw": float(v.get("bess_kw") or 0),
-            "capex_eur": capex,
-            "npv_eur": float(v.get("result_npv_eur_base") or 0),
-            "irr_pct": float(v.get("result_irr_pct_base") or 0),
-            "payback_y": payback,
-            "samosp_pct": float(v.get("result_samosp_pct") or 0),
-            "samostat_pct": float(v.get("result_samostat_pct") or 0),
-            "vyroba_mwh": float(v.get("result_vyroba_mwh") or 0),
-            "export_mwh": float(v.get("result_export_mwh") or 0),
-            "import_mwh": float(v.get("result_import_mwh") or 0),
-            "annual_saving_eur": (capex / payback) if payback else 0,
-            "is_selected": str(v.get("id")) == selected_id,
-            "dominated_by": None,
-        })
-
-    # Dominance — O(n²), n je vždy malé (pár desiatok variantov max)
-    for r in rows:
-        beater = next((o for o in rows if o["id"] != r["id"] and _variant_dominates(o, r)), None)
-        if beater:
-            r["dominated_by"] = beater["short_label"]
-
-    viable = [r for r in rows if not r["dominated_by"]]
-    pick_npv = max(viable, key=lambda r: r["npv_eur"])
-    # „Najrýchlejšia návratnosť" len z variantov, ktoré sa vrátia; inak niet čo odporúčať zvlášť
-    _returning = [r for r in viable if r["payback_y"] is not None]
-    pick_payback = min(_returning, key=lambda r: r["payback_y"]) if _returning else pick_npv
-    pick_npv["is_pick_npv"] = True
-    same_winner = pick_npv["id"] == pick_payback["id"]
-
-    # Kód prípadu (napr. "P-26-322") žije len ako voľný text v názvoch variantov,
-    # nie ako vlastné pole na analyza_om — vytiahni ho odtiaľ, inak posudok_number, inak skratka id.
-    project_id = analyza.get("posudok_number") or f"AOM-{str(analyza_id)[:8]}"
-    code_match = next((re.match(r"^(P-\d{2}-\d{3})", (v.get("name") or "")) for v in picked if re.match(r"^(P-\d{2}-\d{3})", (v.get("name") or ""))), None)
-    if code_match:
-        project_id = code_match.group(1)
-
-    annual_mwh = float(analyza.get("consumption_annual_mwh") or 0)
-    peak_kw = float(analyza.get("consumption_peak_kw_15min") or 0)
-    mrk_kw = float(analyza.get("om_mrk_kw") or 0)
-    tarif_buy = float(analyza.get("tarif_buy") or 0)
-    tarif_sell = float(analyza.get("tarif_sell") or 0)
-
-    context = {
-        "project_name": analyza.get("name") or "Porovnanie ponúk",
-        "project_id": project_id,
-        "client_name": client_name,
-        "site_address": analyza.get("om_address") or "—",
-        "annual_kwh": annual_mwh * 1000,
-        "peak_kw": peak_kw,
-        "mrk_kw": mrk_kw,
-        "tarif_buy": tarif_buy,
-        "tarif_sell": tarif_sell,
-        "max_export_kw": float(analyza.get("max_export_kw") or 0),
-        "rows": rows,
-        "n_variants": len(rows),
-        "dominated_count": len(rows) - len(viable),
-        "viable_count": len(viable),
-        "same_winner": same_winner,
-        "pick_npv": pick_npv,
-        "pick_payback": pick_payback,
-    }
-
-    # === AI naratív (grounded na dátach porovnania; fail-safe deterministický fallback) ===
-    ai_input = {
-        "klient": client_name,
-        "odberne_miesto": {
-            "rocna_spotreba_mwh": round(annual_mwh, 1),
-            "spicka_odberu_kw_15min": round(peak_kw),
-            "mrk_kw": round(mrk_kw),
-            "spicka_prekracuje_mrk": peak_kw > mrk_kw > 0,
-            "tarif_nakup_eur_kwh": tarif_buy,
-            "tarif_vykup_eur_kwh": tarif_sell,
-        },
-        "ponuky": [
-            {
-                "id": r["id"],
-                "nazov": r["short_label"],
-                "fve_kwp": round(r["pv_kwp"]),
-                "bess_kwh": round(r["bess_kwh"]),
-                "bess_kw": round(r["bess_kw"], 1),
-                "capex_eur": round(r["capex_eur"]),
-                "npv_20r_eur": round(r["npv_eur"]),
-                "irr_pct": round(r["irr_pct"], 1),
-                "payback_y": round(r["payback_y"], 1) if r["payback_y"] is not None else "nevráti sa",
-                "samospotreba_pct": round(r["samosp_pct"], 1),
-                "rocna_vyroba_mwh": round(r["vyroba_mwh"], 1),
-                "export_mwh": round(r["export_mwh"], 1),
-                "odhad_rocnej_uspory_eur": round(r["annual_saving_eur"]),
-                "aktualne_vybrane": r["is_selected"],
-                "dominovana_horsou_ponukou": r["dominated_by"],
-            } for r in rows
-        ],
-        "odporucane": {
-            "najvyssie_npv": pick_npv["short_label"],
-            "najrychlejsia_navratnost": pick_payback["short_label"],
-        },
-    }
-    ai = _generate_porovnanie_ai(ai_input)
-    context.update(ai)
-    # Fallback: hodnotenia ponúk nikdy nesmú chýbať
-    if not context.get("ai_variant_assessments"):
-        context["ai_variant_assessments"] = _porovnanie_fallback_assessments(rows, mrk_kw)
-    # Namapuj hodnotenia na rows (template iteruje rows, hodnotenie hľadá podľa id)
-    assess_by_id = {str(a.get("id")): a for a in context["ai_variant_assessments"]}
-    for r in rows:
-        r["assessment"] = assess_by_id.get(r["id"]) or {}
-    if not context.get("ai_recommendation") or not context["ai_recommendation"].get("detail"):
-        if same_winner:
-            rec_detail = (f"Ponuka „{pick_npv['short_label']}“ má súčasne najvyšší čistý zisk za 20 rokov "
-                          f"({round(pick_npv['npv_eur']):,} €) aj najrýchlejšiu návratnosť ({_fmt_pb(pick_npv['payback_y'])}) — "
-                          f"jednoznačná voľba v tomto porovnaní.").replace(",", " ")
+        v_res = sb.table("analyza_om_variants").select("*").eq("analyza_id", analyza_id).order("position").execute()
+        all_variants = v_res.data or []
+        if variant_ids:
+            wanted = {str(x) for x in variant_ids}
+            picked = [v for v in all_variants if str(v.get("id")) in wanted]
         else:
-            rec_detail = (f"Ponuka „{pick_npv['short_label']}“ prinesie za 20 rokov najvyšší čistý zisk "
-                          f"({round(pick_npv['npv_eur']):,} € pri návratnosti {_fmt_pb(pick_npv['payback_y'])}). "
-                          f"Ak preferujete nižšiu vstupnú investíciu a najrýchlejší návrat peňazí, zvoľte "
-                          f"„{pick_payback['short_label']}“ ({round(pick_payback['capex_eur']):,} €, návratnosť "
-                          f"{_fmt_pb(pick_payback['payback_y'])}).").replace(",", " ")
-        context["ai_recommendation"] = {"title": "Odporúčanie Energovision", "detail": rec_detail}
+            picked = all_variants
+        if len(picked) < 2:
+            raise ValueError("Potrebné aspoň 2 varianty na porovnanie")
 
-    pdf_bytes = generate_porovnanie_pdf(context)
+        selected_id = str(analyza.get("selected_variant_id") or "")
 
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    slug = re.sub(r"[^A-Za-z0-9]+", "_", client_name).strip("_")[:40] or "OM"
-    fname = f"Porovnanie_{slug}_{ts}.pdf"
-    pdf_path = f"analyza_om/{analyza_id}/{fname}"
-    sb.storage.from_("documents").upload(pdf_path, pdf_bytes, {"content-type": "application/pdf", "upsert": "true"})
-    pdf_url = sb.storage.from_("documents").get_public_url(pdf_path)
+        rows = []
+        for v in picked:
+            capex = float(v.get("capex_eur") or 0)
+            payback = _payback_or_none(v.get("result_payback_y_base"))  # None = nevráti sa
+            rows.append({
+                "id": str(v.get("id")),
+                "short_label": _short_variant_label(v.get("name"), client_name),
+                "pv_kwp": float(v.get("fve_kwp") or 0),
+                "bess_kwh": float(v.get("bess_kwh") or 0),
+                "bess_kw": float(v.get("bess_kw") or 0),
+                "capex_eur": capex,
+                "npv_eur": float(v.get("result_npv_eur_base") or 0),
+                "irr_pct": float(v.get("result_irr_pct_base") or 0),
+                "payback_y": payback,
+                "samosp_pct": float(v.get("result_samosp_pct") or 0),
+                "samostat_pct": float(v.get("result_samostat_pct") or 0),
+                "vyroba_mwh": float(v.get("result_vyroba_mwh") or 0),
+                "export_mwh": float(v.get("result_export_mwh") or 0),
+                "import_mwh": float(v.get("result_import_mwh") or 0),
+                "annual_saving_eur": (capex / payback) if payback else 0,
+                "is_selected": str(v.get("id")) == selected_id,
+                "dominated_by": None,
+            })
 
-    _record_doc(sb, analyza_id, "porovnanie_pdf", "Porovnávací súhrn (PDF)", fname, pdf_url, pdf_path, len(pdf_bytes) // 1024, None)
+        # Dominance — O(n²), n je vždy malé (pár desiatok variantov max)
+        for r in rows:
+            beater = next((o for o in rows if o["id"] != r["id"] and _variant_dominates(o, r)), None)
+            if beater:
+                r["dominated_by"] = beater["short_label"]
 
-    return {
-        "ok": True,
-        "pdf_url": pdf_url,
-        "size_kb": len(pdf_bytes) // 1024,
-        "n_variants": len(rows),
-        "dominated_count": len(rows) - len(viable),
-        "client": client_name,
-    }
+        viable = [r for r in rows if not r["dominated_by"]]
+        pick_npv = max(viable, key=lambda r: r["npv_eur"])
+        # „Najrýchlejšia návratnosť" len z variantov, ktoré sa vrátia; inak niet čo odporúčať zvlášť
+        _returning = [r for r in viable if r["payback_y"] is not None]
+        pick_payback = min(_returning, key=lambda r: r["payback_y"]) if _returning else pick_npv
+        pick_npv["is_pick_npv"] = True
+        same_winner = pick_npv["id"] == pick_payback["id"]
+
+        # Kód prípadu (napr. "P-26-322") žije len ako voľný text v názvoch variantov,
+        # nie ako vlastné pole na analyza_om — vytiahni ho odtiaľ, inak posudok_number, inak skratka id.
+        project_id = analyza.get("posudok_number") or f"AOM-{str(analyza_id)[:8]}"
+        code_match = next((re.match(r"^(P-\d{2}-\d{3})", (v.get("name") or "")) for v in picked if re.match(r"^(P-\d{2}-\d{3})", (v.get("name") or ""))), None)
+        if code_match:
+            project_id = code_match.group(1)
+
+        annual_mwh = float(analyza.get("consumption_annual_mwh") or 0)
+        peak_kw = float(analyza.get("consumption_peak_kw_15min") or 0)
+        mrk_kw = float(analyza.get("om_mrk_kw") or 0)
+        tarif_buy = float(analyza.get("tarif_buy") or 0)
+        tarif_sell = float(analyza.get("tarif_sell") or 0)
+
+        context = {
+            "project_name": analyza.get("name") or _("Porovnanie ponúk"),
+            "project_id": project_id,
+            "client_name": client_name,
+            "site_address": analyza.get("om_address") or "—",
+            "annual_kwh": annual_mwh * 1000,
+            "peak_kw": peak_kw,
+            "mrk_kw": mrk_kw,
+            "tarif_buy": tarif_buy,
+            "tarif_sell": tarif_sell,
+            "max_export_kw": float(analyza.get("max_export_kw") or 0),
+            "rows": rows,
+            "n_variants": len(rows),
+            "dominated_count": len(rows) - len(viable),
+            "viable_count": len(viable),
+            "same_winner": same_winner,
+            "pick_npv": pick_npv,
+            "pick_payback": pick_payback,
+        }
+
+        # === AI naratív (grounded na dátach porovnania; fail-safe deterministický fallback) ===
+        ai_input = {
+            "klient": client_name,
+            "odberne_miesto": {
+                "rocna_spotreba_mwh": round(annual_mwh, 1),
+                "spicka_odberu_kw_15min": round(peak_kw),
+                "mrk_kw": round(mrk_kw),
+                "spicka_prekracuje_mrk": peak_kw > mrk_kw > 0,
+                "tarif_nakup_eur_kwh": tarif_buy,
+                "tarif_vykup_eur_kwh": tarif_sell,
+            },
+            "ponuky": [
+                {
+                    "id": r["id"],
+                    "nazov": r["short_label"],
+                    "fve_kwp": round(r["pv_kwp"]),
+                    "bess_kwh": round(r["bess_kwh"]),
+                    "bess_kw": round(r["bess_kw"], 1),
+                    "capex_eur": round(r["capex_eur"]),
+                    "npv_20r_eur": round(r["npv_eur"]),
+                    "irr_pct": round(r["irr_pct"], 1),
+                    "payback_y": round(r["payback_y"], 1) if r["payback_y"] is not None else _("nevráti sa"),
+                    "samospotreba_pct": round(r["samosp_pct"], 1),
+                    "rocna_vyroba_mwh": round(r["vyroba_mwh"], 1),
+                    "export_mwh": round(r["export_mwh"], 1),
+                    "odhad_rocnej_uspory_eur": round(r["annual_saving_eur"]),
+                    "aktualne_vybrane": r["is_selected"],
+                    "dominovana_horsou_ponukou": r["dominated_by"],
+                } for r in rows
+            ],
+            "odporucane": {
+                "najvyssie_npv": pick_npv["short_label"],
+                "najrychlejsia_navratnost": pick_payback["short_label"],
+            },
+        }
+        ai = _generate_porovnanie_ai(ai_input)
+        context.update(ai)
+        # Fallback: hodnotenia ponúk nikdy nesmú chýbať
+        if not context.get("ai_variant_assessments"):
+            context["ai_variant_assessments"] = _porovnanie_fallback_assessments(rows, mrk_kw)
+        # Namapuj hodnotenia na rows (template iteruje rows, hodnotenie hľadá podľa id)
+        assess_by_id = {str(a.get("id")): a for a in context["ai_variant_assessments"]}
+        for r in rows:
+            r["assessment"] = assess_by_id.get(r["id"]) or {}
+        if not context.get("ai_recommendation") or not context["ai_recommendation"].get("detail"):
+            # sk: čísla aj celý text cez .replace(",", " ") presne ako predtým (zje aj čiarky vo vete);
+            # en/de: sumy a návratnosť cez aom_i18n.fmt, text bez úprav
+            if sk:
+                eur, pbt = (lambda x: f"{round(x):,} €"), _fmt_pb
+            else:
+                eur, pbt = fmt.eur, fmt.pbt
+            if same_winner:
+                rec_detail = _("Ponuka „{name}“ má súčasne najvyšší čistý zisk za 20 rokov ({npv}) aj najrýchlejšiu "
+                               "návratnosť ({pb}) — jednoznačná voľba v tomto porovnaní.").format(
+                    name=pick_npv["short_label"], npv=eur(pick_npv["npv_eur"]), pb=pbt(pick_npv["payback_y"]))
+            else:
+                rec_detail = _("Ponuka „{name}“ prinesie za 20 rokov najvyšší čistý zisk ({npv} pri návratnosti {pb}). "
+                               "Ak preferujete nižšiu vstupnú investíciu a najrýchlejší návrat peňazí, zvoľte "
+                               "„{alt}“ ({alt_capex}, návratnosť {alt_pb}).").format(
+                    name=pick_npv["short_label"], npv=eur(pick_npv["npv_eur"]), pb=pbt(pick_npv["payback_y"]),
+                    alt=pick_payback["short_label"], alt_capex=eur(pick_payback["capex_eur"]),
+                    alt_pb=pbt(pick_payback["payback_y"]))
+            if sk:
+                rec_detail = rec_detail.replace(",", " ")
+            context["ai_recommendation"] = {"title": _("Odporúčanie Energovision"), "detail": rec_detail}
+
+        pdf_bytes = generate_porovnanie_pdf(context)
+
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        slug = re.sub(r"[^A-Za-z0-9]+", "_", client_name).strip("_")[:40] or "OM"
+        _prefix = {"sk": "Porovnanie", "en": "Comparison", "de": "Vergleich"}[lang]
+        _lsuf = "" if sk else f"_{lang.upper()}"
+        fname = f"{_prefix}_{slug}{_lsuf}_{ts}.pdf"
+        pdf_path = f"analyza_om/{analyza_id}/{fname}"
+        sb.storage.from_("documents").upload(pdf_path, pdf_bytes, {"content-type": "application/pdf", "upsert": "true"})
+        pdf_url = sb.storage.from_("documents").get_public_url(pdf_path)
+
+        _record_doc(sb, analyza_id, "porovnanie_pdf", "Porovnávací súhrn (PDF)", fname, pdf_url, pdf_path, len(pdf_bytes) // 1024, None, lang=lang)
+
+        return {
+            "ok": True,
+            "pdf_url": pdf_url,
+            "size_kb": len(pdf_bytes) // 1024,
+            "n_variants": len(rows),
+            "dominated_count": len(rows) - len(viable),
+            "client": client_name,
+            "lang": lang,
+        }
 
 
 def _nominatim_geocode_psc(psc: str) -> dict | None:
@@ -3002,6 +3043,9 @@ def _generate_chocosuc_ai(ctx: dict) -> dict:
     """Celý posudok píše AI po sekciách, PRÍSNE grounded (len engine čísla).
     Vráti dict s HTML per sekcia + recommendations. Fail-safe -> deterministické narativy."""
     import json
+    from aom_i18n import get_lang
+    from aom_i18n.glossary import glossary_prompt
+    _lang_tail = glossary_prompt(get_lang())  # sk: "" → prompt bez zmeny; vlákna poolu ContextVar nededia
     # audit V: AI naratív dostával "ekonomiku" z Optimistického scenára (S[-1]), kým cover a
     # tabuľky ukazujú odporúčaný (default Báza) — čísla v texte nesedeli so zvyškom posudku.
     S = ctx["scenarios3"]
@@ -3089,7 +3133,7 @@ def _generate_chocosuc_ai(ctx: dict) -> dict:
         ('{"recommendations":[{"title":"krátky","detail":"1-2 vety, KVALITATÍVNE alebo s číslom z JSON"}, ... 4-6 položiek]}'),
     ]
     def _call_group(schema):
-        sysp_g = _grounding + ("VÝSTUP: striktný JSON (žiadny markdown, žiadny text okolo). Každá hodnota je HTML s <p> odsekmi. "
+        sysp_g = _grounding + _lang_tail + ("VÝSTUP: striktný JSON (žiadny markdown, žiadny text okolo). Každá hodnota je HTML s <p> odsekmi. "
                                "Vyplň PRÁVE tieto kľúče:\n" + schema)
         try:
             from anthropic import Anthropic
@@ -3187,15 +3231,27 @@ def _rich_variant_for_row(sb, analyza, row, econ_variants):
     return None
 
 
-def render_posudok_chocosuc(sb, analyza_id: str, variant_id: str | None = None) -> dict:
-    """ChocoSuc-grade posudok: deterministické fakty + AI naratív (grounded) -> HTML->PDF."""
-    from posudok_chocosuc.context import build_chocosuc_context
-    from posudok_chocosuc.generator import generate_chocosuc_pdf
+def render_posudok_chocosuc(sb, analyza_id: str, variant_id: str | None = None, lang: str | None = None) -> dict:
+    """ChocoSuc-grade posudok: deterministické fakty + AI naratív (grounded) -> HTML->PDF.
+    Jazyk: `lang` z požiadavky → analyza_om.doc_lang → customers.lang → sk (aom_i18n.resolve_lang)."""
+    from aom_i18n import resolve_lang, use_lang
 
-    a_res = sb.table("analyza_om").select("*, customers(first_name, last_name, company_name, email, ico)").eq("id", analyza_id).single().execute()
+    a_res = sb.table("analyza_om").select("*, customers(first_name, last_name, company_name, email, ico, lang)").eq("id", analyza_id).single().execute()
     analyza = a_res.data
     if not analyza:
         raise ValueError(f"Analyza {analyza_id} not found")
+    lang = resolve_lang(lang, analyza)
+    with use_lang(lang):
+        return _render_posudok_chocosuc(sb, analyza_id, analyza, variant_id, lang)
+
+
+_POSUDOK_FILE_PREFIX = {"sk": "Posudok_FVE", "en": "Assessment_PV", "de": "Gutachten_PV"}
+
+
+def _render_posudok_chocosuc(sb, analyza_id: str, analyza: dict, variant_id, lang: str) -> dict:
+    from posudok_chocosuc.context import build_chocosuc_context
+    from posudok_chocosuc.generator import generate_chocosuc_pdf
+
     econ = analyza.get("econ_results") or {}
     variants = (econ.get("full_response") or {}).get("variants", [])
     if not variants:
@@ -3281,7 +3337,8 @@ def render_posudok_chocosuc(sb, analyza_id: str, variant_id: str | None = None) 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     import re as _re
     _slug = _re.sub(r"[^A-Za-z0-9]+", "_", (ctx.get("client_name") or "OM")).strip("_")[:40] or "OM"
-    _fbase = f"Posudok_FVE_{_slug}_{ts}"
+    _lsuf = "" if lang == "sk" else f"_{lang.upper()}"
+    _fbase = f"{_POSUDOK_FILE_PREFIX[lang]}_{_slug}{_lsuf}_{ts}"
     pdf_path = f"analyza_om/{analyza_id}/{_fbase}.pdf"
     sb.storage.from_("documents").upload(pdf_path, pdf_bytes, {"content-type": "application/pdf", "upsert": "true"})
     pdf_url = sb.storage.from_("documents").get_public_url(pdf_path)
@@ -3299,10 +3356,10 @@ def render_posudok_chocosuc(sb, analyza_id: str, variant_id: str | None = None) 
 
     sb.table("analyza_om").update({"posudok_orkestra_pdf_url": pdf_url, "posudok_orkestra_docx_url": docx_url, "posudok_orkestra_generated_at": datetime.now().isoformat()}).eq("id", analyza_id).execute()
     _vlabel = ctx.get("variant_title") or None
-    _record_doc(sb, analyza_id, "posudok_pdf", "Technický posudok (PDF)", f"{_fbase}.pdf", pdf_url, pdf_path, len(pdf_bytes)//1024, _vlabel)
+    _record_doc(sb, analyza_id, "posudok_pdf", "Technický posudok (PDF)", f"{_fbase}.pdf", pdf_url, pdf_path, len(pdf_bytes)//1024, _vlabel, lang=lang)
     if docx_url:
-        _record_doc(sb, analyza_id, "posudok_docx", "Technický posudok (DOCX)", f"{_fbase}.docx", docx_url, docx_path, (len(docx_bytes)//1024 if "docx_bytes" in dir() else None), _vlabel)
-    return {"ok": True, "pdf_url": pdf_url, "docx_url": docx_url, "size_kb": len(pdf_bytes) // 1024, "engine": "chocosuc-v1", "client": ctx.get("client_name")}
+        _record_doc(sb, analyza_id, "posudok_docx", "Technický posudok (DOCX)", f"{_fbase}.docx", docx_url, docx_path, (len(docx_bytes)//1024 if "docx_bytes" in dir() else None), _vlabel, lang=lang)
+    return {"ok": True, "pdf_url": pdf_url, "docx_url": docx_url, "size_kb": len(pdf_bytes) // 1024, "engine": "chocosuc-v1", "client": ctx.get("client_name"), "lang": lang}
 
 
 def aom_chat(sb, analyza_id: str, message: str, history=None) -> dict:

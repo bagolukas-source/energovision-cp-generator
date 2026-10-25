@@ -1,14 +1,14 @@
 <!DOCTYPE html>
-<html lang="sk">
+<html lang="{{ lang() }}">
 <head>
 <meta charset="UTF-8">
-<title>{{ project_name }} — Porovnávací súhrn ponúk</title>
+<title>{{ project_name }} — {{ _("Porovnávací súhrn ponúk") }}</title>
 <style>{{ css|safe }}</style>
 <style>
 /* ===== Overrides len pre porovnávací súhrn — plynulý tok, žiadne nútené celé strany ===== */
 @page {
   @bottom-center {
-    content: "Energovision · Porovnávací súhrn ponúk · " counter(page) " / " counter(pages);
+    content: "Energovision · {{ _("Porovnávací súhrn ponúk") }} · " counter(page) " / " counter(pages);
     font-size: 8pt;
     color: #9CA3AF;
     font-family: 'Inter', -apple-system, sans-serif;
@@ -113,28 +113,28 @@
 <div class="pv-header">
   <img src="data:image/png;base64,{{ logo_b64 }}" alt="Energovision" class="logo">
   <div class="cover-meta">
-    <div class="meta-label">Pripravené pre</div>
+    <div class="meta-label">{{ _("Pripravené pre") }}</div>
     <div class="meta-value">{{ client_name }}</div>
   </div>
 </div>
 
 <div class="pv-title-block">
-  <div class="cover-eyebrow">Porovnávací súhrn ponúk</div>
+  <div class="cover-eyebrow">{{ _("Porovnávací súhrn ponúk") }}</div>
   <h1 class="pv-title">{{ project_name }}</h1>
-  <p class="pv-subtitle">{{ n_variants }} porovnávaných ponúk · ročná spotreba {{ (annual_kwh/1000)|round|int }} MWh · špička {{ peak_kw|round|int }} kW · MRK {{ mrk_kw|round|int }} kW{% if site_address and site_address != '—' %} · {{ site_address }}{% endif %}</p>
+  <p class="pv-subtitle">{{ _("{n} porovnávaných ponúk · ročná spotreba {mwh} MWh · špička {peak} kW · MRK {mrk} kW").format(n=n_variants, mwh=(annual_kwh/1000)|round|int|loc, peak=peak_kw|round|int|loc, mrk=mrk_kw|round|int|loc) }}{% if site_address and site_address != '—' %} · {{ site_address }}{% endif %}</p>
 </div>
 
 <div class="pv-meta">
   <div class="pv-meta-col">
-    <div class="meta-label">Vystavené</div>
+    <div class="meta-label">{{ _("Vystavené") }}</div>
     <div class="meta-value">{{ posudok_date }}</div>
   </div>
   <div class="pv-meta-col">
-    <div class="meta-label">Pripravil</div>
+    <div class="meta-label">{{ _("Pripravil") }}</div>
     <div class="meta-value">{{ prepared_by_name }} · {{ prepared_by_phone }}</div>
   </div>
   <div class="pv-meta-col">
-    <div class="meta-label">Identifikátor</div>
+    <div class="meta-label">{{ _("Identifikátor") }}</div>
     <div class="meta-value">{{ project_id }}</div>
   </div>
 </div>
@@ -142,39 +142,39 @@
 {# ===== K VECI ===== #}
 {% if dominated_count > 0 %}
 <div class="finding-callout avoid-break pv-section">
-  <strong>K veci.</strong> Z {{ n_variants }} predložených ponúk {% if dominated_count == 1 %}je <strong>1 ponuka</strong>{% else %}sú <strong>{{ dominated_count }} ponuky</strong>{% endif %} vo všetkých ukazovateľoch (CAPEX, NPV, IRR, návratnosť) horšia než iná ponuka v tomto porovnaní — reálna voľba je medzi zvyšnými {{ viable_count }}.
+  {% if dominated_count == 1 %}{{ _("<strong>K veci.</strong> Z {n} predložených ponúk je <strong>1 ponuka</strong> vo všetkých ukazovateľoch (CAPEX, NPV, IRR, návratnosť) horšia než iná ponuka v tomto porovnaní — reálna voľba je medzi zvyšnými {viable}.").format(n=n_variants, viable=viable_count)|safe }}{% else %}{{ _("<strong>K veci.</strong> Z {n} predložených ponúk sú <strong>{k} ponuky</strong> vo všetkých ukazovateľoch (CAPEX, NPV, IRR, návratnosť) horšia než iná ponuka v tomto porovnaní — reálna voľba je medzi zvyšnými {viable}.").format(n=n_variants, k=dominated_count, viable=viable_count)|safe }}{% endif %}
 </div>
 {% endif %}
 
 {# ===== ZHRNUTIE SITUÁCIE (AI, grounded) ===== #}
 {% if ai_executive_summary %}
 <div class="pv-section avoid-break">
-  <h3 class="section-label">Zhrnutie situácie</h3>
+  <h3 class="section-label">{{ _("Zhrnutie situácie") }}</h3>
   <div class="ai-commentary">{{ ai_executive_summary|safe }}</div>
 </div>
 {% endif %}
 
 {# ===== ODPORÚČANÉ VOĽBY ===== #}
 <div class="pv-section avoid-break">
-  <h3 class="section-label">{% if same_winner %}Odporúčaná voľba{% else %}Dve rozumné voľby{% endif %}</h3>
+  <h3 class="section-label">{% if same_winner %}{{ _("Odporúčaná voľba") }}{% else %}{{ _("Dve rozumné voľby") }}{% endif %}</h3>
   <div class="pick-cards {% if same_winner %}one{% else %}two{% endif %}">
     <div class="pick-card primary">
-      <div class="pick-tag">Najvyšší zisk (NPV){% if pick_npv.is_selected %} · aktuálne vybrané{% endif %}</div>
+      <div class="pick-tag">{{ _("Najvyšší zisk (NPV)") }}{% if pick_npv.is_selected %} · {{ _("aktuálne vybrané") }}{% endif %}</div>
       <div class="pick-title">{{ pick_npv.short_label }}</div>
       <div class="pick-metrics">
         <div class="pick-metric"><div class="pick-metric-value">{{ pick_npv.npv_eur|format_currency }}</div><div class="pick-metric-label">NPV</div></div>
-        <div class="pick-metric"><div class="pick-metric-value">{{ pick_npv.irr_pct|round(1) }} %</div><div class="pick-metric-label">IRR</div></div>
-        <div class="pick-metric"><div class="pick-metric-value">{{ pick_npv.payback_y|navratnost }}</div><div class="pick-metric-label">Návratnosť</div></div>
+        <div class="pick-metric"><div class="pick-metric-value">{{ pick_npv.irr_pct|round(1)|loc(1) }} %</div><div class="pick-metric-label">IRR</div></div>
+        <div class="pick-metric"><div class="pick-metric-value">{{ pick_npv.payback_y|navratnost }}</div><div class="pick-metric-label">{{ _("Návratnosť") }}</div></div>
       </div>
     </div>
     {% if not same_winner %}
     <div class="pick-card">
-      <div class="pick-tag">Najrýchlejšia návratnosť{% if pick_payback.is_selected %} · aktuálne vybrané{% endif %}</div>
+      <div class="pick-tag">{{ _("Najrýchlejšia návratnosť") }}{% if pick_payback.is_selected %} · {{ _("aktuálne vybrané") }}{% endif %}</div>
       <div class="pick-title">{{ pick_payback.short_label }}</div>
       <div class="pick-metrics">
         <div class="pick-metric"><div class="pick-metric-value">{{ pick_payback.npv_eur|format_currency }}</div><div class="pick-metric-label">NPV</div></div>
-        <div class="pick-metric"><div class="pick-metric-value">{{ pick_payback.irr_pct|round(1) }} %</div><div class="pick-metric-label">IRR</div></div>
-        <div class="pick-metric"><div class="pick-metric-value">{{ pick_payback.payback_y|navratnost }}</div><div class="pick-metric-label">Návratnosť</div></div>
+        <div class="pick-metric"><div class="pick-metric-value">{{ pick_payback.irr_pct|round(1)|loc(1) }} %</div><div class="pick-metric-label">IRR</div></div>
+        <div class="pick-metric"><div class="pick-metric-value">{{ pick_payback.payback_y|navratnost }}</div><div class="pick-metric-label">{{ _("Návratnosť") }}</div></div>
       </div>
     </div>
     {% endif %}
@@ -183,32 +183,32 @@
 
 {# ===== TABUĽKA ===== #}
 <div class="pv-section avoid-break">
-  <h3 class="section-label">Všetky porovnávané ponuky ({{ n_variants }})</h3>
+  <h3 class="section-label">{{ _("Všetky porovnávané ponuky ({n})").format(n=n_variants) }}</h3>
   <table class="variants-table">
     <thead>
       <tr>
-        <th>Variant</th>
-        <th class="num">FVE (DC)</th>
+        <th>{{ _("Variant") }}</th>
+        <th class="num">{{ _("FVE (DC)") }}</th>
         <th class="num">BESS</th>
         <th class="num">CAPEX</th>
-        <th class="num">NPV 20r</th>
+        <th class="num">{{ _("NPV 20r") }}</th>
         <th class="num">IRR</th>
-        <th class="num">Návratnosť</th>
-        <th class="choice-col">Voľba</th>
+        <th class="num">{{ _("Návratnosť") }}</th>
+        <th class="choice-col">{{ _("Voľba") }}</th>
       </tr>
     </thead>
     <tbody>
       {% for v in rows %}
       <tr class="{% if v.is_selected %}winner-row{% elif v.dominated_by %}dominated-row{% endif %}">
         <td>
-          <span class="variant-name">{{ v.short_label }}</span>{% if v.is_selected %} <span class="winner-badge">VYBRANÉ</span>{% endif %}
-          {% if v.dominated_by %}<span class="dominated-note">Horšie vo všetkom než „{{ v.dominated_by }}"</span>{% endif %}
+          <span class="variant-name">{{ v.short_label }}</span>{% if v.is_selected %} <span class="winner-badge">{{ _("VYBRANÉ") }}</span>{% endif %}
+          {% if v.dominated_by %}<span class="dominated-note">{{ _("Horšie vo všetkom než „{name}\"").format(name=v.dominated_by|e)|safe }}</span>{% endif %}
         </td>
-        <td class="num">{{ v.pv_kwp|round|int }} kWp</td>
-        <td class="num">{% if v.bess_kwh %}{{ v.bess_kwh|round|int }} kWh{% else %}—{% endif %}</td>
+        <td class="num">{{ v.pv_kwp|round|int|loc }} kWp</td>
+        <td class="num">{% if v.bess_kwh %}{{ v.bess_kwh|round|int|loc }} kWh{% else %}—{% endif %}</td>
         <td class="num">{{ v.capex_eur|format_currency }}</td>
         <td class="num">{{ v.npv_eur|format_currency }}</td>
-        <td class="num">{{ v.irr_pct|round(1) }} %</td>
+        <td class="num">{{ v.irr_pct|round(1)|loc(1) }} %</td>
         <td class="num">{{ v.payback_y|navratnost }}</td>
         <td class="choice-col"><span class="choice-box"></span></td>
       </tr>
@@ -219,38 +219,38 @@
 
 {# ===== GRAFY ===== #}
 <div class="chart-card chart-card-full pv-section">
-  <div class="chart-title">CAPEX vs. NPV — vstup oproti zisku</div>
-  <div class="chart-sub">Modrá = vstupná investícia, zelená = čistý zisk za 20 rokov (súčasná hodnota). Šedá = dominovaná ponuka.</div>
+  <div class="chart-title">{{ _("CAPEX vs. NPV — vstup oproti zisku") }}</div>
+  <div class="chart-sub">{{ _("Modrá = vstupná investícia, zelená = čistý zisk za 20 rokov (súčasná hodnota). Šedá = dominovaná ponuka.") }}</div>
   {{ chart_capex_npv_svg|safe }}
 </div>
 
 <div class="chart-card chart-card-full pv-section">
-  <div class="chart-title">Návratnosť — od najrýchlejšej po najpomalšiu</div>
-  <div class="chart-sub">Zelená = odporúčaná ponuka (najvyššie NPV), šedá = dominovaná ponuka.</div>
+  <div class="chart-title">{{ _("Návratnosť — od najrýchlejšej po najpomalšiu") }}</div>
+  <div class="chart-sub">{{ _("Zelená = odporúčaná ponuka (najvyššie NPV), šedá = dominovaná ponuka.") }}</div>
   {{ chart_payback_svg|safe }}
 </div>
 
 {# ===== HODNOTENIE JEDNOTLIVÝCH PONÚK — výhody / nevýhody ===== #}
 <div class="pv-section">
-  <h3 class="section-label">Hodnotenie jednotlivých ponúk</h3>
+  <h3 class="section-label">{{ _("Hodnotenie jednotlivých ponúk") }}</h3>
   {% for v in rows %}
   <div class="assess-card avoid-break {% if v.is_selected %}assess-selected{% elif v.dominated_by %}assess-dominated{% endif %}">
     <div class="assess-head">
       <span class="assess-title">{{ v.short_label }}</span>
-      {% if v.is_selected %}<span class="winner-badge">VYBRANÉ</span>{% endif %}
-      {% if v.dominated_by %}<span class="assess-dominated-tag">dominovaná ponuka</span>{% endif %}
-      <span class="assess-kpis">{{ v.capex_eur|format_currency }} · NPV {{ v.npv_eur|format_currency }} · IRR {{ v.irr_pct|round(1) }} % · {{ v.payback_y|navratnost }}</span>
+      {% if v.is_selected %}<span class="winner-badge">{{ _("VYBRANÉ") }}</span>{% endif %}
+      {% if v.dominated_by %}<span class="assess-dominated-tag">{{ _("dominovaná ponuka") }}</span>{% endif %}
+      <span class="assess-kpis">{{ v.capex_eur|format_currency }} · NPV {{ v.npv_eur|format_currency }} · IRR {{ v.irr_pct|round(1)|loc(1) }} % · {{ v.payback_y|navratnost }}</span>
     </div>
     {% if v.assessment.verdict %}<p class="assess-verdict">{{ v.assessment.verdict }}</p>{% endif %}
     <div class="assess-cols">
       <div class="assess-col">
-        <div class="assess-col-label pros">Výhody</div>
+        <div class="assess-col-label pros">{{ _("Výhody") }}</div>
         <ul class="assess-list pros">
           {% for p in v.assessment.pros %}<li>{{ p }}</li>{% endfor %}
         </ul>
       </div>
       <div class="assess-col">
-        <div class="assess-col-label cons">Nevýhody</div>
+        <div class="assess-col-label cons">{{ _("Nevýhody") }}</div>
         <ul class="assess-list cons">
           {% for c in v.assessment.cons %}<li>{{ c }}</li>{% endfor %}
         </ul>
@@ -263,9 +263,9 @@
 {# ===== ODPORÚČANIE ===== #}
 {% if ai_recommendation and ai_recommendation.detail %}
 <div class="pv-section avoid-break">
-  <h3 class="section-label">Odporúčanie</h3>
+  <h3 class="section-label">{{ _("Odporúčanie") }}</h3>
   <div class="recommendation-block">
-    <div class="recommendation-title">{{ ai_recommendation.title or "Odporúčanie Energovision" }}</div>
+    <div class="recommendation-title">{{ ai_recommendation.title or _("Odporúčanie Energovision") }}</div>
     <div class="recommendation-detail">{{ ai_recommendation.detail|safe }}</div>
   </div>
 </div>
@@ -273,18 +273,18 @@
 
 {# ===== TECHNICKÉ FAKTY ===== #}
 <div class="pv-section avoid-break">
-  <h3 class="section-label">Technické fakty o odbernom mieste</h3>
+  <h3 class="section-label">{{ _("Technické fakty o odbernom mieste") }}</h3>
   <table class="dotacia-table">
     <tbody>
-      <tr><td>Ročná spotreba elektriny</td><td class="num">{{ (annual_kwh/1000)|round|int }} MWh</td></tr>
-      <tr><td>Špička odberu (15-min maximum)</td><td class="num">{{ peak_kw|round|int }} kW</td></tr>
-      <tr><td>Maximálna rezervovaná kapacita (MRK)</td><td class="num">{{ mrk_kw|round|int }} kW</td></tr>
-      {% if peak_kw > mrk_kw and mrk_kw > 0 %}<tr><td><strong>⚠ Špička odberu prekračuje MRK</strong> — riziko pokút od distribútora; batéria ho vie znížiť (peak shaving)</td><td class="num">+{{ (peak_kw - mrk_kw)|round|int }} kW</td></tr>{% endif %}
-      {% if tarif_buy %}<tr><td>Cena elektriny — nákup</td><td class="num">{{ tarif_buy|round(3) }} €/kWh</td></tr>{% endif %}
-      {% if tarif_sell %}<tr><td>Cena elektriny — výkup prebytkov</td><td class="num">{{ tarif_sell|round(3) }} €/kWh</td></tr>{% endif %}
-      {% if pick_npv.vyroba_mwh %}<tr><td>Ročná výroba FVE ({{ pick_npv.short_label }})</td><td class="num">{{ pick_npv.vyroba_mwh|round|int }} MWh</td></tr>{% endif %}
-      {% if pick_npv.samosp_pct %}<tr><td>Samospotreba vyrobenej elektriny</td><td class="num">{{ pick_npv.samosp_pct|round|int }} %</td></tr>{% endif %}
-      {% if pick_npv.export_mwh %}<tr><td>Ročný export prebytkov do siete</td><td class="num">{{ pick_npv.export_mwh|round|int }} MWh</td></tr>{% endif %}
+      <tr><td>{{ _("Ročná spotreba elektriny") }}</td><td class="num">{{ (annual_kwh/1000)|round|int|loc }} MWh</td></tr>
+      <tr><td>{{ _("Špička odberu (15-min maximum)") }}</td><td class="num">{{ peak_kw|round|int|loc }} kW</td></tr>
+      <tr><td>{{ _("Maximálna rezervovaná kapacita (MRK)") }}</td><td class="num">{{ mrk_kw|round|int|loc }} kW</td></tr>
+      {% if peak_kw > mrk_kw and mrk_kw > 0 %}<tr><td>{{ _("<strong>⚠ Špička odberu prekračuje MRK</strong> — riziko pokút od distribútora; batéria ho vie znížiť (peak shaving)")|safe }}</td><td class="num">+{{ (peak_kw - mrk_kw)|round|int|loc }} kW</td></tr>{% endif %}
+      {% if tarif_buy %}<tr><td>{{ _("Cena elektriny — nákup") }}</td><td class="num">{{ tarif_buy|round(3)|loc(3) }} €/kWh</td></tr>{% endif %}
+      {% if tarif_sell %}<tr><td>{{ _("Cena elektriny — výkup prebytkov") }}</td><td class="num">{{ tarif_sell|round(3)|loc(3) }} €/kWh</td></tr>{% endif %}
+      {% if pick_npv.vyroba_mwh %}<tr><td>{{ _("Ročná výroba FVE ({name})").format(name=pick_npv.short_label) }}</td><td class="num">{{ pick_npv.vyroba_mwh|round|int|loc }} MWh</td></tr>{% endif %}
+      {% if pick_npv.samosp_pct %}<tr><td>{{ _("Samospotreba vyrobenej elektriny") }}</td><td class="num">{{ pick_npv.samosp_pct|round|int|loc }} %</td></tr>{% endif %}
+      {% if pick_npv.export_mwh %}<tr><td>{{ _("Ročný export prebytkov do siete") }}</td><td class="num">{{ pick_npv.export_mwh|round|int|loc }} MWh</td></tr>{% endif %}
     </tbody>
   </table>
   {% if ai_technical_notes %}
@@ -299,7 +299,7 @@
 {# ===== OTÁZKY PRED PODPISOM ===== #}
 {% if ai_open_questions %}
 <div class="pv-section avoid-break">
-  <h3 class="section-label">Čo si overiť pred rozhodnutím</h3>
+  <h3 class="section-label">{{ _("Čo si overiť pred rozhodnutím") }}</h3>
   <ol class="open-questions">
     {% for q in ai_open_questions %}
     <li><strong>{{ q.title }}</strong><div class="oq-detail">{{ q.detail }}</div></li>
@@ -310,14 +310,14 @@
 
 {# ===== AKO ČÍTAŤ ===== #}
 <div class="pv-section avoid-break">
-  <h3 class="section-label">Ako čítať toto porovnanie</h3>
+  <h3 class="section-label">{{ _("Ako čítať toto porovnanie") }}</h3>
   <div class="methodology pv-legend">
-    <p><strong>CAPEX</strong> — celková vstupná investícia bez DPH.</p>
-    <p><strong>NPV (čistá súčasná hodnota)</strong> — čistý zisk za {{ analysis_years }} rokov prevádzky, po odpočítaní investície, v dnešnej hodnote peňazí. Vyššie číslo = viac peňazí za 20 rokov.</p>
-    <p><strong>IRR (vnútorná miera výnosu)</strong> — ročné zhodnotenie investície v percentách; porovnaj s bankovým úrokom alebo alternatívnou investíciou.</p>
-    <p><strong>Návratnosť</strong> — počet rokov, za ktoré sa investícia vráti z úspor na energii.</p>
-    <p><strong>BESS (batériové úložisko)</strong> — ochrana pred pokutou za prekročenie MRK a výnos z obchodovania so spotovou cenou elektriny (arbitráž).</p>
-    <p><strong>Dominovaná ponuka</strong> — existuje iná porovnávaná ponuka, ktorá je súčasne lacnejšia aj výnosnejšia vo všetkých ukazovateľoch; nemá zmysel ju vybrať za žiadnych preferencií.</p>
+    <p>{{ _("<strong>CAPEX</strong> — celková vstupná investícia bez DPH.")|safe }}</p>
+    <p>{{ _("<strong>NPV (čistá súčasná hodnota)</strong> — čistý zisk za {years} rokov prevádzky, po odpočítaní investície, v dnešnej hodnote peňazí. Vyššie číslo = viac peňazí za 20 rokov.").format(years=analysis_years|e)|safe }}</p>
+    <p>{{ _("<strong>IRR (vnútorná miera výnosu)</strong> — ročné zhodnotenie investície v percentách; porovnaj s bankovým úrokom alebo alternatívnou investíciou.")|safe }}</p>
+    <p>{{ _("<strong>Návratnosť</strong> — počet rokov, za ktoré sa investícia vráti z úspor na energii.")|safe }}</p>
+    <p>{{ _("<strong>BESS (batériové úložisko)</strong> — ochrana pred pokutou za prekročenie MRK a výnos z obchodovania so spotovou cenou elektriny (arbitráž).")|safe }}</p>
+    <p>{{ _("<strong>Dominovaná ponuka</strong> — existuje iná porovnávaná ponuka, ktorá je súčasne lacnejšia aj výnosnejšia vo všetkých ukazovateľoch; nemá zmysel ju vybrať za žiadnych preferencií.")|safe }}</p>
   </div>
 </div>
 
@@ -326,21 +326,21 @@
   <div class="decision-block">
     <div>
       <div class="decision-line"></div>
-      <div class="decision-caption">Podpis zákazníka · vybraný variant</div>
+      <div class="decision-caption">{{ _("Podpis zákazníka · vybraný variant") }}</div>
     </div>
     <div>
       <div class="decision-line"></div>
-      <div class="decision-caption">Dátum</div>
+      <div class="decision-caption">{{ _("Dátum") }}</div>
     </div>
   </div>
 
   <div class="contact-card">
-    <h3>Kontakt</h3>
+    <h3>{{ _("Kontakt") }}</h3>
     <p><strong>{{ prepared_by_name }}</strong> · {{ prepared_by_email }} · {{ prepared_by_phone }}</p>
-    <p class="company-info">Energovision s.r.o. · IČO {{ company_ico }} · app.energovision.sk</p>
+    <p class="company-info">Energovision s.r.o. · {{ _("IČO") }} {{ company_ico }} · app.energovision.sk</p>
   </div>
   <div class="footer-disclaimer">
-    Porovnávací súhrn nahrádza samostatné technické posudky priložené k jednotlivým ponukám. Podrobný technický posudok k vybranému variantu je na vyžiadanie k dispozícii v plnom znení. Generated {{ posudok_date }}.
+    {{ _("Porovnávací súhrn nahrádza samostatné technické posudky priložené k jednotlivým ponukám. Podrobný technický posudok k vybranému variantu je na vyžiadanie k dispozícii v plnom znení. Generated {date}.").format(date=posudok_date) }}
   </div>
 </div>
 

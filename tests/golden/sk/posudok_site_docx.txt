@@ -1,0 +1,109 @@
+TECHNICKO-EKONOMICKÝ POSUDOK · P-AOM-000000
+Testovacia firma s.r.o.
+FVE 120 kWp + BESS 112 kWh
+Analýza odberu, simulácia výroby a dispatch, ekonomické posúdenie v 3 scenároch s rizikovou analýzou.
+MANAŽÉRSKE ZHRNUTIE
+Audit odberu: investícia je ekonomicky výhodná vo všetkých scenároch
+Odporúčanie: Realizovať — návratnosť 5,5–6,2 r, NPV 70 663 € (báza); aj v pesimistickom scenári P10 zostáva NPV kladné (44 694 €).
+1 — VÝCHODISKÁ A IDENTIFIKÁCIA OM
+Stav odberného miesta a vstupné dáta
+Charakteristika prevádzky (odvodená z dát): Profil je charakteristický ako nepravidelný profil s výraznými výkyvmi odberu; minimálna sezónnosť, rovnomerná spotreba počas roka. Špička: poludňajší špic. vysoká vhodnosť pre FVE — odber sa kryje s dennou výrobou.
+
+2 — PROFIL ODBERU
+Charakteristika spotreby
+
+Graf 1: Denný profil odberu — pracovný deň vs víkend, s PV produkciou.
+
+Graf 2: Mesačná spotreba.
+
+3 — TECHNICKÉ RIEŠENIE
+Navrhnutý variant — FVE 120 kWp + BESS 112 kWh
+ENERGETICKÁ BILANCIA
+
+Graf 3: Energetická bilancia.
+
+4 — EKONOMICKÉ POSÚDENIE
+Cenové predpoklady
+Tri scenáre prínosu
+
+Graf 4: Porovnanie 3 scenárov.
+
+Graf 5: Kumulatívny cashflow 20 rokov.
+
+5 — SKLADBA PRÍNOSU A RIZIKOVÁ ANALÝZA
+Skladba ročného prínosu
+
+Graf 6: Skladba ročného prínosu.
+
+Graf 7: Tornado — citlivosť NPV.
+
+Graf 8: Monte Carlo — P10 44 694 €, medián 65 937 €, P90 86 106 €; pravdepodobnosť kladného NPV 100 %.
+
+6 — CENA NEČINNOSTI
+Koľko stojí ponechať súčasný stav
+7 — EXPERT POSÚDENIE A ODPORÚČANIA
+Odporúčané kroky
+
+8 — ZÁVER
+Odporúčanie pre klienta
+Investícia 125 476 € do FVE 120 kWp + BESS 112 kWh prinesie ročné úspory 19 186 € (báza) až 21 488 € (optimistický scenár). Návratnosť 5,5–6,2 r, NPV 20 r. 70 663 € (báza), IRR 13.1 %.
+ZÁRUKY A ISTOTY
+Výkonová záruka na panely (25–30 r.) a záruka výrobcu na meniče a batériu.
+Realizácia, revízie a uvedenie do prevádzky pod jednou zodpovednosťou Energovision.
+Monitoring výroby a úspor po spustení; servis počas celej životnosti.
+Skúsenosť s riešeniami pre porovnateľné priemyselné prevádzky.
+9 — PREDPOKLADY A ZDROJE
+Metodika a východiská
+Model má neistotu ±10–15 %. Čísla pochádzajú zo simulácie dispatchu (energetická bilancia validovaná). Posudok je nezáväzný odborný odhad.
+Kontakt: Lukáš Bago · lukas.bago@energovision.sk · 0918 187 762
+Ukazovateľ | Hodnota
+Investícia (Net CAPEX) | 125 476 €
+Ročný prínos (rok 1) | 19 186 €
+Návratnosť | 6,2 r
+NPV 20 r. / IRR | 70 663 € / 13,1 %
+Pokrytie spotreby / samospotreba | 25,7 % / 81,1 %
+Údaj | Hodnota
+Klient | Testovacia firma s.r.o.
+Adresa OM | Priemyselná 1, 972 43 Testovo
+Distribučná oblasť | VN
+Sadzba / tarif | VN
+Ročná spotreba | 388 MWh
+Max 15-min odber | 226 kW
+Priemerný odber / load factor | 44 kW / 0,20
+MRK / RK | 240 / 210 kW
+Parameter | Hodnota
+Inštalovaný výkon FVE | 119,84 kWp DC
+Moduly | ~207 ks modulov á ~580 Wp (orientačne — spresní cenová ponuka)
+Meniče / optimizéry | meniče ~114 kW AC + optimizéry
+Batériové úložisko | batéria 112 kWh
+Konštrukcia | Juh 13°
+Predpokladaná ročná výroba | 124 MWh
+Veličina | Hodnota | Podiel
+Ročná výroba FVE | 124 MWh | 100 %
+Samospotreba | 101 MWh | 81,1 %
+Export prebytkov | 12 MWh | 9,6 %
+Import zo siete | 268 MWh | —
+Pokrytie spotreby OM | 25,7 % | FVE vs spotreba
+Zložka ceny | Hodnota | Zdroj
+Silová zložka | 134,87 €/MWh | faktúra
+Variabilná distribúcia | 16,55 €/MWh | VSD tarif
+TPS + systémové služby | 14,07 €/MWh | pásmo 2
+Avoided cost samospotreby | 151,4 €/MWh | kompozit
+Pevná zložka distribúcie | 8,02 €/kW/mes | × RK 210 kW
+Scenár | Úspora €/r | Návratnosť | NPV 20 r. | IRR
+Báza (ÚRSO 2026 + spot OKTE) | 19 186 € | 6,2 r | 70 663 € | 13,1 %
+Defenzívny (nižší výkup/cena) | 16 308 € | 7,2 r | 37 654 € | 11,2 %
+Optimistický (rast cien energie) | 21 488 € | 5,5 r | 97 070 € | 14,7 %
+Zdroj prínosu | Detail | Hodnota
+FVE priama samospotreba | 94 MWh priamo do odberu | 17 267 €
+FVE export prebytkov | 12 MWh do siete | 767 €
+Batéria — posun PV do odberu | 6 MWh PV uskladnené a využité neskôr | 1 100 €
+Ročná úspora SPOLU |  | 19 186 €
+Scenár cien energie | Náklad za 20 rokov | Rok 1
+Konštantné ceny | 366 638 € | 18 332 €
+Rast cien o 2,5 %/r | 468 283 € | 18 332 €
+Predpoklad / vstup | Hodnota | Zdroj
+Bilančná simulácia | 8 760 h | skutočné namerané 15-min dáta
+Špecifický výnos FVE | 1 035 kWh/kWp | PVGIS
+Diskont / horizont / odpis | 6 % / 20 r / 6 r | WACC / životnosť / zákon
+Tarify | faktúra | faktúra / ÚRSO 2026

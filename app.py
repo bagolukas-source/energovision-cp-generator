@@ -7081,6 +7081,7 @@ def webhook_aom_render_chocosuc():
     if not aid:
         return jsonify({"ok": False, "error": "analyza_id required"}), 400
     vid = body.get("variant_id") or None   # variant zvolený v CRM (má prednosť pred DB — súbeh uloženia)
+    lang = body.get("lang") or None        # sk/en/de z CRM; bez neho analyza_om.doc_lang → customers.lang → sk
     import threading
     try:
         _sb().table("analyza_om").update({"posudok_job_status": "running"}).eq("id", aid).execute()
@@ -7088,7 +7089,7 @@ def webhook_aom_render_chocosuc():
         pass
     def _bg(_aid):
         try:
-            _aom_v2.render_posudok_chocosuc(_sb(), _aid, variant_id=vid)
+            _aom_v2.render_posudok_chocosuc(_sb(), _aid, variant_id=vid, lang=lang)
             try: _sb().table("analyza_om").update({"posudok_job_status": "done"}).eq("id", _aid).execute()
             except Exception: pass
         except Exception:
@@ -7108,7 +7109,8 @@ def webhook_aom_render_chocosuc():
 def webhook_aom_porovnanie():
     """Porovnávací súhrn viacerých ponúk pre jedného klienta — branded PDF (WeasyPrint),
     žiadny nový engine beh, len formátovanie existujúcich analyza_om_variants riadkov.
-    Body: { analyza_id, variant_ids?: [uuid, ...] } — bez variant_ids porovná všetky.
+    Body: { analyza_id, variant_ids?: [uuid, ...], lang?: "sk"|"en"|"de" } — bez variant_ids porovná všetky;
+    bez lang rozhodne analyza_om.doc_lang → customers.lang → sk.
     (Route z 41355ee sa do main nedostala — CRM dostávalo 404; render_porovnanie v main je.)"""
     if not _aom_v2:
         return jsonify({"ok": False, "error": "analyza_om_v2 not loaded"}), 500
@@ -7118,7 +7120,8 @@ def webhook_aom_porovnanie():
         return jsonify({"ok": False, "error": "analyza_id required"}), 400
     variant_ids = body.get("variant_ids") or []
     try:
-        result = _aom_v2.render_porovnanie(_sb(), aid, variant_ids)
+        lang_kw = {"lang": body["lang"]} if body.get("lang") else {}  # bez lang → doc_lang → customers.lang → sk
+        result = _aom_v2.render_porovnanie(_sb(), aid, variant_ids, **lang_kw)
         return jsonify(result)
     except Exception as e:
         log.exception("[aom-porovnanie] failed")
@@ -16821,7 +16824,9 @@ def webhook_prezentacia_b2b():
     body = request.get_json(force=True, silent=True) or {}
     try:
         import generuj_prezentaciu
-        pdf = generuj_prezentaciu.generuj_prezentaciu_b2b(body)
+        from aom_i18n import norm_lang, use_lang
+        with use_lang(norm_lang(body.get("lang"))):
+            pdf = generuj_prezentaciu.generuj_prezentaciu_b2b(body)
         return jsonify({"ok": True, "pdf_base64": _b.b64encode(pdf).decode()})
     except Exception as e:
         log.exception("prezentacia-b2b failed"); return jsonify({"ok": False, "error": str(e)}), 500
@@ -16833,8 +16838,10 @@ def webhook_financovanie_report():
     import base64 as _b
     body = request.get_json(force=True, silent=True) or {}
     try:
+        from aom_i18n import norm_lang, use_lang
         from financovanie_report.generator import generate_financovanie_pdf
-        pdf = generate_financovanie_pdf(body)
+        with use_lang(norm_lang(body.get("lang"))):
+            pdf = generate_financovanie_pdf(body)
         return jsonify({"ok": True, "pdf_base64": _b.b64encode(pdf).decode()})
     except Exception as e:
         log.exception("financovanie-report failed")

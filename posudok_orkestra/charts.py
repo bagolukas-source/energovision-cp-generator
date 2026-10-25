@@ -14,6 +14,9 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import FancyArrowPatch, Circle
 import numpy as np
 
+from aom_i18n import _, get_lang
+from aom_i18n import fmt as _fmt
+
 # ============ ORKESTRA BRAND PALETTE ============
 COLOR_SOLAR = "#FFD645"     # žltá — FVE generation, solar upfront
 COLOR_BATTERY = "#16A34A"   # Energovision zelená — BESS
@@ -353,8 +356,8 @@ def chart_capex_vs_npv(
     ax.set_axisbelow(True)
     capex_colors = [COLOR_NEUTRAL if d else COLOR_GRID for d in dominated_mask]
     npv_colors = [COLOR_NEUTRAL if d else COLOR_BATTERY for d in dominated_mask]
-    ax.bar(x - w / 2, capex, width=w, color=capex_colors, label="CAPEX (vstup)")
-    ax.bar(x + w / 2, npv, width=w, color=npv_colors, label="NPV 20 r (zisk)")
+    ax.bar(x - w / 2, capex, width=w, color=capex_colors, label=_("CAPEX (vstup)"))
+    ax.bar(x + w / 2, npv, width=w, color=npv_colors, label=_("NPV 20 r (zisk)"))
 
     ax.set_xticks(x)
     tick_labels = ax.set_xticklabels(names, fontsize=8.5, rotation=14, ha="right")
@@ -408,9 +411,12 @@ def chart_payback_ranking(
     ax.invert_yaxis()  # najrýchlejšia hore
     max_pb = max(payback_o) if payback_o else 1
     for yi, i, v in zip(y, order, payback_o):
-        _lbl = f"{v:.1f} r" if payback[i] is not None else "nevráti sa"
+        if get_lang() == "sk":  # pôvodný SK tvar s desatinnou bodkou („7.9 r")
+            _lbl = f"{v:.1f} r" if payback[i] is not None else "nevráti sa"
+        else:
+            _lbl = _fmt.pbt(payback[i])  # „7.9 yrs" / „7,9 J." / „no payback"
         ax.text(v + max_pb * 0.015, yi, _lbl, va="center", fontsize=8.5, color=COLOR_TEXT)
-    ax.set_xlabel("Návratnosť (roky) — kratšia je lepšia", fontsize=9, color=COLOR_TEXT)
+    ax.set_xlabel(_("Návratnosť (roky) — kratšia je lepšia"), fontsize=9, color=COLOR_TEXT)
     ax.spines["left"].set_visible(False)
     ax.tick_params(left=False)
     return _save_svg(fig)
