@@ -233,6 +233,11 @@ def _ai_prez_texty(payload: dict) -> dict:
 def generuj_prezentaciu_b2b(g: dict) -> bytes:
     """Podrobná B2B prezentácia z technickej analýzy — editorial premium dizajn."""
     from weasyprint import HTML
+    return HTML(string=_build_b2b_html(g), base_url=BASE).write_pdf()
+
+
+def _build_b2b_html(g: dict) -> str:
+    """HTML B2B prezentácie (bez PDF) — pre generuj_prezentaciu_b2b a zlaté testy."""
     cust = _esc(g.get("zakaznik") or "Vážený klient")
     om = g.get("om") or {}; rec = g.get("variant") or {}; variants = g.get("varianty") or []
     charts = g.get("charts") or []; datum = _esc(g.get("datum") or "")
@@ -477,7 +482,7 @@ def generuj_prezentaciu_b2b(g: dict) -> bytes:
 
     html = (f"<!DOCTYPE html><html lang='sk'><head><meta charset='utf-8'><style>{css}</style></head><body>"
             f"{cover}{s_firma}{s_ref}{s_vych}{s_ries}{s_ekon}{s_var}{chart_slides}{s_3d}{s_pri}{s_close}</body></html>")
-    return HTML(string=html, base_url=BASE).write_pdf()
+    return html
 
 
 def _hdr(logo, name, no):
