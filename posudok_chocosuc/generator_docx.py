@@ -32,6 +32,15 @@ def _set_lang(doc):
     if el is None: el=OxmlElement("w:lang"); rpr.append(el)
     el.set(qn("w:val"),tag)
 
+def _nbsp_eur(doc):
+    """en/de: „19.186 €" / „70 Tsd. €" sa nezalomí (NBSP pred €); sk dokument bez zmeny."""
+    if get_lang()=="sk": return
+    paras=list(doc.paragraphs)+[p for t in doc.tables for row in t.rows for c in row.cells for p in c.paragraphs]
+    for p in paras:
+        for r in p.runs:
+            if " €" in r.text:
+                r.text=re.sub(r"(\d) €","\\1\u00a0€",re.sub(r"(\d) (Tsd\.) €","\\1\u00a0\\2\u00a0€",r.text))
+
 def _shade(cell,hexc):
     sh=OxmlElement("w:shd"); sh.set(qn("w:val"),"clear"); sh.set(qn("w:fill"),hexc); cell._tc.get_or_add_tcPr().append(sh)
 def _kick(doc,t):
@@ -197,4 +206,5 @@ def generate_chocosuc_docx(ctx: dict) -> bytes:
     _para(doc,_("Model má neistotu ±10–15 %. Čísla pochádzajú zo simulácie dispatchu (energetická bilancia validovaná). Posudok je nezáväzný odborný odhad."),size=8.5,color=GREY)
     _para(doc,_("Kontakt: {name} · {email} · {phone}").format(name=ctx.get('prepared_by_name',''),email=ctx.get('prepared_by_email',''),phone=ctx.get('prepared_by_phone','')),size=9)
 
+    _nbsp_eur(doc)
     out=io.BytesIO(); doc.save(out); return out.getvalue()

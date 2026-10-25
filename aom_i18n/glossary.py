@@ -13,8 +13,8 @@ GLOSSARY = {
     },
     "de": {
         "Zelená podnikom": "Zelená podnikom (slowakisches staatliches Förderprogramm für Unternehmen)",
-        "MRK": "maximale Reservekapazität (MRK)",
-        "RK": "Reservekapazität (RK)",
+        "MRK": "maximal reservierte Leistung (MRK)",
+        "RK": "reservierte Leistung (RK)",
         "ZSD / SSD / VSD": "ZSD / SSD / VSD (regionaler Verteilnetzbetreiber)",
         "ÚRSO": "ÚRSO (slowakische Regulierungsbehörde für Netzindustrien)",
         "OKTE": "OKTE (slowakischer Strommarktbetreiber, Day-Ahead-Spot)",

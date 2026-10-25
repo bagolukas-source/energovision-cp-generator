@@ -8,7 +8,7 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from profile_classifier import classify_profile
 from aom_i18n import _, get_lang
-from aom_i18n.fmt import eur, num, pbt, fmt_date, months
+from aom_i18n.fmt import eur, num, pbt, fmt_date, months, volt
 
 DEG=0.0; INFL=0.025; DISC=0.06; LIFE=20; OPEX_RATE=0.0; ODPIS=6; DPPO=0.21; RESID=0.10   # DEG/OPEX 0: bez poklesu výnosu a prevádzkových nákladov (2026-10-24)
 
@@ -110,7 +110,8 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None, selected_
     pm=prof["metrics"]
     profile_sentence=(_("Profil je charakteristický ako {rezim}; {sezonnost}.").format(rezim=prof['rezim'], sezonnost=prof['sezonnost'])
                       + (" " + _("Špička: {spicka}.").format(spicka=prof['spicka']) if prof.get('spicka') else "")
-                      + (f" {prof['fve_fit']}." if prof.get('fve_fit') else ""))
+                      + (f" {prof['fve_fit']}." if prof.get('fve_fit') and get_lang() == "sk"  # SK quirk: malé písmeno po bodke
+                         else (f" {prof['fve_fit'][:1].upper()}{prof['fve_fit'][1:]}." if prof.get('fve_fit') else "")))
 
     # --- ekonomika: VŠETKY zložky z ENGINE value_streams (z dispatchu). Žiadne heuristiky,
     #     žiadne dvojité započítanie — base_saving UŽ obsahuje samospotrebu/export/batériu/arbitráž/peak. ---
@@ -255,6 +256,10 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None, selected_
     _kwp = f"{base.get('pv_kwp',0):.0f}"; _kwh = f"{bess_kwh:.0f}"
     _tarif_src = analyza.get("tarif_source") or "faktúra"
     if _tarif_src == "faktúra": _tarif_src = _("faktúra")   # predvolená hodnota z intake; iný text = údaj z DB
+    elif get_lang() != "sk":  # kódy zdroja tarify (mcp = zápis cez CRM nástroj) — sk ukazuje surový údaj ako doteraz
+        _tarif_src = {"mcp": _("zadané v CRM"), "crm": _("zadané v CRM"), "manual": _("zadané ručne"),
+                      "faktura": _("faktúra"), "urso": _("cenník ÚRSO"), "úrso": _("cenník ÚRSO"),
+                      "spot": _("spot OKTE")}.get(str(_tarif_src).strip().lower(), _tarif_src)
     ctx={
         "client_name":base.get("client_name"),"om_address":base.get("site_address") or "—",
         "eic_om":analyza.get("eic_om"),"cislo_om":analyza.get("cislo_om"),
@@ -308,7 +313,7 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None, selected_
         "summary_headline":summary_headline,
         "recommendation_line":recommendation_line,
         "cover_subtitle":_("Analýza odberu, simulácia výroby a dispatch, ekonomické posúdenie v 3 scenároch s rizikovou analýzou."),
-        "podklady":({"measured":_("15-min profil · "),"extrapolated":_("15-min profil (časť roka) · "),"synthesized":_("profil z faktúry · ")}.get(analyza.get("consumption_strategy"), _("15-min profil · ") if analyza.get("consumption_15min_path") else ""))+"PVGIS · OKTE 2025"+((" · " + _("faktúra")) if tarif_real else ""),
+        "podklady":({"measured":_("15-min profil · "),"extrapolated":_("15-min profil (časť roka) · "),"synthesized":_("profil z faktúry · ")}.get(analyza.get("consumption_strategy"), _("15-min profil · ") if analyza.get("consumption_15min_path") else ""))+_("PVGIS · OKTE 2025")+((" · " + _("faktúra")) if tarif_real else ""),
         "zaver_headline":_("Odporúčanie pre klienta"),
         "zaver_text":(_("Investícia {capex} do batériového úložiska {kwh} kWh k existujúcej FVE {kwp} kWp").format(capex=eur(capex), kwh=_kwh, kwp=_kwp)
                       if _retrofit_bess else
@@ -318,6 +323,8 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None, selected_
                          irr=(f"{full['irr']:.1f}" if get_lang()=="sk" else num(full['irr'],1))),  # SK quirk: IRR v závere s bodkou (13.1 %)
         "recommendations":[],  # doplní AI/deterministic neskôr
     }
+    if get_lang() != "sk":  # VN/NN → „MV (medium voltage)" …; sk ukazuje skratku ako doteraz
+        ctx["om_sadzba"] = volt(ctx["om_sadzba"]); ctx["distrib_oblast"] = volt(ctx["distrib_oblast"])
     _build_deterministic_narratives(ctx, S, full, prof, pm)
     return ctx
 

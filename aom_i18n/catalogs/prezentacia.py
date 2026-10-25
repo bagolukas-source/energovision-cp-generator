@@ -154,7 +154,7 @@ DE = {
     "Profil odberného miesta": "Profil der Abnahmestelle",
     "Analyzovali sme Vašu reálnu spotrebu": "Wir haben Ihren tatsächlichen Verbrauch analysiert",
     "Špička odberu": "Lastspitze",
-    "Rezervovaná kapacita": "Maximale Reservekapazität (MRK)",
+    "Rezervovaná kapacita": "Maximal reservierte Leistung (MRK)",
     "Využitie MRK": "MRK-Auslastung",
     "Riešenie": "Lösung",
     "Odporúčaná konfigurácia": "Empfohlene Konfiguration",

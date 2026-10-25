@@ -1684,19 +1684,20 @@ def _topology_params(analyza: dict) -> tuple[float, float, str]:
 
 def _construction_str(analyza: dict) -> str:
     """Konštrukcia z cenovej ponuky: Juh 13° alebo Východ-Západ 10°. Nikdy 35°.
-    Default keď CP neudáva: Juh 13°."""
+    Default keď CP neudáva: Juh 13°. Text v jazyku aom_i18n (sk bez zmeny)."""
+    from aom_i18n import _
     topo = (analyza.get("fve_topology") or "").strip().lower()
     tilt = analyza.get("fve_tilt_deg")
     try: tilt = int(float(tilt)) if tilt not in (None, "") else None
     except Exception: tilt = None
     if tilt == 35: tilt = None  # 35° nepoužívame
     if any(k in topo for k in ("east", "e-w", "ew", "v-z", "vz", "východ", "zapad", "západ")):
-        return f"Východ-Západ {tilt or 10}°"
+        return _("Východ-Západ {t}°").format(t=tilt or 10)
     if any(k in topo for k in ("juh", "south", "jih")):
-        return f"Juh {tilt or 13}°"
+        return _("Juh {t}°").format(t=tilt or 13)
     if topo and "35" not in topo:
         return analyza.get("fve_topology")  # voľný text z CP
-    return f"Juh {tilt or 13}°"
+    return _("Juh {t}°").format(t=tilt or 13)
 
 
 

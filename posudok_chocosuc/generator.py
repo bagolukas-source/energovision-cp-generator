@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """ChocoSuc-grade posudok generator — HTML -> PDF (WeasyPrint), context-driven."""
-import base64, os
+import base64, os, re
 from pathlib import Path
 from weasyprint import HTML
 import logging
@@ -153,7 +153,9 @@ def _chartjs_init(ctx):
         "scen": {"l": scen_lbl, "v": scen_npv},
     }
     # texty Chart.js mimo CD (CD musí ostať v sk identické); kwp: sk null → JS číslo s bodkou ako doteraz
-    T = {"pv": _("Vyroba FVE"), "wd": _("Pracovny den"), "we": _("Vikend"), "keur": _("k EUR"),
+    # tisíce na osi: sk „70 k EUR" (bez zmeny), en „70k €", de „70 Tsd. €"
+    T = {"pv": _("Vyroba FVE"), "wd": _("Pracovny den"), "we": _("Vikend"),
+         "keur": _("k EUR") if _sk else (" " if get_lang() == "de" else "") + _("k EUR"),
          "kwp": None if _sk else dec(n("fve_kwp"), 2)}
     js = ("window.__ready=false;var CT=" + _j.dumps(T, ensure_ascii=False) + ";var CD=" + _j.dumps(D, ensure_ascii=False) + ";"
         "Chart.defaults.font.family='Segoe UI,Arial,sans-serif';Chart.defaults.font.size=11;Chart.defaults.color='#6B7280';"
@@ -162,7 +164,7 @@ def _chartjs_init(ctx):
         "(function(){var e=document.getElementById('cDonut');if(!e)return;need++;new Chart(e,{type:'doughnut',data:{labels:CD.donut.l,datasets:[{data:CD.donut.v,backgroundColor:CD.donut.c,borderWidth:2,borderColor:'#fff'}]},options:{cutout:'66%',plugins:{legend:{display:false}},layout:{padding:6},animation:{onComplete:fin}},plugins:[{id:'ct',afterDraw:function(c){var m=c.getDatasetMeta(0);if(!m.data[0])return;var x=m.data[0].x,y=m.data[0].y,a=c.ctx;a.save();a.textAlign='center';a.fillStyle='#1A1A1A';a.font='700 23px Segoe UI,Arial';a.fillText(CD.donut.center,x,y-2);a.fillStyle='#9CA3AF';a.font='400 11px Segoe UI,Arial';a.fillText(CD.donut.centerSub,x,y+17);a.restore();}}]});})();"
         "mk('cMonth',{type:'bar',data:{labels:CD.month.l,datasets:[{data:CD.month.v,backgroundColor:'#92D050',borderRadius:4}]},options:{plugins:{legend:{display:false}},scales:{y:{ticks:{callback:function(v){return v+' MWh'}},grid:{color:'#F0F1F3'}},x:{grid:{display:false}}}}});"
         "mk('cDaily',{type:'line',data:{labels:CD.daily.x,datasets:[{label:CT.pv+' '+(CT.kwp||CD.daily.kwp)+' kWp',data:CD.daily.pv,borderColor:'#92D050',backgroundColor:'rgba(146,208,80,.18)',fill:true,tension:.4,pointRadius:0,borderWidth:1.5},{label:CT.wd,data:CD.daily.wd,borderColor:'#1E293B',tension:.4,pointRadius:0,borderWidth:2.4},{label:CT.we,data:CD.daily.we,borderColor:'#94A3B8',borderDash:[5,4],tension:.4,pointRadius:0,borderWidth:2}]},options:{plugins:{legend:{position:'top',labels:{boxWidth:10,padding:10,font:{size:10}}}},scales:{y:{ticks:{callback:function(v){return v+' kW'}},grid:{color:'#F0F1F3'}},x:{grid:{display:false},ticks:{maxTicksLimit:12}}}}});"
-        "mk('cScen',{type:'bar',data:{labels:CD.scen.l,datasets:[{data:CD.scen.v,backgroundColor:['#CBD5E1','#9DB2C9','#92D050'].slice(0,CD.scen.v.length),borderRadius:4}]},options:{plugins:{legend:{display:false}},scales:{y:{ticks:{callback:function(v){return v+' '+CT.keur}},grid:{color:'#F0F1F3'}},x:{grid:{display:false}}}}});"
+        "mk('cScen',{type:'bar',data:{labels:CD.scen.l,datasets:[{data:CD.scen.v,backgroundColor:['#CBD5E1','#9DB2C9','#92D050'].slice(0,CD.scen.v.length),borderRadius:4}]},options:{plugins:{legend:{display:false}},scales:{y:{ticks:{callback:function(v){return v+"+("' '+" if _sk else "")+"CT.keur}},grid:{color:'#F0F1F3'}},x:{grid:{display:false}}}}});"
         "if(need===0)window.__ready=true;setTimeout(function(){window.__ready=true;},5000);")
     return "<script>" + js + "</script>"
 
@@ -300,7 +302,7 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
     <div><div class="kick">{_("Pre")}</div><div style="font-weight:bold;">{ctx.get('client_name','')}</div>
       <div style="color:#374151; font-size:8.6pt;">{ctx.get('om_address','') if has_addr else ''}{('<br>'+_("EIC OM: {x}").format(x=ctx['eic_om'])) if ctx.get('eic_om') else ''}</div>
       <div class="kick" style="margin-top:14px;">{_("Parametre OM")}</div>
-      <div style="font-size:8.6pt;">{_("Spotreba {x} MWh/r").format(x=num(ctx.get('year_mwh')))}<br>{_("MRK {a} kW · RK {b} kW").format(a=num(ctx.get('om_mrk_kw')), b=num(ctx.get('om_rk_kw')))} · {ctx.get('om_sadzba',_("VN"))}{('<br>'+str(ctx['distrib_oblast'])) if (ctx.get('distrib_oblast') and str(ctx.get('distrib_oblast')).lower()!='none') else ''}</div></div>
+      <div style="font-size:8.6pt;">{_("Spotreba {x} MWh/r").format(x=num(ctx.get('year_mwh')))}<br>{_("MRK {a} kW · RK {b} kW").format(a=num(ctx.get('om_mrk_kw')), b=num(ctx.get('om_rk_kw')))} · {ctx.get('om_sadzba',_("VN"))}{('<br>'+str(ctx['distrib_oblast'])) if (ctx.get('distrib_oblast') and str(ctx.get('distrib_oblast')).lower()!='none' and (get_lang()=='sk' or ctx.get('distrib_oblast')!=ctx.get('om_sadzba'))) else ''}</div></div>
     <div><div class="kick">{_("Vystavené")}</div><div style="font-weight:bold;">{ctx.get('posudok_date','')}</div>
       <div class="kick" style="margin-top:14px;">{_("Podklady")}</div>
       <div style="font-size:8.6pt;">{ctx.get('podklady',_("15-min profil · faktúra · PVGIS · OKTE"))}</div></div>
@@ -436,7 +438,7 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
   {gimg(g_vs, _("Ročný prínos podľa zdroja (value stream) — samospotreba, export, batéria, arbitráž, daňový štít."))}
   <h2 style="margin-top:8px;">{_("Citlivosť a riziko")}</h2>
   {gimg(g_tor, _("Tornado — citlivosť NPV na ±15 % driverov."))}
-  {gimg(g_mc, _("Monte Carlo ({n} simulácií). P10 {p10}, medián {p50}, P90 {p90}; pravdepodobnosť kladného NPV {p} %.").format(n=ctx.get('mc_n',5000), p10=eur(ctx['mc_p10']), p50=eur(ctx['mc_p50']), p90=eur(ctx['mc_p90']), p=num(ctx.get('mc_prob_pos',0)*100,0)))}
+  {gimg(g_mc, _("Monte Carlo ({n} simulácií). P10 {p10}, medián {p50}, P90 {p90}; pravdepodobnosť kladného NPV {p} %.").format(n=(ctx.get('mc_n',5000) if get_lang()=='sk' else num(ctx.get('mc_n',5000))), p10=eur(ctx['mc_p10']), p50=eur(ctx['mc_p50']), p90=eur(ctx['mc_p90']), p=num(ctx.get('mc_prob_pos',0)*100,0)))}
 </section>
 
 <section class="newpage">
@@ -496,6 +498,9 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
 </body></html>"""
     html = html.replace("</head>", _CHARTJS_CDN + "</head>", 1)
     html = html.replace("</body></html>", _chartjs_init(ctx) + "</body></html>", 1)
+    if get_lang() != "sk":  # „19.186 €" / „70 Tsd. €" sa nesmie zalomiť (sk bez zmeny)
+        html = re.sub(r"(\d) (Tsd\.) €", "\\1\u00a0\\2\u00a0€", html)
+        html = re.sub(r"(\d) €", "\\1\u00a0€", html)
     return html
 
 def generate_chocosuc_pdf(ctx: dict) -> bytes:

@@ -30,7 +30,7 @@ DE = {
     "EIC OM / č. miesta": "EIC der Abnahmestelle / Nr.",
     "Distribučná oblasť": "Verteilnetzgebiet",
     "Sadzba / tarif": "Tarifstufe / Tarif",
-    "MRK / RK": "MRK / RK (Reservekapazität)",
+    "MRK / RK": "MRK / RK (reservierte Leistung)",
     "Inštalovaný výkon FVE": "Installierte PV-Leistung",
     "Batériové úložisko": "BESS (Batteriespeicher)",
     "Pokrytie spotreby OM": "Verbrauchsdeckung der Abnahmestelle",

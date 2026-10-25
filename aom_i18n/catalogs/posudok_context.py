@@ -26,14 +26,14 @@ EN = {
     "{pb} (báza: nevráti sa)": "{pb} (base case: no payback)",
     "bez batérie — arbitráž sa neuplatňuje": "no battery — arbitrage does not apply",
     "spotová arbitráž z hodinového EMS (nabíjanie v lacných hodinách, vybíjanie v drahých)":
-        "spot price arbitrage from the hourly EMS (charging in cheap hours, discharging in expensive hours)",
+        "spot price arbitrage from the hourly energy management system (EMS): charging in cheap hours, discharging in expensive hours",
     "batéria obchoduje v merchant režime bilančnej skupiny — výnos v riadku Obchodovanie BS":
         "the battery trades in merchant mode within the balancing group — revenue shown in the row “BESS trading in the balancing group”",
     "klient nie je na spotovej tarife — arbitráž sa nepočíta (0 €)": "the client is not on a spot price tariff — arbitrage is not calculated (0 €)",
-    "chýba hodinový spotový výpočet (EMS) — arbitráž nevyčíslená (0 €)": "hourly spot price calculation (EMS) missing — arbitrage not quantified (0 €)",
+    "chýba hodinový spotový výpočet (EMS) — arbitráž nevyčíslená (0 €)": "hourly spot price calculation of the energy management system (EMS) missing — arbitrage not quantified (0 €)",
     "spread nedosiahol prah rentability (≥ 30 €/MWh) — arbitráž 0 €": "the spread did not reach the profitability threshold (≥ 30 €/MWh) — arbitrage 0 €",
     # --- scenáre, tornado ---
-    "Báza (ÚRSO 2026 + spot OKTE)": "Base case (ÚRSO 2026 + OKTE spot price)",
+    "Báza (ÚRSO 2026 + spot OKTE)": "Base case (2026 tariffs of the Slovak energy regulator ÚRSO + OKTE spot price)",
     "Báza": "Base case",
     "Defenzívny (nižší výkup/cena)": "Defensive (lower feed-in/prices)",
     "Defenzívny": "Defensive",
@@ -122,6 +122,14 @@ EN = {
         "~{nmod} modules of ~580 Wp each (indicative — to be specified in the price offer)",
     "meniče ~{ac} kW AC (DC/AC ~1,1)": "inverters ~{ac} kW AC (DC/AC ~1.1)",
     "Juh 13° (orientačne — spresní cenová ponuka)": "South 13° (indicative — to be specified in the price offer)",
+    "Juh {t}°": "South {t}°",
+    "Východ-Západ {t}°": "East-West {t}°",
+    "PVGIS · OKTE 2025": "PVGIS · OKTE 2025 (Slovak electricity market operator, day-ahead spot)",
+    # kódy analyza_om.tarif_source (len en/de)
+    "zadané v CRM": "entered in CRM",
+    "zadané ručne": "entered manually",
+    "cenník ÚRSO": "ÚRSO price list",
+    "spot OKTE": "OKTE spot price",
     "Bázový výpočet z hodinovej simulácie (ceny ÚRSO 2026 + spot OKTE). Ročná úspora {save} €, návratnosť {pb}.":
         "Base calculation from the hourly simulation, using 2026 tariffs of ÚRSO (Slovak energy regulator) and prices of "
         "OKTE (Slovak electricity market operator, day-ahead spot). Annual saving {save} €, payback {pb}.",
@@ -181,14 +189,14 @@ DE = {
     "{pb} (báza: nevráti sa)": "{pb} (Basisfall: keine Amortisation)",
     "bez batérie — arbitráž sa neuplatňuje": "ohne Batterie — keine Arbitrage",
     "spotová arbitráž z hodinového EMS (nabíjanie v lacných hodinách, vybíjanie v drahých)":
-        "Spotpreis-Arbitrage aus dem stündlichen EMS (Laden in günstigen Stunden, Entladen in teuren Stunden)",
+        "Spotpreis-Arbitrage aus dem stündlichen Energiemanagementsystem (EMS): Laden in günstigen Stunden, Entladen in teuren Stunden",
     "batéria obchoduje v merchant režime bilančnej skupiny — výnos v riadku Obchodovanie BS":
         "die Batterie handelt im Merchant-Modus im Bilanzkreis — Ertrag in der Zeile „BESS-Handel im Bilanzkreis“",
     "klient nie je na spotovej tarife — arbitráž sa nepočíta (0 €)": "der Kunde hat keinen Spotpreistarif — Arbitrage wird nicht berechnet (0 €)",
-    "chýba hodinový spotový výpočet (EMS) — arbitráž nevyčíslená (0 €)": "stündliche Spotpreisberechnung (EMS) fehlt — Arbitrage nicht beziffert (0 €)",
+    "chýba hodinový spotový výpočet (EMS) — arbitráž nevyčíslená (0 €)": "stündliche Spotpreisberechnung des Energiemanagementsystems (EMS) fehlt — Arbitrage nicht beziffert (0 €)",
     "spread nedosiahol prah rentability (≥ 30 €/MWh) — arbitráž 0 €": "der Spread hat die Rentabilitätsschwelle (≥ 30 €/MWh) nicht erreicht — Arbitrage 0 €",
     # --- scenáre, tornado ---
-    "Báza (ÚRSO 2026 + spot OKTE)": "Basisfall (ÚRSO 2026 + OKTE-Spotpreis)",
+    "Báza (ÚRSO 2026 + spot OKTE)": "Basisfall (Tarife 2026 der slowakischen Regulierungsbehörde ÚRSO + OKTE-Spotpreis)",
     "Báza": "Basisfall",
     "Defenzívny (nižší výkup/cena)": "Defensiv (niedrigere Einspeisevergütung/Preise)",
     "Defenzívny": "Defensiv",
@@ -277,6 +285,13 @@ DE = {
         "~{nmod} Module mit je ~580 Wp (Richtwert — wird im Angebot präzisiert)",
     "meniče ~{ac} kW AC (DC/AC ~1,1)": "Wechselrichter ~{ac} kW AC (DC/AC ~1,1)",
     "Juh 13° (orientačne — spresní cenová ponuka)": "Süd 13° (Richtwert — wird im Angebot präzisiert)",
+    "Juh {t}°": "Süd {t}°",
+    "Východ-Západ {t}°": "Ost-West {t}°",
+    "PVGIS · OKTE 2025": "PVGIS · OKTE 2025 (slowakischer Strommarktbetreiber, Day-Ahead-Spot)",
+    "zadané v CRM": "im CRM erfasst",
+    "zadané ručne": "manuell erfasst",
+    "cenník ÚRSO": "ÚRSO-Preisblatt",
+    "spot OKTE": "OKTE-Spotpreis",
     "Bázový výpočet z hodinovej simulácie (ceny ÚRSO 2026 + spot OKTE). Ročná úspora {save} €, návratnosť {pb}.":
         "Basisberechnung aus der stündlichen Simulation mit Tarifen 2026 der ÚRSO (slowakische Regulierungsbehörde für Netzindustrien) "
         "und Preisen der OKTE (slowakischer Strommarktbetreiber, Day-Ahead-Spot). Amortisation {pb} bei einer jährlichen Einsparung von {save} €.",
@@ -291,16 +306,16 @@ DE = {
     "6-ročný rovnomerný odpis predstavuje úsporu 21 % × {capex} € = {dan} € na dani z príjmu (priemerne {dan_y} €/rok počas prvých 6 rokov).":
         "Die lineare Abschreibung über 6 Jahre ergibt eine Ertragsteuerersparnis von 21 % × {capex} € = {dan} € (durchschnittlich {dan_y} €/Jahr in den ersten 6 Jahren).",
     "Špičkový odber {peak} kW je len {pct} % zazmluvnenej MRK {mrk} kW. Odberné miesto má rezervu znížiť rezervovanú kapacitu (RK, min. 50 % MRK) a šetriť na pevnej zložke distribúcie":
-        "Die Spitzenlast von {peak} kW beträgt nur {pct} % der vertraglich vereinbarten maximalen Reservekapazität (MRK) von {mrk} kW. "
-        "Die Abnahmestelle hat Spielraum, die Reservekapazität (RK, min. 50 % der MRK) zu senken und beim festen Netzentgeltanteil zu sparen",
+        "Die Spitzenlast von {peak} kW beträgt nur {pct} % der vertraglich vereinbarten maximal reservierten Leistung (MRK) von {mrk} kW. "
+        "Die Abnahmestelle hat Spielraum, die reservierte Leistung (RK, min. 50 % der MRK) zu senken und beim festen Netzentgeltanteil zu sparen",
     "; batéria toto zníženie zabezpečuje proti špičkám (modelovaná úspora {save} €/r).":
         "; die Batterie sichert diese Senkung gegen Lastspitzen ab (modellierte Einsparung {save} €/Jahr).",
     " (úspora nezávislá od FVE/batérie — odporúčame preveriť s prevádzkovateľom distribučnej sústavy).":
         " (Einsparung unabhängig von PV-Anlage/Batterie — wir empfehlen, dies mit dem regionalen Verteilnetzbetreiber abzustimmen).",
-    "Optimalizácia rezervovanej kapacity (MRK/RK)": "Optimierung der Reservekapazität (MRK/RK)",
+    "Optimalizácia rezervovanej kapacity (MRK/RK)": "Optimierung der reservierten Leistung (MRK/RK)",
     "Peak shaving cez batériu": "Peak Shaving mit der Batterie",
     "Batéria {bess} kWh znižuje 15-min špičky zo siete (modelovaná úspora {save} €/r) — podklad pre zníženie rezervovanej kapacity (RK {rk} kW).":
-        "Die Batterie mit {bess} kWh senkt 15-Minuten-Lastspitzen aus dem Netz (modellierte Einsparung {save} €/Jahr) — Grundlage für eine Senkung der Reservekapazität (RK {rk} kW).",
+        "Die Batterie mit {bess} kWh senkt 15-Minuten-Lastspitzen aus dem Netz (modellierte Einsparung {save} €/Jahr) — Grundlage für eine Senkung der reservierten Leistung (RK {rk} kW).",
     "ESG profil a CSRD reporting": "ESG-Profil und CSRD-Berichterstattung",
     "Ročná úspora ~{co2} t CO₂ (pri SK emisnej intenzite ~0,25 kg/kWh) — doložiteľný podklad pre EU Taxonómiu a CSRD disclosures.":
         "Jährliche Einsparung von ~{co2} t CO₂ (bei der slowakischen Emissionsintensität von ~0,25 kg/kWh) — belastbare Grundlage für die EU-Taxonomie und die CSRD-Berichterstattung.",

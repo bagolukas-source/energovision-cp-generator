@@ -89,7 +89,7 @@ def test_prezentacia_formaty():
     assert "6.4 yrs" in en and "6,4 J." in de                     # návratnosť
     assert "1.56 MWp" in en and "1,56 MWp" in de                  # referencie
     assert "Zelená podnikom (Slovak state subsidy scheme for businesses)" in en
-    assert "Maximale Reservekapazität (MRK)" in de
+    assert "Maximal reservierte Leistung (MRK)" in de
 
 
 class _Resp:

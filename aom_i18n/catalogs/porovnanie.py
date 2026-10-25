@@ -140,7 +140,7 @@ DE = {
     "Identifikátor": "Kennung",
     "{n} porovnávaných ponúk · ročná spotreba {mwh} MWh · špička {peak} kW · MRK {mrk} kW":
         "{n} verglichene Angebote · Jahresverbrauch {mwh} MWh · Lastspitze {peak} kW · "
-        "maximale Reservekapazität (MRK) {mrk} kW",
+        "maximal reservierte Leistung (MRK) {mrk} kW",
     "<strong>K veci.</strong> Z {n} predložených ponúk je <strong>1 ponuka</strong> vo všetkých ukazovateľoch "
     "(CAPEX, NPV, IRR, návratnosť) horšia než iná ponuka v tomto porovnaní — reálna voľba je medzi zvyšnými {viable}.":
         "<strong>Kurz gesagt.</strong> Von den {n} vorgelegten Angeboten ist <strong>1 Angebot</strong> in allen "
@@ -213,7 +213,7 @@ DE = {
     "Technické fakty o odbernom mieste": "Technische Fakten zur Abnahmestelle",
     "Ročná spotreba elektriny": "Jährlicher Stromverbrauch",
     "Špička odberu (15-min maximum)": "Lastspitze (15-Minuten-Maximum)",
-    "Maximálna rezervovaná kapacita (MRK)": "Maximale Reservekapazität (MRK)",
+    "Maximálna rezervovaná kapacita (MRK)": "Maximal reservierte Leistung (MRK)",
     "<strong>⚠ Špička odberu prekračuje MRK</strong> — riziko pokút od distribútora; batéria ho vie znížiť "
     "(peak shaving)":
         "<strong>⚠ Die Lastspitze überschreitet die MRK</strong> — Risiko von Strafzahlungen an den "

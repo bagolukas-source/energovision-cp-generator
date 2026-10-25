@@ -144,7 +144,7 @@ DE = {
     "Sadzba / tarif": "Tarifklasse / Tarif",
     "Max 15-min odber": "Max. 15-Min-Leistung",
     "Priemerný odber / load factor": "Durchschnittliche Leistung / Lastfaktor",
-    "MRK / RK": "Maximale Reservekapazität (MRK) / Reservekapazität (RK)",
+    "MRK / RK": "Maximal reservierte Leistung (MRK) / reservierte Leistung (RK)",
     "Údaj": "Angabe",
     "Charakteristika prevádzky (odvodená z dát):": "Betriebscharakteristik (aus den Daten abgeleitet):",
     # 2 profil
@@ -202,7 +202,7 @@ DE = {
     "Graf 6: Skladba ročného prínosu.": "Abbildung 6: Zusammensetzung des jährlichen Nutzens.",
     "Graf 7: Tornado — citlivosť NPV.": "Abbildung 7: Tornado — NPV-Sensitivität.",
     "Graf 8: Monte Carlo — P10 {p10}, medián {p50}, P90 {p90}; pravdepodobnosť kladného NPV {prob} %.":
-        "Abbildung 8: Monte Carlo — P10 {p10}, Median {p50}, P90 {p90}; Wahrscheinlichkeit eines positiven NPV {prob} %.",
+        "Abbildung 8: Monte-Carlo — P10 {p10}, Median {p50}, P90 {p90}; Wahrscheinlichkeit eines positiven NPV {prob} %.",
     # 6 cena nečinnosti
     "Cena nečinnosti": "Kosten des Nichthandelns",
     "Koľko stojí ponechať súčasný stav": "Was die Beibehaltung des aktuellen Zustands kostet",

@@ -28,6 +28,13 @@ def _d(v,d):
     """f"{v:.{d}f}" — sk/en s bodkou (pôvodné sk správanie grafov), de s čiarkou."""
     s=f"{v:.{d}f}"
     return s.replace(".",",") if get_lang()=="de" else s
+def _k(s,sk):
+    """Tisíce v popisoch: sk podľa pôvodnej šablóny ("{} k€" / "{}k" / "{}k €"); en "{}k €" / "{}k", de "{} Tsd. €" / "{} Tsd."."""
+    lang=get_lang()
+    if lang=="sk": return sk.format(s)
+    e="€" in sk
+    if lang=="de": return f"{s} Tsd. €" if e else f"{s} Tsd."
+    return f"{s}k €" if e else f"{s}k"
 # skratky mesiacov a dní v grafoch: sk s diakritikou (pôvodné), en/de podľa aom_i18n.fmt
 _MONTHS_CAL_SK=["Jan","Feb","Mar","Apr","Máj","Jún","Júl","Aug","Sep","Okt","Nov","Dec"]
 def _cal_months(): return list(_MONTHS_CAL_SK) if get_lang()=="sk" else months()
@@ -112,7 +119,7 @@ def chart_scenarios(ctx):
     S=ctx["scenarios3"]; short=[s["short"] for s in S]; npv=[s["npv"] for s in S]; pb=[s["payback"] if s["payback"] is not None else float("nan") for s in S]; irr=[s["irr"] for s in S]
     fig,(a1,a2)=plt.subplots(1,2,figsize=(9,3.0)); x=np.arange(len(S)); cols=["#CBD5E1",GRID,GREEN][:len(S)]
     b=a1.bar(x,[v/1000 for v in npv],color=cols,width=0.62,zorder=3)
-    for bb,v in zip(b,npv): a1.text(bb.get_x()+bb.get_width()/2,v/1000+max(npv)/1000*0.03,f"{v/1000:.0f} k€",ha="center",fontsize=9.5,weight="bold",color="#1E293B")
+    for bb,v in zip(b,npv): a1.text(bb.get_x()+bb.get_width()/2,v/1000+max(npv)/1000*0.03,_k(f"{v/1000:.0f}","{} k€"),ha="center",fontsize=9.5,weight="bold",color="#1E293B")
     a1.set_xticks(x); a1.set_xticklabels(short,fontsize=9.5); a1.set_ylabel("NPV"); a1.set_ylim(min(0,min(npv)/1000*1.1),max(npv)/1000*1.20); a1.set_yticklabels([]); _clean(a1)
     a2b=a2.twinx()
     a2.plot(x,pb,"o-",color=AMBER,lw=2.6,ms=8,zorder=3); a2b.plot(x,irr,"s-",color=GREEN,lw=2.6,ms=7,zorder=3)
@@ -143,12 +150,12 @@ def chart_benefit(ctx):
     for name,val,c in parts:
         if val<=0: continue
         ax.barh(0,val,left=left,color=c,height=0.55,zorder=3)
-        if val>4000: ax.text(left+val/2,0,f"{val/1000:.0f}k",ha="center",va="center",fontsize=9.5,color="white",weight="bold")
+        if val>4000: ax.text(left+val/2,0,_k(f"{val/1000:.0f}","{}k"),ha="center",va="center",fontsize=9.5,color="white",weight="bold")
         left+=val
     ax.set_xlim(0,max(left,1)*1.02); ax.set_ylim(-0.5,0.5); ax.axis("off")
     import matplotlib.patches as mp
     handles=[mp.Patch(color=c) for _n,v,c in parts if v>0]
-    labels=[f"{n} ({v/1000:.0f}k)" for n,v,c in parts if v>0]
+    labels=[f"{n} ("+_k(f"{v/1000:.0f}","{}k")+")" for n,v,c in parts if v>0]
     ax.legend(handles,labels,frameon=False,fontsize=9.5,ncol=len(labels) or 1,loc="upper center",bbox_to_anchor=(0.5,2.1),handlelength=1,columnspacing=1.2)
     return _b64(fig)
 
@@ -157,8 +164,8 @@ def chart_tornado(ctx):
     fig,ax=plt.subplots(figsize=(9,2.6)); y=np.arange(len(drivers))
     for i,(name,lo,hi) in enumerate(drivers):
         ax.barh(i,hi/1000,color=GREEN,height=0.62,zorder=3); ax.barh(i,lo/1000,color="#EF6B6B",height=0.62,zorder=3)
-        ax.text((hi/1000)+4,i,f"+{hi/1000:.0f}k",va="center",fontsize=8.5,color="#16A34A",weight="bold")
-        ax.text((lo/1000)-4,i,f"{lo/1000:.0f}k",va="center",ha="right",fontsize=8.5,color="#DC2626",weight="bold")
+        ax.text((hi/1000)+4,i,_k(f"+{hi/1000:.0f}","{}k"),va="center",fontsize=8.5,color="#16A34A",weight="bold")
+        ax.text((lo/1000)-4,i,_k(f"{lo/1000:.0f}","{}k"),va="center",ha="right",fontsize=8.5,color="#DC2626",weight="bold")
     ax.set_yticks(list(y)); ax.set_yticklabels([d[0] for d in drivers],fontsize=10)
     ax.axvline(0,color="#1E293B",lw=1.4); ax.set_xlabel(_("Zmena NPV oproti báze (k€)  ·  driver ±15 %"))
     ax.invert_yaxis(); ax.grid(False); ax.tick_params(length=0); ax.set_xticklabels([])
@@ -172,7 +179,7 @@ def chart_montecarlo(ctx):
     ymax=max(n); ax.set_ylim(0,ymax*1.32); bb=dict(boxstyle="round,pad=0.2",fc="white",ec="none",alpha=0.95)
     for q,c,lab in [(p10,"#EF6B6B","P10"),(p50,GREEN,_("Medián")),(p90,"#F59E0B","P90")]:
         ax.axvline(q/1000,color=c,lw=2.6,zorder=3,ymax=0.80)
-        ax.text(q/1000,ymax*1.14,f"{lab}: {q/1000:.0f} k€",ha="center",va="bottom",fontsize=9.5,color=c,weight="bold",bbox=bb,zorder=5)
+        ax.text(q/1000,ymax*1.14,f"{lab}: "+_k(f"{q/1000:.0f}","{} k€"),ha="center",va="bottom",fontsize=9.5,color=c,weight="bold",bbox=bb,zorder=5)
     ax.set_xlabel(_("NPV 20 r. (k€)")); ax.set_yticks([]); _clean(ax,yg=False)
     return _b64(fig)
 
@@ -304,12 +311,12 @@ def chart_waterfall(ctx):
     for i,(nm,val,col) in enumerate(steps):
         bot=acc if val>=0 else acc+val
         ax.bar(i,abs(val)/1000,bottom=bot/1000,color=col,width=0.66,zorder=3)
-        ax.text(i,(bot+abs(val)/2)/1000,f"{val/1000:+.0f}k",ha="center",va="center",fontsize=8.2,
+        ax.text(i,(bot+abs(val)/2)/1000,_k(f"{val/1000:+.0f}","{}k"),ha="center",va="center",fontsize=8.2,
                 color="white",weight="bold")
         if i>0: ax.plot([i-1+0.33,i-0.33],[acc/1000,acc/1000],color="#CBD5E1",lw=1,ls=(0,(3,2)),zorder=1)
         acc+=val; xs.append(nm)
     ax.bar(len(steps),npv/1000,color="#102D4C",width=0.66,zorder=3)
-    ax.text(len(steps),npv/1000+(abs(npv)/1000*0.04+2),f"{npv/1000:+.0f}k",ha="center",va="bottom",
+    ax.text(len(steps),npv/1000+(abs(npv)/1000*0.04+2),_k(f"{npv/1000:+.0f}","{}k"),ha="center",va="bottom",
             fontsize=9,color="#102D4C",weight="bold")
     xs.append(_("NPV 20 r."))
     ax.axhline(0,color="#1E293B",lw=1.2)
@@ -329,18 +336,18 @@ def chart_capex_split(ctx):
     left=0
     for nm,val,c in segs:
         ax.barh(1,val/1000,left=left/1000,color=c,height=0.5,zorder=3)
-        if val>total*0.06: ax.text((left+val/2)/1000,1,f"{val/1000:.0f}k",ha="center",va="center",
+        if val>total*0.06: ax.text((left+val/2)/1000,1,_k(f"{val/1000:.0f}","{}k"),ha="center",va="center",
                                     color="white",fontsize=9,weight="bold")
         left+=val
     ax.barh(0,net/1000,color="#102D4C",height=0.5,zorder=3)
-    ax.text(net/1000/2,0,f"{net/1000:.0f}k",ha="center",va="center",color="white",fontsize=9,weight="bold")
+    ax.text(net/1000/2,0,_k(f"{net/1000:.0f}","{}k"),ha="center",va="center",color="white",fontsize=9,weight="bold")
     if dot>1:
         ax.barh(0,dot/1000,left=net/1000,color=LIME,height=0.5,zorder=3,alpha=0.85,hatch="///",edgecolor="white")
         ax.text((net+dot/2)/1000,0,_("dotácia −{v}k").format(v=f"{dot/1000:.0f}"),ha="center",va="center",color="#1A1A1A",fontsize=8.2,weight="bold")
     ax.set_yticks([0,1]); ax.set_yticklabels([_("Čistá investícia"),_("Hrubá investícia")],fontsize=10)  # BUG 4 FIX: "Po dotácii" mätúce keď dotácia=0
     ax.set_xlabel(_("tis. € (bez DPH)")); ax.set_xlim(0,total/1000*1.08); _clean(ax,yg=False); ax.grid(False)
     import matplotlib.patches as mp
-    hs=[mp.Patch(color=c) for _n,v,c in segs]; ls=[f"{n} ({v/1000:.0f}k)" for n,v,c in segs]
+    hs=[mp.Patch(color=c) for _n,v,c in segs]; ls=[f"{n} ("+_k(f"{v/1000:.0f}","{}k")+")" for n,v,c in segs]
     ax.legend(hs,ls,frameon=False,fontsize=9,ncol=len(segs) or 1,loc="upper center",bbox_to_anchor=(0.5,1.28))
     return _b64(fig)
 
@@ -354,7 +361,7 @@ def chart_value_stream(ctx):
     vals=[p[1]/1000 for p in parts]
     bars=ax.barh(y,vals,color=[p[2] for p in parts],height=0.62,zorder=3)
     for i,(b,(n,v,c)) in enumerate(zip(bars,parts)):
-        ax.text(b.get_width()+max(vals)*0.015,i,f"{_d(v/1000,1)}k €",va="center",fontsize=9.5,color="#374151",weight="bold")
+        ax.text(b.get_width()+max(vals)*0.015,i,_k(_d(v/1000,1),"{}k €"),va="center",fontsize=9.5,color="#374151",weight="bold")
     ax.set_yticks(list(y)); ax.set_yticklabels([p[0] for p in parts],fontsize=10)
     ax.set_xlim(0,max(vals)*1.18); ax.set_xlabel(_("€ / rok (plný scenár)")); _clean(ax,yg=False); ax.grid(False)
     tot=sum(p[1] for p in parts)

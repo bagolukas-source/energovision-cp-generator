@@ -63,3 +63,14 @@ def fmt_date(d):
 
 def months():
     return list(_MONTHS[get_lang()])
+
+
+_VOLT = {
+    "en": {"VN": "MV (medium voltage)", "NN": "LV (low voltage)", "VVN": "HV (high voltage)"},
+    "de": {"VN": "MS (Mittelspannung)", "NN": "NS (Niederspannung)", "VVN": "HS (Hochspannung)"},
+}
+
+
+def volt(x):
+    """Napäťová hladina VN/NN/VVN → en/de popis; sk a iné hodnoty bez zmeny."""
+    return _VOLT.get(get_lang(), {}).get(str(x or "").strip().upper(), x)
