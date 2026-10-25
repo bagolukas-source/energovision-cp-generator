@@ -513,5 +513,20 @@ class TestRaynetPrihlasovacieUdaje(_Base):
         self.assertEqual(len(self.fake_get.calls), 1, "druhé volanie nesmie ísť do Raynetu s cudzími údajmi")
 
 
+
+class AomPorovnanieRoute(_Base):
+    """CRM volá /webhook/analyza-om-porovnanie — route chýbala v main (404), render_porovnanie áno."""
+
+    def test_route_existuje_a_vola_render_porovnanie(self):
+        calls = []
+        fake = mock.MagicMock()
+        fake.render_porovnanie.side_effect = lambda sb, aid, vids: calls.append((aid, vids)) or {"ok": True, "pdf_url": "u"}
+        with mock.patch.object(appmod, "_aom_v2", fake), mock.patch.object(appmod, "_sb", lambda: None):
+            r = self.client.post("/webhook/analyza-om-porovnanie", json={"analyza_id": "a1", "variant_ids": ["v1", "v2"]})
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(calls, [("a1", ["v1", "v2"])])
+        r = self.client.post("/webhook/analyza-om-porovnanie", json={})
+        self.assertEqual(r.status_code, 400)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
