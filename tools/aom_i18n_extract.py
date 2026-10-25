@@ -14,6 +14,8 @@ I18N_FILES = [
     "posudok_chocosuc/context.py",
     "posudok_chocosuc/charts.py",
     "posudok_chocosuc/generator_docx.py",
+    "financovanie_report/generator.py",
+    "financovanie_report/templates/report.html",
 ]
 
 

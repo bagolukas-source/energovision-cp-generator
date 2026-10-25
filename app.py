@@ -16834,8 +16834,10 @@ def webhook_financovanie_report():
     import base64 as _b
     body = request.get_json(force=True, silent=True) or {}
     try:
+        from aom_i18n import norm_lang, use_lang
         from financovanie_report.generator import generate_financovanie_pdf
-        pdf = generate_financovanie_pdf(body)
+        with use_lang(norm_lang(body.get("lang"))):
+            pdf = generate_financovanie_pdf(body)
         return jsonify({"ok": True, "pdf_base64": _b.b64encode(pdf).decode()})
     except Exception as e:
         log.exception("financovanie-report failed")

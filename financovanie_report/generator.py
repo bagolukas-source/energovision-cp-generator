@@ -13,6 +13,9 @@ from typing import Any
 from jinja2 import Environment, FileSystemLoader, Undefined, ChainableUndefined
 from weasyprint import HTML, CSS
 
+from aom_i18n import _, get_lang, install_jinja
+from aom_i18n import fmt as _fmt
+
 
 class _SafeUndefined(ChainableUndefined):
     def __str__(self) -> str:
@@ -38,10 +41,8 @@ def _fmt_eur(value: Any) -> str:
     except (TypeError, ValueError):
         return "—"
     sign = "-" if v < 0 else ""
-    v = abs(v)
-    # Always full integer — no M€ abbreviation (user requirement)
-    formatted = f"{v:,.0f}".replace(",", " ")
-    return f"{sign}{formatted} €"
+    # Always full integer — no M€ abbreviation (user requirement); znamienko zvlášť (sk: -0,4 → „-0 €", -0.0 → „0 €")
+    return f"{sign}{_fmt.eur(abs(v))}"
 
 
 def _fmt_pct(value: Any, decimals: int = 1) -> str:
@@ -51,7 +52,9 @@ def _fmt_pct(value: Any, decimals: int = 1) -> str:
         v = float(value)
         if v <= -99.9:
             return "N/A"
-        return f"{v:.{decimals}f} %".replace(".", ",")
+        if get_lang() == "sk":  # sk: bez oddeľovača tisícok (pôvodné správanie)
+            return f"{v:.{decimals}f} %".replace(".", ",")
+        return f"{_fmt.num(v, decimals)} %"
     except (TypeError, ValueError):
         return "N/A"
 
@@ -59,11 +62,14 @@ def _fmt_pct(value: Any, decimals: int = 1) -> str:
 def _fmt_num(value: Any, decimals: int = 0) -> str:
     if value is None or isinstance(value, Undefined):
         return "—"
-    try:
-        v = float(value)
-        return f"{v:,.{decimals}f}".replace(",", " ").replace(".", ",")
-    except (TypeError, ValueError):
-        return "—"
+    return _fmt.num(value, decimals)
+
+
+def _fmt_price3(value: Any) -> str:
+    """Cena €/kWh na 3 desatinné miesta; sk ponecháva pôvodnú desatinnú bodku („0.181")."""
+    if get_lang() == "sk":
+        return "%.3f" % value
+    return _fmt.num(value, 3)
 
 
 def _logo_b64() -> str:
@@ -88,6 +94,8 @@ def _make_env() -> Environment:
     env.filters["eur"] = _fmt_eur
     env.filters["pct"] = _fmt_pct
     env.filters["num"] = _fmt_num
+    env.filters["price3"] = _fmt_price3
+    install_jinja(env)
     env.globals["now"] = datetime.now
     return env
 
@@ -156,7 +164,7 @@ def _cumulative_svg(variants: list[dict], cf_data: list[dict]) -> str:
     if min_v < 0 < max_v:
         zy = sy(0)
         parts.append(f'<line x1="{PL}" y1="{zy:.1f}" x2="{W-PR}" y2="{zy:.1f}" stroke="#475569" stroke-width="1.4" stroke-dasharray="5,3"/>')
-        parts.append(f'<text x="{W-PR}" y="{zy-4:.1f}" text-anchor="end" font-size="7.5" fill="#64748b">bod zvratu (0 €)</text>')
+        parts.append(f'<text x="{W-PR}" y="{zy-4:.1f}" text-anchor="end" font-size="7.5" fill="#64748b">{_("bod zvratu (0 €)")}</text>')
 
     # krivky + koncový bod
     for vc in variants:
@@ -170,7 +178,7 @@ def _cumulative_svg(variants: list[dict], cf_data: list[dict]) -> str:
     # x popisy
     for i, yr in enumerate(years):
         if yr in (5, 10, 15, 20):
-            parts.append(f'<text x="{sx(i):.1f}" y="{H-PB+16}" text-anchor="middle" font-size="8" fill="#64748b">r{yr}</text>')
+            parts.append(f'<text x="{sx(i):.1f}" y="{H-PB+16}" text-anchor="middle" font-size="8" fill="#64748b">{_("r{n}").format(n=yr)}</text>')
 
     parts.append("</svg>")
     return "".join(parts)
@@ -235,7 +243,7 @@ def _mini_svg(cf_breakdown: list[dict], init_inv: float, color: str) -> str:
         i = yr  # index = year number (pts[0]=init, pts[1]=yr1, ..., pts[25]=yr25)
         if i < n:
             x = sx(i)
-            parts.append(f'<text x="{x:.1f}" y="{H-PB+12}" text-anchor="middle" font-size="7" fill="#9ca3af">r{yr}</text>')
+            parts.append(f'<text x="{x:.1f}" y="{H-PB+12}" text-anchor="middle" font-size="7" fill="#9ca3af">{_("r{n}").format(n=yr)}</text>')
 
     # y labels
     parts.append(f'<text x="{PL-3}" y="{PT+5}" text-anchor="end" font-size="7" fill="#9ca3af">{max_label}</text>')
@@ -259,8 +267,9 @@ def render_financovanie_html(context: dict) -> str:
     env = _make_env()
 
     ctx = dict(context)
-    ctx.setdefault("report_date", datetime.now().strftime("%-d. %-m. %Y"))
-    ctx.setdefault("project_name", "Fotovoltická elektráreň")
+    ctx.setdefault("report_date", datetime.now().strftime("%-d. %-m. %Y") if get_lang() == "sk"
+                   else _fmt.fmt_date(datetime.now().date()))
+    ctx.setdefault("project_name", _("Fotovoltická elektráreň"))
     ctx.setdefault("client_name", "")
     ctx.setdefault("site_address", "")
     ctx["logo_b64"] = _logo_b64()
@@ -336,26 +345,26 @@ def render_financovanie_html(context: dict) -> str:
         lines = []
         # 1) Najvyššia NPV — formulácia podľa toho, či víťaz vyžaduje vstupný kapitál
         if _wkey in ("ppa10", "ppa15", "sih") or _winit <= 1:
-            lines.append(
-                f"Najvyššiu čistú súčasnú hodnotu za 20 rokov dosahuje {npv_winner.get('label')} "
-                f"({_fmt_eur(npv_winner.get('npv'))}) — bez vstupného kapitálu, s kladným tokom od začiatku."
-            )
+            lines.append(_(
+                "Najvyššiu čistú súčasnú hodnotu za 20 rokov dosahuje {label} ({npv}) — bez vstupného "
+                "kapitálu, s kladným tokom od začiatku."
+            ).format(label=npv_winner.get('label'), npv=_fmt_eur(npv_winner.get('npv'))))
         else:
-            lines.append(
-                f"Najvyššiu čistú súčasnú hodnotu za 20 rokov dosahuje {npv_winner.get('label')} "
-                f"({_fmt_eur(npv_winner.get('npv'))}); vyžaduje však jednorazový vstupný kapitál {_fmt_eur(_winit)}."
-            )
+            lines.append(_(
+                "Najvyššiu čistú súčasnú hodnotu za 20 rokov dosahuje {label} ({npv}); vyžaduje však "
+                "jednorazový vstupný kapitál {capital}."
+            ).format(label=npv_winner.get('label'), npv=_fmt_eur(npv_winner.get('npv')), capital=_fmt_eur(_winit)))
         # 2) Najnižší vstupný náklad — modely bez vkladu
-        lines.append(
-            f"Najnižší vstupný náklad ({_fmt_eur(low_up.get('initial_investment') or 0)}) a kladný tok od "
-            f"začiatku majú modely bez vstupného vkladu (PPA, SIH) — pozitívny cashflow od prvého mesiaca."
-        )
+        lines.append(_(
+            "Najnižší vstupný náklad ({upfront}) a kladný tok od začiatku majú modely bez vstupného vkladu "
+            "(PPA, SIH) — pozitívny cashflow od prvého mesiaca."
+        ).format(upfront=_fmt_eur(low_up.get('initial_investment') or 0)))
         # 3) Vyvážené odporúčanie
-        lines.append(
-            f"Ako vyváženú voľbu odporúčame {recommended.get('label')}: nulový vstup, vlastníctvo elektrárne "
-            f"od prvého dňa, fixná sadzba a kladný mesačný tok už počas splácania. Vlastná kúpa dáva najvyšší "
-            f"absolútny zisk za 20 rokov, ak má firma voľný kapitál."
-        )
+        lines.append(_(
+            "Ako vyváženú voľbu odporúčame {label}: nulový vstup, vlastníctvo elektrárne od prvého dňa, fixná "
+            "sadzba a kladný mesačný tok už počas splácania. Vlastná kúpa dáva najvyšší absolútny zisk za "
+            "20 rokov, ak má firma voľný kapitál."
+        ).format(label=recommended.get('label')))
         ctx["conclusion_lines"] = lines
 
     tmpl = env.get_template("report.html")

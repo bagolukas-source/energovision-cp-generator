@@ -128,6 +128,49 @@ def test_financovanie_sk_golden():
         assert (G / name).read_text(encoding="utf-8") == a, f"SK regresia: {name}"
 
 
+def _render_lang(lang, f, neutral=True):
+    from aom_i18n import use_lang
+    with use_lang(lang):
+        return render(f(neutral=neutral))
+
+
+_ADDRESS = {"Tomášikova"}  # adresa Energovision (vlastné meno, neprekladá sa)
+
+
+def test_financovanie_en_de_no_slovak_leftovers():
+    from aom_i18n_fixtures import slovak_leftovers
+    for lang in ("en", "de"):
+        for f in GOLDEN.values():
+            html = _render_lang(lang, f)
+            assert f'<html lang="{lang}">' in html
+            left = [w for w in slovak_leftovers(html) if w not in _ADDRESS]
+            assert not left, (lang, f.__name__, left)
+
+
+def test_financovanie_number_formats():
+    en, de = _render_lang("en", fixture_payload), _render_lang("de", fixture_payload)
+    for got, exp in ((en, ["120,000 €", "98,500 €", "-120,000 €", "0.181 €/kWh", "14.2 %", "119.8 kWp", ">Y5<"]),
+                     (de, ["120.000 €", "98.500 €", "-120.000 €", "0,181 €/kWh", "14,2 %", "119,8 kWp", ">J5<"])):
+        miss = [e for e in exp if e not in got]
+        assert not miss, miss
+    sk = render(fixture_payload())
+    assert "120 000 €" in sk and "0.181 €/kWh" in sk and "14,2 %" in sk  # sk zvyklosti bez zmeny
+
+
+def test_financovanie_default_date_by_lang():
+    import re
+    from aom_i18n import use_lang
+    from financovanie_report.generator import render_financovanie_html
+    p = fixture_payload_min(neutral=True)
+    p.pop("report_date")
+    with use_lang("en"):
+        assert re.search(r"generated on \d{1,2} [A-Z][a-z]{2} \d{4}", render_financovanie_html(p))
+    p = fixture_payload_min(neutral=True)
+    p.pop("report_date")
+    with use_lang("de"):
+        assert re.search(r"erstellt am \d{2}\.\d{2}\.\d{4}", render_financovanie_html(p))
+
+
 if __name__ == "__main__" and "--capture" in sys.argv:
     for name, f in GOLDEN.items():
         (G / name).write_text(render(f()), encoding="utf-8")
