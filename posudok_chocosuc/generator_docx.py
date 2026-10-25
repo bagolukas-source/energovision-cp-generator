@@ -143,7 +143,7 @@ def generate_chocosuc_docx(ctx: dict) -> bytes:
     doc.add_page_break(); _kick(doc,"4 — "+_("Ekonomické posúdenie")); _h(doc,_("Cenové predpoklady"))
     _table(doc,[_("Zložka ceny"),_("Hodnota"),_("Zdroj")],[
         [_("Silová zložka"),f"{num(ctx['p_silova']*1000,2)} €/MWh",ctx.get("tarif_source","")],
-        [_("Variabilná distribúcia"),f"{num(ctx['p_dist_var']*1000,2)} €/MWh",_("VSD tarif")],
+        [_("Variabilná distribúcia"),f"{num(ctx['p_dist_var']*1000,2)} €/MWh",ctx.get("dist_tarif_source","")],
         [_("TPS + systémové služby"),f"{num((ctx['p_tps']+ctx['p_so'])*1000,2)} €/MWh",_("pásmo 2")],
         [_("Avoided cost samospotreby"),f"{num(ctx['p_avoided']*1000,1)} €/MWh",_("kompozit")],
         [_("Pevná zložka distribúcie"),_("{v} €/kW/mes").format(v=num(ctx['p_dist_pevna'],2)),f"× RK {num(ctx.get('om_rk_kw'))} kW"],
@@ -158,7 +158,7 @@ def generate_chocosuc_docx(ctx: dict) -> bytes:
     # 5 SKLADBA + RIZIKO
     doc.add_page_break(); _kick(doc,"5 — "+_("Skladba prínosu a riziková analýza")); _h(doc,_("Skladba ročného prínosu"))
     _table(doc,[_("Zdroj prínosu"),_("Detail"),_("Hodnota")],
-        [[n,f,eur(v)] for n,f,v in ctx.get("benefit_rows",[])]+[[_("Ročná úspora SPOLU"),"",eur(full["save_total"])]],
+        [[n,f,eur(v)] for n,f,v in ctx.get("benefit_rows",[])+ctx.get("benefit_cost_rows",[])]+[[_("Ročná úspora SPOLU"),"",eur(full["save_total"])]],
         aligns=["l","l","r"])
     _img(doc,C.chart_benefit(ctx),cap=_("Graf 6: Skladba ročného prínosu."))
     mc_img=C.chart_montecarlo(ctx)
@@ -175,7 +175,7 @@ def generate_chocosuc_docx(ctx: dict) -> bytes:
 
     # 7 ODPORÚČANIA
     _kick(doc,"7 — "+_("Expert posúdenie a odporúčania"))
-    _expert_html = ctx.get("ai_expert_html") or ""
+    _expert_html = ctx.get("ai_expert_html") or ctx.get("expert_fallback_html") or ""
     if _strip(_expert_html):
         for chunk in re.split(r"</p>|\n\n", _expert_html):
             txt=_strip(chunk)

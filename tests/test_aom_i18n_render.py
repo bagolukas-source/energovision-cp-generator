@@ -95,7 +95,7 @@ def test_ai_fallback_v_jazyku(monkeypatch):
     from aom_i18n_fixtures import fixture_ctx, slovak_leftovers
     ctx = fixture_ctx()
     sk = aom._generate_chocosuc_ai(dict(ctx))
-    assert "Z technického hľadiska" in sk["expert"] and "(faktúra)  podmienky" in sk["expert"]  # pôvodná SK vetva
+    assert "Z technického hľadiska" in sk["expert"] and "(faktúra), podmienky" in sk["expert"]  # SK bez straty čiarok (predtým replace(",", " "))
     assert sk["recommendations"][0][0] == "Odporúčanie k navrhnutému variantu"
     for lang in ("en", "de"):
         with use_lang(lang):
