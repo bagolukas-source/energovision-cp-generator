@@ -213,3 +213,13 @@ if __name__ == "__main__":
         print("zapísané:", ", ".join(sorted(outs)))
     else:
         print(__doc__)
+
+
+def test_porovnanie_ai_mimo_schemy_nepada():
+    """AI vrátilo recommendation ako reťazec a hodnotenie ako reťazec → predtým 500 'str' has no attribute 'get'."""
+    bad = dict(_AI, ai_recommendation="<p>Choose HUAWEI 535 kWp.</p>",
+               ai_variant_assessments=["Best value.", {"id": "v2", "verdict": "Fast.", "pros": [], "cons": []}])
+    for lang in (None, "de"):
+        r, seen, _ = run(CASES["porovnanie.html"][0], lang=lang, ai=bad)
+        assert r.get("ok"), r
+        assert "Choose HUAWEI 535 kWp." in seen["html"]
