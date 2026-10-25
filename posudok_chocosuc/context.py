@@ -7,6 +7,8 @@ from datetime import datetime
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from profile_classifier import classify_profile
+from aom_i18n import _, get_lang
+from aom_i18n.fmt import eur, num, pbt, fmt_date, months
 
 DEG=0.0; INFL=0.025; DISC=0.06; LIFE=20; OPEX_RATE=0.0; ODPIS=6; DPPO=0.21; RESID=0.10   # DEG/OPEX 0: bez poklesu výnosu a prevádzkových nákladov (2026-10-24)
 
@@ -16,17 +18,16 @@ def _pb(v):
     except (TypeError, ValueError): return None
     return f if 0 < f < 99 else None
 
-def pb_txt(v, d=1):
-    v=_pb(v)
-    return "nevráti sa" if v is None else (f"{v:.{d}f} r").replace(".",",")
+def pb_txt(v):
+    return pbt(_pb(v))
 
 def _pb_range(lo, hi):
     """„7,8–9,0 r" / „7,8 r (báza: nevráti sa)" / „nevráti sa"."""
     lo, hi = _pb(lo), _pb(hi)
-    if lo is None and hi is None: return "nevráti sa"
-    if hi is None: return f"{pb_txt(lo)} (báza: nevráti sa)"
-    if lo is None: return pb_txt(hi)
-    return f"{lo:.1f}–{hi:.1f} r".replace(".",",")
+    if lo is None and hi is None: return pbt(None)
+    if hi is None: return _("{pb} (báza: nevráti sa)").format(pb=pbt(lo))
+    if lo is None: return pbt(hi)
+    return f"{num(lo,1)}–{pbt(hi)}"
 
 def _npv(save_total, capex, opex, annual_tax):
     npv=-capex
@@ -45,7 +46,7 @@ def _irr(save_total, capex, opex, annual_tax):
             s=save_total*((1-DEG)**(y-1))*((1+INFL)**(y-1)); tax=annual_tax if y<=ODPIS else 0
             v+=(s-opex+tax)/((1+r)**y)
         v+=(capex*RESID)/((1+r)**LIFE); return v
-    for _ in range(60):
+    for _it in range(60):
         m=(lo+hi)/2
         if f(m)>0: lo=m
         else: hi=m
@@ -107,7 +108,9 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None, selected_
     peak_estimated = not _valid
     prof=classify_profile(hourly=[(h[0],h[1],h[2]) for h in hourly] if hourly else None, monthly_mwh=monthly_mwh, avg_kw=avg_kw or None, peak_kw=peak_kw or None)
     pm=prof["metrics"]
-    profile_sentence=f"Profil je charakteristický ako {prof['rezim']}; {prof['sezonnost']}." + (f" Špička: {prof['spicka']}." if prof.get('spicka') else "") + (f" {prof['fve_fit']}." if prof.get('fve_fit') else "")
+    profile_sentence=(_("Profil je charakteristický ako {rezim}; {sezonnost}.").format(rezim=prof['rezim'], sezonnost=prof['sezonnost'])
+                      + (" " + _("Špička: {spicka}.").format(spicka=prof['spicka']) if prof.get('spicka') else "")
+                      + (f" {prof['fve_fit']}." if prof.get('fve_fit') else ""))
 
     # --- ekonomika: VŠETKY zložky z ENGINE value_streams (z dispatchu). Žiadne heuristiky,
     #     žiadne dvojité započítanie — base_saving UŽ obsahuje samospotrebu/export/batériu/arbitráž/peak. ---
@@ -139,17 +142,17 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None, selected_
     _is_spot = (str(analyza.get("om_tarif_typ") or analyza.get("tarif_typ") or "spot").lower() == "spot")
     _has_ems = bool(base.get("value_streams"))
     if bess_kwh <= 0:
-        arbitrage_reason = "bez batérie — arbitráž sa neuplatňuje"
+        arbitrage_reason = _("bez batérie — arbitráž sa neuplatňuje")
     elif abs(save_arb) > 1:
-        arbitrage_reason = "spotová arbitráž z hodinového EMS (nabíjanie v lacných hodinách, vybíjanie v drahých)"
+        arbitrage_reason = _("spotová arbitráž z hodinového EMS (nabíjanie v lacných hodinách, vybíjanie v drahých)")
     elif save_merchant > 1:
-        arbitrage_reason = "batéria obchoduje v merchant režime bilančnej skupiny — výnos v riadku Obchodovanie BS"
+        arbitrage_reason = _("batéria obchoduje v merchant režime bilančnej skupiny — výnos v riadku Obchodovanie BS")
     elif not _is_spot:
-        arbitrage_reason = "klient nie je na spotovej tarife — arbitráž sa nepočíta (0 €)"
+        arbitrage_reason = _("klient nie je na spotovej tarife — arbitráž sa nepočíta (0 €)")
     elif not _has_ems:
-        arbitrage_reason = "chýba hodinový spotový výpočet (EMS) — arbitráž nevyčíslená (0 €)"
+        arbitrage_reason = _("chýba hodinový spotový výpočet (EMS) — arbitráž nevyčíslená (0 €)")
     else:
-        arbitrage_reason = "spread nedosiahol prah rentability (≥ 30 €/MWh) — arbitráž 0 €"
+        arbitrage_reason = _("spread nedosiahol prah rentability (≥ 30 €/MWh) — arbitráž 0 €")
     base_saving = float(base.get("saving_y1_eur") or vs.get("total_eur") or (save_self+save_export+save_bess+save_arb+save_peak+save_merchant))
     annual_tax  = net_capex/ODPIS*DPPO
     # retrofit BESS (pridanie_bess): CAPEX v posudku je LEN batéria, FVE je existujúca
@@ -171,9 +174,9 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None, selected_
         return {"name":name,"short":short,"save_total":stot,"opex":opex,"annual_tax":annual_tax,
                 "payback":pb,"npv":npv,"irr":irr,"save_self":save_self,"save_export":save_export}
     # 3 scenáre = cenová citlivosť na engine bázu (NIE pripočítavanie pák — tie sú už v báze)
-    S = [scen("Báza (ÚRSO 2026 + spot OKTE)","Báza",1.0),
-         scen("Defenzívny (nižší výkup/cena)","Defenzívny",0.85),
-         scen("Optimistický (rast cien energie)","Optimistický",1.12)]
+    S = [scen(_("Báza (ÚRSO 2026 + spot OKTE)"),_("Báza"),1.0),
+         scen(_("Defenzívny (nižší výkup/cena)"),_("Defenzívny"),0.85),
+         scen(_("Optimistický (rast cien energie)"),_("Optimistický"),1.12)]
     # scenario_emphasis z chatu (učiteľnosť): ktorý scenár je „odporúčaný" v posudku
     _co = analyza.get("chat_overrides") or {}
     _emph = _co.get("scenario_emphasis") if isinstance(_co, dict) else None
@@ -189,14 +192,14 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None, selected_
     base_npv = full["npv"]
     def npvm(sm=1.0,cm=1.0):
         return eng_npv + (base_saving*sm - base_saving)*_annuity - (net_capex*cm - net_capex)
-    drv=[("Cena elektriny",npvm(sm=0.85)-base_npv,npvm(sm=1.15)-base_npv),
-         ("Špecifický výnos FVE",npvm(sm=0.90)-base_npv,npvm(sm=1.10)-base_npv),
-         ("CAPEX (cena diela)",npvm(cm=1.15)-base_npv,npvm(cm=0.85)-base_npv)]
+    drv=[(_("Cena elektriny"),npvm(sm=0.85)-base_npv,npvm(sm=1.15)-base_npv),
+         (_("Špecifický výnos FVE"),npvm(sm=0.90)-base_npv,npvm(sm=1.10)-base_npv),
+         (_("CAPEX (cena diela)"),npvm(cm=1.15)-base_npv,npvm(cm=0.85)-base_npv)]
     drv.sort(key=lambda d:max(abs(d[1]),abs(d[2])),reverse=True)
 
     # --- monte carlo ---
     random.seed(42); res=[]
-    for _ in range(5000):
+    for _mc in range(5000):
         sm=random.triangular(0.82,1.15,1.0); cm=random.triangular(0.95,1.12,1.0)
         res.append(eng_npv + (base_saving*sm - base_saving)*_annuity - (net_capex*cm - net_capex))
     res.sort(); P=lambda q:res[int(q*len(res))]
@@ -205,21 +208,23 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None, selected_
     _p10 = P(0.10)
     _prob_pos = sum(1 for x in res if x > 0) / len(res)
     _pb_rng = _pb_range(opti["payback"], S[0]["payback"])
-    _e = lambda v: f"{v:,.0f}".replace(",", " ")  # tisíce medzerou; čiarky vo vete ostanú
     if full["npv"] > 0 and _p10 > 0:
-        summary_headline = "Audit odberu: investícia je ekonomicky výhodná vo všetkých scenároch"
-        recommendation_line = (f"Realizovať — návratnosť {_pb_rng}, NPV {_e(full['npv'])} € (báza); "
-                               f"aj v pesimistickom scenári P10 zostáva NPV kladné ({_e(_p10)} €).")
+        summary_headline = _("Audit odberu: investícia je ekonomicky výhodná vo všetkých scenároch")
+        recommendation_line = _("Realizovať — návratnosť {pb}, NPV {npv} (báza); "
+                                "aj v pesimistickom scenári P10 zostáva NPV kladné ({p10}).").format(
+                                    pb=_pb_rng, npv=eur(full['npv']), p10=eur(_p10))
     elif full["npv"] > 0:
-        summary_headline = "Audit odberu: investícia je v báze výhodná, pri nepriaznivom vývoji môže byť stratová"
-        recommendation_line = (f"Realizovať s rezervou — návratnosť {_pb_rng}, NPV {_e(full['npv'])} € (báza); "
-                               f"v pesimistickom scenári P10 klesá NPV pod nulu ({_e(_p10)} €), "
-                               f"pravdepodobnosť kladného NPV {_prob_pos*100:.0f} %.")
+        summary_headline = _("Audit odberu: investícia je v báze výhodná, pri nepriaznivom vývoji môže byť stratová")
+        recommendation_line = _("Realizovať s rezervou — návratnosť {pb}, NPV {npv} (báza); "
+                                "v pesimistickom scenári P10 klesá NPV pod nulu ({p10}), "
+                                "pravdepodobnosť kladného NPV {prob} %.").format(
+                                    pb=_pb_rng, npv=eur(full['npv']), p10=eur(_p10), prob=num(_prob_pos*100))
     else:
-        summary_headline = "Audit odberu: investícia sa v navrhnutej konfigurácii neoplatí"
-        recommendation_line = (f"V tejto konfigurácii neodporúčame realizovať — NPV {_e(full['npv'])} € (báza), "
-                               f"návratnosť {_pb_rng}; pravdepodobnosť kladného NPV {_prob_pos*100:.0f} %. "
-                               f"Odporúčame preveriť menšiu batériu, inú veľkosť FVE alebo cenu diela.")
+        summary_headline = _("Audit odberu: investícia sa v navrhnutej konfigurácii neoplatí")
+        recommendation_line = _("V tejto konfigurácii neodporúčame realizovať — NPV {npv} (báza), "
+                                "návratnosť {pb}; pravdepodobnosť kladného NPV {prob} %. "
+                                "Odporúčame preveriť menšiu batériu, inú veľkosť FVE alebo cenu diela.").format(
+                                    pb=_pb_rng, npv=eur(full['npv']), prob=num(_prob_pos*100))
 
     # --- cena nečinnosti ---
     ina_y1=self_mwh*1000*p_avoided_eff   # BUG 3 FIX: plný retail (konzistentne s engine úsporou)
@@ -228,32 +233,35 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None, selected_
 
     # --- komponenty (z variantu, fallback orientačné) ---
     comp_real=bool(analyza.get("bundle_id"))
-    components={"panel":f"FVE {base.get('pv_kwp',0):.0f} kWp — moduly podľa cenovej ponuky",
-                "inverter":f"meniče ~{base.get('inverter_kw',0):.0f} kW AC + optimizéry",
-                "battery":f"batéria {bess_kwh:.0f} kWh" if bess_kwh else "—",
-                "konstrukcia":base.get("fve_topology","E-W / Juh")}
+    components={"panel":_("FVE {kwp} kWp — moduly podľa cenovej ponuky").format(kwp=f"{base.get('pv_kwp',0):.0f}"),
+                "inverter":_("meniče ~{kw} kW AC + optimizéry").format(kw=f"{base.get('inverter_kw',0):.0f}"),
+                "battery":_("batéria {kwh} kWh").format(kwh=f"{bess_kwh:.0f}") if bess_kwh else "—",
+                "konstrukcia":base.get("fve_topology") if "fve_topology" in base else _("E-W / Juh")}
 
     # benefit_rows = REÁLNE engine zložky (z dispatchu), žiadny paušál
     _pv_via_bat_mwh = float(base.get("pv_to_bat_mwh") or 0)
     # BUG 2 FIX: prvý riadok = PRIAMA samospotreba (save_self je z engine priama, 381 MWh);
     # batéria je samostatný riadok (žiadne dvojité počítanie 418 vs 381).
-    benefit_rows=[("FVE priama samospotreba",f"{_pv_direct_mwh:.0f} MWh priamo do odberu",save_self),
-                  ("FVE export prebytkov",f"{export_mwh:.0f} MWh do siete",save_export)]
-    if save_bess>0: benefit_rows.append(("Batéria — posun PV do odberu",f"{_pv_via_bat_mwh:.0f} MWh PV uskladnené a využité neskôr",save_bess))
-    if abs(save_arb)>1: benefit_rows.append(("BESS arbitráž (spot v BS)","nabíjanie lacno / vybíjanie draho",save_arb))
-    if save_merchant>1: benefit_rows.append(("BESS obchodovanie v BS (merchant)","spotové obchodovanie batérie cez bilančnú skupinu",save_merchant))
-    if save_peak>0: benefit_rows.append(("Peak shaving (zníženie RK)","redukcia mesačného 15-min maxima",save_peak))
-    benefit_parts=[("Samospotreba",save_self,"#16A34A"),("Export",save_export,"#A7D08C"),
-                   ("Batéria",save_bess,"#5B7CFA"),("Arbitráž",max(save_arb,0.0)+max(save_merchant,0.0),"#8B5CF6"),
-                   ("Daňový štít",annual_tax,"#F59E0B")]
+    benefit_rows=[(_("FVE priama samospotreba"),_("{mwh} MWh priamo do odberu").format(mwh=f"{_pv_direct_mwh:.0f}"),save_self),
+                  (_("FVE export prebytkov"),_("{mwh} MWh do siete").format(mwh=f"{export_mwh:.0f}"),save_export)]
+    if save_bess>0: benefit_rows.append((_("Batéria — posun PV do odberu"),_("{mwh} MWh PV uskladnené a využité neskôr").format(mwh=f"{_pv_via_bat_mwh:.0f}"),save_bess))
+    if abs(save_arb)>1: benefit_rows.append((_("BESS arbitráž (spot v BS)"),_("nabíjanie lacno / vybíjanie draho"),save_arb))
+    if save_merchant>1: benefit_rows.append((_("BESS obchodovanie v BS (merchant)"),_("spotové obchodovanie batérie cez bilančnú skupinu"),save_merchant))
+    if save_peak>0: benefit_rows.append((_("Peak shaving (zníženie RK)"),_("redukcia mesačného 15-min maxima"),save_peak))
+    benefit_parts=[(_("Samospotreba"),save_self,"#16A34A"),(_("Export"),save_export,"#A7D08C"),
+                   (_("Batéria"),save_bess,"#5B7CFA"),(_("Arbitráž"),max(save_arb,0.0)+max(save_merchant,0.0),"#8B5CF6"),
+                   (_("Daňový štít"),annual_tax,"#F59E0B")]
 
+    _kwp = f"{base.get('pv_kwp',0):.0f}"; _kwh = f"{bess_kwh:.0f}"
+    _tarif_src = analyza.get("tarif_source") or "faktúra"
+    if _tarif_src == "faktúra": _tarif_src = _("faktúra")   # predvolená hodnota z intake; iný text = údaj z DB
     ctx={
         "client_name":base.get("client_name"),"om_address":base.get("site_address") or "—",
         "eic_om":analyza.get("eic_om"),"cislo_om":analyza.get("cislo_om"),
         "distrib_oblast":analyza.get("distrib_oblast") or analyza.get("om_sadzba"),
         "om_sadzba":(str(analyza.get("om_sadzba") or "").strip().upper() or "—"),"om_mrk_kw":mrk,"om_rk_kw":rk,
         "posudok_number":analyza.get("posudok_number") or f"P-AOM-{str(analyza.get('id',''))[:6]}","pon_number":analyza.get("pon_number"),
-        "posudok_date":datetime.now().strftime("%d.%m.%Y"),
+        "posudok_date":fmt_date(datetime.now().date()),
         "prepared_by_name":base.get("prepared_by_name"),"prepared_by_email":base.get("prepared_by_email"),"prepared_by_phone":base.get("prepared_by_phone"),
         "fve_kwp":base.get("pv_kwp"),"bess_kwh":bess_kwh,"yield":(base.get("pv_total_mwh",0)*1000/(base.get("pv_kwp") or 1)) if base.get("pv_kwp") else 1075,
         "fve_prod_mwh":base.get("pv_total_mwh"),"self_use_mwh":pv_self_mwh,"export_mwh":export_mwh,
@@ -280,7 +288,7 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None, selected_
         "barrels_oil":base.get("barrels_oil"),
         "monthly_mwh":monthly_mwh,"months_filled":_months_filled,"hourly_wd":hourly_wd,"hourly_we":hourly_we,"profile_metrics":pm,"profile_sentence":profile_sentence,"profile":prof,
         "p_silova":p_silova,"p_dist_var":p_dist_var,"p_tps":p_tps,"p_so":p_so,"p_dist_pevna":p_dist_pevna,"p_sell":p_sell,"p_avoided":p_avoided,"p_avoided_eff":p_avoided_eff,
-        "tarif_real":tarif_real,"tarif_source":(analyza.get("tarif_source") or "faktúra") if tarif_real else "orientačné (ÚRSO 2026)",
+        "tarif_real":tarif_real,"tarif_source":(_tarif_src if tarif_real else _("orientačné (ÚRSO 2026)")),
         "components":components,"components_real":comp_real,
         "scenarios3":S,"tornado_base":base_npv,"tornado_drivers":drv,
         "mc_samples":res,"mc_p10":P(0.10),"mc_p50":P(0.50),"mc_p90":P(0.90),"mc_prob_pos":sum(1 for x in res if x>0)/len(res),"mc_n":5000,
@@ -290,22 +298,24 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None, selected_
         "consumption_strategy":analyza.get("consumption_strategy"),
         "consumption_needs_review":bool(analyza.get("consumption_needs_review")),
         "consumption_source":{
-            "measured":"skutočné namerané 15-min dáta",
-            "extrapolated":"15-min tvar z časti roka, extrapolovaný na celý rok",
-            "synthesized":"modelovaný profil z faktúry (orientačný)",
-        }.get(analyza.get("consumption_strategy"), ("skutočné 15-min dáta" if analyza.get("consumption_15min_path") else "modelovaný profil")),
-        "variant_title":(f"Navrhnutý variant — batériové úložisko {bess_kwh:.0f} kWh k existujúcej FVE {base.get('pv_kwp',0):.0f} kWp"
+            "measured":_("skutočné namerané 15-min dáta"),
+            "extrapolated":_("15-min tvar z časti roka, extrapolovaný na celý rok"),
+            "synthesized":_("modelovaný profil z faktúry (orientačný)"),
+        }.get(analyza.get("consumption_strategy"), (_("skutočné 15-min dáta") if analyza.get("consumption_15min_path") else _("modelovaný profil"))),
+        "variant_title":(_("Navrhnutý variant — batériové úložisko {kwh} kWh k existujúcej FVE {kwp} kWp").format(kwh=_kwh, kwp=_kwp)
                          if _retrofit_bess else
-                         f"Navrhnutý variant — FVE {base.get('pv_kwp',0):.0f} kWp" + (f" + BESS {bess_kwh:.0f} kWh" if bess_kwh else "")),
+                         _("Navrhnutý variant — FVE {kwp} kWp").format(kwp=_kwp) + (f" + BESS {_kwh} kWh" if bess_kwh else "")),
         "summary_headline":summary_headline,
         "recommendation_line":recommendation_line,
-        "cover_subtitle":"Analýza odberu, simulácia výroby a dispatch, ekonomické posúdenie v 3 scenároch s rizikovou analýzou.",
-        "podklady":({"measured":"15-min profil · ","extrapolated":"15-min profil (časť roka) · ","synthesized":"profil z faktúry · "}.get(analyza.get("consumption_strategy"), "15-min profil · " if analyza.get("consumption_15min_path") else ""))+"PVGIS · OKTE 2025"+(" · faktúra" if tarif_real else ""),
-        "zaver_headline":"Odporúčanie pre klienta",
-        "zaver_text":((f"Investícia {capex:,.0f} € do batériového úložiska {bess_kwh:.0f} kWh k existujúcej FVE {base.get('pv_kwp',0):.0f} kWp".replace(","," "))
+        "cover_subtitle":_("Analýza odberu, simulácia výroby a dispatch, ekonomické posúdenie v 3 scenároch s rizikovou analýzou."),
+        "podklady":({"measured":_("15-min profil · "),"extrapolated":_("15-min profil (časť roka) · "),"synthesized":_("profil z faktúry · ")}.get(analyza.get("consumption_strategy"), _("15-min profil · ") if analyza.get("consumption_15min_path") else ""))+"PVGIS · OKTE 2025"+((" · " + _("faktúra")) if tarif_real else ""),
+        "zaver_headline":_("Odporúčanie pre klienta"),
+        "zaver_text":(_("Investícia {capex} do batériového úložiska {kwh} kWh k existujúcej FVE {kwp} kWp").format(capex=eur(capex), kwh=_kwh, kwp=_kwp)
                       if _retrofit_bess else
-                      (f"Investícia {capex:,.0f} € do FVE {base.get('pv_kwp',0):.0f} kWp".replace(","," ")+(f" + BESS {bess_kwh:.0f} kWh" if bess_kwh else "")))
-                     +f" prinesie ročné úspory {_e(S[0]['save_total'])} € (báza) až {_e(opti['save_total'])} € (optimistický scenár). Návratnosť {_pb_rng}, NPV 20 r. {_e(full['npv'])} € (báza), IRR {full['irr']:.1f} %.",
+                      (_("Investícia {capex} do FVE {kwp} kWp").format(capex=eur(capex), kwp=_kwp)+(f" + BESS {_kwh} kWh" if bess_kwh else "")))
+                     +_(" prinesie ročné úspory {s_base} (báza) až {s_opti} (optimistický scenár). Návratnosť {pb}, NPV 20 r. {npv} (báza), IRR {irr} %.").format(
+                         s_base=eur(S[0]['save_total']), s_opti=eur(opti['save_total']), pb=_pb_rng, npv=eur(full['npv']),
+                         irr=(f"{full['irr']:.1f}" if get_lang()=="sk" else num(full['irr'],1))),  # SK quirk: IRR v závere s bodkou (13.1 %)
         "recommendations":[],  # doplní AI/deterministic neskôr
     }
     _build_deterministic_narratives(ctx, S, full, prof, pm)
@@ -315,11 +325,7 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None, selected_
 def _build_deterministic_narratives(ctx, S, full, prof, pm):
     """Odborná próza z REÁLNYCH čísel pre každú sekciu — nezávislé od AI (nikdy prázdne).
     AI naratív tieto polia neskôr môže prepísať/obohatiť."""
-    def n(v, d=0):
-        try:
-            return f"{float(v):,.{d}f}".replace(",", "\u00a0").replace(".", ",").replace("\u00a0", " ")
-        except Exception:
-            return "—"
+    n = num
     fve = float(ctx.get("fve_kwp") or 0)
     prod = float(ctx.get("fve_prod_mwh") or 0)
     selfu = float(ctx.get("self_use_mwh") or 0)
@@ -337,82 +343,94 @@ def _build_deterministic_narratives(ctx, S, full, prof, pm):
     lf = pm.get("load_factor")
     day_share = pm.get("day_share_pct")
     peak_hour = pm.get("peak_hour")
-    rezim = (prof or {}).get("rezim") or "priemyselná prevádzka"
-    sezon = (prof or {}).get("sezonnost") or "rovnomerná"
+    rezim = (prof or {}).get("rezim") or _("priemyselná prevádzka")
+    sezon = (prof or {}).get("sezonnost") or _("rovnomerná")
     co2 = float(ctx.get("co2_avoided_tonnes") or 0)
 
     # --- 1) PROFIL ---
     parts = []
-    parts.append(f"Charakter prevádzky: <b>{rezim}</b>. Z analyzovaných {ctx.get('consumption_source','dát')} vychádza priemerný odber {n(avg_kw)} kW a 15-min špička {n(peak)} kW")
+    parts.append(_("Charakter prevádzky: <b>{rezim}</b>. Z analyzovaných {src} vychádza priemerný odber {avg} kW a 15-min špička {peak} kW").format(
+        rezim=rezim, src=ctx.get('consumption_source', _("dát")), avg=n(avg_kw), peak=n(peak)))
     if lf is not None:
-        parts[-1] += f" (load factor {n(lf,2)})"
+        parts[-1] += " " + _("(load factor {lf})").format(lf=n(lf,2))
     parts[-1] += "."
     if day_share is not None:
-        parts.append(f"Cez deň (slnečné hodiny) prebehne približne {n(day_share)} % spotreby — to priamo určuje, koľko FVE energie sa využije bez batérie.")
-    _sez = str(sezon)
-    _sezl = _sez.lower().replace("sezónnosť", "").strip() or "rovnomerná"
-    parts.append(f"Sezónnosť odberu je {_sezl}; ročná spotreba OM je {n(year)} MWh.")
+        parts.append(_("Cez deň (slnečné hodiny) prebehne približne {pct} % spotreby — to priamo určuje, koľko FVE energie sa využije bez batérie.").format(pct=n(day_share)))
+    if get_lang() == "sk":
+        # SK quirk: z „minimálna sezónnosť, rovnomerná …" ostane „minimálna , rovnomerná …" (zlaté výstupy)
+        _sezl = str(sezon).lower().replace("sezónnosť", "").strip() or "rovnomerná"
+        parts.append(f"Sezónnosť odberu je {_sezl}; ročná spotreba OM je {n(year)} MWh.")
+    else:
+        parts.append(_("Sezónnosť odberu: {sez}; ročná spotreba OM je {mwh} MWh.").format(sez=sezon, mwh=n(year)))
     fit = (prof or {}).get("fve_fit")
     if fit:
         fit = str(fit)[0].upper() + str(fit)[1:]
         parts.append(fit if fit.endswith(".") else fit + ".")
     ctx["profile_narrative"] = "<p>" + "</p><p>".join(parts) + "</p>"
-    ctx["daily_cap"] = f"Priemer {n(avg_kw)} kW, špička {n(peak)} kW" + (f", špičková hodina {peak_hour}:00." if peak_hour is not None else ".")
+    ctx["daily_cap"] = _("Priemer {avg} kW, špička {peak} kW").format(avg=n(avg_kw), peak=n(peak)) + (_(", špičková hodina {h}:00.").format(h=peak_hour) if peak_hour is not None else ".")
     _mf = ctx.get("months_filled") or []
-    _mn = {1:"jan",2:"feb",3:"mar",4:"apr",5:"máj",6:"jún",7:"júl",8:"aug",9:"sep",10:"okt",11:"nov",12:"dec"}
-    ctx["monthly_cap"] = f"Ročná spotreba {n(year)} MWh." + (f" Dopočítané z priemeru: {', '.join(_mn.get(m,str(m)) for m in _mf)}." if _mf else "")
+    _mn = ({1:"jan",2:"feb",3:"mar",4:"apr",5:"máj",6:"jún",7:"júl",8:"aug",9:"sep",10:"okt",11:"nov",12:"dec"}
+           if get_lang() == "sk" else dict(enumerate(months(), 1)))
+    ctx["monthly_cap"] = _("Ročná spotreba {mwh} MWh.").format(mwh=n(year)) + (" " + _("Dopočítané z priemeru: {m}.").format(m=", ".join(_mn.get(m,str(m)) for m in _mf)) if _mf else "")
 
     # --- 2) ENERGETICKÁ BILANCIA ---
     exp_pct = (exp / prod * 100) if prod else 0
-    bnar = (f"Z {n(prod)} MWh ročnej výroby FVE sa <b>{n(sams,1)} %</b> ({n(selfu)} MWh) spotrebuje priamo v prevádzke "
-            f"a iba {n(exp_pct,1)} % ({n(exp,1)} MWh) odchádza ako prebytok do siete. ")
+    bnar = _("Z {prod} MWh ročnej výroby FVE sa <b>{sams} %</b> ({selfu} MWh) spotrebuje priamo v prevádzke "
+             "a iba {exp_pct} % ({exp} MWh) odchádza ako prebytok do siete. ").format(
+                 prod=n(prod), sams=n(sams,1), selfu=n(selfu), exp_pct=n(exp_pct,1), exp=n(exp,1))
     if fve and year and fve * 1.05 < year / 1.05:
-        bnar += f"Relatívne malá FVE ({n(fve)} kWp) voči spotrebe ({n(year)} MWh/r) je dôvod vysokej samospotreby — vyrobená energia sa takmer celá využije na mieste. "
-    bnar += f"FVE pokryje {n(cov,1)} % ročnej spotreby OM; zvyšných {n(imp)} MWh zostáva zo siete."
+        bnar += _("Relatívne malá FVE ({fve} kWp) voči spotrebe ({year} MWh/r) je dôvod vysokej samospotreby — vyrobená energia sa takmer celá využije na mieste. ").format(fve=n(fve), year=n(year))
+    bnar += _("FVE pokryje {cov} % ročnej spotreby OM; zvyšných {imp} MWh zostáva zo siete.").format(cov=n(cov,1), imp=n(imp))
     ctx["balance_narrative"] = "<p>" + bnar + "</p>"
 
     # odhad počtu modulov ak nie sú reálne komponenty (kredibilita technickej sekcie)
     comp = dict(ctx.get("components") or {})
     if not ctx.get("components_real") and fve:
         nmod = int(round(fve / 0.58))  # ~580 Wp typický modul 2026
-        comp["panel"] = f"~{nmod} ks modulov á ~580 Wp (orientačne — spresní cenová ponuka)"
+        comp["panel"] = _("~{nmod} ks modulov á ~580 Wp (orientačne — spresní cenová ponuka)").format(nmod=nmod)
         ac = fve / 1.1
-        comp["inverter"] = comp.get("inverter") or f"meniče ~{ac:.0f} kW AC (DC/AC ~1,1)"
+        comp["inverter"] = comp.get("inverter") or _("meniče ~{ac} kW AC (DC/AC ~1,1)").format(ac=f"{ac:.0f}")
         _k = comp.get("konstrukcia")
         if not _k or "35" in str(_k):
-            comp["konstrukcia"] = "Juh 13° (orientačne — spresní cenová ponuka)"
+            comp["konstrukcia"] = _("Juh 13° (orientačne — spresní cenová ponuka)")
         ctx["components"] = comp
 
     # --- 3) SCENÁRE (3 bullety s výkladom) ---
     sb = []
-    sb.append((S[0]["name"], f"Bázový výpočet z hodinovej simulácie (ceny ÚRSO 2026 + spot OKTE). Ročná úspora {n(S[0]['save_total'])} €, návratnosť {pb_txt(S[0]['payback'])}."))
-    sb.append((S[1]["name"], f"Stresový pohľad — nižší výkup prebytkov a opatrnejšie ceny energie. Ukazuje odolnosť investície: úspora {n(S[1]['save_total'])} €/r, návratnosť {pb_txt(S[1]['payback'])}."))
-    sb.append((S[2]["name"], f"Pri raste trhových cien energie hodnota vlastnej výroby rastie — úspora {n(S[2]['save_total'])} €/r, NPV 20 r. {n(S[2]['npv'])} €, IRR {n(S[2]['irr'],1)} %."))
+    sb.append((S[0]["name"], _("Bázový výpočet z hodinovej simulácie (ceny ÚRSO 2026 + spot OKTE). Ročná úspora {save} €, návratnosť {pb}.").format(
+        save=n(S[0]['save_total']), pb=pb_txt(S[0]['payback']))))
+    sb.append((S[1]["name"], _("Stresový pohľad — nižší výkup prebytkov a opatrnejšie ceny energie. Ukazuje odolnosť investície: úspora {save} €/r, návratnosť {pb}.").format(
+        save=n(S[1]['save_total']), pb=pb_txt(S[1]['payback']))))
+    sb.append((S[2]["name"], _("Pri raste trhových cien energie hodnota vlastnej výroby rastie — úspora {save} €/r, NPV 20 r. {npv} €, IRR {irr} %.").format(
+        save=n(S[2]['save_total']), npv=n(S[2]['npv']), irr=n(S[2]['irr'],1))))
     ctx["scenarios_bullets"] = sb
 
     # --- 4) ZÁVER — argumenty (rich bullety) ---
     args = []
-    args.append(("Predikovateľnosť ceny energie na 20+ rokov",
-                 f"Vlastná výroba pokryje {n(cov,1)} % ročnej spotreby pri {n(sams,1)} % samospotrebe — prirodzený hedge proti rastu cien elektriny a regulačných poplatkov."))
+    args.append((_("Predikovateľnosť ceny energie na 20+ rokov"),
+                 _("Vlastná výroba pokryje {cov} % ročnej spotreby pri {sams} % samospotrebe — prirodzený hedge proti rastu cien elektriny a regulačných poplatkov.").format(cov=n(cov,1), sams=n(sams,1))))
     dan = capex * 0.21
-    args.append(("Daňová optimalizácia",
-                 f"6-ročný rovnomerný odpis predstavuje úsporu 21 % × {n(capex)} € = {n(dan)} € na dani z príjmu (priemerne {n(dan/6)} €/rok počas prvých 6 rokov)."))
+    args.append((_("Daňová optimalizácia"),
+                 _("6-ročný rovnomerný odpis predstavuje úsporu 21 % × {capex} € = {dan} € na dani z príjmu (priemerne {dan_y} €/rok počas prvých 6 rokov).").format(
+                     capex=n(capex), dan=n(dan), dan_y=n(dan/6))))
     # Optimalizácia RK — len ak je špička výrazne pod MRK (reálne z dát, nezávislé od batérie).
     # Peak-shaving cez batériu tvrdíme IBA ak ho model reálne oceňuje (save_peak>0), inak by išlo o blud.
     _save_peak = float(ctx.get("save_peak_eur") or 0)
     if mrk > 0 and peak > 0 and peak < mrk * 0.65 and not ctx.get("peak_estimated"):
-        _t = (f"Špičkový odber {n(peak)} kW je len {n(peak/mrk*100,0)} % zazmluvnenej MRK {n(mrk)} kW. "
-              f"Odberné miesto má rezervu znížiť rezervovanú kapacitu (RK, min. 50 % MRK) a šetriť na pevnej zložke distribúcie")
+        _t = _("Špičkový odber {peak} kW je len {pct} % zazmluvnenej MRK {mrk} kW. "
+               "Odberné miesto má rezervu znížiť rezervovanú kapacitu (RK, min. 50 % MRK) a šetriť na pevnej zložke distribúcie").format(
+                   peak=n(peak), pct=n(peak/mrk*100,0), mrk=n(mrk))
         if _save_peak > 0:
-            _t += f"; batéria toto zníženie zabezpečuje proti špičkám (modelovaná úspora {n(_save_peak)} €/r)."
+            _t += _("; batéria toto zníženie zabezpečuje proti špičkám (modelovaná úspora {save} €/r).").format(save=n(_save_peak))
         else:
-            _t += " (úspora nezávislá od FVE/batérie — odporúčame preveriť s prevádzkovateľom distribučnej sústavy)."
-        args.append(("Optimalizácia rezervovanej kapacity (MRK/RK)", _t))
+            _t += _(" (úspora nezávislá od FVE/batérie — odporúčame preveriť s prevádzkovateľom distribučnej sústavy).")
+        args.append((_("Optimalizácia rezervovanej kapacity (MRK/RK)"), _t))
     elif bess > 0 and _save_peak > 0:
-        args.append(("Peak shaving cez batériu",
-                     f"Batéria {n(bess)} kWh znižuje 15-min špičky zo siete (modelovaná úspora {n(_save_peak)} €/r) — podklad pre zníženie rezervovanej kapacity (RK {n(rk)} kW)."))
-    args.append(("ESG profil a CSRD reporting",
-                 f"Ročná úspora ~{n(co2)} t CO₂ (pri SK emisnej intenzite ~0,25 kg/kWh) — doložiteľný podklad pre EU Taxonómiu a CSRD disclosures."))
-    args.append(("Reziduálna hodnota po 20 rokoch",
-                 f"Ekonomika neráta s poklesom výkonu FVE; konzervatívne 10 % CAPEX = {n(capex*0.10)} € reziduálnej hodnoty."))
+        args.append((_("Peak shaving cez batériu"),
+                     _("Batéria {bess} kWh znižuje 15-min špičky zo siete (modelovaná úspora {save} €/r) — podklad pre zníženie rezervovanej kapacity (RK {rk} kW).").format(
+                         bess=n(bess), save=n(_save_peak), rk=n(rk))))
+    args.append((_("ESG profil a CSRD reporting"),
+                 _("Ročná úspora ~{co2} t CO₂ (pri SK emisnej intenzite ~0,25 kg/kWh) — doložiteľný podklad pre EU Taxonómiu a CSRD disclosures.").format(co2=n(co2))))
+    args.append((_("Reziduálna hodnota po 20 rokoch"),
+                 _("Ekonomika neráta s poklesom výkonu FVE; konzervatívne 10 % CAPEX = {res} € reziduálnej hodnoty.").format(res=n(capex*0.10))))
     ctx["zaver_arguments"] = args
