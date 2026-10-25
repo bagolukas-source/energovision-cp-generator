@@ -31,6 +31,8 @@ from typing import Any
 from jinja2 import Environment, FileSystemLoader, select_autoescape, Undefined
 from weasyprint import HTML, CSS
 
+from aom_i18n import _, fmt, get_lang, install_jinja
+
 from . import charts
 
 
@@ -50,11 +52,8 @@ def _format_currency(value: float | int | None) -> str:
     sign = "-" if v < 0 else ""
     v = abs(v)
     if v >= 1_000_000:
-        return f"{sign}{v/1_000_000:,.2f} M €".replace(",", " ").replace(".", ",")
-    if v >= 1000:
-        # 880 000 €
-        return f"{sign}{v:,.0f} €".replace(",", " ")
-    return f"{sign}{v:,.0f} €".replace(",", " ")
+        return f"{sign}{fmt.num(v / 1_000_000, 2)} M €"  # sk: 1 234,57 M € (ako predtým)
+    return f"{sign}{fmt.num(v, 0)} €"  # sk: 880 000 €
 
 
 def _format_kwh(value: float | int | None) -> str:
@@ -65,10 +64,12 @@ def _format_kwh(value: float | int | None) -> str:
     except (TypeError, ValueError):
         return "—"
     if v >= 1_000_000:
-        return f"{v/1_000_000:,.2f} GWh".replace(".", ",")
+        if get_lang() == "sk":  # pôvodný SK tvar bez zmeny (tisícky GWh ostávajú s čiarkou)
+            return f"{v/1_000_000:,.2f} GWh".replace(".", ",")
+        return f"{fmt.num(v / 1_000_000, 2)} GWh"
     if v >= 1000:
-        return f"{v/1000:,.0f} MWh".replace(",", " ")
-    return f"{v:,.0f} kWh".replace(",", " ")
+        return f"{fmt.num(v / 1000, 0)} MWh"
+    return f"{fmt.num(v, 0)} kWh"
 
 
 def _logo_b64() -> str:
@@ -113,7 +114,10 @@ class _SafeUndefined(Undefined):
 
 
 def _format_navratnost(value, unit: str = " r") -> str:
-    """Návratnosť pre šablóny: None / ≥ 99 (sentinel enginu) / ≤ 0 → „nevráti sa"."""
+    """Návratnosť pre šablóny: None / ≥ 99 (sentinel enginu) / ≤ 0 → „nevráti sa".
+    sk ostáva s desatinnou bodkou („7.9 r"); en/de podľa aom_i18n.fmt.pbt („7.9 yrs" / „7,9 J.")."""
+    if get_lang() != "sk":
+        return fmt.pbt(value)
     try:
         v = float(value)
     except (TypeError, ValueError):
@@ -121,6 +125,16 @@ def _format_navratnost(value, unit: str = " r") -> str:
     if not (0 < v < 99):
         return "nevráti sa"
     return f"{v:.1f}{unit}"
+
+
+def _format_loc(value, d: int = 0) -> str:
+    """Číslo po Jinja round/int v jazyku dokumentu; sk = presne pôvodný výstup šablóny (str)."""
+    if get_lang() == "sk" or isinstance(value, Undefined):
+        return str(value)
+    try:
+        return fmt.num(float(value), d)
+    except (TypeError, ValueError):
+        return str(value)
 
 
 def _make_env() -> Environment:
@@ -132,6 +146,8 @@ def _make_env() -> Environment:
     env.filters["format_currency"] = _format_currency
     env.filters["format_kwh"] = _format_kwh
     env.filters["navratnost"] = _format_navratnost
+    env.filters["loc"] = _format_loc
+    install_jinja(env)  # _(), lang() a formátovače aom_i18n
     return env
 
 
@@ -342,11 +358,11 @@ def generate_orkestra_pdf(context: dict[str, Any]) -> bytes:
 def _build_porovnanie_context(user_ctx: dict[str, Any]) -> dict[str, Any]:
     """Merge user context (rows už majú dominated_by dopočítané) + vygeneruje porovnávacie grafy."""
     c: dict[str, Any] = {
-        "project_name": "Porovnanie ponúk",
+        "project_name": _("Porovnanie ponúk"),
         "project_id": "AOM-DEMO",
-        "client_name": "Klient",
+        "client_name": _("Klient"),
         "site_address": "—",
-        "posudok_date": datetime.now().strftime("%d.%m.%Y"),
+        "posudok_date": fmt.fmt_date(datetime.now()),
         "prepared_by_name": "Lukáš Bago",
         "prepared_by_email": "lukas.bago@energovision.sk",
         "prepared_by_phone": "0918 187 762",

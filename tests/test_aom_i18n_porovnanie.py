@@ -113,6 +113,59 @@ def test_porovnanie_sk_golden():
     assert not bad, f"SK regresia: {bad} — python tests/test_aom_i18n_porovnanie.py --diff"
 
 
+_FIXTURE_WORDS = {"Lukáš"}  # prepared_by_name — dáta, nie text šablóny
+
+
+def test_porovnanie_en_de_bez_slovenciny():
+    from aom_i18n_fixtures import slovak_leftovers
+    for lang in ("en", "de"):
+        for name, (case, ai) in CASES.items():
+            r, seen, _sb = run(case, lang=lang, ai=ai)
+            html = seen["html"]
+            assert f'<html lang="{lang}">' in html, (lang, name)
+            # grafy (posudok_orkestra/charts.py) majú popisky ako glyfy v SVG — mimo tejto kontroly
+            left = [w for w in slovak_leftovers(_SVG.sub("", html)) if w not in _FIXTURE_WORDS]
+            assert not left, (lang, name, left)
+            assert seen["lang_pdf"] == lang and seen["lang_ai"] == lang
+    assert "keine Amortisation" in run(_B, lang="de")[1]["html"]
+    en = run(_A, lang="en")[1]["html"]
+    assert "7.9 yrs" in en and "268,000 €" in en and "maximum reserved capacity (MRK)" in en
+
+
+def test_porovnanie_de_zaznam_a_nazov_suboru():
+    from aom_i18n import get_lang
+    r, seen, sb = run(_A, lang="de")
+    assert r["lang"] == "de" and "/Vergleich_" in r["pdf_url"] and "_DE_" in r["pdf_url"]
+    assert [d.get("lang") for d in sb.db["analyza_om_documents"]] == ["de"]
+    assert get_lang() == "sk"  # kontext sa po renderi vráti
+
+
+def test_porovnanie_jazyk_zo_zakaznika_a_sk_default():
+    r, seen, sb = run(_A, customer_lang="en")
+    assert r["lang"] == "en" and "/Comparison_" in r["pdf_url"] and "_EN_" in r["pdf_url"]
+    r, seen, sb = run(_A)
+    assert r["lang"] == "sk" and "/Porovnanie_" in r["pdf_url"] and "_SK" not in r["pdf_url"]
+    assert all("lang" not in d for d in sb.db["analyza_om_documents"])  # sk = DB default, payload bez zmeny
+    assert seen["ai_input"]["ponuky"][0]["payback_y"] == 7.9
+
+
+def test_porovnanie_glosar_v_ai_prompte_len_pre_en_de(monkeypatch):
+    calls = []
+
+    class _Anth:
+        def __init__(self, *a, **k):
+            self.messages = types.SimpleNamespace(create=lambda **kw: calls.append(kw["system"]) or types.SimpleNamespace(
+                content=[types.SimpleNamespace(type="tool_use", input={"executive_summary": "<p>x</p>"})]))
+    monkeypatch.setitem(sys.modules, "anthropic", types.SimpleNamespace(Anthropic=_Anth))
+    from aom_i18n import use_lang
+    assert aom._generate_porovnanie_ai({})["ai_executive_summary"] == "<p>x</p>"
+    assert calls and "OUTPUT LANGUAGE" not in calls[-1]
+    for lang, name in (("en", "English"), ("de", "German")):
+        with use_lang(lang):
+            aom._generate_porovnanie_ai({})
+        assert name in calls[-1] and "Zelená podnikom" in calls[-1] and "MRK" in calls[-1]
+
+
 if __name__ == "__main__":
     outs = outputs()
     if "--diff" in sys.argv:

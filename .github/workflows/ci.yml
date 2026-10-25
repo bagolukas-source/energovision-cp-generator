@@ -63,4 +63,4 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
           ENERGO_SPOT_CSV: ${{ github.workspace }}/aom_data/sk_spot_2025_hourly.csv
           ENERGO_TARIFF_YAML: ${{ github.workspace }}/aom_data/tariffs/2026.yaml
-        run: python -m pytest -q -p no:cacheprovider tests/test_aom_vlna1.py tests/test_aom_vlna1b_ems.py tests/test_aom_vlna1b_engine.py tests/test_aom_vlna1b_fin.py tests/test_aom_vlna1b_report.py tests/test_audit_bess.py tests/test_aom_merchant_atomic.py tests/test_aom_lp_dispatch.py tests/test_aom_i18n_core.py tests/test_aom_i18n_sk_golden.py tests/test_aom_i18n_catalog.py tests/test_aom_i18n_render.py
+        run: python -m pytest -q -p no:cacheprovider tests/test_aom_vlna1.py tests/test_aom_vlna1b_ems.py tests/test_aom_vlna1b_engine.py tests/test_aom_vlna1b_fin.py tests/test_aom_vlna1b_report.py tests/test_audit_bess.py tests/test_aom_merchant_atomic.py tests/test_aom_lp_dispatch.py tests/test_aom_i18n_core.py tests/test_aom_i18n_sk_golden.py tests/test_aom_i18n_catalog.py tests/test_aom_i18n_render.py tests/test_aom_i18n_porovnanie.py
