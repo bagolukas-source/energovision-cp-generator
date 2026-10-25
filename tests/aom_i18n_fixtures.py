@@ -177,3 +177,14 @@ def render_outputs():
         out[f"posudok_{tag}_charts.json"] = json.dumps(texts, ensure_ascii=False, indent=1)
         out[f"posudok_{tag}_docx.txt"] = docx_text(generate_chocosuc_docx(f()))
     return out
+
+
+_SK_CHARS = re.compile(r"[A-Za-zÀ-ž]*[áčďéíľĺňóôŕšťúýžÁČĎÉÍĽĹŇÓÔŔŠŤÚÝŽ][A-Za-zÀ-ž]*")
+_DATA_WORDS = {"Priemyselná", "Zelená", "ÚRSO", "OKTE"}  # dáta fixtúry a glosár (pôvodné SK názvy)
+
+
+def slovak_leftovers(text: str) -> list:
+    """Slová so slovenskou diakritikou vo viditeľnom texte (bez <script>/<style>/značiek) — pre EN/DE výstup."""
+    t = re.sub(r"<(script|style)\b.*?</\1>", " ", text, flags=re.S)
+    t = re.sub(r"<[^>]+>", " ", t)
+    return sorted({w for w in _SK_CHARS.findall(t) if w not in _DATA_WORDS})

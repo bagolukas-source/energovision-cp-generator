@@ -43,14 +43,20 @@ def use_lang(lang):
         _LANG.reset(tok)
 
 
+_CATALOGS = {}
+
+
 def _catalog(lang):
-    if lang == "en":
-        from .en import T
-        return T
-    if lang == "de":
-        from .de import T
-        return T
-    return {}
+    """Zlúči EN/DE slovníky zo všetkých modulov aom_i18n/catalogs/*.py (jeden modul = jedna oblasť)."""
+    if lang not in _CATALOGS:
+        import importlib, pkgutil
+        from . import catalogs
+        merged = {}
+        for m in sorted(pkgutil.iter_modules(catalogs.__path__), key=lambda m: m.name):
+            mod = importlib.import_module(f"{catalogs.__name__}.{m.name}")
+            merged.update(getattr(mod, lang.upper(), {}))
+        _CATALOGS[lang] = merged
+    return _CATALOGS[lang] if lang in ("en", "de") else {}
 
 
 def tr(text: str, lang: str) -> str:
