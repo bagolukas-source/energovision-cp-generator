@@ -247,6 +247,15 @@ def _mini_svg(cf_breakdown: list[dict], init_inv: float, color: str) -> str:
 # ──────────────────── public API ────────────────────
 
 def generate_financovanie_pdf(context: dict) -> bytes:
+    html_str = render_financovanie_html(context)
+    css_path = str(_TEMPLATES_DIR / "styles.css")
+    pdf_bytes = HTML(string=html_str, base_url=str(_HERE)).write_pdf(
+        stylesheets=[CSS(filename=css_path)]
+    )
+    return pdf_bytes
+
+
+def render_financovanie_html(context: dict) -> str:
     env = _make_env()
 
     ctx = dict(context)
@@ -350,10 +359,4 @@ def generate_financovanie_pdf(context: dict) -> bytes:
         ctx["conclusion_lines"] = lines
 
     tmpl = env.get_template("report.html")
-    html_str = tmpl.render(**ctx)
-
-    css_path = str(_TEMPLATES_DIR / "styles.css")
-    pdf_bytes = HTML(string=html_str, base_url=str(_HERE)).write_pdf(
-        stylesheets=[CSS(filename=css_path)]
-    )
-    return pdf_bytes
+    return tmpl.render(**ctx)
