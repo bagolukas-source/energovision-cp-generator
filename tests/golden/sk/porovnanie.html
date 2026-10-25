@@ -1,0 +1,1277 @@
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+<meta charset="UTF-8">
+<title>Vyrobny areal Senec — Porovnávací súhrn ponúk</title>
+<style>/* ============ ORKESTRA-STYLE POSUDOK · WeasyPrint A4 portrait ============ */
+@page {
+  size: A4 portrait;
+  margin: 18mm 15mm 16mm 15mm;
+  @bottom-center {
+    content: "Energovision · Technicko-ekonomický posudok · " counter(page) " / " counter(pages);
+    font-size: 8pt;
+    color: #9CA3AF;
+    font-family: 'Inter', -apple-system, sans-serif;
+  }
+}
+@page:first { @bottom-center { content: none; } }  /* žiadny footer na cover */
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif;
+  font-size: 10pt;
+  color: #1F2937;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+.page {
+  page-break-after: always;
+  min-height: calc(297mm - 34mm);
+  position: relative;
+}
+.page:last-child { page-break-after: avoid; }
+
+/* ====================== TYPOGRAPHY ====================== */
+.page-title {
+  font-size: 22pt;
+  font-weight: 800;
+  color: #0F172A;
+  letter-spacing: -0.02em;
+  margin-bottom: 4pt;
+}
+.page-subtitle {
+  font-size: 11pt;
+  color: #6B7280;
+  margin-bottom: 22pt;
+}
+.section-label {
+  font-size: 9pt;
+  font-weight: 600;
+  color: #6B7280;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 10pt;
+}
+.kpi-section-label { margin-top: 18pt; }
+
+/* ====================== COVER PAGE ====================== */
+.cover {
+  display: flex;
+  flex-direction: column;
+  height: calc(297mm - 34mm);
+  justify-content: space-between;
+}
+.cover-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding-bottom: 18pt;
+}
+.cover-header .logo {
+  height: 32pt;
+  width: auto;
+}
+.cover-meta { text-align: right; }
+.meta-label {
+  font-size: 8.5pt;
+  color: #9CA3AF;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 2pt;
+}
+.meta-value {
+  font-size: 11pt;
+  color: #1F2937;
+  font-weight: 600;
+}
+
+.cover-hero {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 24pt 0;
+  border-top: 1px solid #E5E7EB;
+  border-bottom: 1px solid #E5E7EB;
+}
+.cover-eyebrow {
+  font-size: 10pt;
+  color: #16A34A;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-bottom: 10pt;
+}
+.cover-title {
+  font-size: 34pt;
+  font-weight: 800;
+  color: #0F172A;
+  letter-spacing: -0.025em;
+  line-height: 1.1;
+  margin-bottom: 8pt;
+}
+.cover-subtitle {
+  font-size: 12pt;
+  color: #4B5563;
+  font-weight: 400;
+}
+
+.cover-pillars {
+  display: flex;
+  gap: 16pt;
+  margin: 28pt 0;
+}
+.pillar {
+  flex: 1;
+  background: #F5F6F8;
+  border-radius: 8pt;
+  padding: 18pt 14pt;
+  text-align: left;
+}
+.pillar-value {
+  font-size: 28pt;
+  font-weight: 800;
+  color: #0F172A;
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+.pillar-unit {
+  font-size: 14pt;
+  font-weight: 600;
+  color: #6B7280;
+}
+.pillar-label {
+  font-size: 9pt;
+  color: #6B7280;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-top: 6pt;
+}
+
+.cover-footer {
+  display: flex;
+  gap: 24pt;
+  padding-top: 18pt;
+  border-top: 1px solid #E5E7EB;
+}
+.cover-footer-col { flex: 1; }
+
+/* ====================== EQUIPMENT CARDS ====================== */
+.equipment-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10pt;
+  margin-bottom: 18pt;
+}
+.equipment-card {
+  background: #FFFFFF;
+  border: 1px solid #E5E7EB;
+  border-radius: 6pt;
+  padding: 12pt 14pt;
+}
+.eq-header {
+  display: flex;
+  align-items: center;
+  gap: 8pt;
+  margin-bottom: 8pt;
+  padding-bottom: 8pt;
+  border-bottom: 1px solid #F3F4F6;
+}
+.eq-icon {
+  font-size: 14pt;
+  color: #16A34A;
+}
+.eq-title {
+  font-size: 11pt;
+  font-weight: 700;
+  color: #0F172A;
+}
+.eq-details {
+  font-size: 9pt;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4pt 10pt;
+}
+.eq-details dt { color: #6B7280; }
+.eq-details dd { color: #1F2937; font-weight: 500; text-align: right; }
+
+/* ====================== KPI PANEL ====================== */
+.kpi-panel {
+  background: #F5F6F8;
+  border-radius: 8pt;
+  padding: 24pt 18pt;
+}
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 18pt 12pt;
+}
+.kpi-grid .kpi-cell:nth-child(5),
+.kpi-grid .kpi-cell:nth-child(6),
+.kpi-grid .kpi-cell:nth-child(7) {
+  /* row 2 keeps 4-col grid; 7 items leave 1 empty cell */
+}
+.kpi-cell { padding: 0 4pt; }
+.kpi-value {
+  font-size: 22pt;
+  font-weight: 800;
+  color: #0F172A;
+  letter-spacing: -0.02em;
+  line-height: 1.05;
+}
+.kpi-unit {
+  font-size: 12pt;
+  font-weight: 600;
+  color: #6B7280;
+}
+.kpi-label {
+  font-size: 8.5pt;
+  color: #6B7280;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-top: 4pt;
+}
+
+/* ====================== CHART CARDS ====================== */
+.chart-card {
+  background: #FFFFFF;
+  border: 1px solid #E5E7EB;
+  border-radius: 6pt;
+  padding: 14pt 16pt;
+  margin-bottom: 12pt;
+}
+.chart-card-full { padding: 16pt; }
+.chart-card-narrow { padding: 14pt; }
+.chart-title {
+  font-size: 12pt;
+  font-weight: 700;
+  color: #0F172A;
+  margin-bottom: 2pt;
+}
+.chart-sub {
+  font-size: 8.5pt;
+  color: #6B7280;
+  margin-bottom: 10pt;
+}
+.chart-card svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.two-col {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 12pt;
+}
+
+/* ====================== CALLOUT ====================== */
+.callout {
+  background: #F0F9FF;
+  border-left: 3pt solid #5B7CFA;
+  padding: 12pt 14pt;
+  border-radius: 4pt;
+  font-size: 9.5pt;
+  color: #1F2937;
+  margin-top: 14pt;
+}
+.callout strong { color: #0F172A; font-weight: 700; }
+.callout-green {
+  background: #F0FDF4;
+  border-left-color: #16A34A;
+}
+
+/* ====================== ENERGY SUMMARY ====================== */
+.energy-summary {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10pt;
+  margin-top: 14pt;
+}
+.es-cell {
+  background: #F5F6F8;
+  padding: 12pt;
+  border-radius: 6pt;
+  text-align: center;
+}
+.es-value {
+  display: block;
+  font-size: 16pt;
+  font-weight: 800;
+  color: #0F172A;
+  margin-bottom: 3pt;
+}
+.es-label {
+  display: block;
+  font-size: 8.5pt;
+  color: #6B7280;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ====================== LEGEND ====================== */
+.legend-list {
+  list-style: none;
+  font-size: 9pt;
+  margin-top: 8pt;
+}
+.legend-list li {
+  display: flex;
+  align-items: center;
+  gap: 6pt;
+  padding: 3pt 0;
+  color: #4B5563;
+}
+.legend-list strong { color: #0F172A; margin-left: auto; }
+.lg-dot {
+  width: 10pt; height: 10pt;
+  border-radius: 2pt;
+  display: inline-block;
+}
+
+/* ====================== CARBON ====================== */
+.carbon-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 14pt;
+  margin-top: 8pt;
+}
+.carbon-card {
+  background: #F5F6F8;
+  border-radius: 8pt;
+  padding: 24pt 20pt;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 100pt;
+}
+.carbon-card-primary {
+  background: linear-gradient(135deg, #15803D 0%, #16A34A 100%);
+}
+.carbon-card-primary .carbon-value,
+.carbon-card-primary .carbon-label { color: #FFFFFF; }
+.carbon-card-primary .carbon-unit { color: #BBF7D0; }
+.carbon-value {
+  font-size: 32pt;
+  font-weight: 800;
+  color: #0F172A;
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+.carbon-unit {
+  font-size: 16pt;
+  font-weight: 600;
+  color: #6B7280;
+}
+.carbon-label {
+  font-size: 10pt;
+  color: #4B5563;
+  margin-top: 8pt;
+  line-height: 1.4;
+}
+
+/* ====================== VARIANTS TABLE ====================== */
+.variants-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 9pt;
+  margin-top: 4pt;
+}
+.variants-table th {
+  background: #F5F6F8;
+  color: #6B7280;
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 8pt;
+  letter-spacing: 0.04em;
+  padding: 10pt 8pt;
+  text-align: left;
+  border-bottom: 1px solid #E5E7EB;
+}
+.variants-table th.num,
+.variants-table td.num { text-align: right; }
+.variants-table td {
+  padding: 10pt 8pt;
+  border-bottom: 1px solid #F3F4F6;
+}
+.variants-table .winner-row {
+  background: #F0FDF4;
+}
+.variants-table .winner-row td {
+  font-weight: 600;
+  color: #0F172A;
+  border-bottom: 1px solid #BBF7D0;
+}
+.winner-badge {
+  background: #16A34A;
+  color: white;
+  font-size: 7.5pt;
+  font-weight: 700;
+  padding: 2pt 6pt;
+  border-radius: 2pt;
+  margin-left: 6pt;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* ====================== 3 CENOVÉ SCENÁRE ====================== */
+.scenarios-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12pt 0 18pt 0;
+  font-size: 9.5pt;
+}
+.scenarios-table th {
+  background: #F5F6F8;
+  text-align: left;
+  font-size: 8pt;
+  font-weight: 600;
+  color: #4B5563;
+  padding: 8pt 6pt;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1pt solid #E5E7EB;
+}
+.scenarios-table th.num,
+.scenarios-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.scenarios-table td {
+  padding: 9pt 6pt;
+  border-bottom: 1px solid #E5E7EB;
+  color: #1F2937;
+}
+.scenarios-table .base-row {
+  background: #F0FDF4;
+}
+.scenarios-table .base-row td {
+  font-weight: 600;
+  color: #0F172A;
+}
+.base-badge {
+  background: #16A34A;
+  color: white;
+  font-size: 7pt;
+  font-weight: 700;
+  padding: 1.5pt 5pt;
+  border-radius: 2pt;
+  margin-left: 6pt;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.scenario-note {
+  font-size: 8pt;
+  color: #6B7280;
+  margin-top: 2pt;
+  font-style: italic;
+}
+.scenarios-explainer {
+  font-size: 9pt;
+  color: #4B5563;
+  margin-top: 14pt;
+  padding: 12pt 14pt;
+  background: #F9FAFB;
+  border-left: 3pt solid #16A34A;
+  border-radius: 0 4pt 4pt 0;
+}
+.scenarios-explainer p {
+  margin-bottom: 5pt;
+  line-height: 1.5;
+}
+.scenarios-explainer strong { color: #0F172A; }
+
+/* ====================== VPLYV DOTÁCIE ====================== */
+.dotacia-formula {
+  background: #FFFBEB;
+  border: 1px solid #FDE68A;
+  border-radius: 6pt;
+  padding: 14pt 16pt;
+  margin-bottom: 16pt;
+  font-size: 10pt;
+  color: #1F2937;
+  line-height: 1.55;
+}
+.dotacia-formula p { margin-bottom: 6pt; }
+.dotacia-formula strong { color: #0F172A; font-weight: 600; }
+.dotacia-formula .info-line {
+  margin-top: 8pt;
+  padding-top: 8pt;
+  border-top: 1px dashed #FDE68A;
+  font-size: 9pt;
+  color: #92400E;
+}
+
+.dotacia-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 10pt;
+  margin-bottom: 16pt;
+}
+.dotacia-table th {
+  background: #F5F6F8;
+  text-align: left;
+  padding: 9pt 8pt;
+  font-size: 8.5pt;
+  font-weight: 600;
+  color: #4B5563;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1pt solid #E5E7EB;
+}
+.dotacia-table th.num,
+.dotacia-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.dotacia-table td {
+  padding: 9pt 8pt;
+  border-bottom: 1px solid #F3F4F6;
+  color: #1F2937;
+}
+.dotacia-table tr:last-child td { border-bottom: none; }
+
+.dotacia-disclaimer {
+  font-size: 9pt;
+  color: #6B7280;
+  margin-top: 12pt;
+  font-style: italic;
+  line-height: 1.55;
+}
+
+/* ====================== ZÁVER ====================== */
+.zaver-fakty {
+  margin-top: 12pt;
+}
+.zaver-item {
+  padding: 10pt 12pt;
+  margin-bottom: 6pt;
+  background: #F9FAFB;
+  border-left: 3pt solid #16A34A;
+  border-radius: 0 4pt 4pt 0;
+  font-size: 10pt;
+  color: #1F2937;
+  line-height: 1.5;
+}
+.zaver-item strong {
+  color: #0F172A;
+  font-weight: 600;
+  margin-right: 4pt;
+}
+.zaver-note {
+  margin-top: 18pt;
+  padding: 12pt 14pt;
+  background: #FFFBEB;
+  border-radius: 4pt;
+  font-size: 9pt;
+  color: #92400E;
+  line-height: 1.6;
+}
+
+/* ====================== OTVORENÉ OTÁZKY ====================== */
+.open-questions {
+  margin-top: 10pt;
+  padding-left: 22pt;
+  font-size: 10pt;
+  line-height: 1.55;
+  color: #1F2937;
+  counter-reset: oq-counter;
+}
+.open-questions li {
+  margin-bottom: 12pt;
+  padding-left: 6pt;
+  position: relative;
+}
+.open-questions li strong {
+  color: #0F172A;
+  font-weight: 600;
+}
+.open-questions .oq-detail {
+  font-size: 9pt;
+  color: #4B5563;
+  margin-top: 3pt;
+  line-height: 1.55;
+  padding-right: 8pt;
+}
+
+/* ====================== METHODOLOGY ====================== */
+.methodology {
+  font-size: 9.5pt;
+  line-height: 1.6;
+  color: #4B5563;
+}
+.methodology p {
+  margin-bottom: 6pt;
+  padding-left: 14pt;
+  position: relative;
+}
+.methodology p:before {
+  content: "›";
+  position: absolute;
+  left: 0;
+  color: #16A34A;
+  font-weight: 700;
+}
+.methodology strong { color: #0F172A; font-weight: 600; }
+
+.contact-card {
+  background: #F5F6F8;
+  border-radius: 6pt;
+  padding: 14pt 16pt;
+  margin-top: 24pt;
+}
+.contact-card h3 {
+  font-size: 10pt;
+  font-weight: 700;
+  color: #0F172A;
+  margin-bottom: 8pt;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.contact-card p {
+  font-size: 9.5pt;
+  line-height: 1.5;
+  color: #4B5563;
+  margin-bottom: 6pt;
+}
+.contact-card .company-info {
+  font-size: 8.5pt;
+  color: #9CA3AF;
+  padding-top: 6pt;
+  border-top: 1px solid #E5E7EB;
+}
+.footer-disclaimer {
+  font-size: 8pt;
+  color: #9CA3AF;
+  text-align: center;
+  margin-top: 18pt;
+  font-style: italic;
+}
+
+
+/* ============================================================================
+   EXPERT POSÚDENIE (Vlna 4 — AI Claude Sonnet 4.5)
+   ============================================================================ */
+
+.ai-commentary {
+  background: #F5F6F8;
+  border-left: 4px solid #16A34A;
+  padding: 16px 20px;
+  border-radius: 0 8px 8px 0;
+  margin: 12px 0 20px 0;
+  font-size: 11pt;
+  line-height: 1.6;
+  color: #1F2937;
+}
+
+.ai-commentary p {
+  margin: 0 0 10px 0;
+}
+
+.ai-commentary p:last-child {
+  margin-bottom: 0;
+}
+
+.ai-section-title {
+  font-size: 12pt;
+  font-weight: 700;
+  color: #102D4C;
+  margin: 24px 0 10px 0;
+  padding-bottom: 4px;
+  border-bottom: 1px solid #E5E7EB;
+}
+
+.ai-recommendations {
+  list-style: none;
+  counter-reset: ai-rec;
+  padding: 0;
+  margin: 0 0 16px 0;
+}
+
+.ai-recommendations li {
+  counter-increment: ai-rec;
+  position: relative;
+  padding: 10px 12px 10px 42px;
+  margin: 0 0 8px 0;
+  background: #FFFFFF;
+  border: 1px solid #E5E7EB;
+  border-radius: 6px;
+  font-size: 10.5pt;
+  line-height: 1.5;
+}
+
+.ai-recommendations li::before {
+  content: counter(ai-rec);
+  position: absolute;
+  left: 10px;
+  top: 10px;
+  width: 24px;
+  height: 24px;
+  background: #16A34A;
+  color: #FFFFFF;
+  border-radius: 50%;
+  font-weight: 700;
+  font-size: 10pt;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ai-recommendations li strong {
+  display: block;
+  color: #102D4C;
+  margin-bottom: 3px;
+  font-size: 10.5pt;
+}
+
+.ai-anomalies {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 16px 0;
+}
+
+.ai-anomaly-item {
+  background: #FFFBEB;
+  border-left: 4px solid #F59E0B;
+  padding: 10px 14px;
+  border-radius: 0 6px 6px 0;
+  font-size: 10.5pt;
+  line-height: 1.5;
+}
+
+.ai-anomaly-item strong {
+  display: block;
+  color: #92400E;
+  margin-bottom: 3px;
+  font-size: 10.5pt;
+}
+
+.ai-detail {
+  color: #4B5563;
+  font-size: 10pt;
+  line-height: 1.5;
+  margin-top: 2px;
+}
+
+.ai-footer {
+  margin-top: 16px;
+  padding: 10px 14px;
+  background: #F9FAFB;
+  border-radius: 6px;
+  font-size: 9pt;
+  color: #6B7280;
+  text-align: center;
+}
+
+.ai-footer em {
+  font-style: italic;
+}
+
+/* ============================================================================
+   POROVNÁVACÍ SÚHRN (viacero ponúk pre jedného klienta)
+   ============================================================================ */
+.finding-callout {
+  background: #F0FDF4;
+  border-left: 3pt solid #16A34A;
+  padding: 14pt 16pt;
+  border-radius: 0 6pt 6pt 0;
+  font-size: 10pt;
+  color: #1F2937;
+  line-height: 1.55;
+  margin-bottom: 20pt;
+}
+.finding-callout strong { color: #0F172A; font-weight: 700; }
+
+.pick-cards {
+  display: grid;
+  gap: 12pt;
+  margin-bottom: 20pt;
+}
+.pick-cards.two { grid-template-columns: 1fr 1fr; }
+.pick-card {
+  border: 1.5pt solid #E5E7EB;
+  border-radius: 8pt;
+  padding: 16pt 18pt;
+  background: #FFFFFF;
+}
+.pick-card.primary {
+  border-color: #16A34A;
+  background: #F0FDF4;
+}
+.pick-tag {
+  font-size: 8.5pt;
+  font-weight: 700;
+  color: #16A34A;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 6pt;
+}
+.pick-title {
+  font-size: 14pt;
+  font-weight: 800;
+  color: #0F172A;
+  margin-bottom: 12pt;
+  letter-spacing: -0.01em;
+}
+.pick-metrics {
+  display: flex;
+  gap: 20pt;
+}
+.pick-metric {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.pick-metric-value {
+  font-size: 16pt;
+  font-weight: 800;
+  color: #0F172A;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+.pick-metric-label {
+  font-size: 8pt;
+  color: #6B7280;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-top: 2pt;
+  white-space: nowrap;
+}
+
+.variants-table .dominated-row td {
+  color: #9CA3AF;
+}
+.variants-table .dominated-row .variant-name { color: #6B7280; }
+.dominated-note {
+  display: block;
+  font-size: 7.5pt;
+  font-style: italic;
+  color: #9CA3AF;
+  margin-top: 2pt;
+  font-weight: 400;
+}
+.choice-col { text-align: center; }
+.choice-box {
+  display: inline-block;
+  width: 11pt;
+  height: 11pt;
+  border: 1.4pt solid #9CA3AF;
+  border-radius: 2pt;
+}
+
+.decision-block {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 28pt;
+  margin-top: 28pt;
+  padding-top: 18pt;
+  border-top: 1px solid #E5E7EB;
+}
+.decision-line {
+  border-bottom: 1px solid #9CA3AF;
+  height: 26pt;
+}
+.decision-caption {
+  font-size: 8pt;
+  color: #9CA3AF;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-top: 5pt;
+}
+</style>
+<style>
+/* ===== Overrides len pre porovnávací súhrn — plynulý tok, žiadne nútené celé strany ===== */
+@page {
+  @bottom-center {
+    content: "Energovision · Porovnávací súhrn ponúk · " counter(page) " / " counter(pages);
+    font-size: 8pt;
+    color: #9CA3AF;
+    font-family: 'Inter', -apple-system, sans-serif;
+  }
+}
+.pv-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding-bottom: 12pt;
+  border-bottom: 1px solid #E5E7EB;
+  margin-bottom: 18pt;
+}
+.pv-header .logo { height: 26pt; width: auto; }
+.pv-title-block { margin-bottom: 14pt; }
+.pv-title {
+  font-size: 24pt;
+  font-weight: 800;
+  color: #0F172A;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  margin: 4pt 0 4pt;
+}
+.pv-subtitle { font-size: 10pt; color: #6B7280; }
+.pv-section { margin-bottom: 16pt; }
+.avoid-break { break-inside: avoid; page-break-inside: avoid; }
+.chart-card { break-inside: avoid; page-break-inside: avoid; }
+.pick-cards { margin-bottom: 0; }
+.pick-card { padding: 12pt 14pt; }
+.pick-title { font-size: 12.5pt; margin-bottom: 8pt; }
+.pick-metric-value { font-size: 14pt; }
+.variants-table td { padding: 8pt 8pt; }
+.pv-meta {
+  display: flex;
+  gap: 24pt;
+  padding: 10pt 0;
+  border-top: 1px solid #E5E7EB;
+  border-bottom: 1px solid #E5E7EB;
+  margin-bottom: 16pt;
+}
+.pv-meta-col { flex: 1; }
+.pv-legend { font-size: 9pt; }
+.pv-legend p { margin-bottom: 4pt; padding-left: 12pt; }
+.decision-block { margin-top: 18pt; padding-top: 12pt; }
+.contact-card { margin-top: 14pt; padding: 10pt 14pt; }
+.footer-disclaimer { margin-top: 10pt; }
+
+/* ===== Hodnotenie ponúk — výhody / nevýhody ===== */
+.assess-card {
+  border: 1px solid #E5E7EB;
+  border-radius: 6pt;
+  padding: 10pt 14pt;
+  margin-bottom: 8pt;
+  background: #FFFFFF;
+}
+.assess-card.assess-selected { border-color: #16A34A; background: #F0FDF4; }
+.assess-card.assess-dominated { background: #FAFAFA; }
+.assess-card.assess-dominated .assess-title,
+.assess-card.assess-dominated .assess-list li { color: #9CA3AF; }
+.assess-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8pt;
+  padding-bottom: 6pt;
+  border-bottom: 1px solid #F3F4F6;
+  margin-bottom: 6pt;
+}
+.assess-title { font-size: 11pt; font-weight: 700; color: #0F172A; }
+.assess-kpis { margin-left: auto; font-size: 8pt; color: #6B7280; white-space: nowrap; }
+.assess-dominated-tag {
+  font-size: 7.5pt; text-transform: uppercase; letter-spacing: 0.05em;
+  color: #9CA3AF; font-style: italic;
+}
+.assess-verdict { font-size: 9.5pt; color: #1F2937; margin: 0 0 6pt; }
+.assess-cols { display: flex; gap: 16pt; }
+.assess-col { flex: 1; }
+.assess-col-label {
+  font-size: 8pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+  margin-bottom: 3pt;
+}
+.assess-col-label.pros { color: #16A34A; }
+.assess-col-label.cons { color: #B45309; }
+.assess-list { list-style: none; padding: 0; margin: 0; font-size: 8.5pt; color: #374151; }
+.assess-list li { padding-left: 11pt; position: relative; margin-bottom: 2.5pt; line-height: 1.4; }
+.assess-list.pros li::before { content: "✓"; position: absolute; left: 0; color: #16A34A; font-weight: 700; }
+.assess-list.cons li::before { content: "✕"; position: absolute; left: 0; color: #B45309; font-weight: 700; }
+
+/* ===== Odporúčanie ===== */
+.recommendation-block {
+  background: linear-gradient(135deg, #F0FDF4 0%, #DCFCE7 100%);
+  border: 1.5pt solid #16A34A;
+  border-radius: 8pt;
+  padding: 14pt 18pt;
+}
+.recommendation-title { font-size: 12pt; font-weight: 800; color: #14532D; margin-bottom: 6pt; }
+.recommendation-detail { font-size: 10pt; color: #1F2937; line-height: 1.55; }
+</style>
+</head>
+<body>
+
+
+<div class="pv-header">
+  <img src="data:IMG" alt="Energovision" class="logo">
+  <div class="cover-meta">
+    <div class="meta-label">Pripravené pre</div>
+    <div class="meta-value">Testovacia firma s.r.o.</div>
+  </div>
+</div>
+
+<div class="pv-title-block">
+  <div class="cover-eyebrow">Porovnávací súhrn ponúk</div>
+  <h1 class="pv-title">Vyrobny areal Senec</h1>
+  <p class="pv-subtitle">3 porovnávaných ponúk · ročná spotreba 1250 MWh · špička 620 kW · MRK 500 kW · Priemyselná 12, Senec</p>
+</div>
+
+<div class="pv-meta">
+  <div class="pv-meta-col">
+    <div class="meta-label">Vystavené</div>
+    <div class="meta-value">DD.MM.YYYY</div>
+  </div>
+  <div class="pv-meta-col">
+    <div class="meta-label">Pripravil</div>
+    <div class="meta-value">Lukáš Bago · 0918 187 762</div>
+  </div>
+  <div class="pv-meta-col">
+    <div class="meta-label">Identifikátor</div>
+    <div class="meta-value">P-26-322</div>
+  </div>
+</div>
+
+
+
+<div class="finding-callout avoid-break pv-section">
+  <strong>K veci.</strong> Z 3 predložených ponúk je <strong>1 ponuka</strong> vo všetkých ukazovateľoch (CAPEX, NPV, IRR, návratnosť) horšia než iná ponuka v tomto porovnaní — reálna voľba je medzi zvyšnými 2.
+</div>
+
+
+
+
+
+
+<div class="pv-section avoid-break">
+  <h3 class="section-label">Dve rozumné voľby</h3>
+  <div class="pick-cards two">
+    <div class="pick-card primary">
+      <div class="pick-tag">Najvyšší zisk (NPV)</div>
+      <div class="pick-title">SOLINTEG 535 kWp / 224 kWh</div>
+      <div class="pick-metrics">
+        <div class="pick-metric"><div class="pick-metric-value">268 000 €</div><div class="pick-metric-label">NPV</div></div>
+        <div class="pick-metric"><div class="pick-metric-value">11.8 %</div><div class="pick-metric-label">IRR</div></div>
+        <div class="pick-metric"><div class="pick-metric-value">7.9 r</div><div class="pick-metric-label">Návratnosť</div></div>
+      </div>
+    </div>
+    
+    <div class="pick-card">
+      <div class="pick-tag">Najrýchlejšia návratnosť · aktuálne vybrané</div>
+      <div class="pick-title">HUAWEI 535 kWp</div>
+      <div class="pick-metrics">
+        <div class="pick-metric"><div class="pick-metric-value">241 000 €</div><div class="pick-metric-label">NPV</div></div>
+        <div class="pick-metric"><div class="pick-metric-value">13.6 %</div><div class="pick-metric-label">IRR</div></div>
+        <div class="pick-metric"><div class="pick-metric-value">6.4 r</div><div class="pick-metric-label">Návratnosť</div></div>
+      </div>
+    </div>
+    
+  </div>
+</div>
+
+
+<div class="pv-section avoid-break">
+  <h3 class="section-label">Všetky porovnávané ponuky (3)</h3>
+  <table class="variants-table">
+    <thead>
+      <tr>
+        <th>Variant</th>
+        <th class="num">FVE (DC)</th>
+        <th class="num">BESS</th>
+        <th class="num">CAPEX</th>
+        <th class="num">NPV 20r</th>
+        <th class="num">IRR</th>
+        <th class="num">Návratnosť</th>
+        <th class="choice-col">Voľba</th>
+      </tr>
+    </thead>
+    <tbody>
+      
+      <tr class="">
+        <td>
+          <span class="variant-name">SOLINTEG 535 kWp / 224 kWh</span>
+          
+        </td>
+        <td class="num">535 kWp</td>
+        <td class="num">224 kWh</td>
+        <td class="num">412 000 €</td>
+        <td class="num">268 000 €</td>
+        <td class="num">11.8 %</td>
+        <td class="num">7.9 r</td>
+        <td class="choice-col"><span class="choice-box"></span></td>
+      </tr>
+      
+      <tr class="winner-row">
+        <td>
+          <span class="variant-name">HUAWEI 535 kWp</span> <span class="winner-badge">VYBRANÉ</span>
+          
+        </td>
+        <td class="num">535 kWp</td>
+        <td class="num">—</td>
+        <td class="num">298 000 €</td>
+        <td class="num">241 000 €</td>
+        <td class="num">13.6 %</td>
+        <td class="num">6.4 r</td>
+        <td class="choice-col"><span class="choice-box"></span></td>
+      </tr>
+      
+      <tr class="dominated-row">
+        <td>
+          <span class="variant-name">SUNGROW 400 kWp</span>
+          <span class="dominated-note">Horšie vo všetkom než „HUAWEI 535 kWp"</span>
+        </td>
+        <td class="num">400 kWp</td>
+        <td class="num">—</td>
+        <td class="num">320 000 €</td>
+        <td class="num">150 000 €</td>
+        <td class="num">9.0 %</td>
+        <td class="num">8.5 r</td>
+        <td class="choice-col"><span class="choice-box"></span></td>
+      </tr>
+      
+    </tbody>
+  </table>
+</div>
+
+
+<div class="chart-card chart-card-full pv-section">
+  <div class="chart-title">CAPEX vs. NPV — vstup oproti zisku</div>
+  <div class="chart-sub">Modrá = vstupná investícia, zelená = čistý zisk za 20 rokov (súčasná hodnota). Šedá = dominovaná ponuka.</div>
+  <svg>SOLINTEG 535 kWp / 224 kWh | HUAWEI 535 kWp | SUNGROW 400 kWp | 0€ | 100k€ | 200k€ | 300k€ | 400k€ | CAPEX (vstup) | NPV 20 r (zisk)</svg>
+
+</div>
+
+<div class="chart-card chart-card-full pv-section">
+  <div class="chart-title">Návratnosť — od najrýchlejšej po najpomalšiu</div>
+  <div class="chart-sub">Zelená = odporúčaná ponuka (najvyššie NPV), šedá = dominovaná ponuka.</div>
+  <svg>0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | Návratnosť (roky) — kratšia je lepšia | HUAWEI 535 kWp | SOLINTEG 535 kWp / 224 kWh | SUNGROW 400 kWp | 6.4 r | 7.9 r | 8.5 r</svg>
+
+</div>
+
+
+<div class="pv-section">
+  <h3 class="section-label">Hodnotenie jednotlivých ponúk</h3>
+  
+  <div class="assess-card avoid-break ">
+    <div class="assess-head">
+      <span class="assess-title">SOLINTEG 535 kWp / 224 kWh</span>
+      
+      
+      <span class="assess-kpis">412 000 € · NPV 268 000 € · IRR 11.8 % · 7.9 r</span>
+    </div>
+    
+    <div class="assess-cols">
+      <div class="assess-col">
+        <div class="assess-col-label pros">Výhody</div>
+        <ul class="assess-list pros">
+          <li>Najvyšší čistý zisk za 20 rokov zo všetkých porovnávaných ponúk (268 000 €).</li><li>Batéria 224 kWh chráni pred prekročením MRK 500 kW a umožňuje arbitráž na spotovom trhu.</li>
+        </ul>
+      </div>
+      <div class="assess-col">
+        <div class="assess-col-label cons">Nevýhody</div>
+        <ul class="assess-list cons">
+          <li>Vyššia vstupná investícia oproti variantu bez batérie a dodatočná technológia na údržbu.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  
+  <div class="assess-card avoid-break assess-selected">
+    <div class="assess-head">
+      <span class="assess-title">HUAWEI 535 kWp</span>
+      <span class="winner-badge">VYBRANÉ</span>
+      
+      <span class="assess-kpis">298 000 € · NPV 241 000 € · IRR 13.6 % · 6.4 r</span>
+    </div>
+    
+    <div class="assess-cols">
+      <div class="assess-col">
+        <div class="assess-col-label pros">Výhody</div>
+        <ul class="assess-list pros">
+          <li>Najrýchlejšia návratnosť v porovnaní (6.4 roka).</li><li>Najnižšia vstupná investícia (298 000 €).</li><li>Jednoduchšie riešenie bez batériového úložiska — menej technológie, nižší CAPEX.</li><li>Najvyššie ročné zhodnotenie investície (IRR 13.6 %).</li>
+        </ul>
+      </div>
+      <div class="assess-col">
+        <div class="assess-col-label cons">Nevýhody</div>
+        <ul class="assess-list cons">
+          <li>Bez ochrany pred prekročením MRK 500 kW a bez výnosu z arbitráže.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  
+  <div class="assess-card avoid-break assess-dominated">
+    <div class="assess-head">
+      <span class="assess-title">SUNGROW 400 kWp</span>
+      
+      <span class="assess-dominated-tag">dominovaná ponuka</span>
+      <span class="assess-kpis">320 000 € · NPV 150 000 € · IRR 9.0 % · 8.5 r</span>
+    </div>
+    
+    <div class="assess-cols">
+      <div class="assess-col">
+        <div class="assess-col-label pros">Výhody</div>
+        <ul class="assess-list pros">
+          <li>Jednoduchšie riešenie bez batériového úložiska — menej technológie, nižší CAPEX.</li>
+        </ul>
+      </div>
+      <div class="assess-col">
+        <div class="assess-col-label cons">Nevýhody</div>
+        <ul class="assess-list cons">
+          <li>Bez ochrany pred prekročením MRK 500 kW a bez výnosu z arbitráže.</li><li>Vo všetkých ukazovateľoch horšia než „HUAWEI 535 kWp“ — nemá zmysel ju vybrať.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  
+</div>
+
+
+
+<div class="pv-section avoid-break">
+  <h3 class="section-label">Odporúčanie</h3>
+  <div class="recommendation-block">
+    <div class="recommendation-title">Odporúčanie Energovision</div>
+    <div class="recommendation-detail">Ponuka „SOLINTEG 535 kWp / 224 kWh“ prinesie za 20 rokov najvyšší čistý zisk (268 000 € pri návratnosti 7.9 r). Ak preferujete nižšiu vstupnú investíciu a najrýchlejší návrat peňazí  zvoľte „HUAWEI 535 kWp“ (298 000 €  návratnosť 6.4 r).</div>
+  </div>
+</div>
+
+
+
+<div class="pv-section avoid-break">
+  <h3 class="section-label">Technické fakty o odbernom mieste</h3>
+  <table class="dotacia-table">
+    <tbody>
+      <tr><td>Ročná spotreba elektriny</td><td class="num">1250 MWh</td></tr>
+      <tr><td>Špička odberu (15-min maximum)</td><td class="num">620 kW</td></tr>
+      <tr><td>Maximálna rezervovaná kapacita (MRK)</td><td class="num">500 kW</td></tr>
+      <tr><td><strong>⚠ Špička odberu prekračuje MRK</strong> — riziko pokút od distribútora; batéria ho vie znížiť (peak shaving)</td><td class="num">+120 kW</td></tr>
+      <tr><td>Cena elektriny — nákup</td><td class="num">0.168 €/kWh</td></tr>
+      <tr><td>Cena elektriny — výkup prebytkov</td><td class="num">0.045 €/kWh</td></tr>
+      <tr><td>Ročná výroba FVE (SOLINTEG 535 kWp / 224 kWh)</td><td class="num">562 MWh</td></tr>
+      <tr><td>Samospotreba vyrobenej elektriny</td><td class="num">82 %</td></tr>
+      <tr><td>Ročný export prebytkov do siete</td><td class="num">98 MWh</td></tr>
+    </tbody>
+  </table>
+  
+</div>
+
+
+
+
+
+<div class="pv-section avoid-break">
+  <h3 class="section-label">Ako čítať toto porovnanie</h3>
+  <div class="methodology pv-legend">
+    <p><strong>CAPEX</strong> — celková vstupná investícia bez DPH.</p>
+    <p><strong>NPV (čistá súčasná hodnota)</strong> — čistý zisk za 20 rokov prevádzky, po odpočítaní investície, v dnešnej hodnote peňazí. Vyššie číslo = viac peňazí za 20 rokov.</p>
+    <p><strong>IRR (vnútorná miera výnosu)</strong> — ročné zhodnotenie investície v percentách; porovnaj s bankovým úrokom alebo alternatívnou investíciou.</p>
+    <p><strong>Návratnosť</strong> — počet rokov, za ktoré sa investícia vráti z úspor na energii.</p>
+    <p><strong>BESS (batériové úložisko)</strong> — ochrana pred pokutou za prekročenie MRK a výnos z obchodovania so spotovou cenou elektriny (arbitráž).</p>
+    <p><strong>Dominovaná ponuka</strong> — existuje iná porovnávaná ponuka, ktorá je súčasne lacnejšia aj výnosnejšia vo všetkých ukazovateľoch; nemá zmysel ju vybrať za žiadnych preferencií.</p>
+  </div>
+</div>
+
+
+<div class="avoid-break">
+  <div class="decision-block">
+    <div>
+      <div class="decision-line"></div>
+      <div class="decision-caption">Podpis zákazníka · vybraný variant</div>
+    </div>
+    <div>
+      <div class="decision-line"></div>
+      <div class="decision-caption">Dátum</div>
+    </div>
+  </div>
+
+  <div class="contact-card">
+    <h3>Kontakt</h3>
+    <p><strong>Lukáš Bago</strong> · lukas.bago@energovision.sk · 0918 187 762</p>
+    <p class="company-info">Energovision s.r.o. · IČO 53 036 280 · app.energovision.sk</p>
+  </div>
+  <div class="footer-disclaimer">
+    Porovnávací súhrn nahrádza samostatné technické posudky priložené k jednotlivým ponukám. Podrobný technický posudok k vybranému variantu je na vyžiadanie k dispozícii v plnom znení. Generated DD.MM.YYYY.
+  </div>
+</div>
+
+</body>
+</html>

@@ -18,6 +18,10 @@ I18N_FILES = [
     "generuj_prezentaciu.py",
     "financovanie_report/generator.py",
     "financovanie_report/templates/report.html",
+    "posudok_orkestra/templates/porovnanie.html",
+    "posudok_orkestra/generator.py",
+    "posudok_orkestra/charts.py",
+    "analyza_om_v2.py",
 ]
 
 

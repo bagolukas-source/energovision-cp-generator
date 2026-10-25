@@ -7109,7 +7109,8 @@ def webhook_aom_render_chocosuc():
 def webhook_aom_porovnanie():
     """Porovnávací súhrn viacerých ponúk pre jedného klienta — branded PDF (WeasyPrint),
     žiadny nový engine beh, len formátovanie existujúcich analyza_om_variants riadkov.
-    Body: { analyza_id, variant_ids?: [uuid, ...] } — bez variant_ids porovná všetky.
+    Body: { analyza_id, variant_ids?: [uuid, ...], lang?: "sk"|"en"|"de" } — bez variant_ids porovná všetky;
+    bez lang rozhodne analyza_om.doc_lang → customers.lang → sk.
     (Route z 41355ee sa do main nedostala — CRM dostávalo 404; render_porovnanie v main je.)"""
     if not _aom_v2:
         return jsonify({"ok": False, "error": "analyza_om_v2 not loaded"}), 500
@@ -7119,7 +7120,8 @@ def webhook_aom_porovnanie():
         return jsonify({"ok": False, "error": "analyza_id required"}), 400
     variant_ids = body.get("variant_ids") or []
     try:
-        result = _aom_v2.render_porovnanie(_sb(), aid, variant_ids)
+        lang_kw = {"lang": body["lang"]} if body.get("lang") else {}  # bez lang → doc_lang → customers.lang → sk
+        result = _aom_v2.render_porovnanie(_sb(), aid, variant_ids, **lang_kw)
         return jsonify(result)
     except Exception as e:
         log.exception("[aom-porovnanie] failed")
