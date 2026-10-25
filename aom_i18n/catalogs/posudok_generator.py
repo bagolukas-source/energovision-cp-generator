@@ -210,7 +210,6 @@ _T = [
     ("Zdroj / komentár", "Source / comment", "Quelle / Kommentar"),
     ("Silová zložka", "Energy component", "Energiepreis"),
     ("Variabilná distribúcia", "Variable distribution charge", "Variables Netzentgelt"),
-    ("VSD tarif", "VSD tariff (regional distribution system operator)", "VSD-Tarif (regionaler Verteilnetzbetreiber)"),
     ("TPS + systémové služby", "TPS (system operation tariff) + system services",
      "TPS (Systembetriebstarif) + Systemdienstleistungen"),
     ("pásmo 2", "band 2", "Stufe 2"),
@@ -349,6 +348,9 @@ _T = [
     ("Posudok je nezáväzný odborný odhad.", "This assessment is a non-binding expert estimate.",
      "Dieses Gutachten ist eine unverbindliche fachliche Einschätzung."),
     ("Kontakt", "Contact", "Kontakt"),
+    ("⚡ Nabíjanie batérie zo siete: <b>{x}</b> ročne — {r}", "⚡ Battery charging from the grid: <b>{x}</b> per year — {r}",
+     "⚡ Laden der Batterie aus dem Netz: <b>{x}</b> pro Jahr — {r}"),
+    ("MWh · {x} nevyužité", "MWh · {x} unused", "MWh · {x} ungenutzt"),
 ]
 
 EN = {sk: en for sk, en, _de in _T}

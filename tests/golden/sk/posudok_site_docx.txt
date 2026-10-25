@@ -42,7 +42,15 @@ Graf 8: Monte Carlo — P10 44 694 €, medián 65 937 €, P90 86 106 €; prav
 6 — CENA NEČINNOSTI
 Koľko stojí ponechať súčasný stav
 7 — EXPERT POSÚDENIE A ODPORÚČANIA
+Z technického hľadiska je navrhnutý variant 120 kWp primeraný profilu OM — pri samospotrebe 81,1 % sa vyrobená energia využije takmer celá. Rozhodujúce predpoklady sú špecifický výnos 1 035 kWh/kWp (PVGIS) a stabilita odberového profilu.
+Citlivosť: medzi defenzívnym a optimistickým scenárom je rozpätie NPV 37 654 – 97 070 €. Pred realizáciou odporúčam overiť finálnu tarifu (faktúra), podmienky pripojenia u prevádzkovateľa distribučnej sústavy a presnú konštrukciu z cenovej ponuky.
 Odporúčané kroky
+01  Odporúčanie k navrhnutému variantu
+Realizovať — návratnosť 5,5–6,2 r, NPV 70 663 € (báza); aj v pesimistickom scenári P10 zostáva NPV kladné (44 694 €).
+02  Preveriť zníženie RK
+Po inštalácii batérie klesá špičkové zaťaženie zo siete — možnosť znížiť rezervovanú kapacitu.
+03  Technická obhliadka OM
+Overenie strechy/plochy, statiky a bodu pripojenia pred finálnym projektom.
 
 8 — ZÁVER
 Odporúčanie pre klienta
@@ -86,7 +94,7 @@ Import zo siete | 268 MWh | —
 Pokrytie spotreby OM | 25,7 % | FVE vs spotreba
 Zložka ceny | Hodnota | Zdroj
 Silová zložka | 134,87 €/MWh | faktúra
-Variabilná distribúcia | 16,55 €/MWh | VSD tarif
+Variabilná distribúcia | 16,55 €/MWh | tarif SSE
 TPS + systémové služby | 14,07 €/MWh | pásmo 2
 Avoided cost samospotreby | 151,4 €/MWh | kompozit
 Pevná zložka distribúcie | 8,02 €/kW/mes | × RK 210 kW

@@ -160,6 +160,14 @@ EN = {
     "Reziduálna hodnota po 20 rokoch": "Residual value after 20 years",
     "Ekonomika neráta s poklesom výkonu FVE; konzervatívne 10 % CAPEX = {res} € reziduálnej hodnoty.":
         "The economics assume no degradation of PV output; conservatively 10 % of CAPEX = {res} € residual value.",
+    # --- 2026-10-25: záporná arbitráž ako náklad, distribútor OM ---
+    'pri spotovej tarife spread medzi lacnými a drahými hodinami nepokryl straty batérie pri nabíjaní a vybíjaní': "on the spot tariff, the spread between cheap and expensive hours did not cover the battery's charging and discharging losses",
+    'pri fixnej tarife nemá nabíjanie zo siete cenový rozdiel, takže straty batérie pri nabíjaní a vybíjaní sú čistý náklad': "on a fixed-price tariff, charging from the grid brings no price difference, so the battery's charging and discharging losses are a pure cost",
+    '; náklad je už odpočítaný v ročnej úspore': '; this cost is already deducted from the annual savings',
+    'Batéria — nabíjanie zo siete (náklad)': 'Battery — charging from the grid (cost)',
+    '{mwh} MWh zo siete, straty pri nabíjaní a vybíjaní': '{mwh} MWh from the grid, charging and discharging losses',
+    'tarif {dist}': '{dist} tariff (regional distribution system operator)',
+    'tarif distribútora': 'distribution system operator tariff',
 }
 
 DE = {
@@ -322,4 +330,12 @@ DE = {
     "Reziduálna hodnota po 20 rokoch": "Restwert nach 20 Jahren",
     "Ekonomika neráta s poklesom výkonu FVE; konzervatívne 10 % CAPEX = {res} € reziduálnej hodnoty.":
         "Die Wirtschaftlichkeitsrechnung berücksichtigt keine Leistungsminderung der PV-Anlage; konservativ 10 % des CAPEX = {res} € Restwert.",
+    # --- 2026-10-25: záporná arbitráž ako náklad, distribútor OM ---
+    'pri spotovej tarife spread medzi lacnými a drahými hodinami nepokryl straty batérie pri nabíjaní a vybíjaní': 'beim Spot-Tarif deckte die Preisspanne zwischen günstigen und teuren Stunden die Lade- und Entladeverluste der Batterie nicht',
+    'pri fixnej tarife nemá nabíjanie zo siete cenový rozdiel, takže straty batérie pri nabíjaní a vybíjaní sú čistý náklad': 'beim Festpreistarif bringt das Laden aus dem Netz keinen Preisunterschied, daher sind die Lade- und Entladeverluste der Batterie reine Kosten',
+    '; náklad je už odpočítaný v ročnej úspore': '; diese Kosten sind in der jährlichen Einsparung bereits abgezogen',
+    'Batéria — nabíjanie zo siete (náklad)': 'Batterie — Laden aus dem Netz (Kosten)',
+    '{mwh} MWh zo siete, straty pri nabíjaní a vybíjaní': '{mwh} MWh aus dem Netz, Lade- und Entladeverluste',
+    'tarif {dist}': '{dist}-Tarif (regionaler Verteilnetzbetreiber)',
+    'tarif distribútora': 'Tarif des Verteilnetzbetreibers',
 }

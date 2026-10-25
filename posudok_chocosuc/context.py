@@ -144,7 +144,12 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None, selected_
     _has_ems = bool(base.get("value_streams"))
     if bess_kwh <= 0:
         arbitrage_reason = _("bez batérie — arbitráž sa neuplatňuje")
-    elif abs(save_arb) > 1:
+    elif save_arb < -1:  # nabíjanie zo siete stratové: náklad, nie prínos (už odpočítaný v ročnej úspore)
+        arbitrage_reason = (_("pri spotovej tarife spread medzi lacnými a drahými hodinami nepokryl straty batérie pri nabíjaní a vybíjaní")
+                            if _is_spot else
+                            _("pri fixnej tarife nemá nabíjanie zo siete cenový rozdiel, takže straty batérie pri nabíjaní a vybíjaní sú čistý náklad"))
+        arbitrage_reason += _("; náklad je už odpočítaný v ročnej úspore")
+    elif save_arb > 1:
         arbitrage_reason = _("spotová arbitráž z hodinového EMS (nabíjanie v lacných hodinách, vybíjanie v drahých)")
     elif save_merchant > 1:
         arbitrage_reason = _("batéria obchoduje v merchant režime bilančnej skupiny — výnos v riadku Obchodovanie BS")
@@ -246,7 +251,11 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None, selected_
     benefit_rows=[(_("FVE priama samospotreba"),_("{mwh} MWh priamo do odberu").format(mwh=f"{_pv_direct_mwh:.0f}"),save_self),
                   (_("FVE export prebytkov"),_("{mwh} MWh do siete").format(mwh=f"{export_mwh:.0f}"),save_export)]
     if save_bess>0: benefit_rows.append((_("Batéria — posun PV do odberu"),_("{mwh} MWh PV uskladnené a využité neskôr").format(mwh=f"{_pv_via_bat_mwh:.0f}"),save_bess))
-    if abs(save_arb)>1: benefit_rows.append((_("BESS arbitráž (spot v BS)"),_("nabíjanie lacno / vybíjanie draho"),save_arb))
+    if save_arb>1: benefit_rows.append((_("BESS arbitráž (spot v BS)"),_("nabíjanie lacno / vybíjanie draho"),save_arb))
+    # záporná arbitráž nie je prínos — samostatný riadok nákladu (súčet s prínosmi = ročná úspora enginu)
+    benefit_cost_rows=([(_("Batéria — nabíjanie zo siete (náklad)"),
+                         _("{mwh} MWh zo siete, straty pri nabíjaní a vybíjaní").format(mwh=f"{float(base.get('grid_to_bat_mwh') or 0):.0f}"),
+                         save_arb)] if save_arb<-1 else [])
     if save_merchant>1: benefit_rows.append((_("BESS obchodovanie v BS (merchant)"),_("spotové obchodovanie batérie cez bilančnú skupinu"),save_merchant))
     if save_peak>0: benefit_rows.append((_("Peak shaving (zníženie RK)"),_("redukcia mesačného 15-min maxima"),save_peak))
     benefit_parts=[(_("Samospotreba"),save_self,"#16A34A"),(_("Export"),save_export,"#A7D08C"),
@@ -256,10 +265,15 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None, selected_
     _kwp = f"{base.get('pv_kwp',0):.0f}"; _kwh = f"{bess_kwh:.0f}"
     _tarif_src = analyza.get("tarif_source") or "faktúra"
     if _tarif_src == "faktúra": _tarif_src = _("faktúra")   # predvolená hodnota z intake; iný text = údaj z DB
-    elif get_lang() != "sk":  # kódy zdroja tarify (mcp = zápis cez CRM nástroj) — sk ukazuje surový údaj ako doteraz
+    else:  # kódy zdroja tarify (mcp = zápis cez CRM nástroj) → čitateľný text vo všetkých jazykoch
         _tarif_src = {"mcp": _("zadané v CRM"), "crm": _("zadané v CRM"), "manual": _("zadané ručne"),
                       "faktura": _("faktúra"), "urso": _("cenník ÚRSO"), "úrso": _("cenník ÚRSO"),
                       "spot": _("spot OKTE")}.get(str(_tarif_src).strip().lower(), _tarif_src)
+    # distribútor OM (SSE/ZSE/VSD…) — predtým natvrdo „VSD tarif" pre každé OM
+    _dist = str(analyza.get("om_distributor")
+                or ((((analyza.get("econ_results") or {}).get("full_response") or {}).get("tariff_detail") or {}).get("distribuutor"))
+                or "").strip().upper()
+    _dist_tarif = _("tarif {dist}").format(dist=_dist) if _dist else _("tarif distribútora")
     ctx={
         "client_name":base.get("client_name"),"om_address":base.get("site_address") or "—",
         "eic_om":analyza.get("eic_om"),"cislo_om":analyza.get("cislo_om"),
@@ -294,11 +308,13 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None, selected_
         "monthly_mwh":monthly_mwh,"months_filled":_months_filled,"hourly_wd":hourly_wd,"hourly_we":hourly_we,"profile_metrics":pm,"profile_sentence":profile_sentence,"profile":prof,
         "p_silova":p_silova,"p_dist_var":p_dist_var,"p_tps":p_tps,"p_so":p_so,"p_dist_pevna":p_dist_pevna,"p_sell":p_sell,"p_avoided":p_avoided,"p_avoided_eff":p_avoided_eff,
         "tarif_real":tarif_real,"tarif_source":(_tarif_src if tarif_real else _("orientačné (ÚRSO 2026)")),
+        "om_distributor":_dist,
+        "dist_tarif_source":(_dist_tarif if analyza.get("tarif_distribucia_eur_mwh") not in (None,"") else _("orientačné (ÚRSO 2026)")),
         "components":components,"components_real":comp_real,
         "scenarios3":S,"tornado_base":base_npv,"tornado_drivers":drv,
         "mc_samples":res,"mc_p10":P(0.10),"mc_p50":P(0.50),"mc_p90":P(0.90),"mc_prob_pos":sum(1 for x in res if x>0)/len(res),"mc_n":5000,
         "inaction_y1":ina_y1,"inaction_flat_20y":ina_flat,"inaction_infl_20y":ina_infl,
-        "benefit_rows":benefit_rows,"benefit_parts":benefit_parts,
+        "benefit_rows":benefit_rows,"benefit_cost_rows":benefit_cost_rows,"benefit_parts":benefit_parts,
         "consumption_real":(analyza.get("consumption_strategy") or ("measured" if analyza.get("consumption_15min_path") else "")) == "measured",
         "consumption_strategy":analyza.get("consumption_strategy"),
         "consumption_needs_review":bool(analyza.get("consumption_needs_review")),
@@ -326,7 +342,33 @@ def build_chocosuc_context(analyza: dict, variants: list, hourly=None, selected_
     if get_lang() != "sk":  # VN/NN → „MV (medium voltage)" …; sk ukazuje skratku ako doteraz
         ctx["om_sadzba"] = volt(ctx["om_sadzba"]); ctx["distrib_oblast"] = volt(ctx["distrib_oblast"])
     _build_deterministic_narratives(ctx, S, full, prof, pm)
+    ctx["expert_fallback_html"], ctx["recommendations"] = deterministic_expert(ctx)
     return ctx
+
+
+def deterministic_expert(ctx):
+    """Sekcia 7 bez AI: technicko-rizikové posúdenie + odporúčané kroky z čísel posudku
+    (aj fallback AI v analyza_om_v2 — sekcia 7 nikdy nemá prázdne nadpisy)."""
+    from aom_i18n.fmt import dec
+    S = ctx["scenarios3"]
+    exp = ("<p>" + _("Z technického hľadiska je navrhnutý variant {kwp} kWp primeraný profilu OM — pri samospotrebe "
+                     "{sam} % sa vyrobená energia využije takmer celá. Rozhodujúce predpoklady sú špecifický výnos "
+                     "{vyn} kWh/kWp (PVGIS) a stabilita odberového profilu.").format(
+               kwp=num(round(float(ctx.get("fve_kwp") or 0))), sam=dec(round(float(ctx.get("samosp_pct") or 0), 1)),
+               vyn=num(round(float(ctx.get("yield") or 0))))
+           + "</p><p>" + _("Citlivosť: medzi defenzívnym a optimistickým scenárom je rozpätie NPV {lo} – {hi} €. "
+                           "Pred realizáciou odporúčam overiť finálnu tarifu (faktúra), podmienky pripojenia u "
+                           "prevádzkovateľa distribučnej sústavy a presnú konštrukciu z cenovej ponuky.").format(
+               lo=num(S[1]["npv"]), hi=num(S[2]["npv"])) + "</p>")
+    recs = [(_("Odporúčanie k navrhnutému variantu"), ctx.get("recommendation_line", ""))]
+    if not ctx.get("tarif_real"):
+        recs.append((_("Doplniť faktúru za elektrinu"), _("Spresní silovú aj distribučnú cenu — posudok prejde z orientačného na presný.")))
+    if not ctx.get("bess_kwh"):
+        recs.append((_("Preveriť variant s batériou"), _("Batéria posúva výrobu do špičiek a zvyšuje samospotrebu — vhodné preveriť ako ďalší variant.")))
+    else:
+        recs.append((_("Preveriť zníženie RK"), _("Po inštalácii batérie klesá špičkové zaťaženie zo siete — možnosť znížiť rezervovanú kapacitu.")))
+    recs.append((_("Technická obhliadka OM"), _("Overenie strechy/plochy, statiky a bodu pripojenia pred finálnym projektom.")))
+    return exp, recs
 
 
 def _build_deterministic_narratives(ctx, S, full, prof, pm):

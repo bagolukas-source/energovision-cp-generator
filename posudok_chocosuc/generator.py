@@ -40,7 +40,11 @@ def _energy_flow_svg(ctx):
     grid_imp = n("grid_import_mwh"); exp = n("export_mwh")
     pv_load = n("pv_to_load_mwh") or max(0.0, pv - exp)
     bat_out = n("bat_to_load_mwh")
-    bat_chg = n("pv_to_bat_mwh") + n("grid_to_bat_mwh")
+    pv_bat = n("pv_to_bat_mwh"); grid_bat = n("grid_to_bat_mwh")
+    bat_chg = pv_bat + grid_bat
+    # šípka Sieť→Spotreba = len import do odberu; import do batérie má vlastnú šípku (predtým celý import)
+    grid_load = n("grid_to_load_mwh") or max(0.0, grid_imp - grid_bat)
+    pv_lost = n("loss_mwh")  # orezaná / nevyužitá výroba — inak výroba nesedí so súčtom tokov
     merch = n("merchant_throughput_mwh"); merch_cyc = n("merchant_cycles")  # merchant: obchod batérie do siete
     def f(x):
         return ("%0.0f" % round(x)).replace(",", " ")
@@ -66,7 +70,15 @@ def _energy_flow_svg(ctx):
     parts.append(f'<path d="M656,196 C600,250 560,270 540,286" fill="none" stroke="{AMBER}" stroke-width="5" marker-end="url(#ah-a)" opacity="0.9"/>')
     parts.append(f'<path d="M304,300 L396,300" fill="none" stroke="{BLUE}" stroke-width="5" marker-end="url(#ah-b)" opacity="0.9"/>')
     # kruhy
-    parts.append(circ(720,150,72,"#FEF3C7","#FCD34D",_("Solar PV"),f(pv),_("MWh generácia")))
+    if merch<=0.5 and bat_chg>0.5:  # tok batérie (site režim): FVE→batéria, sieť→batéria, batéria→spotreba
+        if pv_bat>0.5:
+            parts.append(f'<path d="M720,224 L720,290" fill="none" stroke="{AMBER}" stroke-width="4" marker-end="url(#ah-a)" opacity="0.9"/>')
+        if grid_bat>0.5:
+            parts.append(f'<path d="M262,365 C380,452 560,452 670,388" fill="none" stroke="{BLUE}" stroke-width="4" marker-end="url(#ah-b)" opacity="0.9"/>')
+        if bat_out>0.5:
+            parts.append(f'<path d="M664,350 C620,348 580,334 548,318" fill="none" stroke="{GREENM}" stroke-width="4.5" marker-end="url(#ah-g)" opacity="0.9"/>')
+    parts.append(circ(720,150,72,"#FEF3C7","#FCD34D",_("Solar PV"),f(pv),
+                      _("MWh · {x} nevyužité").format(x=f(pv_lost)) if pv_lost>0.5 else _("MWh generácia")))
     parts.append(circ(230,300,72,"#DBEAFE","#93C5FD",_("Sieť"),f(grid_imp),_("MWh · export {x}").format(x=f(exp))))
     parts.append(circ(470,300,72,"#F3E8FF","#D8B4FE",_("Spotreba"),f(load),_("MWh spotreba")))
     if merch>0.5:
@@ -76,7 +88,11 @@ def _energy_flow_svg(ctx):
     # labely tokov
     parts.append(lbl(475,52,f(exp),AMBER))
     parts.append(lbl(600,243,f(pv_load),AMBER))
-    parts.append(lbl(350,300,f(grid_imp),BLUE))
+    parts.append(lbl(350,300,f(grid_load),BLUE))
+    if merch<=0.5 and bat_chg>0.5:
+        if pv_bat>0.5: parts.append(lbl(764,258,f(pv_bat),AMBER))
+        if grid_bat>0.5: parts.append(lbl(470,432,f(grid_bat),BLUE))
+        if bat_out>0.5: parts.append(lbl(604,352,f(bat_out),GREENM))
     if merch>0.5:
         # Batéria v merchant režime: obojsmerné obchodovanie so sieťou (nabíja lacno / predáva draho)
         parts.append(f'<path d="M672,392 C520,452 380,452 286,352" fill="none" stroke="{GREENM}" '
@@ -205,7 +221,7 @@ def render_chocosuc_html(ctx: dict) -> str:
     pm=ctx.get("profile_metrics",{})
     recs=ctx.get("recommendations",[])
     summ_nar=ctx.get("ai_summary_html") or ctx.get("ai_commentary_html") or ""
-    exp_nar=ctx.get("ai_expert_html") or ctx.get("ai_commentary_html") or ""
+    exp_nar=ctx.get("ai_expert_html") or ctx.get("ai_commentary_html") or ctx.get("expert_fallback_html") or ""
     has_addr = ctx.get("om_address") and ctx.get("om_address")!="—"
     # tarif rows (s fallback flagom)
     tflag = "" if ctx.get("tarif_real") else " <span style='color:#B45309'>" + _("(predpoklad)") + "</span>"
@@ -407,7 +423,7 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
   <div class="kick">{_("4 — Ekonomické posúdenie")}</div><h2>{_("Cenové predpoklady")}{tflag}</h2>
   <table>{trow([_("Zložka ceny"),_("Hodnota"),_("Zdroj / komentár")],head=True,align=['l','r','l'])}
     {trow([_("Silová zložka"),f"{num(ctx['p_silova']*1000,2)} €/MWh",ctx.get('tarif_source','')])}
-    {trow([_("Variabilná distribúcia"),f"{num(ctx['p_dist_var']*1000,2)} €/MWh",_("VSD tarif")])}
+    {trow([_("Variabilná distribúcia"),f"{num(ctx['p_dist_var']*1000,2)} €/MWh",ctx.get('dist_tarif_source','')])}
     {trow([_("TPS + systémové služby"),f"{num((ctx['p_tps']+ctx['p_so'])*1000,2)} €/MWh",_("pásmo 2")])}
     {trow([_("Avoided cost samospotreby"),f"{num((ctx.get('p_avoided_eff') or ctx['p_avoided'])*1000,1)} €/MWh",_("plný retail (engine)")],em="em")}
     {trow([_("Pevná zložka distribúcie"),_("{x} €/kW/mes").format(x=num(ctx['p_dist_pevna'],2)),_("× RK {x} kW").format(x=num(ctx.get('om_rk_kw')))])}
@@ -429,11 +445,11 @@ ul.green li:before {{ content:"●"; color:#92D050; position:absolute; left:0; }
 <section class="newpage">
   <div class="kick">{_("5 — Skladba prínosu a riziková analýza")}</div><h2>{_("Skladba ročného prínosu (plný scenár)")}</h2>
   <table>{trow([_("Zdroj prínosu"),_("Vzorec"),_("Hodnota")],head=True,align=['l','r','r'])}
-    {"".join(trow([n,f,eur(v)]) for n,f,v in ctx.get('benefit_rows',[]))}
+    {"".join(trow([n,f,eur(v)]) for n,f,v in ctx.get('benefit_rows',[])+ctx.get('benefit_cost_rows',[]))}
     {trow([_("Ročná úspora SPOLU"),"",eur(full['save_total'])],em="em")}
     {trow([_("Daňový štít z odpisu (r. 1–6)"),_("6-r lineárny odpis × DPPO 21 %"),eur(full.get('annual_tax',0))])}
   </table>
-  {('<p class="note">' + _("⚡ Arbitráž batérie: <b>{x}</b> — {r}").format(x=eur(ctx.get("arbitrage_eur")), r=ctx.get("arbitrage_reason")) + '</p>') if ctx.get("arbitrage_shown") else ""}
+  {('<p class="note">' + (_("⚡ Nabíjanie batérie zo siete: <b>{x}</b> ročne — {r}") if ctx.get("benefit_cost_rows") else _("⚡ Arbitráž batérie: <b>{x}</b> — {r}")).format(x=eur(ctx.get("arbitrage_eur")), r=ctx.get("arbitrage_reason")) + '</p>') if ctx.get("arbitrage_shown") else ""}
   {gimg(g_ben, _("Skladba ročného prínosu."))}
   {gimg(g_vs, _("Ročný prínos podľa zdroja (value stream) — samospotreba, export, batéria, arbitráž, daňový štít."))}
   <h2 style="margin-top:8px;">{_("Citlivosť a riziko")}</h2>
