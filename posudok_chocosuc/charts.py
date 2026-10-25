@@ -4,6 +4,9 @@ import io, base64, math
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.ticker import ScalarFormatter
+from aom_i18n import _, get_lang
+from aom_i18n.fmt import num, months
 
 GREEN="#5E8E2A"; LIME="#92D050"; DARK="#1A1A1A"; GRAY="#6B7280"; GRID="#5B7CFA"; SITE="#B85DD8"; SOLAR="#FFC629"; AMBER="#F59E0B"
 plt.rcParams.update({"font.family":"DejaVu Sans","font.size":11,"axes.edgecolor":"#E3E8EE","axes.labelcolor":"#64748B",
@@ -14,7 +17,27 @@ def _clean(ax,yg=True):
     ax.grid(axis="x",visible=False)
     if not yg: ax.grid(axis="y",visible=False)
     ax.tick_params(length=0)
+class _CommaFmt(ScalarFormatter):
+    """Predvolené číselné ticky s desatinnou čiarkou (len de; sk/en ostávajú ako matplotlib)."""
+    def __call__(self,x,pos=None): return super().__call__(x,pos).replace(".",",")
+def _de_ticks(fig):
+    for ax in fig.axes:
+        for axis in (ax.xaxis,ax.yaxis):
+            if type(axis.get_major_formatter()) is ScalarFormatter: axis.set_major_formatter(_CommaFmt())
+def _d(v,d):
+    """f"{v:.{d}f}" — sk/en s bodkou (pôvodné sk správanie grafov), de s čiarkou."""
+    s=f"{v:.{d}f}"
+    return s.replace(".",",") if get_lang()=="de" else s
+# skratky mesiacov a dní v grafoch: sk s diakritikou (pôvodné), en/de podľa aom_i18n.fmt
+_MONTHS_CAL_SK=["Jan","Feb","Mar","Apr","Máj","Jún","Júl","Aug","Sep","Okt","Nov","Dec"]
+def _cal_months(): return list(_MONTHS_CAL_SK) if get_lang()=="sk" else months()
+_DAYS={"sk":["Po","Ut","St","Št","Pi","So","Ne"],"en":["Mon","Tue","Wed","Thu","Fri","Sat","Sun"],
+       "de":["Mo","Di","Mi","Do","Fr","Sa","So"]}
+def _days(): return _DAYS.get(get_lang(),_DAYS["sk"])
+# „Po" = pondelok aj „po" — krátke kľúče by kolidovali v spoločnom katalógu, preto slovník
+_BEFORE_AFTER={"sk":["Pred","Po"],"en":["Before","After"],"de":["Vorher","Nachher"]}
 def _b64(fig):
+    if get_lang()=="de": _de_ticks(fig)
     b=io.BytesIO(); fig.savefig(b,format="png",dpi=150,bbox_inches="tight",pad_inches=0.12); plt.close(fig)
     return "data:image/png;base64,"+base64.b64encode(b.getvalue()).decode()
 
@@ -39,8 +62,8 @@ def chart_daily(ctx):
     pv=[v*pvpeak for v in pvshape]
     fig,ax=plt.subplots(figsize=(9,3.0)); x=range(24)
     ax.fill_between(x,pv,color=LIME,alpha=0.32,lw=0,label=f"PV {ctx.get('fve_kwp',0):.0f} kWp",zorder=1)
-    ax.plot(x,wd,color="#1E293B",lw=2.6,label="Pracovný deň",zorder=3)
-    ax.plot(x,we,color="#94A3B8",lw=2.2,ls=(0,(4,3)),label="Víkend",zorder=2)
+    ax.plot(x,wd,color="#1E293B",lw=2.6,label=_("Pracovný deň"),zorder=3)
+    ax.plot(x,we,color="#94A3B8",lw=2.2,ls=(0,(4,3)),label=_("Víkend"),zorder=2)
     ax.set_xlim(0,23); ax.set_ylim(0,max(max(wd),max(pv) or 1)*1.15); ax.set_xticks(range(0,24,3))
     ax.set_xticklabels([f"{h}:00" for h in range(0,24,3)]); ax.set_ylabel("kW")
     ax.legend(frameon=False,fontsize=10,ncol=3,loc="upper right"); _clean(ax)
@@ -48,7 +71,7 @@ def chart_daily(ctx):
 
 def chart_monthly(ctx):
     m=ctx.get("monthly_mwh") or [ctx.get("year_mwh",0)/12]*12
-    lab=["Jan","Feb","Mar","Apr","Máj","Jún","Júl","Aug","Sep","Okt","Nov","Dec"]
+    lab=_cal_months()
     fig,ax=plt.subplots(figsize=(9,2.7)); bars=ax.bar(lab,m,color=GREEN,width=0.66,zorder=3)
     for b,v in zip(bars,m): ax.text(b.get_x()+b.get_width()/2,v+max(m)*0.02,f"{v:.0f}",ha="center",fontsize=9,color="#475569",weight="bold")
     ax.set_ylabel("MWh"); ax.set_ylim(0,max(m)*1.20); _clean(ax)
@@ -70,18 +93,18 @@ def chart_energy_balance(ctx):
         tx=x+(0.42 if al=="l" else -0.42); ha="left" if al=="l" else "right"; ym=yb+h/2
         bb=dict(boxstyle="round,pad=0.12",facecolor="white",edgecolor="none",alpha=1.0)
         ax.text(tx,ym+0.22,t,ha=ha,va="center",fontsize=10.5,color=DARK,weight="bold",bbox=bb,zorder=5)
-        ax.text(tx,ym-0.05,f"{val:,.0f} MWh".replace(","," "),ha=ha,va="center",fontsize=9,color="#64748B",bbox=bb,zorder=5)
+        ax.text(tx,ym-0.05,f"{num(val)} MWh",ha=ha,va="center",fontsize=9,color="#64748B",bbox=bb,zorder=5)
         ax.text(tx,ym-0.32,sub,ha=ha,va="center",fontsize=7.5,color="#9CA3AF",bbox=bb,zorder=5)
     h_self=self_*scale; h_gi=gi*scale; h_load=load*scale; h_exp=exp*scale
-    om_bot=y0; node(9.0,om_bot,h_load,SITE,"Odberné miesto",load,"spotreba","r"); om_top=om_bot+h_load
+    om_bot=y0; node(9.0,om_bot,h_load,SITE,_("Odberné miesto"),load,_("spotreba"),"r"); om_top=om_bot+h_load
     h_pv=h_self+h_exp; pv_top=y0+h_load; pv_bot=pv_top-h_pv
-    node(1.0,pv_bot,h_pv,SOLAR,"Fotovoltika",pv,f"výroba {pv:.0f} MWh","l")
-    gi_top=pv_bot-0.30; gi_bot=gi_top-h_gi; node(1.0,gi_bot,h_gi,GRID,"Sieť",gi,"import","l")
+    node(1.0,pv_bot,h_pv,SOLAR,_("Fotovoltika"),pv,_("výroba {v} MWh").format(v=f"{pv:.0f}"),"l")
+    gi_top=pv_bot-0.30; gi_bot=gi_top-h_gi; node(1.0,gi_bot,h_gi,GRID,_("Sieť"),gi,_("import"),"l")
     t=om_top; band(pv_top,pv_top-h_self,t,t-h_self,SOLAR,0.45); t-=h_self
     band(gi_top,gi_bot,t,t-h_gi,GRID,0.40)
     if h_exp>0.05:
         ax.add_patch(FancyBboxPatch((9.05,om_top-h_exp),0.32,max(h_exp,0.14),boxstyle="round,pad=0.02,rounding_size=0.04",facecolor=GRID,alpha=0.75,edgecolor="none"))
-        ax.text(9.0,om_top+0.22,f"export {exp:.0f} MWh",ha="right",va="bottom",fontsize=8,color="#64748B")
+        ax.text(9.0,om_top+0.22,_("export {v} MWh").format(v=f"{exp:.0f}"),ha="right",va="bottom",fontsize=8,color="#64748B")
         band(pv_bot+h_pv,pv_bot+h_self,om_top+0.02,om_top-h_exp+0.02,SOLAR,0.25)
     return _b64(fig)
 
@@ -93,10 +116,10 @@ def chart_scenarios(ctx):
     a1.set_xticks(x); a1.set_xticklabels(short,fontsize=9.5); a1.set_ylabel("NPV"); a1.set_ylim(min(0,min(npv)/1000*1.1),max(npv)/1000*1.20); a1.set_yticklabels([]); _clean(a1)
     a2b=a2.twinx()
     a2.plot(x,pb,"o-",color=AMBER,lw=2.6,ms=8,zorder=3); a2b.plot(x,irr,"s-",color=GREEN,lw=2.6,ms=7,zorder=3)
-    a2.set_xticks(x); a2.set_xticklabels(short,fontsize=9.5); a2.set_ylabel("Návratnosť (r)",color=AMBER); a2b.set_ylabel("IRR (%)",color=GREEN)
+    a2.set_xticks(x); a2.set_xticklabels(short,fontsize=9.5); a2.set_ylabel(_("Návratnosť (r)"),color=AMBER); a2b.set_ylabel("IRR (%)",color=GREEN)
     a2.grid(False); a2b.grid(False); a2.tick_params(length=0); a2b.tick_params(length=0); a2.spines["left"].set_visible(False); a2b.spines["right"].set_visible(False)
     bb=dict(boxstyle="round,pad=0.18",fc="white",ec="none",alpha=0.92)
-    for xi,v in zip(x,pb): a2.annotate((f"{v:.1f} r" if v==v else "nevráti sa"),(xi,v),textcoords="offset points",xytext=(0,-15),ha="center",fontsize=9,color="#D97706",weight="bold",bbox=bb,zorder=6)
+    for xi,v in zip(x,pb): a2.annotate((_("{v} r").format(v=_d(v,1)) if v==v else _("nevráti sa")),(xi,v),textcoords="offset points",xytext=(0,-15),ha="center",fontsize=9,color="#D97706",weight="bold",bbox=bb,zorder=6)
     for xi,v in zip(x,irr): a2b.annotate(f"{v:.0f} %",(xi,v),textcoords="offset points",xytext=(0,11),ha="center",fontsize=9,color=GREEN,weight="bold",bbox=bb,zorder=6)
     a2.set_ylim(0,max([v for v in pb if v==v] or [20])*1.55); a2b.set_ylim(0,max(irr)*1.45)
     return _b64(fig)
@@ -110,7 +133,7 @@ def chart_cumcf(ctx):
             sv=s["save_total"]*((1-0.005)**(y-1))*((1+0.025)**(y-1)); tax=s.get("annual_tax",0) if y<=6 else 0
             acc+=sv-s.get("opex",0.0)+tax; cf.append(acc)
         ax.plot(yrs,[c/1000 for c in cf],lw=2.8,color=cols[i%3],label=s["short"],zorder=3,solid_capstyle="round")
-    ax.axhline(0,color="#CBD5E1",lw=1.2); ax.set_xlabel("Rok prevádzky"); ax.set_ylabel("Kumulatívny CF (k€)")
+    ax.axhline(0,color="#CBD5E1",lw=1.2); ax.set_xlabel(_("Rok prevádzky")); ax.set_ylabel(_("Kumulatívny CF (k€)"))
     ax.legend(frameon=False,fontsize=10,loc="upper left"); ax.set_xlim(0,20); _clean(ax)
     return _b64(fig)
 
@@ -124,7 +147,7 @@ def chart_benefit(ctx):
         left+=val
     ax.set_xlim(0,max(left,1)*1.02); ax.set_ylim(-0.5,0.5); ax.axis("off")
     import matplotlib.patches as mp
-    handles=[mp.Patch(color=c) for _,v,c in parts if v>0]
+    handles=[mp.Patch(color=c) for _n,v,c in parts if v>0]
     labels=[f"{n} ({v/1000:.0f}k)" for n,v,c in parts if v>0]
     ax.legend(handles,labels,frameon=False,fontsize=9.5,ncol=len(labels) or 1,loc="upper center",bbox_to_anchor=(0.5,2.1),handlelength=1,columnspacing=1.2)
     return _b64(fig)
@@ -137,7 +160,7 @@ def chart_tornado(ctx):
         ax.text((hi/1000)+4,i,f"+{hi/1000:.0f}k",va="center",fontsize=8.5,color="#16A34A",weight="bold")
         ax.text((lo/1000)-4,i,f"{lo/1000:.0f}k",va="center",ha="right",fontsize=8.5,color="#DC2626",weight="bold")
     ax.set_yticks(list(y)); ax.set_yticklabels([d[0] for d in drivers],fontsize=10)
-    ax.axvline(0,color="#1E293B",lw=1.4); ax.set_xlabel("Zmena NPV oproti báze (k€)  ·  driver ±15 %")
+    ax.axvline(0,color="#1E293B",lw=1.4); ax.set_xlabel(_("Zmena NPV oproti báze (k€)  ·  driver ±15 %"))
     ax.invert_yaxis(); ax.grid(False); ax.tick_params(length=0); ax.set_xticklabels([])
     pad=max(abs(d[1]) for d in drivers)/1000*1.35; ax.set_xlim(-pad,pad)
     return _b64(fig)
@@ -147,10 +170,10 @@ def chart_montecarlo(ctx):
     fig,ax=plt.subplots(figsize=(9,2.7))
     n,bins,patches=ax.hist(s,bins=44,color="#C7E0C7",edgecolor="white",linewidth=0.4,zorder=2)
     ymax=max(n); ax.set_ylim(0,ymax*1.32); bb=dict(boxstyle="round,pad=0.2",fc="white",ec="none",alpha=0.95)
-    for q,c,lab in [(p10,"#EF6B6B","P10"),(p50,GREEN,"Medián"),(p90,"#F59E0B","P90")]:
+    for q,c,lab in [(p10,"#EF6B6B","P10"),(p50,GREEN,_("Medián")),(p90,"#F59E0B","P90")]:
         ax.axvline(q/1000,color=c,lw=2.6,zorder=3,ymax=0.80)
         ax.text(q/1000,ymax*1.14,f"{lab}: {q/1000:.0f} k€",ha="center",va="bottom",fontsize=9.5,color=c,weight="bold",bbox=bb,zorder=5)
-    ax.set_xlabel("NPV 20 r. (k€)"); ax.set_yticks([]); _clean(ax,yg=False)
+    ax.set_xlabel(_("NPV 20 r. (k€)")); ax.set_yticks([]); _clean(ax,yg=False)
     return _b64(fig)
 
 
@@ -160,14 +183,14 @@ def chart_solar_donut(ctx):
     direct=float(ctx.get("direct_to_load_pct") or 0); batt=float(ctx.get("charging_battery_pct") or 0)
     exp=float(ctx.get("exported_pct") or 0); curt=float(ctx.get("curtailed_pct") or 0)
     prod=float(ctx.get("fve_prod_mwh") or 0)
-    segs=[("Priamo do odberu",direct,SOLAR),("Cez batériu",batt,GREEN),
-          ("Export do siete",exp,GRID),("Nevyužité",curt,"#CBD5E1")]
+    segs=[(_("Priamo do odberu"),direct,SOLAR),(_("Cez batériu"),batt,GREEN),
+          (_("Export do siete"),exp,GRID),(_("Nevyužité"),curt,"#CBD5E1")]
     segs=[s for s in segs if s[1] and s[1]>0.05]
     fig,ax=plt.subplots(figsize=(5.6,3.2))
     ax.pie([s[1] for s in segs], colors=[s[2] for s in segs], startangle=90, counterclock=False,
            wedgeprops=dict(width=0.40, edgecolor="white", linewidth=2.2))
     ax.text(0,0.10,f"{prod:.0f}",ha="center",va="center",fontsize=21,weight="bold",color=DARK)
-    ax.text(0,-0.20,"MWh / rok",ha="center",va="center",fontsize=9.5,color=GRAY)
+    ax.text(0,-0.20,_("MWh / rok"),ha="center",va="center",fontsize=9.5,color=GRAY)
     ax.legend([f"{s[0]}  {s[1]:.0f} %" for s in segs], loc="center left",
               bbox_to_anchor=(1.02,0.5), frameon=False, fontsize=10.5, handlelength=1.0, labelspacing=0.7)
     ax.set(aspect="equal")
@@ -186,15 +209,15 @@ def chart_energy_flow(ctx):
     has_bat=(pv_bat+grid_bat+bat_load)>0.05
     fig,ax=plt.subplots(figsize=(7.6,3.6)); ax.set_xlim(0,10); ax.set_ylim(0,6.2); ax.axis("off")
     # uzly ako malé zaoblené obdĺžniky (x,y,farba,názov,hodnota)
-    N={"solar":(1.7,4.6,FVE_C,"Výroba FVE",pv),
-       "load":(5.0,1.5,LOAD_C,"Spotreba",load),
-       "grid":(1.7,1.5,GRID_C,"Sieť",grid_imp)}
-    if has_bat: N["bat"]=(8.3,4.6,BAT_C,"Batéria",pv_bat+grid_bat)
+    N={"solar":(1.7,4.6,FVE_C,_("Výroba FVE"),pv),
+       "load":(5.0,1.5,LOAD_C,_("Spotreba"),load),
+       "grid":(1.7,1.5,GRID_C,_("Sieť"),grid_imp)}
+    if has_bat: N["bat"]=(8.3,4.6,BAT_C,_("Batéria"),pv_bat+grid_bat)
     NW,NH=1.5,0.62
     def node(x,y,c,nm,val):
         ax.add_patch(FancyBboxPatch((x-NW/2,y-NH/2),NW,NH,boxstyle="round,pad=0.02,rounding_size=0.10",
             facecolor=c,edgecolor="none",zorder=3))
-        ax.text(x,y+0.02,f"{val:,.0f}".replace(","," "),ha="center",va="center",color="white",fontsize=12,weight="bold",zorder=4)
+        ax.text(x,y+0.02,num(val),ha="center",va="center",color="white",fontsize=12,weight="bold",zorder=4)
         ax.text(x,y-0.34,f"{nm}",ha="center",va="top",color=TXT,fontsize=9,zorder=4)
         ax.text(x+NW/2-0.08,y-0.16,"MWh",ha="right",va="center",color="white",fontsize=6.5,alpha=0.85,zorder=4)
     def flow(a,b,val,col,rad=0.0):
@@ -204,14 +227,14 @@ def chart_energy_flow(ctx):
             arrowstyle="-|>",mutation_scale=11,lw=0.8+min(4.2,val/45.0),color=col,alpha=0.5,
             shrinkA=30,shrinkB=30,zorder=2))
         mx,my=(x1+x2)/2,(y1+y2)/2
-        ax.text(mx,my,f"{val:,.0f}".replace(","," "),fontsize=8,color=col,weight="bold",ha="center",va="center",
+        ax.text(mx,my,num(val),fontsize=8,color=col,weight="bold",ha="center",va="center",
                 bbox=dict(boxstyle="round,pad=0.14",fc="white",ec="none",alpha=0.95),zorder=5)
     for _k,(_x,_y,_c,_nm,_v) in N.items():
         node(_x,_y,_c,_nm,_v)
     flow("solar","load",pv_load,FVE_C,-0.16)
     flow("grid","load",grid_load,GRID_C,0.10)
     if exp>0.05:
-        ax.annotate(f"Export {exp:,.0f} MWh".replace(","," "),(N["solar"][0]+NW/2,N["solar"][1]+0.45),
+        ax.annotate(_("Export {v} MWh").format(v=num(exp)),(N["solar"][0]+NW/2,N["solar"][1]+0.45),
             fontsize=8,color=TXT,ha="left",va="bottom")
     if has_bat:
         flow("solar","bat",pv_bat,FVE_C,-0.12)
@@ -240,16 +263,16 @@ def chart_soc_profile(ctx):
     cr=cap*0.6
     chg=[min(c,cr) for c in chg]; dis=[min(d,cr) for d in dis]
     eff=0.95; soc=cap*0.20; socs=[0.0]*24
-    for _ in range(2):
+    for _it in range(2):
         socs=[0.0]*24
         for h in range(24):
             soc=min(cap,max(0.0, soc+chg[h]*eff-dis[h])); socs[h]=soc/cap*100
     fig,ax=plt.subplots(figsize=(9,3.0)); x=list(range(24))
-    ax.bar(x,chg,color=GREEN,width=0.7,alpha=0.55,zorder=2,label="Nabíjanie (z PV)")
-    ax.bar(x,[-d for d in dis],color=GRID,width=0.7,alpha=0.55,zorder=2,label="Vybíjanie (špička)")
+    ax.bar(x,chg,color=GREEN,width=0.7,alpha=0.55,zorder=2,label=_("Nabíjanie (z PV)"))
+    ax.bar(x,[-d for d in dis],color=GRID,width=0.7,alpha=0.55,zorder=2,label=_("Vybíjanie (špička)"))
     mx=max(max(chg),max(dis),1.0)
-    ax.set_ylim(-mx*1.3,mx*1.3); ax.set_ylabel("Výkon kW"); ax.axhline(0,color="#CBD5E1",lw=1)
-    ax2=ax.twinx(); ax2.plot(x,socs,color="#102D4C",lw=2.8,zorder=4,label="Stav nabitia (SoC)")
+    ax.set_ylim(-mx*1.3,mx*1.3); ax.set_ylabel(_("Výkon kW")); ax.axhline(0,color="#CBD5E1",lw=1)
+    ax2=ax.twinx(); ax2.plot(x,socs,color="#102D4C",lw=2.8,zorder=4,label=_("Stav nabitia (SoC)"))
     ax2.fill_between(x,socs,color="#102D4C",alpha=0.06,zorder=1)
     ax2.set_ylim(0,105); ax2.set_ylabel("SoC %",color="#102D4C"); ax2.grid(False)
     ax2.tick_params(axis="y",colors="#102D4C")
@@ -273,10 +296,10 @@ def chart_waterfall(ctx):
     pv_tax=sum(tax/((1+DISC)**y) for y in range(1,ODPIS+1))
     pv_res=(capex_gross*RESID)/((1+DISC)**LIFE)
     pv_ops=(npv+net)-pv_tax-pv_res   # diskontované prevádzkové úspory po OPEX (reziduum → bilancia sedí)
-    steps=[("Investícia",-capex_gross,"#EF6B6B")]
-    if dot>1: steps.append(("Dotácia",dot,LIME))
-    steps += [("Prevádzkové\núspory (20 r.)",pv_ops,GREEN),("Daňový štít\n(r. 1–6)",pv_tax,AMBER),
-              ("Zostatková\nhodnota",pv_res,"#A7D08C")]
+    steps=[(_("Investícia"),-capex_gross,"#EF6B6B")]
+    if dot>1: steps.append((_("Dotácia"),dot,LIME))
+    steps += [(_("Prevádzkové\núspory (20 r.)"),pv_ops,GREEN),(_("Daňový štít\n(r. 1–6)"),pv_tax,AMBER),
+              (_("Zostatková\nhodnota"),pv_res,"#A7D08C")]
     fig,ax=plt.subplots(figsize=(9,3.4)); acc=0.0; xs=[]
     for i,(nm,val,col) in enumerate(steps):
         bot=acc if val>=0 else acc+val
@@ -288,10 +311,10 @@ def chart_waterfall(ctx):
     ax.bar(len(steps),npv/1000,color="#102D4C",width=0.66,zorder=3)
     ax.text(len(steps),npv/1000+(abs(npv)/1000*0.04+2),f"{npv/1000:+.0f}k",ha="center",va="bottom",
             fontsize=9,color="#102D4C",weight="bold")
-    xs.append("NPV 20 r.")
+    xs.append(_("NPV 20 r."))
     ax.axhline(0,color="#1E293B",lw=1.2)
     ax.set_xticks(range(len(xs))); ax.set_xticklabels(xs,fontsize=8.2)
-    ax.set_ylabel("k€ (diskontované)"); _clean(ax)
+    ax.set_ylabel(_("k€ (diskontované)")); _clean(ax)
     return _b64(fig)
 
 
@@ -301,7 +324,7 @@ def chart_capex_split(ctx):
     total=float(ctx.get("capex_total_eur") or (pv+bess)); other=max(0.0,total-pv-bess)
     net=float(ctx.get("net_capex_eur") or total); dot=max(0.0,total-net)
     fig,ax=plt.subplots(figsize=(9,2.2))
-    segs=[("FVE",pv,SOLAR),("Batéria",bess,GREEN),("Ostatné / inžiniering",other,"#94A3B8")]
+    segs=[(_("FVE"),pv,SOLAR),(_("Batéria"),bess,GREEN),(_("Ostatné / inžiniering"),other,"#94A3B8")]
     segs=[s for s in segs if s[1]>1]
     left=0
     for nm,val,c in segs:
@@ -313,11 +336,11 @@ def chart_capex_split(ctx):
     ax.text(net/1000/2,0,f"{net/1000:.0f}k",ha="center",va="center",color="white",fontsize=9,weight="bold")
     if dot>1:
         ax.barh(0,dot/1000,left=net/1000,color=LIME,height=0.5,zorder=3,alpha=0.85,hatch="///",edgecolor="white")
-        ax.text((net+dot/2)/1000,0,f"dotácia −{dot/1000:.0f}k",ha="center",va="center",color="#1A1A1A",fontsize=8.2,weight="bold")
-    ax.set_yticks([0,1]); ax.set_yticklabels(["Čistá investícia","Hrubá investícia"],fontsize=10)  # BUG 4 FIX: "Po dotácii" mätúce keď dotácia=0
-    ax.set_xlabel("tis. € (bez DPH)"); ax.set_xlim(0,total/1000*1.08); _clean(ax,yg=False); ax.grid(False)
+        ax.text((net+dot/2)/1000,0,_("dotácia −{v}k").format(v=f"{dot/1000:.0f}"),ha="center",va="center",color="#1A1A1A",fontsize=8.2,weight="bold")
+    ax.set_yticks([0,1]); ax.set_yticklabels([_("Čistá investícia"),_("Hrubá investícia")],fontsize=10)  # BUG 4 FIX: "Po dotácii" mätúce keď dotácia=0
+    ax.set_xlabel(_("tis. € (bez DPH)")); ax.set_xlim(0,total/1000*1.08); _clean(ax,yg=False); ax.grid(False)
     import matplotlib.patches as mp
-    hs=[mp.Patch(color=c) for _,v,c in segs]; ls=[f"{n} ({v/1000:.0f}k)" for n,v,c in segs]
+    hs=[mp.Patch(color=c) for _n,v,c in segs]; ls=[f"{n} ({v/1000:.0f}k)" for n,v,c in segs]
     ax.legend(hs,ls,frameon=False,fontsize=9,ncol=len(segs) or 1,loc="upper center",bbox_to_anchor=(0.5,1.28))
     return _b64(fig)
 
@@ -331,16 +354,18 @@ def chart_value_stream(ctx):
     vals=[p[1]/1000 for p in parts]
     bars=ax.barh(y,vals,color=[p[2] for p in parts],height=0.62,zorder=3)
     for i,(b,(n,v,c)) in enumerate(zip(bars,parts)):
-        ax.text(b.get_width()+max(vals)*0.015,i,f"{v/1000:.1f}k €",va="center",fontsize=9.5,color="#374151",weight="bold")
+        ax.text(b.get_width()+max(vals)*0.015,i,f"{_d(v/1000,1)}k €",va="center",fontsize=9.5,color="#374151",weight="bold")
     ax.set_yticks(list(y)); ax.set_yticklabels([p[0] for p in parts],fontsize=10)
-    ax.set_xlim(0,max(vals)*1.18); ax.set_xlabel("€ / rok (plný scenár)"); _clean(ax,yg=False); ax.grid(False)
+    ax.set_xlim(0,max(vals)*1.18); ax.set_xlabel(_("€ / rok (plný scenár)")); _clean(ax,yg=False); ax.grid(False)
     tot=sum(p[1] for p in parts)
-    ax.set_title(f"Ročný prínos spolu {tot/1000:.0f} tis. €",fontsize=10,color="#374151",loc="left",pad=6)
+    ax.set_title(_("Ročný prínos spolu {v} tis. €").format(v=f"{tot/1000:.0f}"),fontsize=10,color="#374151",loc="left",pad=6)
     return _b64(fig)
 
 
 # ============ Orkestra vlna 2 — monitoring-style vizuály ============
-_MONTHS_SK=["Apr","Máj","Jún","Júl","Aug","Sep","Okt","Nov","Dec","Jan","Feb","Mar"]
+def _months_apr():
+    """Apr..Mar (sezónny rad energetických metrík)."""
+    m=_cal_months(); return m[3:]+m[:3]
 
 def chart_energy_metrics(ctx):
     """Orkestra-style trio: energetická nezávislosť / solar utilizácia / batéria utilizácia (mesačné plochy + priemer)."""
@@ -355,9 +380,9 @@ def chart_energy_metrics(ctx):
     sm=sum(season)/12
     def monthly(avg, amp=1.0, lo=0, hi=100):
         return [max(lo,min(hi, avg*(1+amp*(s/sm-1)))) for s in season]
-    rows=[("Energetická nezávislosť",monthly(indep,1.0),"#5B7CFA",indep),
-          ("Solar utilizácia",monthly(solar_u,0.10,hi=100),"#FFC629",solar_u),
-          ("Batéria utilizácia",monthly(batt_u,0.18),"#2EA84F",batt_u)]
+    rows=[(_("Energetická nezávislosť"),monthly(indep,1.0),"#5B7CFA",indep),
+          (_("Solar utilizácia"),monthly(solar_u,0.10,hi=100),"#FFC629",solar_u),
+          (_("Batéria utilizácia"),monthly(batt_u,0.18),"#2EA84F",batt_u)]
     fig,axs=plt.subplots(3,1,figsize=(9,4.3),sharex=True)
     for ax,(nm,vals,col,avg) in zip(axs,rows):
         ax.fill_between(range(12),vals,color=col,alpha=0.85,zorder=2,lw=0)
@@ -366,7 +391,7 @@ def chart_energy_metrics(ctx):
         for sp in ["top","right","left"]: ax.spines[sp].set_visible(False)
         ax.set_title(nm,fontsize=10,weight="bold",color="#1A1A1A",loc="left",pad=2)
         ax.text(11.2,52,f"Ø {avg:.0f} %",fontsize=11,weight="bold",color=col,va="center")
-    axs[-1].set_xticks(range(12)); axs[-1].set_xticklabels(_MONTHS_SK,fontsize=8.5)
+    axs[-1].set_xticks(range(12)); axs[-1].set_xticklabels(_months_apr(),fontsize=8.5)
     fig.tight_layout(h_pad=1.4)
     return _b64(fig)
 
@@ -416,14 +441,14 @@ def chart_interval_week(ctx):
     """Orkestra-style interval activity: stacked týždeň — batéria, solar, net load pred/po."""
     SOL,LB,BAT,LA,SOC=_week_dispatch(ctx); x=list(range(168))
     fig,ax=plt.subplots(figsize=(9,3.4))
-    ax.bar(x,SOL,width=1.0,color="#FFE08A",zorder=2,label="Solárna výroba")
-    ax.bar(x,[max(0,v) for v in BAT],width=1.0,color="#2EA84F",zorder=3,label="Batéria — nabíjanie")
-    ax.bar(x,[min(0,v) for v in BAT],width=1.0,color="#2EA84F",alpha=0.6,zorder=3,label="Batéria — vybíjanie")
-    ax.fill_between(x,LA,color="#AFC7F7",alpha=0.6,zorder=1,label="Net load po (zo siete)")
-    ax.plot(x,LB,color="#3B5BDB",lw=1.0,ls=(0,(2,2)),zorder=4,label="Net load pred")
+    ax.bar(x,SOL,width=1.0,color="#FFE08A",zorder=2,label=_("Solárna výroba"))
+    ax.bar(x,[max(0,v) for v in BAT],width=1.0,color="#2EA84F",zorder=3,label=_("Batéria — nabíjanie"))
+    ax.bar(x,[min(0,v) for v in BAT],width=1.0,color="#2EA84F",alpha=0.6,zorder=3,label=_("Batéria — vybíjanie"))
+    ax.fill_between(x,LA,color="#AFC7F7",alpha=0.6,zorder=1,label=_("Net load po (zo siete)"))
+    ax.plot(x,LB,color="#3B5BDB",lw=1.0,ls=(0,(2,2)),zorder=4,label=_("Net load pred"))
     ax.axhline(0,color="#CBD5E1",lw=1)
     ax.set_xlim(0,167); ax.set_xticks([i*24+12 for i in range(7)])
-    ax.set_xticklabels(["Po","Ut","St","Št","Pi","So","Ne"],fontsize=9)
+    ax.set_xticklabels(_days(),fontsize=9)
     ax.set_ylabel("kW"); _clean(ax)
     ax.legend(frameon=False,fontsize=8.2,ncol=5,loc="upper center",bbox_to_anchor=(0.5,1.17),columnspacing=1.0,handlelength=1.2)
     return _b64(fig)
@@ -441,14 +466,14 @@ def chart_daily_activity(ctx):
     lds=sum(ldsh) or 1; load_before=[daily_load*s/lds for s in ldsh]
     x=list(range(24)); has_bat=g("bess_kwh")>0
     fig,ax=plt.subplots(figsize=(9,3.2))
-    ax.fill_between(x,load_before,color="#C7D7F7",alpha=0.7,zorder=1,label="Odber pred")
-    ax.fill_between(x,[max(0,v) for v in la],color="#3B5BDB",alpha=0.45,zorder=2,label="Odber po (zo siete)")
-    ax.fill_between(x,sol,color="#FFC629",alpha=0.55,zorder=2,label="Solárna výroba")
+    ax.fill_between(x,load_before,color="#C7D7F7",alpha=0.7,zorder=1,label=_("Odber pred"))
+    ax.fill_between(x,[max(0,v) for v in la],color="#3B5BDB",alpha=0.45,zorder=2,label=_("Odber po (zo siete)"))
+    ax.fill_between(x,sol,color="#FFC629",alpha=0.55,zorder=2,label=_("Solárna výroba"))
     ax.set_ylabel("kW"); ax.set_xlim(0,23); ax.set_xticks(range(0,24,3)); ax.set_xticklabels([f"{h}:00" for h in range(0,24,3)])
     _clean(ax)
     handles=[]
     if has_bat:
-        ax2=ax.twinx(); ax2.plot(x,soc,color="#2EA84F",lw=2.8,zorder=5,label="SoC batérie")
+        ax2=ax.twinx(); ax2.plot(x,soc,color="#2EA84F",lw=2.8,zorder=5,label=_("SoC batérie"))
         ax2.set_ylim(0,105); ax2.set_ylabel("SoC %",color="#2EA84F"); ax2.grid(False); ax2.tick_params(axis="y",colors="#2EA84F")
         h2,l2=ax2.get_legend_handles_labels()
     else:
@@ -464,11 +489,11 @@ def chart_demand_mrk(ctx):
     g=lambda k: float(ctx.get(k) or 0)
     mrk=g("om_mrk_kw"); rk=g("om_rk_kw") or (mrk*0.9 if mrk else 0)
     fig,ax=plt.subplots(figsize=(9,3.0))
-    ax.fill_between(x,[max(0,v) for v in LB],color="#C7D2DE",alpha=0.8,zorder=1,label="Odber pred (net load)")
-    ax.fill_between(x,[max(0,v) for v in LA],color="#3B5BDB",alpha=0.45,zorder=2,label="Odber po (s batériou)")
-    if mrk>0: ax.axhline(mrk,color="#DC2626",lw=1.6,ls=(0,(6,3)),zorder=4,label=f"MRK {mrk:.0f} kW")
-    if rk>0 and abs(rk-mrk)>1: ax.axhline(rk,color="#F59E0B",lw=1.5,ls=(0,(4,3)),zorder=4,label=f"RK {rk:.0f} kW")
-    ax.set_xlim(0,167); ax.set_xticks([i*24+12 for i in range(7)]); ax.set_xticklabels(["Po","Ut","St","Št","Pi","So","Ne"],fontsize=9)
+    ax.fill_between(x,[max(0,v) for v in LB],color="#C7D2DE",alpha=0.8,zorder=1,label=_("Odber pred (net load)"))
+    ax.fill_between(x,[max(0,v) for v in LA],color="#3B5BDB",alpha=0.45,zorder=2,label=_("Odber po (s batériou)"))
+    if mrk>0: ax.axhline(mrk,color="#DC2626",lw=1.6,ls=(0,(6,3)),zorder=4,label=_("MRK {v} kW").format(v=f"{mrk:.0f}"))
+    if rk>0 and abs(rk-mrk)>1: ax.axhline(rk,color="#F59E0B",lw=1.5,ls=(0,(4,3)),zorder=4,label=_("RK {v} kW").format(v=f"{rk:.0f}"))
+    ax.set_xlim(0,167); ax.set_xticks([i*24+12 for i in range(7)]); ax.set_xticklabels(_days(),fontsize=9)
     ax.set_ylabel("kW"); _clean(ax)
     top=max(max(LB),mrk or 0)*1.12 or 1; ax.set_ylim(0,top)
     ax.legend(frameon=False,fontsize=8.4,ncol=4,loc="upper center",bbox_to_anchor=(0.5,1.16),columnspacing=1.0,handlelength=1.4)
@@ -484,11 +509,11 @@ def chart_emissions_intensity(ctx):
     fig,ax=plt.subplots(figsize=(4.4,3.2))
     bars=ax.bar([0,1],[before,after],color=["#C7CDD4","#5B7CFA"],width=0.5,zorder=3)
     for b,v in zip(bars,[before,after]):
-        ax.text(b.get_x()+b.get_width()/2,v+0.008,f"{v:.2f}",ha="center",fontsize=11,weight="bold",color="#374151")
-    ax.set_xticks([0,1]); ax.set_xticklabels(["Pred","Po"],fontsize=10)
+        ax.text(b.get_x()+b.get_width()/2,v+0.008,_d(v,2),ha="center",fontsize=11,weight="bold",color="#374151")
+    ax.set_xticks([0,1]); ax.set_xticklabels(_BEFORE_AFTER.get(get_lang(),_BEFORE_AFTER["sk"]),fontsize=10)
     ax.set_ylim(0,before*1.25); ax.set_yticks([]); _clean(ax,yg=False); ax.grid(False)
     for sp in ["left"]: ax.spines[sp].set_visible(False)
     ax.text(1.62,before*0.55,f"−{red:.0f} %",fontsize=20,weight="bold",color="#5B7CFA",ha="center")
-    ax.text(1.62,before*0.40,"zmena",fontsize=9.5,color="#5B7CFA",ha="center")
+    ax.text(1.62,before*0.40,_("zmena"),fontsize=9.5,color="#5B7CFA",ha="center")
     ax.set_xlim(-0.5,2.3)
     return _b64(fig)
