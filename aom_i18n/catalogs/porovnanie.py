@@ -1,4 +1,4 @@
-"""Porovnávací súhrn ponúk (posudok_orkestra/templates/porovnanie.html + render_porovnanie, fallback texty).
+"""Porovnávací súhrn ponúk (posudok_orkestra/templates/porovnanie.html, grafy charts.py, render_porovnanie, fallback).
 „Návratnosť" je v common.py."""
 EN = {
     # hlavička, meta
@@ -44,6 +44,9 @@ EN = {
     "Návratnosť — od najrýchlejšej po najpomalšiu": "Payback — from fastest to slowest",
     "Zelená = odporúčaná ponuka (najvyššie NPV), šedá = dominovaná ponuka.":
         "Green = recommended offer (highest NPV), grey = dominated offer.",
+    "CAPEX (vstup)": "CAPEX (investment)",
+    "NPV 20 r (zisk)": "NPV 20 yrs (profit)",
+    "Návratnosť (roky) — kratšia je lepšia": "Payback (years) — shorter is better",
     # hodnotenie ponúk
     "Hodnotenie jednotlivých ponúk": "Assessment of each offer",
     "dominovaná ponuka": "dominated offer",
@@ -170,6 +173,9 @@ DE = {
     "Návratnosť — od najrýchlejšej po najpomalšiu": "Amortisation — von der schnellsten zur langsamsten",
     "Zelená = odporúčaná ponuka (najvyššie NPV), šedá = dominovaná ponuka.":
         "Grün = empfohlenes Angebot (höchster NPV), Grau = dominiertes Angebot.",
+    "CAPEX (vstup)": "CAPEX (Investition)",
+    "NPV 20 r (zisk)": "NPV 20 J. (Gewinn)",
+    "Návratnosť (roky) — kratšia je lepšia": "Amortisation (Jahre) — kürzer ist besser",
     # hodnotenie ponúk
     "Hodnotenie jednotlivých ponúk": "Bewertung der einzelnen Angebote",
     "dominovaná ponuka": "dominiertes Angebot",

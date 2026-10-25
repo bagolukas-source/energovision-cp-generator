@@ -149,6 +149,39 @@ def test_porovnanie_jazyk_zo_zakaznika_a_sk_default():
     assert seen["ai_input"]["ponuky"][0]["payback_y"] == 7.9
 
 
+def _chart_texts(case, lang=None):
+    """Texty matplotlib grafov porovnania (osi, legendy, popisky stĺpcov) — v SVG sú to glyfy, nie text."""
+    import matplotlib.text
+    from posudok_orkestra import charts as C
+    seen, orig = [], C._save_svg
+
+    def rec(fig):
+        fig.canvas.draw()
+        seen.append([t.get_text() for t in fig.findobj(matplotlib.text.Text) if t.get_text().strip()])
+        return orig(fig)
+    C._save_svg = rec
+    try:
+        run(case, lang=lang)
+    finally:
+        C._save_svg = orig
+    return seen
+
+
+def test_porovnanie_grafy_sk_bez_zmeny_en_de_bez_slovenciny():
+    from aom_i18n_fixtures import slovak_leftovers
+    capex_npv, payback = _chart_texts(_B)
+    assert {"CAPEX (vstup)", "NPV 20 r (zisk)"} <= set(capex_npv)
+    assert {"8.4 r", "9.1 r", "nevráti sa"} <= set(payback)  # SK: desatinná bodka ako predtým
+    assert "Návratnosť (roky) — kratšia je lepšia" in payback
+    for lang, pb in (("en", {"8.4 yrs", "9.1 yrs", "no payback", "CAPEX (investment)"}),
+                     ("de", {"8,4 J.", "9,1 J.", "keine Amortisation", "CAPEX (Investition)"})):
+        for case in (_A, _B):
+            texts = _chart_texts(case, lang)
+            assert len(texts) == 2
+            assert not slovak_leftovers(" ".join(sum(texts, []))), (lang, texts)
+        assert pb <= set(sum(_chart_texts(_B, lang), []))
+
+
 def test_porovnanie_glosar_v_ai_prompte_len_pre_en_de(monkeypatch):
     calls = []
 

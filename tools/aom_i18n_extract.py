@@ -16,6 +16,7 @@ I18N_FILES = [
     "posudok_chocosuc/generator_docx.py",
     "posudok_orkestra/templates/porovnanie.html",
     "posudok_orkestra/generator.py",
+    "posudok_orkestra/charts.py",
     "analyza_om_v2.py",
 ]
 
