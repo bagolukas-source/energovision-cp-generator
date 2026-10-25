@@ -5,6 +5,8 @@ Na inom projekte vrati iny popis."""
 from __future__ import annotations
 import statistics as st
 
+from aom_i18n import _
+
 
 def _r(x, n=2):
     try: return round(float(x), n)
@@ -39,32 +41,32 @@ def classify_profile(hourly=None, monthly_mwh=None, avg_kw=None, peak_kw=None, p
     rezim = None
     if load_factor is not None:
         if load_factor >= 0.6 and (weekend_ratio is None or weekend_ratio >= 0.75):
-            rezim = "nepretrzita prevadzka (24/7)".replace("nepretrzita","nepretržitá")
+            rezim = _("nepretržitá prevádzka (24/7)")
         elif load_factor >= 0.45:
-            rezim = "viaczmenná prevádzka" if (day_share is None or day_share < 0.62) else "prevažne denná prevádzka s vysokým využitím"
+            rezim = _("viaczmenná prevádzka") if (day_share is None or day_share < 0.62) else _("prevažne denná prevádzka s vysokým využitím")
         elif load_factor >= 0.30:
-            rezim = "jednozmenná/denná prevádzka s poklesom mimo pracovného času"
+            rezim = _("jednozmenná/denná prevádzka s poklesom mimo pracovného času")
         else:
-            rezim = "nepravidelný profil s výraznými výkyvmi odberu"
+            rezim = _("nepravidelný profil s výraznými výkyvmi odberu")
         if weekend_ratio is not None and weekend_ratio < 0.6:
-            rezim += ", znížená prevádzka cez víkendy"
+            rezim += _(", znížená prevádzka cez víkendy")
     sezonnost = None
     if seasonality_cv is not None:
-        sezonnost = ("minimálna sezónnosť, rovnomerná spotreba počas roka" if seasonality_cv < 0.12
-                     else "mierna sezónnosť" if seasonality_cv < 0.25 else "výrazná sezónnosť")
+        sezonnost = (_("minimálna sezónnosť, rovnomerná spotreba počas roka") if seasonality_cv < 0.12
+                     else _("mierna sezónnosť") if seasonality_cv < 0.25 else _("výrazná sezónnosť"))
     spicka = None
     if peak_hour is not None:
-        spicka = ("ranný špic" if 6 <= peak_hour <= 10 else "poludňajší špic" if 11 <= peak_hour <= 15
-                  else "večerný špic" if 16 <= peak_hour <= 21 else "nočný špic")
+        spicka = (_("ranný špic") if 6 <= peak_hour <= 10 else _("poludňajší špic") if 11 <= peak_hour <= 15
+                  else _("večerný špic") if 16 <= peak_hour <= 21 else _("nočný špic"))
     fve_fit = None
     if day_share is not None:
-        fve_fit = ("vysoká vhodnosť pre FVE — odber sa kryje s dennou výrobou" if day_share >= 0.5
-                   else "FVE vhodná najmä s batériou — časť odberu je mimo slnečných hodín")
+        fve_fit = (_("vysoká vhodnosť pre FVE — odber sa kryje s dennou výrobou") if day_share >= 0.5
+                   else _("FVE vhodná najmä s batériou — časť odberu je mimo slnečných hodín"))
     elif load_factor is not None:
-        fve_fit = ("dobrá vhodnosť pre FVE pri dennom využití" if load_factor >= 0.35
-                   else "odporúčaná batéria na presun výroby do odberu")
+        fve_fit = (_("dobrá vhodnosť pre FVE pri dennom využití") if load_factor >= 0.35
+                   else _("odporúčaná batéria na presun výroby do odberu"))
     return {"metrics": metrics,
-            "rezim": rezim or "profil odberu (z dostupných dát)",
-            "sezonnost": sezonnost or "sezónnosť nehodnotená",
+            "rezim": rezim or _("profil odberu (z dostupných dát)"),
+            "sezonnost": sezonnost or _("sezónnosť nehodnotená"),
             "spicka": spicka, "fve_fit": fve_fit,
             "data_mode": "hourly" if hourly else "aggregate"}
