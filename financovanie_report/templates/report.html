@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="sk">
+<html lang="{{ lang() }}">
 <head>
 <meta charset="UTF-8"/>
 <link rel="stylesheet" href="styles.css"/>
@@ -14,23 +14,23 @@
     <div class="cover-logo">
       {% if logo_b64 %}<img src="data:image/png;base64,{{ logo_b64 }}" alt="Energovision"/>{% else %}<strong style="font-size:16pt;color:#0F172A;">energovision</strong>{% endif %}
     </div>
-    <div class="cover-badge">ANALÝZA FINANCOVANIA</div>
+    <div class="cover-badge">{{ _("ANALÝZA FINANCOVANIA") }}</div>
   </div>
 
   <div class="cover-body">
-    <div class="cover-eyebrow">Technicko-ekonomická analýza · Modely financovania</div>
-    <h1 class="cover-title">Financovanie fotovoltickej elektrárne</h1>
+    <div class="cover-eyebrow">{{ _("Technicko-ekonomická analýza · Modely financovania") }}</div>
+    <h1 class="cover-title">{{ _("Financovanie fotovoltickej elektrárne") }}</h1>
     {% if client_name %}<div class="cover-client">{{ client_name }}</div>{% endif %}
-    <div class="cover-tagline">Moderné energetické riešenia, ktoré hľadáte.</div>
+    <div class="cover-tagline">{{ _("Moderné energetické riešenia, ktoré hľadáte.") }}</div>
 
     <div class="cover-meta">
-      {% if pv_kwp %}<div class="cover-meta-item"><label>Výkon FVE</label><span>{{ pv_kwp|num(1) }} kWp</span></div>{% endif %}
-      {% if capex %}<div class="cover-meta-item"><label>Investícia (CAPEX)</label><span>{{ capex|eur }}</span></div>{% endif %}
-      {% if bess_kwh and bess_kwh > 0 %}<div class="cover-meta-item"><label>Batéria (BESS)</label><span>{{ bess_kwh|num(0) }} kWh / {{ bess_kw|num(0) }} kW</span></div>{% endif %}
-      {% if annual_prod_mwh %}<div class="cover-meta-item"><label>Výroba / rok</label><span>{{ (annual_prod_mwh * 1000)|num(0) }} kWh</span></div>{% endif %}
-      {% if tarif_buy %}<div class="cover-meta-item"><label>Cena elektriny</label><span>{{ "%.3f"|format(tarif_buy) }} €/kWh</span></div>{% endif %}
-      {% if samosp_pct %}<div class="cover-meta-item"><label>Samospotreba</label><span>{{ samosp_pct }} %</span></div>{% endif %}
-      <div class="cover-meta-item"><label>Dátum</label><span>{{ report_date }}</span></div>
+      {% if pv_kwp %}<div class="cover-meta-item"><label>{{ _("Výkon FVE") }}</label><span>{{ pv_kwp|num(1) }} kWp</span></div>{% endif %}
+      {% if capex %}<div class="cover-meta-item"><label>{{ _("Investícia (CAPEX)") }}</label><span>{{ capex|eur }}</span></div>{% endif %}
+      {% if bess_kwh and bess_kwh > 0 %}<div class="cover-meta-item"><label>{{ _("Batéria (BESS)") }}</label><span>{{ bess_kwh|num(0) }} kWh / {{ bess_kw|num(0) }} kW</span></div>{% endif %}
+      {% if annual_prod_mwh %}<div class="cover-meta-item"><label>{{ _("Výroba / rok") }}</label><span>{{ (annual_prod_mwh * 1000)|num(0) }} kWh</span></div>{% endif %}
+      {% if tarif_buy %}<div class="cover-meta-item"><label>{{ _("Cena elektriny") }}</label><span>{{ tarif_buy|price3 }} €/kWh</span></div>{% endif %}
+      {% if samosp_pct %}<div class="cover-meta-item"><label>{{ _("Samospotreba") }}</label><span>{{ samosp_pct }} %</span></div>{% endif %}
+      <div class="cover-meta-item"><label>{{ _("Dátum") }}</label><span>{{ report_date }}</span></div>
     </div>
   </div>
 
@@ -43,36 +43,36 @@
 {# ═══════════════════════════ PAGE 2: POROVNANIE MODELOV ═══════════════════════════ #}
 <div class="page">
   <div class="section-header">
-    <div class="section-title">Porovnanie modelov financovania</div>
-    <div class="section-meta">Scenár: {{ scenario|default('Realistický') }} · CAPEX: {{ capex|eur }}</div>
+    <div class="section-title">{{ _("Porovnanie modelov financovania") }}</div>
+    <div class="section-meta">{{ _("Scenár: {s} · CAPEX: {c}").format(s=scenario|default(_("Realistický")), c=capex|eur) }}</div>
   </div>
 
   <div class="intro-box">
-    Tento report porovnáva spôsoby financovania rovnakej zostavy{% if pv_kwp %} ({{ pv_kwp|num(0) }} kWp FVE{% if bess_kwh and bess_kwh > 0 %} + batéria {{ bess_kwh|num(0) }} kWh{% endif %}{% if capex %}, investícia {{ capex|eur }}{% endif %}){% endif %} — vlastná kúpa, SIH zelený úver, lízing, PPA a dotácia. Pri každej možnosti vidíte počiatočný výdaj, návratnosť, kedy bude FVE 100 % vaša a celkový 25-ročný prínos. Čísla vychádzajú z reálnej spotreby a cien odberného miesta (scenár {{ scenario|default('Realistický') }}). Na konci nájdete súhrnnú tabuľku a vyhodnotenie.
+    {{ _("Tento report porovnáva spôsoby financovania rovnakej zostavy") }}{% if pv_kwp %} ({{ _("{kwp} kWp FVE").format(kwp=pv_kwp|num(0)) }}{% if bess_kwh and bess_kwh > 0 %} + {{ _("batéria {kwh} kWh").format(kwh=bess_kwh|num(0)) }}{% endif %}{% if capex %}, {{ _("investícia {c}").format(c=capex|eur) }}{% endif %}){% endif %} {{ _("— vlastná kúpa, SIH zelený úver, lízing, PPA a dotácia. Pri každej možnosti vidíte počiatočný výdaj, návratnosť, kedy bude FVE 100 % vaša a celkový 25-ročný prínos. Čísla vychádzajú z reálnej spotreby a cien odberného miesta (scenár {s}). Na konci nájdete súhrnnú tabuľku a vyhodnotenie.").format(s=scenario|default(_("Realistický"))) }}
   </div>
 
   {% if best_key %}
   <div class="recommendation">
-    <strong>Odporúčaný model: {{ best_label }}</strong> — bez jediného eura z vrecka<br/>
-    Elektráreň postaví financujúci partner a vy ju splácate z úspory, ktorú sama vyrobí — od prvého mesiaca ste v pluse.
-    Vlastníctvo máte od začiatku a váš kapitál medzitým ostáva pracovať vo firme.
-    {% if best_npv %}Čistá súčasná hodnota dosahuje <strong>{{ best_npv|eur }}</strong>.{% endif %}
-    {% if npv_winner and npv_winner.key != best_key %}<br/><span style="color:#475569;">Najvyššiu NPV ({{ npv_winner.npv|eur }}) síce dosahuje {{ npv_winner.label }}{% if npv_winner.key in ['ppa10','ppa15'] %}, no viaže na dlhoročnú PPA zmluvu bez vlastníctva{% elif npv_winner.key == 'vl' %}, no vyžaduje plný vstupný kapitál naraz{% elif npv_winner.key == 'dot' %}, no s 2-ročným čakaním a administratívou{% endif %} — preto odporúčame vyváženejší model vyššie.</span>{% endif %}
+    <strong>{{ _("Odporúčaný model: {m}").format(m=best_label) }}</strong> {{ _("— bez jediného eura z vrecka") }}<br/>
+    {{ _("Elektráreň postaví financujúci partner a vy ju splácate z úspory, ktorú sama vyrobí — od prvého mesiaca ste v pluse.") }}
+    {{ _("Vlastníctvo máte od začiatku a váš kapitál medzitým ostáva pracovať vo firme.") }}
+    {% if best_npv %}{{ (_("Čistá súčasná hodnota dosahuje <strong>{npv}</strong>.")|safe).format(npv=best_npv|eur) }}{% endif %}
+    {% if npv_winner and npv_winner.key != best_key %}<br/><span style="color:#475569;">{{ _("Najvyššiu NPV ({npv}) síce dosahuje {m}").format(npv=npv_winner.npv|eur, m=npv_winner.label) }}{% if npv_winner.key in ['ppa10','ppa15'] %}{{ _(", no viaže na dlhoročnú PPA zmluvu bez vlastníctva") }}{% elif npv_winner.key == 'vl' %}{{ _(", no vyžaduje plný vstupný kapitál naraz") }}{% elif npv_winner.key == 'dot' %}{{ _(", no s 2-ročným čakaním a administratívou") }}{% endif %}{{ _(" — preto odporúčame vyváženejší model vyššie.") }}</span>{% endif %}
   </div>
 
   <div class="guide">
-    <div class="guide-title">Ktorá voľba je pre vás?</div>
+    <div class="guide-title">{{ _("Ktorá voľba je pre vás?") }}</div>
     <table class="guide-table"><tr>
-      <td class="guide-cell" style="border-left:3px solid #3b82f6;"><div class="guide-tag" style="color:#3b82f6;">Máte voľný kapitál</div><div class="guide-opt">Vlastná kúpa</div><div class="guide-desc">Najvyšší celkový zisk a vlastníctvo od prvého dňa. Žiadny dlh, žiadne úroky.</div></td>
-      <td class="guide-cell" style="border-left:3px solid #10b981;"><div class="guide-tag" style="color:#10b981;">Chcete si nechať hotovosť</div><div class="guide-opt">SIH zelený úver</div><div class="guide-desc">0 € z vrecka, vlastníctvo od začiatku, splátka sa platí z úspor. Kapitál ostáva vo firme.</div></td>
-      <td class="guide-cell" style="border-left:3px solid #6366f1;"><div class="guide-tag" style="color:#6366f1;">Nechcete vklad ani záväzok</div><div class="guide-opt">PPA / ENERY</div><div class="guide-desc">Elektráreň postaví a vlastní ENERY, vy platíte len nižšiu cenu za prúd. Po zmluve prejde zadarmo na vás.</div></td>
+      <td class="guide-cell" style="border-left:3px solid #3b82f6;"><div class="guide-tag" style="color:#3b82f6;">{{ _("Máte voľný kapitál") }}</div><div class="guide-opt">{{ _("Vlastná kúpa") }}</div><div class="guide-desc">{{ _("Najvyšší celkový zisk a vlastníctvo od prvého dňa. Žiadny dlh, žiadne úroky.") }}</div></td>
+      <td class="guide-cell" style="border-left:3px solid #10b981;"><div class="guide-tag" style="color:#10b981;">{{ _("Chcete si nechať hotovosť") }}</div><div class="guide-opt">{{ _("SIH zelený úver") }}</div><div class="guide-desc">{{ _("0 € z vrecka, vlastníctvo od začiatku, splátka sa platí z úspor. Kapitál ostáva vo firme.") }}</div></td>
+      <td class="guide-cell" style="border-left:3px solid #6366f1;"><div class="guide-tag" style="color:#6366f1;">{{ _("Nechcete vklad ani záväzok") }}</div><div class="guide-opt">PPA / ENERY</div><div class="guide-desc">{{ _("Elektráreň postaví a vlastní ENERY, vy platíte len nižšiu cenu za prúd. Po zmluve prejde zadarmo na vás.") }}</div></td>
     </tr></table>
     <table class="vprops"><tr>
-      <td>🔒 <strong>Fixná cena energie 20+ rokov</strong> — hedge proti rastu cien.</td>
-      <td>🧾 <strong>Daňová výhoda</strong> — odpis aj splátky znižujú základ dane.</td>
+      <td>🔒 <strong>{{ _("Fixná cena energie 20+ rokov") }}</strong> {{ _("— hedge proti rastu cien.") }}</td>
+      <td>🧾 <strong>{{ _("Daňová výhoda") }}</strong> {{ _("— odpis aj splátky znižujú základ dane.") }}</td>
     </tr><tr>
-      <td>🌱 <strong>ESG / CSRD</strong> — doložiteľné zníženie CO₂.</td>
-      <td>🤝 <strong>Jeden partner</strong> — projekt, realizácia, revízie aj servis.</td>
+      <td>🌱 <strong>ESG / CSRD</strong> {{ _("— doložiteľné zníženie CO₂.") }}</td>
+      <td>🤝 <strong>{{ _("Jeden partner") }}</strong> {{ _("— projekt, realizácia, revízie aj servis.") }}</td>
     </tr></table>
   </div>
   {% endif %}
@@ -81,12 +81,12 @@
   <table class="variant-table">
     <thead>
       <tr>
-        <th>Model</th>
+        <th>{{ _("Model") }}</th>
         <th>IRR</th>
-        <th>NPV (20 r)</th>
-        <th>Návratnosť</th>
-        <th>Kumulatív 20r</th>
-        <th>Počiatočný výdaj</th>
+        <th>{{ _("NPV (20 r)") }}</th>
+        <th>{{ _("Návratnosť") }}</th>
+        <th>{{ _("Kumulatív 20r") }}</th>
+        <th>{{ _("Počiatočný výdaj") }}</th>
       </tr>
     </thead>
     <tbody>
@@ -104,7 +104,7 @@
           {% endif %}
         </td>
         <td><strong style="color:{% if v.npv and v.npv > 0 %}#15803d{% else %}#dc2626{% endif %}">{{ v.npv|eur }}</strong></td>
-        <td>{% if v.payback and v.payback > 0 %}{{ v.payback|num(1) }} r{% else %}<strong style="color:#15803d;">okamžite</strong>{% endif %}</td>
+        <td>{% if v.payback and v.payback > 0 %}{{ _("{n} r").format(n=v.payback|num(1)) }}{% else %}<strong style="color:#15803d;">{{ _("okamžite") }}</strong>{% endif %}</td>
         <td><strong>{{ v.cum_milestones[3]|eur }}</strong></td>
         <td>{{ v.initial_investment|eur }}</td>
       </tr>
@@ -119,12 +119,12 @@
 {% if cumulative_svg %}
 <div class="page">
   <div class="section-header">
-    <div class="section-title">Kumulatívny tok a čo z neho vyplýva</div>
-    <div class="section-meta">20-ročný horizont · Scenár: {{ scenario|default('Realistický') }}</div>
+    <div class="section-title">{{ _("Kumulatívny tok a čo z neho vyplýva") }}</div>
+    <div class="section-meta">{{ _("20-ročný horizont · Scenár: {s}").format(s=scenario|default(_("Realistický"))) }}</div>
   </div>
 
   <div class="chart-container">
-    <div class="chart-title">Kumulatívny cashflow za 20 rokov (€)</div>
+    <div class="chart-title">{{ _("Kumulatívny cashflow za 20 rokov (€)") }}</div>
     {{ cumulative_svg|safe }}
     {% if variants %}
     <div class="legend">
@@ -139,47 +139,47 @@
   </div>
 
   {% if variants %}
-  <div class="insight-title">Čo z grafu vyplýva</div>
+  <div class="insight-title">{{ _("Čo z grafu vyplýva") }}</div>
   <table class="kpi-row"><tr>
     <td class="kpi-box kpi-hi">
-      <div class="kpi-box-label">Najvyššia hodnota</div>
+      <div class="kpi-box-label">{{ _("Najvyššia hodnota") }}</div>
       <div class="kpi-box-value">{{ npv_winner.npv|eur }}</div>
-      <div class="kpi-box-sub">{{ npv_winner.label }} · NPV 20 r</div>
+      <div class="kpi-box-sub">{{ npv_winner.label }} · {{ _("NPV 20 r") }}</div>
     </td>
     <td class="kpi-box">
-      <div class="kpi-box-label">Najrýchlejšie v pluse</div>
-      <div class="kpi-box-value">{% if fastest_be and fastest_be.breakeven_year and fastest_be.breakeven_year > 1 %}rok {{ fastest_be.breakeven_year }}{% else %}od začiatku{% endif %}</div>
+      <div class="kpi-box-label">{{ _("Najrýchlejšie v pluse") }}</div>
+      <div class="kpi-box-value">{% if fastest_be and fastest_be.breakeven_year and fastest_be.breakeven_year > 1 %}{{ _("rok {n}").format(n=fastest_be.breakeven_year) }}{% else %}{{ _("od začiatku") }}{% endif %}</div>
       <div class="kpi-box-sub">{{ fastest_be.label if fastest_be else '—' }}</div>
     </td>
     <td class="kpi-box">
-      <div class="kpi-box-label">Najnižší vstup</div>
+      <div class="kpi-box-label">{{ _("Najnižší vstup") }}</div>
       <div class="kpi-box-value">{{ (lowest_upfront.initial_investment if lowest_upfront else 0)|eur }}</div>
       <div class="kpi-box-sub">{{ lowest_upfront.label if lowest_upfront else '—' }}</div>
     </td>
     <td class="kpi-box kpi-reco">
-      <div class="kpi-box-label">Naše odporúčanie</div>
+      <div class="kpi-box-label">{{ _("Naše odporúčanie") }}</div>
       <div class="kpi-box-value">{{ best_label }}</div>
       <div class="kpi-box-sub">{% if best_npv %}NPV {{ best_npv|eur }}{% endif %}</div>
     </td>
   </tr></table>
 
-  <div class="insight-title">Bod zvratu — odkedy je model v pluse</div>
+  <div class="insight-title">{{ _("Bod zvratu — odkedy je model v pluse") }}</div>
   <table class="be-table"><tr>
     {% for v in variants %}
     <td class="be-cell">
       <span class="be-chip" style="background:{{ v.color }}1f;color:{{ v.color }};border:1px solid {{ v.color }}55;">{{ v.label }}</span>
-      <span class="be-year">{% if v.breakeven_year and v.breakeven_year > 1 %}rok {{ v.breakeven_year }}{% elif v.breakeven_year %}od začiatku{% else %}nad 20 r{% endif %}</span>
+      <span class="be-year">{% if v.breakeven_year and v.breakeven_year > 1 %}{{ _("rok {n}").format(n=v.breakeven_year) }}{% elif v.breakeven_year %}{{ _("od začiatku") }}{% else %}{{ _("nad 20 r") }}{% endif %}</span>
     </td>
     {% if loop.index % 4 == 0 and not loop.last %}</tr><tr>{% endif %}
     {% endfor %}
   </tr></table>
 
   <div class="howto">
-    <strong>Ako čítať graf:</strong> každá krivka je kumulatívny čistý tok daného modelu. Kde pretne prerušovanú čiaru „bod zvratu (0 €)", odvtedy vám elektráreň zarába. Čím vyššie krivka končí v roku 20, tým väčší je celkový prínos. Modely bez vstupného vkladu (PPA, SIH) sú v pluse prakticky od začiatku; vlastná kúpa nabieha pomalšie, no končí najvyššie.
+    <strong>{{ _("Ako čítať graf:") }}</strong> {{ _("každá krivka je kumulatívny čistý tok daného modelu. Kde pretne prerušovanú čiaru „bod zvratu (0 €)\", odvtedy vám elektráreň zarába. Čím vyššie krivka končí v roku 20, tým väčší je celkový prínos. Modely bez vstupného vkladu (PPA, SIH) sú v pluse prakticky od začiatku; vlastná kúpa nabieha pomalšie, no končí najvyššie.")|safe }}
   </div>
 
   {% if annual_prod_mwh %}
-  <div class="esg-strip"><strong>ESG / CSRD:</strong> elektráreň vyrobí za 20 rokov približne {{ (annual_prod_mwh * 20 * 0.92)|num(0) }} MWh čistej energie — doložiteľné zníženie uhlíkovej stopy a nezávislosť od rastu cien elektriny.</div>
+  <div class="esg-strip"><strong>ESG / CSRD:</strong> {{ _("elektráreň vyrobí za 20 rokov približne {mwh} MWh čistej energie — doložiteľné zníženie uhlíkovej stopy a nezávislosť od rastu cien elektriny.").format(mwh=(annual_prod_mwh * 20 * 0.92)|num(0)) }}</div>
   {% endif %}
   {% endif %}
 </div>
@@ -192,34 +192,34 @@
   {# Colored header #}
   <div class="variant-header" style="background:{{ v.color }};">
     <div class="variant-header-left">
-      <div class="variant-header-eyebrow">Model {{ loop.index }} z {{ variants|length }} · Detailná analýza · {{ scenario|default('Realistický') }} scenár</div>
+      <div class="variant-header-eyebrow">{{ _("Model {i} z {n} · Detailná analýza · {s} scenár").format(i=loop.index, n=variants|length, s=scenario|default(_("Realistický"))) }}</div>
       <div class="variant-header-title">{{ v.label }}</div>
     </div>
     <div class="variant-header-right">
       {% if client_name %}<div>{{ client_name }}</div>{% endif %}
-      <div>{% if pv_kwp %}{{ pv_kwp|num(0) }} kWp{% if bess_kwh and bess_kwh > 0 %} + {{ bess_kwh|num(0) }} kWh batéria{% endif %} · {% endif %}{{ capex|eur }}</div>
+      <div>{% if pv_kwp %}{{ pv_kwp|num(0) }} kWp{% if bess_kwh and bess_kwh > 0 %} + {{ _("{kwh} kWh batéria").format(kwh=bess_kwh|num(0)) }}{% endif %} · {% endif %}{{ capex|eur }}</div>
     </div>
   </div>
 
   {# 4 KPI cards #}
   <div class="kpi4-grid">
     <div class="kpi4-card {% if v.npv and v.npv > 0 %}kpi-good{% else %}kpi-bad{% endif %}">
-      <div class="kpi4-label">Čistá súčasná hodnota (NPV)</div>
+      <div class="kpi4-label">{{ _("Čistá súčasná hodnota (NPV)") }}</div>
       <div class="kpi4-value">{{ v.npv|eur }}</div>
-      <div class="kpi4-sub">diskontovaný prínos 20r</div>
+      <div class="kpi4-sub">{{ _("diskontovaný prínos 20r") }}</div>
     </div>
     <div class="kpi4-card {% if v.total_cum_25 and v.total_cum_25 > 0 %}kpi-good{% else %}kpi-bad{% endif %}">
-      <div class="kpi4-label">Celkový zisk 20 rokov</div>
+      <div class="kpi4-label">{{ _("Celkový zisk 20 rokov") }}</div>
       <div class="kpi4-value">{{ v.cum_milestones[3]|eur }}</div>
-      <div class="kpi4-sub">kumulatívny cashflow</div>
+      <div class="kpi4-sub">{{ _("kumulatívny cashflow") }}</div>
     </div>
     <div class="kpi4-card kpi-good">
-      <div class="kpi4-label">{% if v.key == "ppa10" or v.key == "ppa15" %}Prevod FVE (zadarmo){% else %}Bod zvratu{% endif %}</div>
-      <div class="kpi4-value">{% if v.key == "ppa10" %}po 10 rokoch{% elif v.key == "ppa15" %}po 15 rokoch{% elif v.payback and v.payback > 0 %}rok {{ v.payback|int + 2026 }}{% else %}okamžite{% endif %}</div>
-      <div class="kpi4-sub">{% if v.key == "ppa10" or v.key == "ppa15" %}bezplatný prevod po zmluve{% else %}investícia splatená{% endif %}</div>
+      <div class="kpi4-label">{% if v.key == "ppa10" or v.key == "ppa15" %}{{ _("Prevod FVE (zadarmo)") }}{% else %}{{ _("Bod zvratu") }}{% endif %}</div>
+      <div class="kpi4-value">{% if v.key == "ppa10" %}{{ _("po 10 rokoch") }}{% elif v.key == "ppa15" %}{{ _("po 15 rokoch") }}{% elif v.payback and v.payback > 0 %}{{ _("rok {n}").format(n=v.payback|int + 2026) }}{% else %}{{ _("okamžite") }}{% endif %}</div>
+      <div class="kpi4-sub">{% if v.key == "ppa10" or v.key == "ppa15" %}{{ _("bezplatný prevod po zmluve") }}{% else %}{{ _("investícia splatená") }}{% endif %}</div>
     </div>
     <div class="kpi4-card {% if v.irr_pct is none or v.irr_pct == none or v.irr_pct > 8 %}kpi-good{% else %}kpi-neutral{% endif %}">
-      <div class="kpi4-label">Vnútorná výnosnosť (IRR)</div>
+      <div class="kpi4-label">{{ _("Vnútorná výnosnosť (IRR)") }}</div>
       <div class="kpi4-value">
         {% if v.irr_pct is none or v.irr_pct == none %}
           <span class="na-text">N/A</span>
@@ -227,7 +227,7 @@
           {{ v.irr_pct|pct }}
         {% endif %}
       </div>
-      <div class="kpi4-sub">{% if v.irr_pct is none or v.irr_pct == none %}N/A — nulová vstupná investícia{% else %}ročná výnosnosť projektu{% endif %}</div>
+      <div class="kpi4-sub">{% if v.irr_pct is none or v.irr_pct == none %}{{ _("N/A — nulová vstupná investícia") }}{% else %}{{ _("ročná výnosnosť projektu") }}{% endif %}</div>
     </div>
   </div>
 
@@ -236,15 +236,15 @@
     <tr>
       <td class="col-left">
         {# Cashflow table #}
-        <div class="section-label" style="border-left:3px solid {{ v.color }};">Rok po roku — cashflow ({{ scenario|default('realistický') }} scenár)</div>
+        <div class="section-label" style="border-left:3px solid {{ v.color }};">{{ _("Rok po roku — cashflow ({s} scenár)").format(s=scenario|default(_("realistický"))) }}</div>
         <table class="cf-table">
           <thead>
             <tr style="background:{{ v.color }};color:#fff;">
-              <th class="cf-th">Rok</th>
-              <th class="cf-th">Prínos FVE</th>
-              {% if v.has_payment_col %}<th class="cf-th">Splátka</th>{% endif %}
-              <th class="cf-th">Čistý CF</th>
-              <th class="cf-th">Kumulatív</th>
+              <th class="cf-th">{{ _("Rok") }}</th>
+              <th class="cf-th">{{ _("Prínos FVE") }}</th>
+              {% if v.has_payment_col %}<th class="cf-th">{{ _("Splátka") }}</th>{% endif %}
+              <th class="cf-th">{{ _("Čistý CF") }}</th>
+              <th class="cf-th">{{ _("Kumulatív") }}</th>
             </tr>
           </thead>
           <tbody>
@@ -255,7 +255,7 @@
             </tr>
             {% endif %}
             <tr class="{% if row.is_waiting %}cf-waiting{% elif row.event_label %}cf-event-after{% elif loop.index is odd %}cf-odd{% else %}cf-even{% endif %}">
-              <td class="cf-td cf-year">{% if row.y == 1 %}1 ½r{% else %}{{ row.y }}{% endif %}{% if row.is_waiting %} ⏳{% endif %}</td>
+              <td class="cf-td cf-year">{% if row.y == 1 %}{{ _("1 ½r") }}{% else %}{{ row.y }}{% endif %}{% if row.is_waiting %} ⏳{% endif %}</td>
               <td class="cf-td">{% if row.is_waiting %}–{% else %}{{ row.gross|eur }}{% endif %}</td>
               {% if v.has_payment_col %}
               <td class="cf-td {% if row.payment > 0 %}cf-red{% else %}cf-grey{% endif %}">
@@ -273,7 +273,7 @@
           </tbody>
           <tfoot>
             <tr class="cf-total">
-              <td class="cf-td cf-year">Spolu</td>
+              <td class="cf-td cf-year">{{ _("Spolu") }}</td>
               <td class="cf-td">{{ v.total_gross|eur }}</td>
               {% if v.has_payment_col %}
               <td class="cf-td cf-red">−{{ v.total_payment|eur }}</td>
@@ -294,14 +294,14 @@
 
       <td class="col-right">
         {# Mini chart #}
-        <div class="section-label" style="border-left:3px solid {{ v.color }};">Kumulatívny vývoj (20 rokov)</div>
+        <div class="section-label" style="border-left:3px solid {{ v.color }};">{{ _("Kumulatívny vývoj (20 rokov)") }}</div>
         <div class="mini-chart-wrap">
           {{ v.mini_svg|safe }}
         </div>
 
         {# Parametre & podmienky #}
         <div class="params-box">
-          <div class="params-title">Parametre &amp; podmienky</div>
+          <div class="params-title">{{ _("Parametre & podmienky") }}</div>
           {% for item in v['items'] %}
           <div class="params-item" style="border-left:2px solid {{ v.color }};">{{ item }}</div>
           {% endfor %}
@@ -310,13 +310,13 @@
         {# Výhody / Nevýhody #}
         <div class="pros-cons-grid">
           <div class="pros-box">
-            <div class="pros-title">✓ Výhody</div>
+            <div class="pros-title">✓ {{ _("Výhody") }}</div>
             {% for p in v.pros %}
             <div class="pros-item">✓ {{ p }}</div>
             {% endfor %}
           </div>
           <div class="cons-box">
-            <div class="cons-title">✗ Nevýhody</div>
+            <div class="cons-title">✗ {{ _("Nevýhody") }}</div>
             {% for c in v.cons %}
             <div class="cons-item">✗ {{ c }}</div>
             {% endfor %}
@@ -338,38 +338,38 @@
 {% if variants %}
 <div class="page">
   <div class="section-header">
-    <div class="section-title">Záverečné porovnanie — kumulatívny tok (20 rokov)</div>
-    <div class="section-meta">Kumulatív v míľnikových rokoch · Scenár: {{ scenario|default('Realistický') }}</div>
+    <div class="section-title">{{ _("Záverečné porovnanie — kumulatívny tok (20 rokov)") }}</div>
+    <div class="section-meta">{{ _("Kumulatív v míľnikových rokoch · Scenár: {s}").format(s=scenario|default(_("Realistický"))) }}</div>
   </div>
 
   <table class="variant-table final-matrix">
     <thead>
       <tr>
-        <th>Rok / ukazovateľ</th>
+        <th>{{ _("Rok / ukazovateľ") }}</th>
         {% for v in variants %}<th style="text-align:right;">{{ v.label }}</th>{% endfor %}
       </tr>
     </thead>
     <tbody>
       <tr>
-        <td><strong>Vklad dnes</strong></td>
+        <td><strong>{{ _("Vklad dnes") }}</strong></td>
         {% for v in variants %}<td style="text-align:right;">{% if v.initial_investment and v.initial_investment > 0 %}{{ v.initial_investment|eur }}{% else %}0 €{% endif %}</td>{% endfor %}
       </tr>
       {% for yr in final_years %}
       <tr {% if yr in [10, 15, 20] %}class="best-row"{% endif %}>
-        <td>{% if yr == 1 %}1. rok{% else %}Rok {{ yr }}{% endif %}</td>
+        <td>{% if yr == 1 %}{{ _("1. rok") }}{% else %}{{ _("Rok {n}").format(n=yr) }}{% endif %}</td>
         {% for v in variants %}{% set c = v.cum_by_year[yr] %}<td style="text-align:right;color:{% if c is not none and c >= 0 %}#15803d{% else %}#b91c1c{% endif %};{% if yr in [10, 15, 20] %}font-weight:700;{% endif %}">{{ c|eur }}</td>{% endfor %}
       </tr>
       {% endfor %}
       <tr style="border-top:2px solid #cbd5e1;">
-        <td><strong>NPV 20r</strong></td>
+        <td><strong>{{ _("NPV 20r") }}</strong></td>
         {% for v in variants %}<td style="text-align:right;"><strong>{{ v.npv|eur }}</strong></td>{% endfor %}
       </tr>
     </tbody>
   </table>
-  <div class="milestone-note">Kumulatívny čistý tok = súčet ročných prínosov mínus splátky, vrátane vstupného vkladu. Roky 10/15/20/25 sú zvýraznené. Zelená = v pluse, červená = ešte v mínuse.</div>
+  <div class="milestone-note">{{ _("Kumulatívny čistý tok = súčet ročných prínosov mínus splátky, vrátane vstupného vkladu. Roky 10/15/20/25 sú zvýraznené. Zelená = v pluse, červená = ešte v mínuse.") }}</div>
 
   {% if conclusion_lines %}
-  <div class="ai-head">Záver — odporúčanie Energovision</div>
+  <div class="ai-head">{{ _("Záver — odporúčanie Energovision") }}</div>
   <div class="ai-box">
     {% for line in conclusion_lines %}<p>{{ line }}</p>{% endfor %}
     {% if ai_text %}{% for para in ai_text.split('\n\n') %}{% if para.strip() %}<p>{{ para.strip() }}</p>{% endif %}{% endfor %}{% endif %}
@@ -377,9 +377,9 @@
   {% endif %}
 
   <div class="report-footer">
-    <strong>Energovision s.r.o.</strong> · IČO: 53036280 · Tomášikova 19, Bratislava<br/>
+    <strong>Energovision s.r.o.</strong> · {{ _("IČO") }}: 53036280 · Tomášikova 19, Bratislava<br/>
     obchod@energovision.sk · +421 948 302 137 · www.energovision.sk<br/>
-    <span style="color:#94a3b8;">Správa vygenerovaná {{ report_date }} · Hodnoty sú orientačné a slúžia pre rozhodovaciu podporu.</span>
+    <span style="color:#94a3b8;">{{ _("Správa vygenerovaná {d} · Hodnoty sú orientačné a slúžia pre rozhodovaciu podporu.").format(d=report_date) }}</span>
   </div>
 </div>
 {% endif %}
