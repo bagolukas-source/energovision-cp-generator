@@ -1,0 +1,256 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+@page { size:A4; margin:18mm 16mm 16mm 16mm;
+  @top-left { content: element(hdr); }
+  @bottom-center { content: "Energovision, s.r.o.  ·  IČO 53 036 280  ·  www.energovision.sk  ·  strana " counter(page) " / " counter(pages); font-family:Arial; font-size:7pt; color:#9CA3AF; } }
+#hdr { position: running(hdr); font-family:Arial; font-size:7.5pt; color:#9CA3AF; }
+#hdr b { color:#5E8E2A; }
+* { box-sizing:border-box; }
+body { font-family:Arial, sans-serif; color:#1A1A1A; font-size:9.3pt; line-height:1.5; margin:0; }
+h1 { font-size:17pt; margin:0 0 8px; } h2 { font-size:13pt; margin:2px 0 8px; page-break-after:avoid; }
+.kick { font-size:7.6pt; font-weight:bold; letter-spacing:2.6px; color:#5E8E2A; text-transform:uppercase; margin:0 0 4px; page-break-after:avoid; }
+.sub { color:#6B7280; font-size:9pt; margin:0 0 12px; }
+.cover-pg { page-break-after:always; } .newpage { page-break-before:always; }
+section { page-break-inside:auto; }
+table { width:100%; border-collapse:collapse; margin:6px 0 10px; font-size:8.7pt; page-break-inside:avoid; }
+th { background:#F0F7F0; color:#374151; padding:6px 9px; border-bottom:1.5px solid #C7E0C7; font-size:8pt; }
+td { padding:5px 9px; border-bottom:1px solid #EEF1F4; vertical-align:top; }
+td,th { text-align:left; } .cl { text-align:left; } .cr { text-align:right; }
+tr.em td { background:#F0F7F0; font-weight:bold; }
+.kpis { display:flex; gap:10px; margin:10px 0 6px; page-break-inside:avoid; }
+.kpi { flex:1; background:#F8FAFB; border-radius:8px; padding:11px 13px; border-left:3px solid #92D050; }
+.kpi .l { font-size:7pt; letter-spacing:1.4px; color:#9CA3AF; text-transform:uppercase; font-weight:bold; }
+.kpi .v { font-size:15pt; font-weight:bold; color:#1A1A1A; margin-top:2px; }
+.kpi .n { font-size:7.4pt; color:#6B7280; font-style:italic; }
+.banner { background:#F0F7F0; border-left:4px solid #5E8E2A; padding:12px 16px; border-radius:6px; margin:8px 0 12px; page-break-inside:avoid; }
+.banner .t { font-size:7.6pt; font-weight:bold; letter-spacing:2px; color:#5E8E2A; text-transform:uppercase; }
+.banner .b { font-size:11pt; font-weight:bold; margin-top:3px; }
+.hero { background:#EFF6E8; border-radius:10px; padding:14px 18px; margin:12px 0; display:flex; align-items:center; justify-content:space-between; page-break-inside:avoid; }
+.hero .big { font-size:23pt; font-weight:bold; color:#5E8E2A; } .hero .lbl { font-size:8.6pt; color:#475569; max-width:46%; }
+.benefits { display:flex; gap:9px; margin:12px 0 4px; page-break-inside:avoid; }
+.bcard { flex:1; background:#FFF; border:1px solid #E8EDF2; border-top:3px solid #92D050; border-radius:8px; padding:10px 11px; }
+.bcard .h { font-weight:bold; font-size:9.2pt; margin-bottom:2px; } .bcard .d { font-size:7.8pt; color:#64748B; line-height:1.35; }
+.note { font-size:7.8pt; color:#9CA3AF; margin:4px 0 0; }
+.img { width:100%; margin:4px 0 2px; page-break-inside:avoid; } .cap { font-size:7.6pt; color:#9CA3AF; font-style:italic; margin:0 0 12px; }
+.rec { margin:0 0 9px; padding-left:30px; position:relative; page-break-inside:avoid; }
+.rec .nthe { position:absolute; left:0; top:0; font-size:13pt; font-weight:bold; color:#92D050; }
+.rec b { display:block; font-size:9.6pt; } .rec span { color:#374151; font-size:8.7pt; }
+.two { display:flex; gap:16px; } .two>div { flex:1; }
+ul.green { list-style:none; padding:0; margin:6px 0; }
+ul.green li { position:relative; padding-left:16px; margin-bottom:6px; font-size:8.9pt; }
+ul.green li:before { content:"●"; color:#92D050; position:absolute; left:0; }
+.narr p { margin:0 0 8px; }
+.chartwrap{position:relative;width:100%;margin:6px 0}
+.flowsvg{width:100%;margin:6px 0;text-align:center}
+.nobreak{page-break-inside:avoid}
+</style><script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script></head><body>
+<div id="hdr"><b>energovision</b>  ·  Posudok · Testovacia firma s.r.o. · P-AOM-000000</div>
+
+<section class="cover-pg">
+  <div style="text-align:right; margin-bottom:30px;"><img src="data:IMG" style="height:42px;"></div>
+  <div class="kick">Technicko-ekonomický posudok &nbsp;·&nbsp; P-AOM-000000</div>
+  <h1 style="font-size:28pt; margin:6px 0;">Testovacia firma s.r.o.</h1>
+  <div style="font-size:11pt; color:#374151;">FVE 120 kWp + BESS 112 kWh</div>
+  <div style="font-size:9pt; color:#9CA3AF; font-style:italic; margin-top:8px;">Analýza odberu, simulácia výroby a dispatch, ekonomické posúdenie v 3 scenároch s rizikovou analýzou.</div>
+  <div style="display:flex; gap:36px; margin-top:30px; align-items:flex-end;">
+    <div><div class="kick">Čistý prínos · NPV 20 r.</div><div style="font-size:32pt; font-weight:bold; color:#5E8E2A; line-height:1.0;">+70 663 €</div></div>
+    <div><div class="kick">Návratnosť</div><div style="font-size:32pt; font-weight:bold; color:#1A1A1A; line-height:1.0;">6,2 r</div></div>
+    <div><div class="kick">IRR</div><div style="font-size:32pt; font-weight:bold; color:#1A1A1A; line-height:1.0;">13 %</div></div>
+  </div>
+  <div class="two" style="margin-top:40px;">
+    <div><div class="kick">Pre</div><div style="font-weight:bold;">Testovacia firma s.r.o.</div>
+      <div style="color:#374151; font-size:8.6pt;">Priemyselná 1, 972 43 Testovo</div>
+      <div class="kick" style="margin-top:14px;">Parametre OM</div>
+      <div style="font-size:8.6pt;">Spotreba 388 MWh/r<br>MRK 240 kW · RK 210 kW · VN<br>VN</div></div>
+    <div><div class="kick">Vystavené</div><div style="font-weight:bold;">DD.MM.YYYY</div>
+      <div class="kick" style="margin-top:14px;">Podklady</div>
+      <div style="font-size:8.6pt;">15-min profil · PVGIS · OKTE 2025 · faktúra</div></div>
+  </div>
+  <div style="background:#EFF6E8; border-left:3px solid #92D050; border-radius:6px; padding:12px 16px; margin-top:30px;">
+    <div class="kick">Pripravil pre Vás</div><div style="font-weight:bold;">Lukáš Bago</div>
+    <div style="font-size:8.6pt; color:#374151;">Energovision, s.r.o. · lukas.bago@energovision.sk · 0918 187 762</div></div>
+</section>
+
+<section class="newpage">
+  <div class="kick">Manažérske zhrnutie</div>
+  <h2>Audit odberu: investícia je ekonomicky výhodná vo všetkých scenároch</h2>
+  <div class="banner"><div class="t">Odporúčanie</div><div class="b">Realizovať — návratnosť 5,5–6,2 r, NPV 70 663 € (báza); aj v pesimistickom scenári P10 zostáva NPV kladné (44 694 €).</div></div>
+  <div class="hero"><div class="lbl"><b>Čistý prínos investície (NPV 20 r.)</b> pri diskonte 6 % — po odpočítaní celej investície a prevádzkových nákladov.</div><div class="big">+70 663 €</div></div>
+  <div class="kpis">
+    <div class="kpi"><div class="l">Investícia</div><div class="v">125 476 €</div><div class="n">bez DPH</div></div>
+    <div class="kpi"><div class="l">Ročný prínos · rok 1</div><div class="v">19–21 tis. €</div><div class="n">báza → optimistický</div></div>
+    <div class="kpi"><div class="l">Návratnosť</div><div class="v">5,5–6,2 r</div><div class="n">s daňovým odpisom</div></div>
+    <div class="kpi"><div class="l">IRR · NPV</div><div class="v">13 %</div><div class="n">NPV 70 663 €</div></div>
+  </div>
+  <div class="kick" style="margin-top:10px;">Čo získate</div>
+  <div class="benefits">
+    <div class="bcard"><div class="h">Nižšie účty</div><div class="d">Úspora 19 186 €–21 488 €/rok na elektrine a distribúcii.</div></div>
+    <div class="bcard"><div class="h">Stabilná cena 20+ r.</div><div class="d">Vlastná výroba je hedge proti rastu cien — chráni hodnotu až 468 283 €.</div></div>
+    <div class="bcard"><div class="h">Nezávislosť</div><div class="d">25,7 % spotreby z vlastného zdroja pri 81,1 % samospotrebe.</div></div>
+    <div class="bcard"><div class="h">ESG</div><div class="d">−28 t CO₂ ročne; doložiteľný príspevok k udržateľnosti.</div></div>
+  </div>
+  <div class="narr" style="margin-top:8px;"></div>
+</section>
+
+<section class="newpage">
+  <div class="kick">1 — Východiská a identifikácia OM</div><h2>Stav odberného miesta a vstupné dáta</h2>
+  <table><tr class=""><th class="cl">Údaj</th><th class="cl">Hodnota</th><th class="cl">Komentár</th></tr><tr class=""><td class="cl">Klient</td><td class="cl">Testovacia firma s.r.o.</td><td class="cl">VN odberateľ</td></tr><tr class=""><td class="cl">Adresa OM</td><td class="cl">Priemyselná 1, 972 43 Testovo</td><td class="cl"></td></tr><tr class=""><td class="cl">Distribučná oblasť</td><td class="cl">VN</td><td class="cl"></td></tr><tr class=""><td class="cl">Sadzba / tarif</td><td class="cl">VN</td><td class="cl"></td></tr><tr class=""><td class="cl">Ročná spotreba</td><td class="cl">388 MWh</td><td class="cl">skutočné namerané 15-min dáta</td></tr><tr class=""><td class="cl">Max 15-min odber</td><td class="cl">226 kW</td><td class="cl"></td></tr><tr class=""><td class="cl">Priemerný odber</td><td class="cl">44 kW</td><td class="cl">load factor 0,20</td></tr><tr class=""><td class="cl">MRK / RK</td><td class="cl">240 / 210 kW</td><td class="cl">špička 226 kW = 94 % MRK</td></tr></table>
+  <div class="banner"><div class="t">Charakteristika prevádzky (odvodená z dát)</div><div style="font-size:8.8pt; margin-top:3px;">Profil je charakteristický ako nepravidelný profil s výraznými výkyvmi odberu; minimálna sezónnosť, rovnomerná spotreba počas roka. Špička: poludňajší špic. vysoká vhodnosť pre FVE — odber sa kryje s dennou výrobou.</div></div>
+</section>
+
+<section class="newpage">
+  <div class="kick">2 — Profil odberu</div><h2>Charakteristika spotreby</h2>
+  <div class="narr"><p>Charakter prevádzky: <b>nepravidelný profil s výraznými výkyvmi odberu</b>. Z analyzovaných skutočné namerané 15-min dáta vychádza priemerný odber 44 kW a 15-min špička 226 kW (load factor 0,20).</p><p>Cez deň (slnečné hodiny) prebehne približne 69 % spotreby — to priamo určuje, koľko FVE energie sa využije bez batérie.</p><p>Sezónnosť odberu je minimálna , rovnomerná spotreba počas roka; ročná spotreba OM je 388 MWh.</p><p>Vysoká vhodnosť pre FVE — odber sa kryje s dennou výrobou.</p></div>
+  <div class="chartwrap" style="height:320px"><canvas id="cDaily"></canvas></div><div class="cap">Graf 1: Denný profil odberu — pracovný deň vs víkend + výroba FVE (kW).</div>
+  <div class="chartwrap" style="height:300px"><canvas id="cMonth"></canvas></div><div class="cap">Graf 2: Mesačná spotreba (MWh).</div>
+</section>
+
+<section class="newpage">
+  <div class="kick">3 — Technické riešenie</div><h2>Navrhnutý variant — FVE 120 kWp + BESS 112 kWh</h2>
+  <table><tr class=""><th class="cl">Parameter</th><th class="cl">Hodnota</th></tr>
+    <tr class=""><td class="cl">Inštalovaný výkon FVE</td><td class="cl">119,84 kWp DC</td></tr>
+    <tr class=""><td class="cl">Moduly <span style='color:#B45309'>(orientačné)</span></td><td class="cl">~207 ks modulov á ~580 Wp (orientačne — spresní cenová ponuka)</td></tr>
+    <tr class=""><td class="cl">Optimizéry / meniče</td><td class="cl">meniče ~114 kW AC + optimizéry</td></tr>
+    <tr class=""><td class="cl">Batériové úložisko</td><td class="cl">batéria 112 kWh</td></tr>
+    <tr class=""><td class="cl">Konštrukcia</td><td class="cl">Juh 13°</td></tr>
+    <tr class=""><td class="cl">Špecifický výnos</td><td class="cl">1 035 kWh/kWp</td></tr>
+    <tr class="em"><td class="cl">Predpokladaná ročná výroba</td><td class="cl">124 MWh</td></tr>
+  </table>
+  <div class="narr"></div>
+  <div class="kick" style="margin-top:8px;">Energetická bilancia</div>
+  <table><tr class=""><th class="cl">Veličina</th><th class="cr">Hodnota</th><th class="cr">Podiel</th></tr>
+    <tr class=""><td class="cl">Ročná výroba FVE</td><td class="cr">124 MWh</td><td class="cr">100 %</td></tr>
+    <tr class="em"><td class="cl">Samospotreba</td><td class="cr">101 MWh</td><td class="cr">81,1 %</td></tr>
+    <tr class=""><td class="cl">Export prebytkov</td><td class="cr">12 MWh</td><td class="cr">9,6 %</td></tr>
+    <tr class=""><td class="cl">Straty / nevyužité</td><td class="cr">12 MWh</td><td class="cr">9,3 %</td></tr>
+    <tr class=""><td class="cl">Import zo siete</td><td class="cr">268 MWh</td><td class="cr">—</td></tr>
+    <tr class=""><td class="cl">Pokrytie spotreby OM</td><td class="cr">25,7 %</td><td class="cr">FVE vs spotreba</td></tr>
+  </table>
+  <div class="kick" style="margin-top:10px;">Tok energie a využitie výroby</div>
+  <div class="nobreak"><div class="flowsvg"><svg viewBox="0 0 920 472" width="100%" style="max-height:400px" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI,Arial,sans-serif"><defs><marker id="ah-a" markerWidth="9" markerHeight="9" refX="6" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#F59E0B"/></marker><marker id="ah-b" markerWidth="9" markerHeight="9" refX="6" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#60A5FA"/></marker><marker id="ah-g" markerWidth="9" markerHeight="9" refX="6" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#5E8E2A"/></marker><marker id="ah-g0" markerWidth="9" markerHeight="9" refX="3" refY="4.5" orient="auto"><path d="M9,0 L0,4.5 L9,9 z" fill="#5E8E2A"/></marker></defs><path d="M720,78 L720,52 L230,52 L230,225" fill="none" stroke="#F59E0B" stroke-width="4" marker-end="url(#ah-a)" opacity="0.9"/><path d="M656,196 C600,250 560,270 540,286" fill="none" stroke="#F59E0B" stroke-width="5" marker-end="url(#ah-a)" opacity="0.9"/><path d="M304,300 L396,300" fill="none" stroke="#60A5FA" stroke-width="5" marker-end="url(#ah-b)" opacity="0.9"/><circle cx="720" cy="150" r="72" fill="#FEF3C7" stroke="#FCD34D" stroke-width="2.5"/><text x="720" y="102" text-anchor="middle" font-size="13" font-weight="600" fill="#374151">Solar PV</text><text x="720" y="158" text-anchor="middle" font-size="26" font-weight="700" fill="#1A1A1A">124</text><text x="720" y="178" text-anchor="middle" font-size="10.5" fill="#9CA3AF">MWh generácia</text><circle cx="230" cy="300" r="72" fill="#DBEAFE" stroke="#93C5FD" stroke-width="2.5"/><text x="230" y="252" text-anchor="middle" font-size="13" font-weight="600" fill="#374151">Sieť</text><text x="230" y="308" text-anchor="middle" font-size="26" font-weight="700" fill="#1A1A1A">268</text><text x="230" y="328" text-anchor="middle" font-size="10.5" fill="#9CA3AF">MWh · export 12</text><circle cx="470" cy="300" r="72" fill="#F3E8FF" stroke="#D8B4FE" stroke-width="2.5"/><text x="470" y="252" text-anchor="middle" font-size="13" font-weight="600" fill="#374151">Spotreba</text><text x="470" y="308" text-anchor="middle" font-size="26" font-weight="700" fill="#1A1A1A">388</text><text x="470" y="328" text-anchor="middle" font-size="10.5" fill="#9CA3AF">MWh spotreba</text><circle cx="720" cy="352" r="56" fill="#DCFCE7" stroke="#86EFAC" stroke-width="2.5"/><text x="720" y="320" text-anchor="middle" font-size="13" font-weight="600" fill="#374151">Batéria</text><text x="720" y="360" text-anchor="middle" font-size="26" font-weight="700" fill="#1A1A1A">6</text><text x="720" y="380" text-anchor="middle" font-size="10.5" fill="#9CA3AF">MWh von · 18 nabité</text><rect x="458.0" y="39" width="34" height="26" rx="7" fill="#fff" stroke="#E5E7EB"/><text x="475" y="57" text-anchor="middle" font-size="13" font-weight="700" fill="#F59E0B">12</text><rect x="583.0" y="230" width="34" height="26" rx="7" fill="#fff" stroke="#E5E7EB"/><text x="600" y="248" text-anchor="middle" font-size="13" font-weight="700" fill="#F59E0B">94</text><rect x="329.0" y="287" width="42" height="26" rx="7" fill="#fff" stroke="#E5E7EB"/><text x="350" y="305" text-anchor="middle" font-size="13" font-weight="700" fill="#60A5FA">268</text></svg></div><div class="cap">Graf 3: Ročný tok energie — výroba FVE, priama samospotreba, batéria a sieť (MWh/rok).</div></div>
+  
+  <div class="kick" style="margin-top:12px;">Využitie vyrobenej energie</div>
+  <div class="nobreak two" style="align-items:center; margin-top:4px;">
+    <div class="chartwrap" style="height:230px"><canvas id="cDonut"></canvas></div>
+    <div><div style="margin:5px 0;font-size:11.5pt;color:#374151"><span style="display:inline-block;width:11px;height:11px;background:#92D050;border-radius:2px;margin-right:8px;vertical-align:middle"></span>Priamo do odberu — <b>75,9 %</b> <span style="color:#9CA3AF">(94 MWh)</span></div><div style="margin:5px 0;font-size:11.5pt;color:#374151"><span style="display:inline-block;width:11px;height:11px;background:#5E8E2A;border-radius:2px;margin-right:8px;vertical-align:middle"></span>Cez batériu — <b>5,2 %</b> <span style="color:#9CA3AF">(6 MWh)</span></div><div style="margin:5px 0;font-size:11.5pt;color:#374151"><span style="display:inline-block;width:11px;height:11px;background:#9DB2C9;border-radius:2px;margin-right:8px;vertical-align:middle"></span>Export do siete — <b>9,6 %</b> <span style="color:#9CA3AF">(12 MWh)</span></div><div style="margin-top:10px;font-size:10.5pt;color:#6B7280;line-height:1.5">Vďaka profilu odberu sa <b>81,1 %</b> vyrobenej energie spotrebuje priamo na mieste; do siete odchádza len <b>9,6 %</b>. Vysoká samospotreba je kľúčová pre rýchlu návratnosť.</div></div>
+  </div>
+  <div class="cap">Graf 4: Ako sa využije vyrobená FVE energia — priamo, cez batériu, export.</div>
+  <div class="kick" style="margin-top:12px;">Energetické metriky (ročný priemer)</div>
+  <img class="img" src="data:IMG"><div class="cap">Graf 5: Energetická nezávislosť, využitie solárnej výroby a batérie — mesačné priemery roka 1.</div>
+  <div class="kick" style="margin-top:12px;">Environmentálny prínos (CO₂)</div>
+  <div class="benefits">
+    <div class="bcard" style="border-top-color:#5E8E2A; background:#F4F8EE;"><div class="h" style="font-size:15pt; color:#5E8E2A;">−28 t</div><div class="d">CO₂ ročne menej</div></div>
+    <div class="bcard"><div class="h" style="font-size:15pt;">26 %</div><div class="d">zníženie uhlíkovej stopy</div></div>
+    <div class="bcard"><div class="h" style="font-size:15pt;">1 327</div><div class="d">ekvivalent vysadených stromov</div></div>
+    <div class="bcard"><div class="h" style="font-size:15pt;">64</div><div class="d">barelov ropy ušetrených</div></div>
+  </div>
+  <div class="two" style="margin-top:10px; align-items:center;">
+    <div><img class="img" src="data:IMG"><div class="cap">Graf 6: Emisná intenzita pred a po inštalácii (tCO₂ na MWh spotreby).</div></div>
+    <div class="narr"><p>Z 124 MWh ročnej výroby FVE sa <b>81,1 %</b> (101 MWh) spotrebuje priamo v prevádzke a iba 9,6 % (11,9 MWh) odchádza ako prebytok do siete. Relatívne malá FVE (120 kWp) voči spotrebe (388 MWh/r) je dôvod vysokej samospotreby — vyrobená energia sa takmer celá využije na mieste. FVE pokryje 25,7 % ročnej spotreby OM; zvyšných 268 MWh zostáva zo siete.</p></div>
+  </div>
+</section>
+
+<section class="newpage">
+  <div class="kick">3b — Intervalová prevádzka a riadenie odberu</div><h2>Ako systém pracuje v čase</h2>
+  <div class="kick" style="margin-top:4px;">Priemerný deň</div>
+  <img class="img" src="data:IMG"><div class="cap">Graf 7: Priemerný deň roka 1 — odber pred a po inštalácii, solárna výroba a stav nabitia batérie (SoC).</div>
+  <div class="kick" style="margin-top:10px;">Reprezentatívny týždeň — intervalová aktivita</div>
+  <img class="img" src="data:IMG"><div class="cap">Graf 8: Reprezentatívny týždeň zo simulácie — solárna výroba, nabíjanie/vybíjanie batérie a čistý odber pred/po.</div>
+  <div class="kick" style="margin-top:10px;">Prevádzka batérie — typický deň</div>
+  <img class="img" src="data:IMG"><div class="cap">Graf 9: Denný cyklus batérie — nabíjanie z PV cez deň, vybíjanie do večernej špičky; krivka SoC.</div>
+  <div class="kick" style="margin-top:10px;">Riadenie odberovej špičky (MRK / RK)</div>
+  <img class="img" src="data:IMG"><div class="cap">Graf 10: Čistý odber zo siete pred a po inštalácii vs rezervovaná kapacita (MRK/RK) — reprezentatívny týždeň.</div>
+</section>
+
+<section class="newpage">
+  <div class="kick">4 — Ekonomické posúdenie</div><h2>Cenové predpoklady</h2>
+  <table><tr class=""><th class="cl">Zložka ceny</th><th class="cr">Hodnota</th><th class="cl">Zdroj / komentár</th></tr>
+    <tr class=""><td class="cl">Silová zložka</td><td class="cr">134,87 €/MWh</td><td class="cl">faktúra</td></tr>
+    <tr class=""><td class="cl">Variabilná distribúcia</td><td class="cr">16,55 €/MWh</td><td class="cl">VSD tarif</td></tr>
+    <tr class=""><td class="cl">TPS + systémové služby</td><td class="cr">14,07 €/MWh</td><td class="cl">pásmo 2</td></tr>
+    <tr class="em"><td class="cl">Avoided cost samospotreby</td><td class="cr">183,4 €/MWh</td><td class="cl">plný retail (engine)</td></tr>
+    <tr class=""><td class="cl">Pevná zložka distribúcie</td><td class="cr">8,02 €/kW/mes</td><td class="cl">× RK 210 kW</td></tr>
+    <tr class=""><td class="cl">Výkupná cena prebytkov</td><td class="cr">60 €/MWh</td><td class="cl">export</td></tr>
+  </table>
+  <h2 style="margin-top:8px;">Tri scenáre prínosu</h2>
+  <div class="narr"></div>
+  <table><tr class=""><th class="cl">Scenár</th><th class="cr">Úspora €/r</th><th class="cr">Návratnosť</th><th class="cr">NPV 20 r.</th><th class="cr">IRR</th></tr>
+    <tr class="em"><td class="cl">Báza (ÚRSO 2026 + spot OKTE)</td><td class="cr">19 186 €</td><td class="cr">6,2 r</td><td class="cr">70 663 €</td><td class="cr">13,1 %</td></tr><tr class=""><td class="cl">Defenzívny (nižší výkup/cena)</td><td class="cr">16 308 €</td><td class="cr">7,2 r</td><td class="cr">37 654 €</td><td class="cr">11,2 %</td></tr><tr class=""><td class="cl">Optimistický (rast cien energie)</td><td class="cr">21 488 €</td><td class="cr">5,5 r</td><td class="cr">97 070 €</td><td class="cr">14,7 %</td></tr>
+  </table>
+  <div class="scenexpl"><div class="rec"><b>Báza (ÚRSO 2026 + spot OKTE)</b><span>Bázový výpočet z hodinovej simulácie (ceny ÚRSO 2026 + spot OKTE). Ročná úspora 19 186 €, návratnosť 6,2 r.</span></div><div class="rec"><b>Defenzívny (nižší výkup/cena)</b><span>Stresový pohľad — nižší výkup prebytkov a opatrnejšie ceny energie. Ukazuje odolnosť investície: úspora 16 308 €/r, návratnosť 7,2 r.</span></div><div class="rec"><b>Optimistický (rast cien energie)</b><span>Pri raste trhových cien energie hodnota vlastnej výroby rastie — úspora 21 488 €/r, NPV 20 r. 97 070 €, IRR 14,7 %.</span></div></div>
+  <div class="kick">Štruktúra investície</div>
+  <img class="img" src="data:IMG"><div class="cap">Graf 11: Rozpad investície — FVE, batéria a ostatné náklady; dotácia znižuje na čistú investíciu.</div>
+  <div class="chartwrap" style="height:300px"><canvas id="cScen"></canvas></div><div class="cap">Graf 12: Porovnanie scenárov — NPV 20 r.</div>
+  <img class="img" src="data:IMG"><div class="cap">Graf 13: Kumulatívny cashflow 20 rokov.</div>
+  <img class="img" src="data:IMG"><div class="cap">Graf 14: NPV most — od investície cez diskontované úspory, daňový štít a zostatkovú hodnotu po čisté NPV.</div>
+</section>
+
+<section class="newpage">
+  <div class="kick">5 — Skladba prínosu a riziková analýza</div><h2>Skladba ročného prínosu (plný scenár)</h2>
+  <table><tr class=""><th class="cl">Zdroj prínosu</th><th class="cr">Vzorec</th><th class="cr">Hodnota</th></tr>
+    <tr class=""><td class="cl">FVE priama samospotreba</td><td class="cr">94 MWh priamo do odberu</td><td class="cr">17 267 €</td></tr><tr class=""><td class="cl">FVE export prebytkov</td><td class="cr">12 MWh do siete</td><td class="cr">767 €</td></tr><tr class=""><td class="cl">Batéria — posun PV do odberu</td><td class="cr">6 MWh PV uskladnené a využité neskôr</td><td class="cr">1 100 €</td></tr>
+    <tr class="em"><td class="cl">Ročná úspora SPOLU</td><td class="cr"></td><td class="cr">19 186 €</td></tr>
+    <tr class=""><td class="cl">Daňový štít z odpisu (r. 1–6)</td><td class="cr">6-r lineárny odpis × DPPO 21 %</td><td class="cr">4 392 €</td></tr>
+  </table>
+  <p class="note">⚡ Arbitráž batérie: <b>0 €</b> — klient nie je na spotovej tarife — arbitráž sa nepočíta (0 €)</p>
+  <img class="img" src="data:IMG"><div class="cap">Graf 15: Skladba ročného prínosu.</div>
+  <img class="img" src="data:IMG"><div class="cap">Graf 16: Ročný prínos podľa zdroja (value stream) — samospotreba, export, batéria, arbitráž, daňový štít.</div>
+  <h2 style="margin-top:8px;">Citlivosť a riziko</h2>
+  <img class="img" src="data:IMG"><div class="cap">Graf 17: Tornado — citlivosť NPV na ±15 % driverov.</div>
+  <img class="img" src="data:IMG"><div class="cap">Graf 18: Monte Carlo (5000 simulácií). P10 44 694 €, medián 65 937 €, P90 86 106 €; pravdepodobnosť kladného NPV 100 %.</div>
+</section>
+
+<section class="newpage">
+  <div class="kick">6 — Cena nečinnosti</div><h2>Koľko stojí ponechať súčasný stav</h2>
+  <p>Energiu, ktorú FVE pokryje priamo do odberu, dnes nakupujete zo siete. Pri zachovaní súčasného stavu za ňu počas 20-ročnej životnosti zaplatíte:</p>
+  <table><tr class=""><th class="cl">Scenár cien energie</th><th class="cr">Náklad za 20 rokov</th><th class="cr">Rok 1</th></tr>
+    <tr class=""><td class="cl">Konštantné ceny</td><td class="cr">366 638 €</td><td class="cr">18 332 €</td></tr>
+    <tr class="em"><td class="cl">Rast cien o 2,5 %/r</td><td class="cr">468 283 €</td><td class="cr">18 332 €</td></tr>
+  </table>
+  <p class="note">Nečinnosť nie je neutrálna voľba — je to rozhodnutie naďalej platiť plnú trhovú cenu za energiu, ktorú si viete vyrobiť pri náklade 125 476 €.</p>
+</section>
+
+<section class="newpage">
+  <div class="kick">7 — Expert posúdenie a odporúčania</div><h2>Odborné posúdenie</h2>
+  <div class="narr"></div>
+  <div class="kick" style="margin-top:10px;">Odporúčané kroky</div>
+  
+</section>
+
+<section class="newpage">
+  <div class="kick">8 — Záver</div><h2>Odporúčanie pre klienta</h2>
+  <div class="banner"><div style="font-size:9.4pt;">Investícia 125 476 € do FVE 120 kWp + BESS 112 kWh prinesie ročné úspory 19 186 € (báza) až 21 488 € (optimistický scenár). Návratnosť 5,5–6,2 r, NPV 20 r. 70 663 € (báza), IRR 13.1 %.</div></div>
+  <div class="kick" style="margin-top:10px;">Argumenty pre realizáciu</div>
+  <div class="rec"><b>Predikovateľnosť ceny energie na 20+ rokov</b><span>Vlastná výroba pokryje 25,7 % ročnej spotreby pri 81,1 % samospotrebe — prirodzený hedge proti rastu cien elektriny a regulačných poplatkov.</span></div><div class="rec"><b>Daňová optimalizácia</b><span>6-ročný rovnomerný odpis predstavuje úsporu 21 % × 125 476 € = 26 350 € na dani z príjmu (priemerne 4 392 €/rok počas prvých 6 rokov).</span></div><div class="rec"><b>ESG profil a CSRD reporting</b><span>Ročná úspora ~28 t CO₂ (pri SK emisnej intenzite ~0,25 kg/kWh) — doložiteľný podklad pre EU Taxonómiu a CSRD disclosures.</span></div><div class="rec"><b>Reziduálna hodnota po 20 rokoch</b><span>Ekonomika neráta s poklesom výkonu FVE; konzervatívne 10 % CAPEX = 12 548 € reziduálnej hodnoty.</span></div>
+  <div class="kick" style="margin-top:10px;">Záruky a istoty</div>
+  <ul class="green">
+    <li>Výkonová záruka na panely (typicky 25–30 r.) a záruka výrobcu na meniče a batériu.</li>
+    <li>Realizácia, revízie a uvedenie do prevádzky pod jednou zodpovednosťou Energovision.</li>
+    <li>Monitoring výroby a úspor po spustení; servis počas celej životnosti zdroja.</li>
+    <li>Skúsenosť s riešeniami pre porovnateľné priemyselné prevádzky (FVE + BESS na VN).</li>
+  </ul>
+  <div class="kick" style="margin-top:10px;">Ako začneme</div>
+  <table><tr class=""><th class="cl">Krok</th><th class="cl">Obsah</th></tr>
+    <tr class=""><td class="cl">01 · Spätná väzba a obhliadka</td><td class="cl">Prejdeme posudok, doplníme vstupy, technická obhliadka OM.</td></tr>
+    <tr class=""><td class="cl">02 · Akceptácia a zmluva</td><td class="cl">Odsúhlasenie špecifikácie a finančných podmienok, projekt a zmluva.</td></tr>
+    <tr class=""><td class="cl">03 · Realizácia</td><td class="cl">Inštalácia FVE + BESS, integrácia s VN, žiadosť o zníženie RK.</td></tr>
+    <tr class=""><td class="cl">04 · Spustenie a monitoring</td><td class="cl">Uvedenie do prevádzky, revízie, optimalizácia dispatchu, dohľad.</td></tr>
+  </table>
+  <div class="banner"><div class="t">Komplexná zodpovednosť — Energovision</div><div style="font-size:8.6pt; margin-top:3px;">Fotovoltika a batérie, údržba a servis trafostaníc, odborné revízie, elektrotechnické práce, energetický manažment a monitoring — jeden partner pre celý životný cyklus zdroja.</div></div>
+</section>
+
+<section>
+  <div class="kick">9 — Predpoklady a zdroje</div><h2>Metodika a východiská</h2>
+  <table><tr class=""><th class="cl">Predpoklad / vstup</th><th class="cl">Hodnota</th><th class="cl">Zdroj</th></tr>
+    <tr class=""><td class="cl">Bilančná simulácia</td><td class="cl">8 760 h</td><td class="cl">skutočné namerané 15-min dáta</td></tr>
+    <tr class=""><td class="cl">Špecifický výnos FVE</td><td class="cl">1 035 kWh/kWp</td><td class="cl">PVGIS</td></tr>
+    <tr class=""><td class="cl">Diskont / horizont / odpis</td><td class="cl">6 % / 20 r / 6 r</td><td class="cl">WACC / životnosť / zákon</td></tr>
+    <tr class=""><td class="cl">Inflácia energie</td><td class="cl">2,5 % ročne</td><td class="cl">makro</td></tr>
+    <tr class=""><td class="cl">Tarify a ceny</td><td class="cl">faktúra</td><td class="cl">faktúra / ÚRSO 2026</td></tr>
+    <tr class=""><td class="cl">Komponenty a CAPEX</td><td class="cl">orientačné</td><td class="cl">cenová ponuka</td></tr>
+  </table>
+  <p class="note">Model má neistotu rádovo ±10–15 %. Reálne výsledky závisia od nábehu prevádzky, finálnej tarify a podmienok pripojenia. Hodnoty samospotreby sú odvodené zo skutočných nameraných dát. Posudok je nezáväzný odborný odhad.</p>
+  <div style="background:#F8FAFB; border-radius:8px; padding:12px 16px; margin-top:10px;">
+    <div class="kick">Kontakt</div><div style="font-weight:bold;">Lukáš Bago</div>
+    <div style="font-size:8.6pt; color:#374151;">lukas.bago@energovision.sk · 0918 187 762</div></div>
+</section>
+<script>…</script></body></html>
