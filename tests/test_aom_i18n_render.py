@@ -83,3 +83,23 @@ def test_glossary_in_ai_prompt_only_for_en_de(monkeypatch):
     with use_lang("de"):
         aom._generate_chocosuc_ai(dict(ctx))
     assert calls and all("German" in s and "Zelená podnikom" in s for s in calls)
+
+
+def test_ai_fallback_v_jazyku(monkeypatch):
+    """Keď AI skupina zlyhá, deterministický fallback musí byť v jazyku dokumentu (sk ostáva pôvodný)."""
+    class _Boom:
+        def __init__(self, *a, **k):
+            raise RuntimeError("AI nedostupné")
+    monkeypatch.setitem(sys.modules, "anthropic", types.SimpleNamespace(Anthropic=_Boom))
+    from aom_i18n import use_lang
+    from aom_i18n_fixtures import fixture_ctx, slovak_leftovers
+    ctx = fixture_ctx()
+    sk = aom._generate_chocosuc_ai(dict(ctx))
+    assert "Z technického hľadiska" in sk["expert"] and "(faktúra)  podmienky" in sk["expert"]  # pôvodná SK vetva
+    assert sk["recommendations"][0][0] == "Odporúčanie k navrhnutému variantu"
+    for lang in ("en", "de"):
+        with use_lang(lang):
+            r = aom._generate_chocosuc_ai(fixture_ctx())
+        texts = [r["expert"], r["summary"]] + [t for pair in r["recommendations"] for t in pair]
+        left = [w for w in slovak_leftovers(" ".join(texts))]
+        assert not left, (lang, left)

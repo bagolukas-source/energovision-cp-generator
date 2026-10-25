@@ -3101,26 +3101,44 @@ def _generate_chocosuc_ai(ctx: dict) -> dict:
     def _fallback():
         # deterministický fallback — summary (ekonomický) ≠ expert (technicko-rizikový)
         e = facts["ekonomika"]
-        summ = (ctx.get("balance_narrative","") +
-                f"<p>{ctx.get('recommendation_line', '')} "
-                + (f"Ročná úspora {bza['save_total']:,.0f} € (báza) až {full['save_total']:,.0f} € (plný scenár), "
-                   f"NPV 20 r. {e['npv20_eur']:,.0f} € a IRR {e['irr_pct']} %. Pravdepodobnosť kladného NPV (Monte Carlo) "
-                   f"{e['mc_prob_npv_kladne_pct']} %.</p>").replace(",", " "))
-        exp = (f"<p>Z technického hľadiska je navrhnutý variant {facts['fve_bess']['fve_kwp']:.0f} kWp primeraný profilu OM — "
-               f"pri samospotrebe {facts['fve_bess']['samospotreba_pct']} % sa vyrobená energia využije takmer celá. "
-               f"Rozhodujúce predpoklady sú špecifický výnos {facts['fve_bess']['specificky_vynos_kwh_kwp']} kWh/kWp (PVGIS) a "
-               f"stabilita odberového profilu.</p>"
-               f"<p>Citlivosť: medzi defenzívnym a optimistickým scenárom je rozpätie NPV {S[1]['npv']:,.0f} – {S[2]['npv']:,.0f} €. "
-               f"Pred realizáciou odporúčam overiť finálnu tarifu (faktúra), podmienky pripojenia u prevádzkovateľa distribučnej "
-               f"sústavy a presnú konštrukciu z cenovej ponuky.</p>").replace(",", " ")
-        recs = [("Odporúčanie k navrhnutému variantu", ctx.get("recommendation_line", ""))]
+        from aom_i18n import _, get_lang
+        from aom_i18n.fmt import dec, num
+        if get_lang() == "sk":
+            summ = (ctx.get("balance_narrative","") +
+                    f"<p>{ctx.get('recommendation_line', '')} "
+                    + (f"Ročná úspora {bza['save_total']:,.0f} € (báza) až {full['save_total']:,.0f} € (plný scenár), "
+                       f"NPV 20 r. {e['npv20_eur']:,.0f} € a IRR {e['irr_pct']} %. Pravdepodobnosť kladného NPV (Monte Carlo) "
+                       f"{e['mc_prob_npv_kladne_pct']} %.</p>").replace(",", " "))
+            exp = (f"<p>Z technického hľadiska je navrhnutý variant {facts['fve_bess']['fve_kwp']:.0f} kWp primeraný profilu OM — "
+                   f"pri samospotrebe {facts['fve_bess']['samospotreba_pct']} % sa vyrobená energia využije takmer celá. "
+                   f"Rozhodujúce predpoklady sú špecifický výnos {facts['fve_bess']['specificky_vynos_kwh_kwp']} kWh/kWp (PVGIS) a "
+                   f"stabilita odberového profilu.</p>"
+                   f"<p>Citlivosť: medzi defenzívnym a optimistickým scenárom je rozpätie NPV {S[1]['npv']:,.0f} – {S[2]['npv']:,.0f} €. "
+                   f"Pred realizáciou odporúčam overiť finálnu tarifu (faktúra), podmienky pripojenia u prevádzkovateľa distribučnej "
+                   f"sústavy a presnú konštrukciu z cenovej ponuky.</p>").replace(",", " ")
+        else:  # en/de: preložené vety a formáty jazyka (SK vetva vyššie ostáva bajt po bajte)
+            fb_ = facts["fve_bess"]
+            summ = (ctx.get("balance_narrative", "") + f"<p>{ctx.get('recommendation_line', '')} "
+                    + _("Ročná úspora {a} € (báza) až {b} € (plný scenár), NPV 20 r. {npv} € a IRR {irr} %. "
+                        "Pravdepodobnosť kladného NPV (Monte Carlo) {p} %.").format(
+                        a=num(bza["save_total"]), b=num(full["save_total"]), npv=num(e["npv20_eur"]),
+                        irr=dec(e["irr_pct"]), p=dec(e["mc_prob_npv_kladne_pct"])) + "</p>")
+            exp = ("<p>" + _("Z technického hľadiska je navrhnutý variant {kwp} kWp primeraný profilu OM — pri samospotrebe "
+                             "{sam} % sa vyrobená energia využije takmer celá. Rozhodujúce predpoklady sú špecifický výnos "
+                             "{vyn} kWh/kWp (PVGIS) a stabilita odberového profilu.").format(
+                       kwp=num(fb_["fve_kwp"]), sam=dec(fb_["samospotreba_pct"]), vyn=num(fb_["specificky_vynos_kwh_kwp"]))
+                   + "</p><p>" + _("Citlivosť: medzi defenzívnym a optimistickým scenárom je rozpätie NPV {lo} – {hi} €. "
+                                   "Pred realizáciou odporúčam overiť finálnu tarifu (faktúra), podmienky pripojenia u "
+                                   "prevádzkovateľa distribučnej sústavy a presnú konštrukciu z cenovej ponuky.").format(
+                       lo=num(S[1]["npv"]), hi=num(S[2]["npv"])) + "</p>")
+        recs = [(_("Odporúčanie k navrhnutému variantu"), ctx.get("recommendation_line", ""))]
         if not facts["ceny_realne_z_faktury"]:
-            recs.append(("Doplniť faktúru za elektrinu", "Spresní silovú aj distribučnú cenu — posudok prejde z orientačného na presný."))
+            recs.append((_("Doplniť faktúru za elektrinu"), _("Spresní silovú aj distribučnú cenu — posudok prejde z orientačného na presný.")))
         if not facts["fve_bess"].get("bess_kwh"):
-            recs.append(("Preveriť variant s batériou", "Batéria posúva výrobu do špičiek a zvyšuje samospotrebu — vhodné preveriť ako ďalší variant."))
+            recs.append((_("Preveriť variant s batériou"), _("Batéria posúva výrobu do špičiek a zvyšuje samospotrebu — vhodné preveriť ako ďalší variant.")))
         else:
-            recs.append(("Preveriť zníženie RK", "Po inštalácii batérie klesá špičkové zaťaženie zo siete — možnosť znížiť rezervovanú kapacitu."))
-        recs.append(("Technická obhliadka OM", "Overenie strechy/plochy, statiky a bodu pripojenia pred finálnym projektom."))
+            recs.append((_("Preveriť zníženie RK"), _("Po inštalácii batérie klesá špičkové zaťaženie zo siete — možnosť znížiť rezervovanú kapacitu.")))
+        recs.append((_("Technická obhliadka OM"), _("Overenie strechy/plochy, statiky a bodu pripojenia pred finálnym projektom.")))
         return {"summary": summ, "profile": ctx.get("profile_narrative",""), "balance": ctx.get("balance_narrative",""),
                 "scenarios": "", "technical": "", "expert": exp, "zaver": ctx.get("zaver_text",""), "recommendations": recs}
 
