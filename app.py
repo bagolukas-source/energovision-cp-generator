@@ -938,8 +938,6 @@ def _notion_zrkadlo_beh(pages, delta_days, dry_run):
             off += 1000
         plan, rep = _nz.naplanuj(stranky, pr.json(), videne)
         rep["mod"] = "ZÁPIS" if zapis else "DRY-RUN (nezapísané)"
-        if not dry_run:  # podrobnosti len do ručného dry-runu, odpoveď cronu ostáva v net._http_response
-            rep = {k: v for k, v in rep.items() if k not in ("rozdiely", "doplnenia", "bez_projektu")}
         if not zapis:
             return rep
         hlavicky = {**_supa_headers(), "Prefer": "return=minimal"}
@@ -970,12 +968,11 @@ def _notion_zrkadlo_beh(pages, delta_days, dry_run):
 @app.route("/webhook/notion-sync-zakazky", methods=["GET", "POST"])
 def notion_sync_zakazky():
     """Sync Dashboard zákaziek Notion→CRM. Default dry_run (nezapisuje).
-    Params: dry_run=0 (zapíše), delta_days=N (len zmenené za N dní; 0=full), key=WEBHOOK_SECRET (pre cron)."""
+    Params: dry_run=0 (zapíše), delta_days=N (len zmenené za N dní; 0=full).
+    Tajomstvo v hlavičke X-Webhook-Secret; key v URL ostáva len pre cron, ktorý ho dnes tak posiela."""
     args = request.args
-    if WEBHOOK_SECRET and args.get("key") != WEBHOOK_SECRET and request.headers.get("X-Webhook-Secret") != WEBHOOK_SECRET:
-        # povolené aj bez kľúča pre manuálny dry_run? Nie — chránime zápis. Dry-run dovolíme.
-        if args.get("dry_run", "1") not in ("1", "true", "yes"):
-            return jsonify({"ok": False, "error": "unauthorized (key)"}), 401
+    if not _nz.tajomstvo_ok(request.headers.get("X-Webhook-Secret") or args.get("key"), WEBHOOK_SECRET):
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
     dry_run = args.get("dry_run", "1") in ("1", "true", "yes")
     delta_days = int(args.get("delta_days") or 0)
     try:
@@ -1059,8 +1056,7 @@ def notion_sync_zakazky():
 
     stats["mode"] = "DRY-RUN (nezapísané)" if dry_run else "ZAPÍSANÉ"
     stats["delta_days"] = delta_days
-    if not WEBHOOK_SECRET or args.get("key") == WEBHOOK_SECRET or request.headers.get("X-Webhook-Secret") == WEBHOOK_SECRET:
-        stats["zrkadlo"] = _notion_zrkadlo_beh(pages, delta_days, dry_run)
+    stats["zrkadlo"] = _notion_zrkadlo_beh(pages, delta_days, dry_run)
     return jsonify({"ok": True, **stats})
 
 

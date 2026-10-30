@@ -1,24 +1,30 @@
-"""Notion Dashboard -> projects: zrkadlo stavu a doplnenie prázdnych polí CRM.
+"""Notion Dashboard -> projects: zrkadlo stavu, To do a report rozdielov.
 
 Čisté funkcie bez siete, volá ich /webhook/notion-sync-zakazky v app.py.
 
 Pravidlá:
-- zrkadlové *_notion stĺpce sa prepisujú vždy,
-- vlastné polia CRM sa len dopĺňajú, keď sú prázdne; vyplnené sa nikdy neprepíšu,
-  rozdiel ide ako udalosť notion_rozdiel,
-- párovanie len cez notion_page_id, nič sa nezakladá ani nemaže,
-- computed_phase sa nedotýka (nie je v ZRKADLO ani POLIA_CRM).
+- do projects ide len stav_celkovy_notion, todo_notion a notion_synced_at,
+- vlastné polia CRM (POLIA_CRM) sa nezapisujú vôbec: ZoD a suma spúšťajú lifecycle, bránu
+  realizácie, W4, províziu aj návrh faktúry. Prázdne idú do reportu doplnenia, rôzne do
+  reportu rozdiely a ako udalosť notion_rozdiel,
+- párovanie len cez notion_page_id, pri neistej väzbe sa nezapisuje a nahlási sa,
+- archivované projekty sa preskakujú, nič sa nezakladá ani nemaže,
+- computed_phase sa nemení, nesúlad so stavom ide do reportu rozpor_stavu.
 
 Hodnoty sa čítajú priamo z Notion properties: notion_props_to_flat nepozná typy
 status a date, stav a dátumy by zahodil.
 """
 import difflib
+import hmac
 import re
 import unicodedata
-from datetime import datetime
-from zoneinfo import ZoneInfo
+from datetime import datetime, timezone
 
-TZ = ZoneInfo("Europe/Bratislava")
+try:
+    from zoneinfo import ZoneInfo
+    TZ = ZoneInfo("Europe/Bratislava")
+except Exception:  # chýba tzdata, modul sa importuje v app.py a nesmie zhodiť službu
+    TZ = timezone.utc
 
 P_STAV = "STAV celkový"
 P_TODO = "To do / na čo čakáme ?"
@@ -31,8 +37,10 @@ VSETKY_P = (P_STAV, P_TODO, P_SUMA, P_ZOD, P_FS, P_TERMIN, P_OBCHODNIK)
 
 # Predvolená hodnota status property: Notion ju ukazuje aj pri riadku bez hodnoty.
 STAV_PREDVOLENY = "Administratíva"
+STAV_POZASTAVENE = "Pozastavené"
 
 ZRKADLO = {"stav": "stav_celkovy_notion", "todo": "todo_notion"}
+ZAPIS_STLPCE = frozenset(ZRKADLO.values()) | {"notion_synced_at"}
 POLIA_CRM = {
     "suma": "contract_value_no_vat",
     "zod": "contract_signed_at",
@@ -42,12 +50,35 @@ POLIA_CRM = {
 }
 POPIS = {"suma": "Suma", "zod": "ZoD", "fs": "Funkčná skúška", "termin": "Termín", "obchodnik": "Obchodník"}
 
-_STOP = {"sro", "spol", "ao", "spolocnost", "ing", "kwp", "kwh", "om1", "om2"}
+# computed_phase -> stavy Notionu, ktoré s ňou nie sú v rozpore. Pozastavené sa neporovnáva.
+STAV_FAZY = {
+    "bez_zod": ("Obchod", "Administratíva"),
+    "vystavit_fa1": ("Administratíva",),
+    "urgovat_fa1": ("Administratíva",),
+    "projekcia": ("Administratíva", "V realizácii"),
+    "realizacia": ("V realizácii",),
+    "funkcna_skuska": ("V realizácii", "Realizácia dokončená"),
+    "porealizacna": ("Realizácia dokončená", "Porealizačná fáza", "Zákazka dokončená"),
+    "dokoncene": ("Porealizačná fáza", "Zákazka dokončená"),
+}
+
+_STOP = {"sro", "spol", "spolocnost", "ing", "kwp", "kwh", "fve", "bess", "bue"}
+_ROZLISOVACE = (
+    r"\bom\s*-?\s*(\d+)\b",
+    r"\b(\d+)\s*\.?\s*etap",
+    r"\betap[a-z]*\s*(\d+)\b",
+    r"(\d+(?:[.,]\d+)?)\s*(?:kwp|kwh|kw|mw)\b",
+)
 
 
 def zapis_povoleny(dry_run, env):
     """Poistka: cron volá dry_run=0 a Render nasadzuje merge hneď, zápis zapína až env."""
     return not dry_run and env.get("NOTION_ZRKADLO_ZAPIS") == "1"
+
+
+def tajomstvo_ok(prijate, tajomstvo):
+    """Prázdne tajomstvo na serveri znamená odmietnuť, nie pustiť všetkých."""
+    return bool(tajomstvo) and hmac.compare_digest((prijate or "").encode(), tajomstvo.encode())
 
 
 def hodnoty_stranky(pg):
@@ -85,17 +116,21 @@ def _den(v):
     return (d if d.tzinfo else d.replace(tzinfo=TZ)).astimezone(TZ).date().isoformat()
 
 
+def _mena(v):
+    return {m.strip().casefold() for m in re.split(r"[,;/]", str(v)) if m.strip()}
+
+
 def _rovnake(kluc, crm, notion):
     if kluc == "suma":
         return abs(float(crm) - float(notion)) < 0.01
     if kluc == "obchodnik":
-        return str(crm).strip().casefold() in [n.strip().casefold() for n in str(notion).split(",")]
+        return _mena(crm) <= _mena(notion)  # Notion je multi_select, poradie ani ďalší obchodník nie sú rozpor
     return _den(crm) == _den(notion)
 
 
 def porovnaj(hodnoty, projekt):
-    """Vráti (zmeny pre PATCH projects, rozdiely). Vyplnené pole CRM sa nikdy nedostane do zmien."""
-    zmeny, rozdiely = {}, []
+    """Vráti (zmeny pre PATCH, doplnenia, rozdiely). Zmeny obsahujú len zrkadlové stĺpce."""
+    zmeny, doplnenia, rozdiely = {}, [], []
     for kluc, stlpec in ZRKADLO.items():
         if kluc in hodnoty and (projekt.get(stlpec) or None) != hodnoty[kluc]:
             zmeny[stlpec] = hodnoty[kluc]
@@ -105,10 +140,15 @@ def porovnaj(hodnoty, projekt):
             continue
         crm = projekt.get(stlpec)
         if _prazdne(crm):
-            zmeny[stlpec] = notion
+            doplnenia.append({"pole": kluc, "stlpec": stlpec, "notion": str(notion)})
         elif not _rovnake(kluc, crm, notion):
             rozdiely.append({"pole": kluc, "crm": str(crm), "notion": str(notion)})
-    return zmeny, rozdiely
+    return zmeny, doplnenia, rozdiely
+
+
+def rozpor_stavu(stav, faza):
+    povolene = STAV_FAZY.get(faza)
+    return bool(stav and povolene and stav != STAV_POZASTAVENE and stav not in povolene)
 
 
 def _kod(t):
@@ -116,10 +156,24 @@ def _kod(t):
     return m.group(0) if m else None
 
 
+def _ascii(t):
+    return "".join(c for c in unicodedata.normalize("NFKD", (t or "").lower()) if not unicodedata.combining(c))
+
+
 def _slova(t):
-    t = "".join(c for c in unicodedata.normalize("NFKD", (t or "").lower()) if not unicodedata.combining(c))
-    t = re.sub(r"p-\d{2}-\d+", " ", t).replace("s.r.o", "sro").replace("s. r. o", "sro")
-    return {w for w in re.findall(r"[a-z0-9]+", t) if len(w) >= 3 and w not in _STOP}
+    t = re.sub(r"p-\d{2}-\d+", " ", _ascii(t)).replace("s.r.o", "sro").replace("s. r. o", "sro")
+    return {w for w in re.findall(r"[a-z]{3,}", t) if w not in _STOP}
+
+
+def _rozlisovace_sedia(a, b):
+    """OM, etapa a výkon: ak ich uvádzajú obe strany, musia sa zhodovať."""
+    a, b = _ascii(a), _ascii(b)
+    for vzor in _ROZLISOVACE:
+        ra = {x.replace(",", ".") for x in re.findall(vzor, a)}
+        rb = {x.replace(",", ".") for x in re.findall(vzor, b)}
+        if ra and rb and ra != rb:
+            return False
+    return True
 
 
 def _podobne(slova, ine):
@@ -127,14 +181,17 @@ def _podobne(slova, ine):
 
 
 def vazba_ok(nazov_notion, nazov_crm):
-    """Sedí stránka na projekt? KRUP: rovnaký kód, ale Baliareň v CRM a TRAFOSTANICA v Notione."""
+    """Sedí stránka na projekt? Pri neistote False: nezapisuje sa a nahlási sa.
+    KRUP: rovnaký kód, ale Baliareň v CRM a TRAFOSTANICA v Notione."""
     kn, kc = _kod(nazov_notion), _kod(nazov_crm)
     if kn and kc and kn != kc:
         return False
+    if not _rozlisovace_sedia(nazov_notion, nazov_crm):
+        return False
     a, b = _slova(nazov_notion), _slova(nazov_crm)
     if not a or not b:
-        return True
-    if not (kn and kc):  # CRM názov môže byť voľný („FVE Radošinka 200kW“), stačí spoločné slovo
+        return bool(kn and kc)  # zhodný kód bez ďalšieho názvu
+    if not (kn and kc):  # CRM názov môže byť voľný („FVE Radošinka 200kW“), stačí spoločné vlastné slovo
         return bool(a & b)
     return a <= b or b <= a or _podobne(a - b, b) or _podobne(b - a, a)
 
@@ -159,17 +216,22 @@ def naplanuj(stranky, projekty, videne_rozdiely):
 
     plan = {"zmeny": [], "udalosti": [], "ok_ids": []}
     rep = {
-        "stranky": len(stranky), "sparovane": 0, "projekty_so_zmenou": 0,
-        "zmeny_polia": {}, "rozdiely_polia": {}, "nove_rozdiely": 0,
-        "zla_vazba": [], "bez_projektu": [], "chybajuce_properties": [], "rozdiely": [], "doplnenia": [],
+        "stranky": len(stranky), "sparovane": 0, "archivovane": 0, "projekty_so_zmenou": 0,
+        "zmeny_polia": {}, "doplnenia_polia": {}, "rozdiely_polia": {}, "nove_rozdiely": 0,
+        "zla_vazba": [], "bez_projektu": [], "chybajuce_properties": [],
+        "rozpor_stavu": [], "rozdiely": [], "doplnenia": [],
     }
     videne_stranky = set()
     for pg in stranky:
         pid, nazov = _id(pg.get("id")), nazov_stranky(pg)
         videne_stranky.add(pid)
-        zhody = podla_id.get(pid, [])
-        if not zhody:
+        vsetky = podla_id.get(pid, [])
+        if not vsetky:
             rep["bez_projektu"].append({"notion": nazov, "notion_page_id": pid})
+            continue
+        zhody = [p for p in vsetky if not p.get("archived_at")]
+        rep["archivovane"] += len(vsetky) - len(zhody)
+        if not zhody:
             continue
         zle = [p for p in zhody if len(zhody) > 1 or not vazba_ok(nazov, p.get("name"))]
         if zle:
@@ -180,14 +242,17 @@ def naplanuj(stranky, projekty, videne_rozdiely):
         plan["ok_ids"].append(p["id"])
         hodnoty = hodnoty_stranky(pg)
         rep["chybajuce_properties"] = sorted(set(rep["chybajuce_properties"]) | {n for n in VSETKY_P if n not in (pg.get("properties") or {})})
-        zmeny, rozdiely = porovnaj(hodnoty, p)
+        zmeny, doplnenia, rozdiely = porovnaj(hodnoty, p)
         if zmeny:
             plan["zmeny"].append((p["id"], zmeny))
             rep["projekty_so_zmenou"] += 1
             for s in zmeny:
                 rep["zmeny_polia"][s] = rep["zmeny_polia"].get(s, 0) + 1
-                if s in POLIA_CRM.values():
-                    rep["doplnenia"].append({"projekt": p.get("name"), "stlpec": s, "hodnota": zmeny[s]})
+        for d in doplnenia:
+            rep["doplnenia_polia"][d["pole"]] = rep["doplnenia_polia"].get(d["pole"], 0) + 1
+            rep["doplnenia"].append({"projekt": p.get("name"), **d})
+        if rozpor_stavu(hodnoty.get("stav"), p.get("computed_phase")):
+            rep["rozpor_stavu"].append({"projekt": p.get("name"), "stav_notion": hodnoty["stav"], "computed_phase": p["computed_phase"], "suma": p.get("contract_value_no_vat")})
         for r in rozdiely:
             rep["rozdiely_polia"][r["pole"]] = rep["rozdiely_polia"].get(r["pole"], 0) + 1
             rep["rozdiely"].append({"projekt": p.get("name"), **r})
@@ -202,5 +267,5 @@ def naplanuj(stranky, projekty, videne_rozdiely):
 
     for pid, zhody in podla_id.items():
         if pid not in videne_stranky:
-            rep["zla_vazba"] += [{"projekt": p.get("name"), "id": p["id"], "notion": None, "notion_page_id": pid} for p in zhody]
+            rep["zla_vazba"] += [{"projekt": p.get("name"), "id": p["id"], "notion": None, "notion_page_id": pid} for p in zhody if not p.get("archived_at")]
     return plan, rep
