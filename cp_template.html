@@ -511,7 +511,7 @@
     <h1 class="cover-title">Vlastná elektrina<br><span class="accent">priamo z Vašej strechy</span></h1>
     <div class="cover-sub">
       Návrh fotovoltickej elektrárne {{ vykon_kwp_sk }} kWp pripravený osobne pre Vás —
-      vrátane vybavenia dotácie, montáže a uvedenia do prevádzky.
+      vrátane montáže, pripojenia a uvedenia do prevádzky.
     </div>
     <div class="cover-personal">
       „{{ uvodny_pozdrav }}"
@@ -725,8 +725,8 @@
       <div class="benefit-num"><div class="benefit-num-circle">5</div></div>
       <div class="benefit-body">
         <div class="benefit-title">Pokoj a komfort, žiadna administratíva navyše</div>
-        <div class="benefit-text">Vybavenie pripojenia k distribučnej sieti, žiadosť o dotáciu Zelená domácnostiam, revíziu
-          aj registráciu malého zdroja vybavujeme za Vás. Vy sa staráte o domácnosť — my o všetko ostatné.</div>
+        <div class="benefit-text">Vybavenie pripojenia k distribučnej sieti, revíziu aj registráciu malého zdroja
+          vybavujeme za Vás a pomôžeme Vám s podkladmi k žiadosti o dotáciu. Vy sa staráte o domácnosť — my o všetko ostatné.</div>
       </div>
     </div>
   </div>
@@ -743,7 +743,7 @@
 
   <div class="section-eyebrow">04  ·  Cena</div>
   <h2 class="section-title">Vaša investícia
-    <small>Pevná cena na komplet, vrátane materiálu, práce, projekcie, revízie a vybavenia dotácie. Po obhliadke sa fixuje v zmluve.</small>
+    <small>Orientačná cena na komplet, vrátane materiálu, práce, projekcie a revízie. Záväzná cena sa určí po obhliadke v zmluve.</small>
   </h2>
 
   <div class="price-block">
@@ -755,14 +755,10 @@
       <div class="label">DPH 23 %</div>
       <div class="value">{{ dph_eur }}</div>
     </div>
+    {% if zlava > 0 %}
     <div class="price-row" style="border-top: 2px solid rgba(0,0,0,0.15); margin-top: 2mm; padding-top: 4mm;">
       <div class="label"><strong>Cena s DPH</strong></div>
       <div class="value"><strong>{{ cena_s_dph_eur }}</strong></div>
-    </div>
-    {% if dotacia > 0 %}
-    <div class="price-row discount">
-      <div class="label">− Dotácia Zelená domácnostiam</div>
-      <div class="value">− {{ dotacia_eur }}</div>
     </div>
     {% endif %}
     {% if zlava > 0 %}
@@ -772,12 +768,13 @@
     </div>
     {% endif %}
     <div class="price-row final">
-      <div class="label">Vaša cena po dotácii</div>
+      <div class="label">Vaša cena s DPH</div>
       <div class="value">{{ cena_finalna_eur }}</div>
     </div>
   </div>
 
   <p class="price-note">Cena platí 30 dní od dátumu vystavenia. Sadzba DPH 23 % podľa platnej legislatívy SR.</p>
+  <p class="price-note">{{ dotacia_poznamka }}</p>
 
   <h3>Návratnosť investície v skratke</h3>
   <p class="lead-text">{{ navratnost_text | safe }}</p>
@@ -850,7 +847,7 @@
 
   <div class="chart-block">
     <img src="{{ chart_uspora }}" style="max-height: 95mm; width: auto; max-width: 100%; margin: 0 auto; display: block;">
-    <div class="chart-caption">25-ročná kumulatívna úspora pri 3 % ročnom raste cien elektriny a 0,5 % degradácii. Návratnosť počítaná z ceny po dotácii.</div>
+    <div class="chart-caption">25-ročná kumulatívna úspora pri 3 % ročnom raste cien elektriny a 0,5 % degradácii. Návratnosť počítaná z plnej ceny, bez dotácie.</div>
   </div>
 
   <div class="chart-block" style="margin-top: 8mm;">
@@ -879,7 +876,7 @@
         <li>Montáž a uvedenie do prevádzky vlastným tímom</li>
         <li>Revízna správa elektroinštalácie</li>
         <li>Vybavenie pripojenia do distribučnej siete</li>
-        {% if dotacia > 0 %}<li>Vybavenie žiadosti o dotáciu Zelená domácnostiam</li>{% endif %}
+        <li>Pomoc s podkladmi k žiadosti o dotáciu Zelená domácnostiam II</li>
         <li>Doprava materiálu na miesto inštalácie</li>
         <li>Inštalácia mobilnej aplikácie + zaškolenie</li>
         <li><strong>Bezplatná prvá ročná kontrola</strong> po 12 mesiacoch (vizuálna kontrola, dotiahnutie, monitoring, čistota)</li>
@@ -926,8 +923,8 @@
   <div class="why-row">
     <div class="why-icon-cell"><div class="why-icon-circle">2</div></div>
     <div class="why-body">
-      <div class="why-h">Certifikovaný zhotoviteľ SIEA pre Zelenú domácnostiam</div>
-      <div class="why-t">Sme zaregistrovaní v zozname zhotoviteľov SIEA. Žiadosť o dotáciu pripravíme a podáme za Vás — vrátane podkladov, splnomocnení a komunikácie s úradom.</div>
+      <div class="why-h">Pomoc so Zelenou domácnostiam II</div>
+      <div class="why-t">Poradíme, čo treba k registrácii a rezervácii, a pripravíme Vám podklady od zhotoviteľa. O príspevku rozhoduje SIEA.</div>
     </div>
   </div>
 

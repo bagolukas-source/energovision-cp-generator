@@ -17,7 +17,7 @@ from email.utils import formatdate
 sys.path.insert(0, str(Path(__file__).parent))
 from generate_cp import (
     load_cennik, vyrataj_konfig, vyrataj_ceny, vyrataj_navratnost,
-    vyrob_grafy, vyrob_internu_kalkulaciu, ZHOTOVITEL, DEFAULTS
+    vyrob_grafy, vyrob_internu_kalkulaciu, ZHOTOVITEL, DEFAULTS, DOTACIA_POZNAMKA
 )
 
 _SD = os.path.dirname(os.path.abspath(__file__))
@@ -246,7 +246,7 @@ def gen_copywriting(lead, konfig, ceny, navratnost):
 
     # === NÁVRATNOSŤ TEXT ===
     navratnost_text = (
-        f"Pri dnešných cenách elektriny ({_sk_dec(cena_el)} €/kWh) sa investícia po dotácii "
+        f"Pri dnešných cenách elektriny ({_sk_dec(cena_el)} €/kWh) sa investícia "
         f"<strong>{_sk_int(ceny['cena_finalna'])} €</strong> vráti za "
         f"<strong>~{_sk_dec(nav_rokov, 1)} rokov</strong>. "
         f"S rastom cien elektriny (3 % ročne) bude návratnosť reálne kratšia. "
@@ -418,6 +418,7 @@ def vyrob_html_pdf(lead, konfig, ceny, navratnost, grafy, out_pdf, bom_rozpis=No
         "cena_bez_dph_eur": fmt_eur(ceny["cena_bez_dph"]),
         "dph_eur": fmt_eur(ceny["cena_s_dph"] - ceny["cena_bez_dph"]),
         "cena_s_dph_eur": fmt_eur(ceny["cena_s_dph"]),
+        "dotacia_poznamka": DOTACIA_POZNAMKA,
         "dotacia_eur": fmt_eur(ceny["dotacia"]),
         "zlava_eur": fmt_eur(ceny["zlava_eur"]),
         "cena_finalna_eur": fmt_eur(ceny["cena_finalna"]),
@@ -461,7 +462,6 @@ Krátko zhrnuté:
 - Predpokladaná ročná výroba: {navratnost['rocna_vyroba_kwh']:,.0f} kWh
 - Predpokladaná ročná úspora: {navratnost['rocne_uspora_eur']:,.0f} EUR
 - Cena s DPH: {ceny['cena_s_dph']:,.2f} EUR
-- Cena po dotácii Zelená domácnostiam: {ceny['cena_finalna']:,.2f} EUR
 - Návratnosť: cca {navratnost['navratnost_rokov']:.1f} rokov
 
 Ako ďalší krok navrhujem bezplatnú obhliadku, kde upresníme technické detaily
@@ -530,8 +530,6 @@ def main(lead_path):
     print(f"   {out_dir}/{interna}.xlsx")
     print(f"\n💰 Súhrn cien:")
     print(f"   Cena s DPH:        {ceny['cena_s_dph']:>12,.2f} €".replace(",", " "))
-    print(f"   Dotácia:           {-ceny['dotacia']:>12,.0f} €".replace(",", " "))
-    print(f"   Cena po dotácii:   {ceny['cena_po_dotacii']:>12,.2f} €".replace(",", " "))
     print(f"   Návratnosť:        {navratnost['navratnost_rokov']:>12.1f} rokov")
 
 
