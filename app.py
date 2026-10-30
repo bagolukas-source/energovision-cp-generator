@@ -856,6 +856,8 @@ def notion_update_page(page_id, properties):
     return r.json()
 
 
+import notion_zrkadlo as _nz
+
 DASHBOARD_DB_ID = "2671b0e51aa3803b9ee2dde6da0fb130"
 
 def _notion_query_all(db_id, delta_days=0):
@@ -916,15 +918,61 @@ def _parse_diary(text):
         out.append((iso, line, stripped))
     return out
 
+def _notion_zrkadlo_beh(pages, delta_days, dry_run):
+    """Zrkadlo do projects (pravidlá v notion_zrkadlo.py). Vždy nad celým Dashboardom, aj pri delte denníka.
+    Zapisuje len pri dry_run=0 a env NOTION_ZRKADLO_ZAPIS=1: cron volá dry_run=0, merge samotný nič nezapíše.
+    Chyba zrkadla nezhodí sync denníka."""
+    zapis = _nz.zapis_povoleny(dry_run, os.environ)
+    try:
+        stranky = pages if delta_days == 0 else _notion_query_all(DASHBOARD_DB_ID, 0)
+        pr = requests.get(f"{SUPABASE_URL}/rest/v1/projects?select=*&notion_page_id=not.is.null&limit=2000", headers=_supa_headers(), timeout=40)
+        pr.raise_for_status()
+        videne, off = set(), 0
+        while True:
+            ev = requests.get(f"{SUPABASE_URL}/rest/v1/events?select=entity_id,payload&verb=eq.notion_rozdiel&order=id.asc&limit=1000&offset={off}", headers=_supa_headers(), timeout=40)
+            ev.raise_for_status()
+            rows = ev.json()
+            videne |= {(e["entity_id"], e["payload"].get("pole"), e["payload"].get("crm"), e["payload"].get("notion")) for e in rows}
+            if len(rows) < 1000:
+                break
+            off += 1000
+        plan, rep = _nz.naplanuj(stranky, pr.json(), videne)
+        rep["mod"] = "ZÁPIS" if zapis else "DRY-RUN (nezapísané)"
+        if not zapis:
+            return rep
+        hlavicky = {**_supa_headers(), "Prefer": "return=minimal"}
+        rep["chyby_zapisu"] = 0
+        ok_ids = set(plan["ok_ids"])
+        for pid, zmeny in plan["zmeny"]:
+            r = requests.patch(f"{SUPABASE_URL}/rest/v1/projects?id=eq.{pid}", headers=hlavicky, json=zmeny, timeout=20)
+            if not r.ok:
+                log.error("[notion-zrkadlo] %s: %s", pid, r.text[:200])
+                rep["chyby_zapisu"] += 1
+                ok_ids.discard(pid)
+        for i in range(0, len(plan["udalosti"]), 200):
+            r = requests.post(f"{SUPABASE_URL}/rest/v1/events", headers=hlavicky, json=plan["udalosti"][i:i+200], timeout=40)
+            if not r.ok:
+                log.error("[notion-zrkadlo] udalosti: %s", r.text[:200])
+                rep["chyby_zapisu"] += 1
+        if ok_ids:
+            import datetime as _dt
+            kedy = _dt.datetime.now(_dt.timezone.utc).isoformat()
+            r = requests.patch(f"{SUPABASE_URL}/rest/v1/projects?id=in.({','.join(sorted(ok_ids))})", headers=hlavicky, json={"notion_synced_at": kedy}, timeout=40)
+            rep["chyby_zapisu"] += 0 if r.ok else 1
+        return rep
+    except Exception as e:
+        log.exception("[notion-zrkadlo] zlyhalo")
+        return {"chyba": str(e)[:200]}
+
+
 @app.route("/webhook/notion-sync-zakazky", methods=["GET", "POST"])
 def notion_sync_zakazky():
     """Sync Dashboard zákaziek Notion→CRM. Default dry_run (nezapisuje).
-    Params: dry_run=0 (zapíše), delta_days=N (len zmenené za N dní; 0=full), key=WEBHOOK_SECRET (pre cron)."""
+    Params: dry_run=0 (zapíše), delta_days=N (len zmenené za N dní; 0=full).
+    Tajomstvo v hlavičke X-Webhook-Secret; key v URL ostáva len pre cron, ktorý ho dnes tak posiela."""
     args = request.args
-    if WEBHOOK_SECRET and args.get("key") != WEBHOOK_SECRET and request.headers.get("X-Webhook-Secret") != WEBHOOK_SECRET:
-        # povolené aj bez kľúča pre manuálny dry_run? Nie — chránime zápis. Dry-run dovolíme.
-        if args.get("dry_run", "1") not in ("1", "true", "yes"):
-            return jsonify({"ok": False, "error": "unauthorized (key)"}), 401
+    if not _nz.tajomstvo_ok(request.headers.get("X-Webhook-Secret") or args.get("key"), WEBHOOK_SECRET):
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
     dry_run = args.get("dry_run", "1") in ("1", "true", "yes")
     delta_days = int(args.get("delta_days") or 0)
     try:
@@ -1008,6 +1056,7 @@ def notion_sync_zakazky():
 
     stats["mode"] = "DRY-RUN (nezapísané)" if dry_run else "ZAPÍSANÉ"
     stats["delta_days"] = delta_days
+    stats["zrkadlo"] = _notion_zrkadlo_beh(pages, delta_days, dry_run)
     return jsonify({"ok": True, **stats})
 
 
