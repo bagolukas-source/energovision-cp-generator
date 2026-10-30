@@ -238,7 +238,7 @@ def vyrob_kombinovany_command(lead, results, out_command_path, ev_id, vek_dni=0)
         body_variants += (
             f"\n📄 {variant_label[v]}\n"
             f"   Cena s DPH:        {n(r['cena_s_dph'], 2)} EUR\n"
-            f"   Po dotácii:        {n(r['cena_finalna'], 2)} EUR\n"
+            f"   Konečná cena:      {n(r['cena_finalna'], 2)} EUR\n"
             f"   Návratnosť:        cca {n(r['navratnost_rokov'], 1)} rokov\n"
             f"   {variant_pitch[v]}\n"
         )
@@ -319,7 +319,7 @@ def vyrob_kombinovany_command(lead, results, out_command_path, ev_id, vek_dni=0)
             f'<td style="padding:12px; text-align:right; min-width:180px; vertical-align:top;">'
             f'<div style="color:#666; font-size:11px; text-transform:uppercase; letter-spacing:1px;">Cena s DPH</div>'
             f'<div style="font-size:14px; font-weight:600; color:#1a1a1a;">{n(r["cena_s_dph"], 2)} €</div>'
-            f'<div style="color:#666; font-size:11px; text-transform:uppercase; letter-spacing:1px; margin-top:6px;">Po dotácii</div>'
+            f'<div style="color:#666; font-size:11px; text-transform:uppercase; letter-spacing:1px; margin-top:6px;">Konečná cena</div>'
             f'<div style="font-size:18px; font-weight:800; color:#6FB022;">{n(r["cena_finalna"], 2)} €</div>'
             f'<div style="color:#666; font-size:11px; margin-top:4px;">Návratnosť ~{n(r["navratnost_rokov"], 1)} rokov</div>'
             f'</td>'
@@ -480,7 +480,7 @@ def vyrob_outlook_draft_command(lead, konfig, ceny, navratnost, pdf_path, out_co
         f'<td style="padding:6px 12px;"><strong>{n(rocna_uspora)} € / rok</strong></td></tr>'
         f'<tr><td style="padding:6px 12px; color:#666;">Cena s DPH</td>'
         f'<td style="padding:6px 12px;">{n(ceny["cena_s_dph"], 2)} €</td></tr>'
-        f'<tr><td style="padding:6px 12px; color:#666;">Po dotácii</td>'
+        f'<tr><td style="padding:6px 12px; color:#666;">Konečná cena</td>'
         f'<td style="padding:6px 12px; font-size:16px; color:#6FB022;">'
         f'<strong>{n(ceny["cena_finalna"], 2)} €</strong></td></tr>'
         f'<tr><td style="padding:6px 12px; color:#666;">Návratnosť</td>'

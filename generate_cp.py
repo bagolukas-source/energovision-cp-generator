@@ -39,6 +39,14 @@ ZHOTOVITEL = {
 }
 
 # Defaultné konštanty (môžu byť prepísané v lead-e)
+# Jediné miesto s textom o dotácii v ponuke. Pri zmene podmienok SIEA zmeň text aj dátum.
+DOTACIA_POZNAMKA = (
+    "Dotácia nie je v cene odpočítaná. V projekte Zelená domácnostiam II zaplatí domácnosť celú cenu "
+    "a SIEA jej príspevok do 1 000 € (1 150 € so zvýhodnením), najviac 50 % výdavkov, vyplatí na účet "
+    "až po dokončení inštalácie a schválení žiadosti. Príspevok nie je nárokovateľný, závisí od rezervácie "
+    "a podmienok SIEA. Stav k 30. 10. 2026."
+)
+
 DEFAULTS = {
     "marza_pct": 30,                # marža v %
     "rezerva_pct": 5,               # rezerva v %
@@ -65,12 +73,6 @@ DEFAULTS = {
     "ev_najazd_km_rok": 21230,
     "ev_spotreba_kwh_100km": 19,
     "ev_podiel_zo_slnka_pct": 40,
-    # Dotácia je paušálna — pevná suma bez ohľadu na výkon (Lukáš 2026-09-28).
-    # Musí zostať zhodná s fve-os CRM:
-    # apps/web/src/app/(admin)/ponuky/novy/actions.ts → DOTACIA_EUR.
-    # Keď sa zmení tu a nie tam (alebo naopak), CP PDF a CRM budú tvrdiť iné
-    # číslo tomu istému klientovi — to sa už raz stalo, pozri poznámku nižšie.
-    "dotacia_eur": 1000,
     "obchodnik": {
         "meno": "Dominik Galaba",
         "funkcia": "Office & Administration Manager",
@@ -236,18 +238,10 @@ def vyrataj_ceny(konfig, lead):
     cena_bez_dph = nakupna_spolu + rezerva_eur + marza_eur
     cena_s_dph = cena_bez_dph * (1 + dph)
 
-    # Dotácia Zelená domácnostiam — paušálne, rovnaká suma pre každú ponuku.
-    #
-    # História, aby sa to neprepisovalo dokola:
-    #   pôvodne  flat 1 500 € (3 kW strop)
-    #   2026-07-23  500 €/kW so stropom 3 500 € — zosúladené s CRM po nesúlade
-    #   2026-09-28  paušál 1 000 € bez ohľadu na výkon (Lukáš)
-    #
-    # Okresové zvýhodnenia (575/900 €/kW) neplatia, batéria dotáciu nezvyšuje.
-    if lead.get("dotacia", True):
-        dotacia = DEFAULTS["dotacia_eur"]
-    else:
-        dotacia = 0
+    # Dotácia sa z ceny neodpočítava. Zelená domácnostiam II (VP V1, účinné od 21. 10. 2026):
+    # domácnosť zaplatí celú cenu a SIEA jej príspevok vyplatí na účet až po inštalácii
+    # a schválení úplnej žiadosti. Text pre zákazníka je v DOTACIA_POZNAMKA.
+    dotacia = 0
 
     cena_po_dotacii = cena_s_dph - dotacia
     zlava_eur = lead.get("zlava_eur", 0)
@@ -582,13 +576,11 @@ def vyrob_docx(lead, konfig, ceny, navratnost, grafy, out_path):
         cell_set(row.cells[1], value, size=size, bold=bold, align="right",
                  fill=(GREEN if hi else None), color=((0,0,0) if hi else None))
     cprow("Cena fotovoltaického zariadenia s DPH 23 %", f"{ceny['cena_s_dph']:,.2f} €".replace(",", "X").replace(".", ",").replace("X", " "), bold=True)
-    if ceny["dotacia"] > 0:
-        cprow("Dotácia Zelená domácnostiam", f"− {ceny['dotacia']:,.0f} €".replace(",", " "))
     if ceny["zlava_eur"] > 0:
         cprow("Zľava", f"− {ceny['zlava_eur']:,.2f} €".replace(",", "X").replace(".", ",").replace("X", " "))
-    cprow("Cena po dotácii", f"{ceny['cena_finalna']:,.2f} €".replace(",", "X").replace(".", ",").replace("X", " "), bold=True, hi=True, size=14)
+    cprow("Konečná cena s DPH", f"{ceny['cena_finalna']:,.2f} €".replace(",", "X").replace(".", ",").replace("X", " "), bold=True, hi=True, size=14)
     add_p("", space_after=10)
-    add_p(f"Sadzba DPH 23 % podľa platnej legislatívy SR.", size=9, color=(0x88,0x88,0x88), italic=True)
+    add_p(f"Sadzba DPH 23 % podľa platnej legislatívy SR. {DOTACIA_POZNAMKA}", size=9, color=(0x88,0x88,0x88), italic=True)
 
     add_h("3. Návratnosť a úspora", size=14)
 
@@ -615,8 +607,7 @@ def vyrob_docx(lead, konfig, ceny, navratnost, grafy, out_path):
         "Revízna správa elektroinštalácie",
         "Vybavenie pripojenia do distribučnej siete",
     ]
-    if lead.get("dotacia", True):
-        items.append("Vybavenie žiadosti o dotáciu Zelená domácnostiam")
+    items.append("Pomoc s podkladmi k žiadosti o dotáciu Zelená domácnostiam II")
     items.append("Záruka 12 rokov na panely (produkt) a 25 rokov na lineárny pokles výkonu")
     items.append("Záruka 10 rokov na fotovoltický menič a 12 rokov na montáž")
     if konfig["ma_bateriu"]:
@@ -736,8 +727,6 @@ def vyrob_internu_kalkulaciu(lead, konfig, ceny, navratnost, out_path):
     s(r, "Cena bez DPH", ceny["cena_bez_dph"], fmt='#,##0.00 €'); r += 1
     s(r, "DPH 23 %", ceny["cena_s_dph"] - ceny["cena_bez_dph"], fmt='#,##0.00 €'); r += 1
     s(r, "Cena s DPH", ceny["cena_s_dph"], b=True, fmt='#,##0.00 €'); r += 1
-    s(r, "Dotácia Zelená domácnostiam", -ceny["dotacia"], fmt='#,##0.00 €'); r += 1
-    s(r, "Cena po dotácii", ceny["cena_po_dotacii"], b=True, fmt='#,##0.00 €'); r += 1
     if ceny["zlava_eur"] > 0:
         s(r, "Zľava", -ceny["zlava_eur"], fmt='#,##0.00 €'); r += 1
         s(r, "FINÁLNA cena pre zákazníka", ceny["cena_finalna"], b=True, fmt='#,##0.00 €')
@@ -788,7 +777,6 @@ Krátko zhrnuté:
 • Predpokladaná ročná výroba: {navratnost['rocna_vyroba_kwh']:,.0f} kWh
 • Predpokladaná ročná úspora: {navratnost['rocne_uspora_eur']:,.0f} €
 • Cena s DPH: {ceny['cena_s_dph']:,.2f} €
-• Cena po dotácii Zelená domácnostiam: {ceny['cena_finalna']:,.2f} €
 • Návratnosť: cca {navratnost['navratnost_rokov']:.1f} rokov
 
 Ako ďalší krok navrhujem bezplatnú obhliadku, kde upresníme technické detaily
@@ -878,8 +866,6 @@ def main(lead_path):
     print(f"   {out_dir}/{interna}.xlsx")
     print(f"\n💰 Súhrn cien:")
     print(f"   Cena s DPH:        {ceny['cena_s_dph']:>12,.2f} €".replace(",", "X").replace(".", ",").replace("X", " "))
-    print(f"   Dotácia:           {-ceny['dotacia']:>12,.0f} €".replace(",", " "))
-    print(f"   Cena po dotácii:   {ceny['cena_po_dotacii']:>12,.2f} €".replace(",", "X").replace(".", ",").replace("X", " "))
     print(f"   Zisk (interný):    {ceny['zisk']:>12,.2f} €".replace(",", "X").replace(".", ",").replace("X", " "))
     print(f"   Návratnosť:        {navratnost['navratnost_rokov']:>12.1f} rokov")
 
