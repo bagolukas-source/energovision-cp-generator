@@ -266,7 +266,8 @@ def vyrataj_ceny(konfig, lead):
 
 def vyrataj_navratnost(konfig, ceny, lead):
     vykon = konfig["vykon_kwp"]
-    rocna_vyroba = vykon * DEFAULTS["vyroba_kwh_per_kwp"]
+    # Výroba z nákresu na reálnej streche má prednosť pred paušálom pre južnú orientáciu.
+    rocna_vyroba = lead.get("rocna_vyroba_kwh") or vykon * DEFAULTS["vyroba_kwh_per_kwp"]
     cena_el = lead.get("cena_el_eur_kwh", DEFAULTS["cena_el_eur_kwh"])
     samosp = (lead.get("samospotreba_pct") or
               (DEFAULTS["samospotreba_pct"] + (10 if konfig["ma_bateriu"] else 0))) / 100
