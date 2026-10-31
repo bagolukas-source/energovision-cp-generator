@@ -196,8 +196,8 @@ def gen_copywriting(lead, konfig, ceny, navratnost):
 
     # === RIEŠENIE INTRO ===
     rieseni_intro = (
-        f"Zostava postavená tak, aby vyrobila ~{_sk_int(vyroba)} kWh ročne a pokryla "
-        f"{pokrytie:.0f} % Vašej spotreby. Komponenty sú overené značky, montáž robíme vlastným tímom."
+        f"Zostava postavená tak, aby vyrobila ~{_sk_int(vyroba)} kWh ročne a priamo v dome pokryla "
+        f"{pokrytie:.0f} % Vašej spotreby, prebytky idú do siete za výkupnú cenu. Komponenty sú overené značky, montáž robíme vlastným tímom."
     )
 
     # === BENEFITY ===
@@ -234,8 +234,8 @@ def gen_copywriting(lead, konfig, ceny, navratnost):
         benefit_bateria = (
             f"Batéria s kapacitou {_sk_dec(konfig['bateria_kwh'], 1)} kWh uloží to, čo cez deň nestihnete spotrebovať. "
             "Večer a v noci čerpáte vlastnú elektrinu zo slnka, nie zo siete. V našom prepočte "
-            f"preto rátame s využitím výroby na úrovni {_sk_int(navratnost.get('samospotreba_cielova_pct') or 80)} % "
-            f"namiesto bežných {_sk_int((navratnost.get('samospotreba_cielova_pct') or 80) - 10)} % bez batérie."
+            f"preto rátame s využitím výroby na úrovni {_sk_int(navratnost['samospotreba_cielova_pct'])} % "
+            f"namiesto {_sk_int(navratnost['samospotreba_bez_baterie_pct'])} % bez batérie."
         )
     else:
         benefit_bateria = (

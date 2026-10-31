@@ -55,7 +55,8 @@ DEFAULTS = {
     "cena_el_eur_kwh": 0.16,        # priemer SK 2026
     "vykupna_cena_eur_kwh": 0.05,   # prebytky do siete
     # Podiel VYROBY, ktory dom spotrebuje priamo (zvysok ide do siete za vykupnu cenu).
-    "samospotreba_pct": 70,         # bez baterie 70 %, s bateriou +10 = 80 %
+    "samospotreba_pct": 32,         # bez baterie pri vyrobe = spotrebe; merania 400 domacnosti NL 32 %, HTW Berlin 30 %
+    "bateria_kwh_rok_na_kwh": 225,  # co rocne prida 1 kWh baterie; +21 p. b. pri 1 kWh/MWh (NL), HTW Berlin +30 p. b.
     # Strop POKRYTIA SPOTREBY: aj velka FVE nepokryje cely rok — v noci a v zime
     # sa odoberá zo siete. Bez tohto stropu model pri predimenzovanej FVE tvrdil
     # uzitocnu spotrebu vyssiu, nez je cela rocna spotreba domu (zakaznici to
@@ -269,9 +270,8 @@ def vyrataj_navratnost(konfig, ceny, lead):
     # Výroba z nákresu na reálnej streche má prednosť pred paušálom pre južnú orientáciu.
     rocna_vyroba = lead.get("rocna_vyroba_kwh") or vykon * DEFAULTS["vyroba_kwh_per_kwp"]
     cena_el = lead.get("cena_el_eur_kwh", DEFAULTS["cena_el_eur_kwh"])
-    samosp = (lead.get("samospotreba_pct") or
-              (DEFAULTS["samospotreba_pct"] + (10 if konfig["ma_bateriu"] else 0))) / 100
-    if samosp > 1: samosp = 0.85
+    samosp = lead.get("samospotreba_pct")  # vstup od obchodnika ma prednost pred modelom
+    if samosp: samosp = 0.85 if samosp > 100 else samosp / 100
     vykupna = DEFAULTS["vykupna_cena_eur_kwh"]
     naras_pct = DEFAULTS["narast_cien_el_pct_rok"] / 100
     deg_pct = DEFAULTS["degradacia_pct_rok"] / 100
@@ -297,9 +297,18 @@ def vyrataj_navratnost(konfig, ceny, lead):
                      (DEFAULTS["ev_podiel_zo_slnka_pct"] + (10 if konfig["ma_bateriu"] else 0))) / 100
         ev_zo_slnka_ciel = ev_kwh_rok * min(ev_podiel, 1.0)
 
+    def _z_vyroby(vyroba_kwh, bateria):
+        """Kolko z vyroby dom stihne minut. Cim vacsia FVE voci spotrebe, tym mensi podiel."""
+        if samosp:
+            return vyroba_kwh * samosp
+        podiel = DEFAULTS["samospotreba_pct"] / 100
+        if rocna_spotreba > 0:
+            podiel *= 2 * rocna_spotreba / (vyroba_kwh + rocna_spotreba)
+        return vyroba_kwh * podiel + (konfig["bateria_kwh"] * DEFAULTS["bateria_kwh_rok_na_kwh"] if bateria else 0)
+
     def _rozdel3(vyroba_kwh):
         """Vrati (priamo v dome, nabite do auta zo slnka, dodane do siete) v kWh."""
-        z_vyroby = vyroba_kwh * samosp
+        z_vyroby = min(vyroba_kwh, _z_vyroby(vyroba_kwh, konfig["ma_bateriu"]))
         z_spotreby = rocna_spotreba * max_pokr if rocna_spotreba > 0 else z_vyroby
         priamo = min(z_vyroby, z_spotreby)
         zvysok = max(0.0, vyroba_kwh - priamo)
@@ -341,7 +350,8 @@ def vyrataj_navratnost(konfig, ceny, lead):
         "uspora_25_rokov": suma,
         "kumul_25": kumul,
         "samospotreba_pct": realna_samosp * 100,   # realne dosiahnuta, uz po strope spotrebou
-        "samospotreba_cielova_pct": samosp * 100,  # vstupny predpoklad (profil vyroby vs. odberu)
+        "samospotreba_cielova_pct": (priamo_dom_kwh / rocna_vyroba * 100) if rocna_vyroba > 0 else 0,
+        "samospotreba_bez_baterie_pct": (_z_vyroby(rocna_vyroba, False) / rocna_vyroba * 100) if rocna_vyroba > 0 else 0,
         "pokrytie_spotreby_pct": pokrytie_spotreby * 100,
         "priamo_spotrebovane_kwh": priamo_kwh,
         "priamo_v_dome_kwh": priamo_dom_kwh,
@@ -647,7 +657,7 @@ def vyrob_docx(lead, konfig, ceny, navratnost, grafy, out_path):
     add_h("8. Doplnkové služby", size=14)
     dop = []
     if not konfig["ma_bateriu"]:
-        dop.append("Doplnenie batériového úložiska (zvýšenie samospotreby z ~70 % na ~90 %)")
+        dop.append("Doplnenie batériového úložiska (večer a v noci využijete vlastnú elektrinu zo slnka)")
     if not konfig["ma_wallbox"]:
         dop.append("Wallbox pre elektromobil (priama integrácia s FVE — nabíjanie zo slnka)")
     dop += [

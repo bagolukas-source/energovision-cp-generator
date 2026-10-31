@@ -36,4 +36,17 @@ for zakazane in ("12 rokov", "5 až 6 týždňov", "D + "):
 for povinne in ("<strong>15 rokov</strong> produktová záruka", "najneskôr do 4 mesiacov od uhradenia zálohovej faktúry č. 1"):
     check(f"šablóna podľa zmluvy nesie „{povinne}“", povinne in tpl)
 
+
+# Samospotreba: rovnake cisla pinuje CRM v b2c-agent-konfiguracia.test.ts
+konf = {"vykon_kwp": 8.46, "ma_bateriu": False, "bateria_kwh": 0}
+sam = lambda **k: gc.vyrataj_navratnost(dict(konf, **k), {"cena_po_dotacii": 7469.88}, {"rocna_spotreba_kwh": 8000, "rocna_vyroba_kwh": 8612})
+bez = sam()
+check("bez batérie 723 €", round(bez["rocne_uspora_eur"]) == 723)
+check("bez batérie 31 % výroby", round(bez["samospotreba_cielova_pct"]) == 31)
+bat = sam(ma_bateriu=True, bateria_kwh=10.36)
+check("s batériou 979 €", round(bat["rocne_uspora_eur"]) == 979)
+check("text batérie má hodnotu bez batérie", round(bat["samospotreba_bez_baterie_pct"]) == 31)
+check("menšia FVE má väčší podiel", gc.vyrataj_navratnost(konf, {"cena_po_dotacii": 1}, {"rocna_spotreba_kwh": 8000, "rocna_vyroba_kwh": 4000})["samospotreba_cielova_pct"] > 40)
+check("vstup obchodníka má prednosť", round(gc.vyrataj_navratnost(konf, {"cena_po_dotacii": 1}, {"rocna_spotreba_kwh": 8000, "rocna_vyroba_kwh": 8000, "samospotreba_pct": 50})["samospotreba_cielova_pct"]) == 50)
+
 sys.exit(1 if fails else 0)
