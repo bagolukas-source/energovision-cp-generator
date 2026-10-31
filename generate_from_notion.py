@@ -587,6 +587,10 @@ def _resolve_obchodnik(props: dict) -> dict:
     return OBCHODNICI.get(meno_key, DEFAULT_OBCHODNIK)
 
 
+# CRM má kódy aj slová, šablóna pozná len kódy. Neznáma orientácia sa v PDF netvári ako južná.
+ORIENTACIA_KOD = {"JUH": "J", "JUHOVÝCHOD": "JV", "JUHOZÁPAD": "JZ", "VÝCHOD": "V", "ZÁPAD": "Z"}
+
+
 def lead_from_notion(notion_props, variant):
     """
     Z Notion properties zostaví lead.json pre konkrétny variant.
@@ -716,6 +720,8 @@ def lead_from_notion(notion_props, variant):
             id_int = int(_m_id.group(0)) if _m_id else 0
     cislo_ponuky = f"EV-26-{id_int:03d}-{variant}" if id_int else f"EV-26-{variant}"
 
+    _orient = (notion_props.get("Orientácia") or "").strip().upper()
+
     # Telefón / email z Notion
     telefon = notion_props.get("Telefón") or ""
     email = notion_props.get("Email") or ""
@@ -761,6 +767,7 @@ def lead_from_notion(notion_props, variant):
     vek_dni = detekuj_vek_leadu(notion_props)
 
     return {
+        "orientacia": ORIENTACIA_KOD.get(_orient, _orient),
         "meno": full_name,  # cele meno (Meno Priezvisko) - pouzite v PDF "PRE" a titulke
         "priezvisko": priezvisko,  # iba priezvisko - pre filename, folder, salutacie
         "mesto": mesto,

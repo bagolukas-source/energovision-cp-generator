@@ -374,7 +374,7 @@ def vyrob_html_pdf(lead, konfig, ceny, navratnost, grafy, out_pdf, bom_rozpis=No
     }.get(distribucka_short, "distribučnou spoločnosťou")
 
     # orientácia
-    orientacia = lead.get("orientacia", "J")
+    orientacia = lead.get("orientacia") or ""  # neznáma sa netvári ako južná
     orientacia_text = {
         "J": "južná orientácia — najproduktívnejšia",
         "JV": "juhovýchodná — výborná, prevažujúce ranné slnko",
