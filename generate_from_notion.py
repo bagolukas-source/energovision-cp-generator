@@ -777,6 +777,7 @@ def lead_from_notion(notion_props, variant):
         "email": email,
         "vek_dni": vek_dni,
         "rocna_spotreba_kwh": spotreba,
+        "rocna_vyroba_kwh": notion_props.get("rocna_vyroba_kwh"),
         "cena_el_eur_kwh": 0.16,
         "distribucka": DISTRIBUCKA_DEFAULT,
         "vykon_kwp": vykon_kwp,
