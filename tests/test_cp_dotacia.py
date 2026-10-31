@@ -31,5 +31,9 @@ tpl = open(os.path.join(ROOT, "cp_template.html"), encoding="utf8").read()
 for zakazane in ("po dotácii", "Pevná cena", "Certifikovaný zhotoviteľ SIEA", "dotacia_eur"):
     check(f"šablóna bez „{zakazane}“", zakazane not in tpl)
 check("šablóna nesie poznámku", "{{ dotacia_poznamka }}" in tpl)
+for zakazane in ("12 rokov", "5 až 6 týždňov", "D + "):
+    check(f"šablóna podľa zmluvy bez „{zakazane}“", zakazane not in tpl)
+for povinne in ("<strong>15 rokov</strong> produktová záruka", "najneskôr do 4 mesiacov od uhradenia zálohovej faktúry č. 1"):
+    check(f"šablóna podľa zmluvy nesie „{povinne}“", povinne in tpl)
 
 sys.exit(1 if fails else 0)
