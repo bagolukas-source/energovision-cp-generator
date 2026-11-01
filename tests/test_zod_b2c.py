@@ -50,7 +50,8 @@ with tempfile.TemporaryDirectory() as tmp:
             check("číslo a dátum CP", "LEAD-2026-0001-xyz-A zo dňa 02.10.2026" in text)
             check("záruka panely podľa typu", "25 rokov produktová záruka na fotovoltické panely" in text
                   and "Minimálne 30 rokov lineárna výkonová záruka" in text)
-            check("záruka menič 10 rokov", "10 rokov záruka na fotovoltický menič" in text)
+            check("záruka menič Huawei 10 rokov", "10 rokov záruka na fotovoltický menič (striedač) od výrobcu pri značke Huawei" in text)
+            check("záruka menič Solinteg 5 + 5", "pri značke Solinteg 5 rokov plná záruka a ďalších 5 rokov len na materiál" in text)
             check("lehota 4 mesiace", "Najneskôr do 4 mesiacov od uhradenia" in text)
             check("dátum podpisu", "V Bratislave, dňa 09.10.2026" in text)
             check("podpis objednávateľa", any(r.endswith("Ján Testovací") and "Lukáš Bago" in r for r in riadky))
