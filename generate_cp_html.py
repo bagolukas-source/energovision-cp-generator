@@ -424,6 +424,7 @@ def vyrob_html_pdf(lead, konfig, ceny, navratnost, grafy, out_pdf, bom_rozpis=No
         "cena_finalna_eur": fmt_eur(ceny["cena_finalna"]),
         "dotacia": ceny["dotacia"],
         "zlava": ceny["zlava_eur"],
+        "zlava_text": ceny.get("zlava_text", "Zľava"),
         "chart_uspora": f"file://{grafy['uspora']}",
         "chart_vyroba": f"file://{grafy['vyroba']}",
         "chart_porovnanie": f"file://{grafy['porovnanie']}",
