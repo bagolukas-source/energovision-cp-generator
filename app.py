@@ -4587,6 +4587,13 @@ def _generate_pdf_supabase_impl():
             crm_marza = None
         dph = 0.23
         crm_cena_bez_dph = crm_cena_s_dph / (1 + dph)
+        # Cenníková cena pred zľavou (CRM 2026-11-07): Cena X s DPH je výsledná cena po zľave, v PDF ide cenníková − zľava = výsledná.
+        # Starý CRM pole neposiela a PDF ukáže len výslednú cenu ako doteraz.
+        try:
+            crm_cennikova = float(flat_props.get(f"Cenníková cena {variant} s DPH") or 0)
+        except (TypeError, ValueError):
+            crm_cennikova = 0
+        zlava_eur = round(crm_cennikova - crm_cena_s_dph, 2) if crm_cennikova > crm_cena_s_dph else 0
         # Dotácia + ZD logika ostáva
         dotacia = ceny.get("dotacia", 0) if lead.get("dotacia", True) else 0
         cena_po_dot = crm_cena_s_dph - dotacia
@@ -4596,11 +4603,14 @@ def _generate_pdf_supabase_impl():
             "nakupna_spolu": ceny.get("nakupna_spolu", 0),
             "rezerva_eur": 0,
             "marza_eur": crm_cena_bez_dph - ceny.get("nakupna_spolu", 0),
-            "cena_bez_dph": crm_cena_bez_dph,
-            "cena_s_dph": crm_cena_s_dph,
+            "cena_bez_dph": (crm_cena_s_dph + zlava_eur) / (1 + dph),
+            "cena_s_dph": crm_cena_s_dph + zlava_eur,
+            "cena_po_zlave_bez_dph": crm_cena_bez_dph,
+            "cena_po_zlave_s_dph": crm_cena_s_dph,
+            "zlava_text": str(flat_props.get("Zľava text") or "Zľava"),
             "dotacia": dotacia,
             "cena_po_dotacii": cena_po_dot,
-            "zlava_eur": 0,
+            "zlava_eur": zlava_eur,
             "cena_finalna": cena_po_dot,
             "marza_pct": crm_marza if crm_marza is not None else ceny.get("marza_pct"),
             "zisk": crm_cena_bez_dph - ceny.get("nakupna_spolu", 0),
@@ -4627,7 +4637,7 @@ def _generate_pdf_supabase_impl():
             bom_items = body.get("bom") or []
             if bom_items:
                 from generate_cp_html import priprav_bom_rozpis
-                bom_rozpis = priprav_bom_rozpis(bom_items, ceny["cena_bez_dph"], ceny["cena_s_dph"])
+                bom_rozpis = priprav_bom_rozpis(bom_items, ceny.get("cena_po_zlave_bez_dph", ceny["cena_bez_dph"]), ceny.get("cena_po_zlave_s_dph", ceny["cena_s_dph"]))
                 log.info(f"[generate-pdf-supabase] BOM rozpis: {'OK, ' + str(len(bom_items)) + ' poloziek' if bom_rozpis else 'PRESKOCENY (prazdny vysledok)'}")
         except Exception as _bom_e:
             log.warning(f"[generate-pdf-supabase] BOM rozpis zlyhal (best-effort): {_bom_e}")
