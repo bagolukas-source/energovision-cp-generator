@@ -8590,24 +8590,19 @@ def webhook_aom_orphan_reset():
     """
     try:
         sb = _sb()
-        # Reset všetkých orphan running
-        result = sb.rpc("exec_sql", {"sql": "UPDATE analyza_om SET status='draft', updated_at=now() WHERE status='running' AND updated_at < now() - INTERVAL '30 minutes' RETURNING id, name"}).execute()
-        # Fallback ak exec_sql neexistuje — direct query
-        if not result.data:
-            res = sb.table("analyza_om").select("id, name, updated_at").eq("status", "running").execute()
-            now = datetime.now(timezone.utc)
-            stale = []
-            for r in (res.data or []):
-                try:
-                    upd = datetime.fromisoformat(r["updated_at"].replace("Z", "+00:00"))
-                    if (now - upd).total_seconds() > 30 * 60:
-                        stale.append(r)
-                except Exception:
-                    pass
-            for s in stale:
-                sb.table("analyza_om").update({"status": "draft", "updated_at": now.isoformat()}).eq("id", s["id"]).execute()
-            return jsonify({"ok": True, "reset_count": len(stale), "reset_ids": [s["id"] for s in stale]})
-        return jsonify({"ok": True, "reset_count": len(result.data), "reset_ids": [r["id"] for r in result.data]})
+        res = sb.table("analyza_om").select("id, name, updated_at").eq("status", "running").execute()
+        now = datetime.now(timezone.utc)
+        stale = []
+        for r in (res.data or []):
+            try:
+                upd = datetime.fromisoformat(r["updated_at"].replace("Z", "+00:00"))
+                if (now - upd).total_seconds() > 30 * 60:
+                    stale.append(r)
+            except Exception:
+                pass
+        for s in stale:
+            sb.table("analyza_om").update({"status": "draft", "updated_at": now.isoformat()}).eq("id", s["id"]).execute()
+        return jsonify({"ok": True, "reset_count": len(stale), "reset_ids": [s["id"] for s in stale]})
     except Exception as e:
         log.exception("[aom-orphan-reset] failed")
         return jsonify({"ok": False, "error": str(e)[:500]}), 500
