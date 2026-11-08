@@ -211,3 +211,19 @@ def test_chraneny_variant_prezije_a_ostane_vybrany():
     aom.run_variants_premium(sb, _AID)
     assert any(r["id"] == "old-1" for r in sb.db["analyza_om_variants"])
     assert _analyza(sb)["selected_variant_id"] == "old-1"
+
+
+def test_prepocet_neznasobi_rucne_varianty():
+    """Chránený ručný variant + kópie z minulých behov = po každom prepočte len 1 kópia (Rettenmeier 72 kópií → timeout)."""
+    sb = _sb(True)
+    orig = {"analyza_id": _AID, "name": "A · FVE", "fve_kwp": 100, "bess_kwh": 0, "bess_kw": 0,
+            "capex_eur": 70000, "capex_source": "manual"}
+    sb.db["analyza_om_variants"] = [{**orig, "id": "chraneny", "is_protected": True},
+                                    {**orig, "id": "kopia-1"}, {**orig, "id": "kopia-2"}]
+    for _ in range(2):
+        aom.run_variants_premium(sb, _AID)
+    rows = sb.db["analyza_om_variants"]
+    assert [r["id"] for r in rows if r.get("is_protected")] == ["chraneny"]
+    assert len([r for r in rows if not r.get("is_protected")]) == 1
+    a = _analyza(sb)
+    assert len([v for v in a["econ_results"]["full_response"]["variants"] if v.get("capex_source") == "manual"]) == 1

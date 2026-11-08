@@ -1078,7 +1078,14 @@ def run_variants_premium(sb, analyza_id: str) -> dict:
         _manual_keep = []
         try:
             _mk = sb.table("analyza_om_variants").select("name,fve_kwp,bess_kwh,bess_kw,capex_eur,inverter_kw").eq("analyza_id", analyza_id).eq("capex_source", "manual").execute()
-            _manual_keep = _mk.data or []
+            # Chránený originál + jeho prepočítaná kópia = ten istý variant. Bez deduplikácie každý
+            # prepočet pridá ďalšiu kópiu a beh časom prekročí 120 s limit workera (Rettenmeier: 72 kópií).
+            _manual_keep = list({
+                (_m.get("name"), float(_m.get("fve_kwp") or 0), float(_m.get("bess_kwh") or 0),
+                 float(_m.get("bess_kw") or 0), float(_m.get("capex_eur") or 0),
+                 float(_m.get("inverter_kw") or 0)): _m
+                for _m in (_mk.data or [])
+            }.values())
         except Exception:
             _manual_keep = []
 
