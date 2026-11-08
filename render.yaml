@@ -14,7 +14,7 @@ services:
     pip install -r requirements.txt
 
     '
-  startCommand: gunicorn app:app --workers 2 --bind 0.0.0.0:$PORT --timeout 120
+  startCommand: gunicorn app:app --workers 2 --bind 0.0.0.0:$PORT --timeout 300
   healthCheckPath: /health
   envVars:
   - key: NOTION_TOKEN
