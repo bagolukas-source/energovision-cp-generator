@@ -4555,7 +4555,10 @@ def _generate_pdf_supabase_impl():
     from generate_from_notion import lead_from_notion
     lead = lead_from_notion(flat_props, variant)
 
-    if variant in ("B", "C"):
+    # Partner portál posiela zostavu z vlastného cenníka (menič a batéria tej istej značky);
+    # mapy kódov generátora jeho názvy nepoznajú, takže kontrola kompatibility by sa mýlila.
+    partner_portal = flat_props.get("Zdroj") == "partner_portal"
+    if variant in ("B", "C") and not partner_portal:
         ok, msg = check_compatibility(lead["invertor_kod"], lead.get("bateria_kod"))
         if not ok:
             return jsonify({"error": f"incompatible: {msg}"}), 400
