@@ -130,6 +130,7 @@
     display: table; width: 100%; border-collapse: collapse;
   }
   .cover-info-row { display: table-row; }
+  .cover-info-sub { font-size: 9pt; color: var(--gray); font-weight: normal; }
   .cover-info-cell {
     display: table-cell; padding: 2.5mm 0; vertical-align: middle;
     border-bottom: 1px solid rgba(0,0,0,0.10);
@@ -528,6 +529,18 @@
       <div class="cover-info-cell cover-info-label">Adresa</div>
       <div class="cover-info-cell cover-info-value">{% if lead.ulica %}{{ lead.ulica }}{% if lead.psc or lead.mesto %}, {% endif %}{% endif %}{% if lead.psc %}{{ lead.psc }} {% endif %}{{ lead.mesto }}</div>
     </div>
+    {% if lead.predajne_miesto %}{% set pm = lead.predajne_miesto %}
+    <div class="cover-info-row">
+      <div class="cover-info-cell cover-info-label">Predajné miesto</div>
+      <div class="cover-info-cell cover-info-value">{{ pm.nazov }}{% if pm.ico %} · IČO {{ pm.ico }}{% endif %}{% if pm.dic %} · DIČ {{ pm.dic }}{% endif %}{% if pm.adresa %}<br><span class="cover-info-sub">{{ pm.adresa }}</span>{% endif %}</div>
+    </div>
+    {% if pm.predajca %}
+    <div class="cover-info-row">
+      <div class="cover-info-cell cover-info-label">Predajca</div>
+      <div class="cover-info-cell cover-info-value">{{ pm.predajca }}{% if pm.predajca_tel %} · {{ pm.predajca_tel }}{% endif %}{% if pm.predajca_email %} · {{ pm.predajca_email }}{% endif %}</div>
+    </div>
+    {% endif %}
+    {% endif %}
     <div class="cover-info-row">
       <div class="cover-info-cell cover-info-label">Číslo ponuky</div>
       <div class="cover-info-cell cover-info-value">{{ cislo_ponuky }}</div>

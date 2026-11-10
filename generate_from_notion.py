@@ -587,6 +587,25 @@ def _resolve_obchodnik(props: dict) -> dict:
     return OBCHODNICI.get(meno_key, DEFAULT_OBCHODNIK)
 
 
+def _resolve_predajne_miesto(props: dict):
+    """Predajné miesto a predajca z partner portálu (CRM ich neposiela → None, PDF bez zmeny).
+    Hodnoty prichádzajú už HTML-escapované od volajúceho, rovnako ako ostatné polia šablóny."""
+    def g(key):
+        return str(props.get(key) or "").strip()
+    nazov = g("Predajné miesto")
+    if not nazov:
+        return None
+    return {
+        "nazov": nazov,
+        "ico": g("Predajné miesto IČO"),
+        "dic": g("Predajné miesto DIČ"),
+        "adresa": g("Predajné miesto adresa"),
+        "predajca": g("Predajca"),
+        "predajca_tel": g("Predajca telefón"),
+        "predajca_email": g("Predajca email"),
+    }
+
+
 # CRM má kódy aj slová, šablóna pozná len kódy. Neznáma orientácia sa v PDF netvári ako južná.
 ORIENTACIA_KOD = {"JUH": "J", "JUHOVÝCHOD": "JV", "JUHOZÁPAD": "JZ", "VÝCHOD": "V", "ZÁPAD": "Z"}
 
@@ -719,6 +738,10 @@ def lead_from_notion(notion_props, variant):
             _m_id = re.search(r"\d+", str(id_p))
             id_int = int(_m_id.group(0)) if _m_id else 0
     cislo_ponuky = f"EV-26-{id_int:03d}-{variant}" if id_int else f"EV-26-{variant}"
+    # Partner portál posiela vlastné číslo ponuky (napr. PN-2026-000012-A); CRM ho neposiela.
+    _cislo_explicit = str(notion_props.get("Číslo ponuky") or "").strip()
+    if _cislo_explicit:
+        cislo_ponuky = _cislo_explicit
 
     _orient = (notion_props.get("Orientácia") or "").strip().upper()
 
@@ -811,6 +834,7 @@ def lead_from_notion(notion_props, variant):
         ))(notion_props.get("Platobné podmienky") or notion_props.get("Platby") or "60_30_10"),
         "cislo_ponuky": cislo_ponuky,
         "obchodnik": _resolve_obchodnik(notion_props),
+        "predajne_miesto": _resolve_predajne_miesto(notion_props),
     }
 
 
