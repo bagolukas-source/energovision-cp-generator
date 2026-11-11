@@ -13,7 +13,7 @@ from __future__ import annotations
 from math import exp
 
 
-def rte_simple(base_rte: float = 0.88) -> float:
+def rte_simple(base_rte: float = 0.913) -> float:
     """Konštantná RTE — pre rule-based dispatch ako fallback."""
     return base_rte
 
@@ -22,7 +22,7 @@ def rte_curve(
     soc: float,
     c_rate: float,
     temp_c: float = 25.0,
-    base_rte_ac_ac: float = 0.88,
+    base_rte_ac_ac: float = 0.913,
 ) -> float:
     """Vráti RTE pre danú prevádzkovú podmienku.
 

@@ -33,7 +33,7 @@ from energovision_analytics.financial.merchant_arbitrage import (  # noqa: E402
 SPOT = pd.read_csv(os.environ["ENERGO_SPOT_CSV"])["price_eur_per_mwh"].to_numpy()[:8760]
 
 
-def _lp(price, kwh, p_kw, rk_kw, exp_kw, fee, degr=0.0, cycles=1.0, load=None, rte=0.88, window=24):
+def _lp(price, kwh, p_kw, rk_kw, exp_kw, fee, degr=0.0, cycles=1.0, load=None, rte=0.913, window=24):
     """Nezávislá referencia (docs/aom-audit-2026-10-24/04-tarify-merchant/merchant_lp.py): LP s
     chronologickým SoC, deň začína prázdny, strop DC energie = usable × cykly/deň."""
     n = len(price); sr = rte ** 0.5; usable = kwh * 0.9
@@ -74,7 +74,7 @@ def test_merchant_1_cyklus_rovna_sa_lp():
     e = _merchant(max_cycles_per_day=1.0)
     lp = _lp(SPOT, 1000, 500, 5000, 5000, 0.15, cycles=1.0)
     assert abs(e["merchant_net_eur"] - lp) <= 1.0, (e["merchant_net_eur"], lp)
-    assert abs(e["merchant_net_eur"] - 33622) <= 1.0, e["merchant_net_eur"]   # rc1 = LP
+    assert abs(e["merchant_net_eur"] - 34698) <= 1.0, e["merchant_net_eur"]   # rc1 = LP (33 622 pri RTE 0,88; od 2026-11-11 RTE 0,913)
     assert e["model"] == "denny_milp_chronologicky_soc"
 
 

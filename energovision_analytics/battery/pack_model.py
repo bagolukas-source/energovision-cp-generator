@@ -42,7 +42,7 @@ class DispatchResult:
     energy_drawn_kwh: float = 0.0        # = actual_discharge / eta_dis (čistá energia z bunky)
     soc_kwh_before: float = 0.0
     soc_kwh_after: float = 0.0
-    rte_used: float = 0.88
+    rte_used: float = 0.913
     rejected_reason: Optional[str] = None
     degradation_delta: float = 0.0
 

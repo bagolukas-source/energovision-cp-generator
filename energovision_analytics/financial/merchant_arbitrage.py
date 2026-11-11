@@ -140,7 +140,7 @@ def compute_merchant_arbitrage(
     power_kw_ac: float,
     rk_kw: float,            # rezervovaná kapacita (import limit) kW
     export_kw: float,        # max export do gridu kW
-    rte: float = 0.88,       # round-trip účinnosť
+    rte: float = 0.913,      # round-trip účinnosť (datasheet LUNA2000-241; rozhodnutie majiteľa 2026-11-11)
     organizer_fee_pct: float = 15.0,   # marža organizátora bilančnej skupiny
     imbalance_cost_eur_mwh: float = 0.0,    # odchýlková (imbalance) cena na obchodovaný AC objem
     degradation_cost_eur_mwh: float = 0.0,  # cyklová degradačná rezerva na DC throughput

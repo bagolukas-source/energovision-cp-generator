@@ -222,8 +222,8 @@ class BESSInput(EnergoBase):
                                 description="DoD floor (LFP typicky 5-10%)")
     soc_max_pct: float = Field(0.98, ge=0.80, le=0.99,
                                 description="DoD ceiling")
-    rte_ac_ac: float = Field(0.88, ge=0.80, le=0.95,
-                              description="Round-trip AC-AC efficiency (reálne 0.88; datasheet 0.91)")
+    rte_ac_ac: float = Field(0.913, ge=0.80, le=0.95,
+                              description="Round-trip AC-AC efficiency (datasheet Huawei LUNA2000-241: 91,3 %; rozhodnutie majiteľa 2026-11-11)")
     c_rate_max: float = Field(0.5, gt=0, le=2.0,
                                description="Max C-rate (power_kw / nominal_kwh)")
     initial_soh: float = Field(1.0, ge=0.5, le=1.0,

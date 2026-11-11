@@ -41,8 +41,9 @@ def test_a15_zaporna_cena_nabitia_staticke_rte():
     assert iv[0].grid_to_bat_kwh > 0 and iv[0].tarif_buy_eur_kwh < 0      # nabíja pri zápornej cene
     streams = s.sav_bess_self_cons_eur + s.sav_arbitrage_eur
     real = _bill_saving(_LOAD, iv)
-    # predtým 7,4992 € (max(0,…) zahodil záporný náklad) vs skutočných 9,0393 €
-    assert abs(real - 9.0393) < 1e-3, real
+    # predtým 7,4992 € (max(0,…) zahodil záporný náklad) vs skutočných 9,3035 €
+    # (9,0393 € pri RTE 0,88; od 2026-11-11 je predvolená RTE 0,913)
+    assert abs(real - 9.3035) < 1e-3, real
     assert abs(streams - real) < 1e-6, (streams, real)
 
 

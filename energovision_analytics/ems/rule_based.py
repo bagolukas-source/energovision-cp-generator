@@ -371,7 +371,7 @@ class RuleBasedEMS:
                     # BOD 8 FIX: vedrá sú v AC-IN báze (nabíjanie). Na dodanie bat_to_load (AC-OUT)
                     # sa z nich spotrebuje bat_to_load/rte AC-IN — tým sa RTE strata na nabíjaní
                     # reálne oceníní (predtým zostala "visieť" vo vedre → arbitráž nadhodnotená).
-                    _rte = float(getattr(self.bat.bess, "rte_ac_ac", 0.88)) or 0.88
+                    _rte = float(getattr(self.bat.bess, "rte_ac_ac", 0.913)) or 0.913
                     _need_in = bat_to_load_kwh / _rte
                     _pv_share = _pv_bucket / _tot_b
                     _in_pv = _need_in * _pv_share

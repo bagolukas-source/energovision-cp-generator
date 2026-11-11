@@ -356,7 +356,7 @@ class HTMLDashboard:
                 <dt>BESS kapacita</dt><dd><b>{self.bess.nominal_kwh} kWh</b></dd>
                 <dt>BESS výkon</dt><dd>{self.bess.power_kw_ac} kW AC</dd>
                 <dt>Výrobca</dt><dd>{self.bess.vyrobca.value} {escape(str(self.bess.typ))}</dd>
-                <dt>RTE</dt><dd>{self.bess.rte_ac_ac*100:.0f}% (field)</dd>"""
+                <dt>RTE</dt><dd>{self.bess.rte_ac_ac*100:.1f}% (datasheet)</dd>"""
         return f"""
         <div class="card">
             <h4>Navrhované riešenie</h4>
@@ -796,7 +796,7 @@ class HTMLDashboard:
                 <b>Arbitráž za týždeň:</b> BESS nabité {grid_charge_kwh:.0f} kWh zo siete pri priemernej cene
                 <b>{avg_charge_spot:.0f} €/MWh</b>, vybité {discharge_kwh:.0f} kWh pri priemernej cene
                 <b>{avg_discharge_spot:.0f} €/MWh</b>. Spread <b>{arb_spread:+.0f} €/MWh</b>
-                × {discharge_kwh:.0f} kWh × RTE 0.88 ≈ <b>{(arb_spread/1000 * discharge_kwh * 0.88):.0f} €</b> čistý zisk z arbitráže.
+                × {discharge_kwh:.0f} kWh × RTE {(self.bess.rte_ac_ac if self.bess else 0.913):.3f} ≈ <b>{(arb_spread/1000 * discharge_kwh * (self.bess.rte_ac_ac if self.bess else 0.913)):.0f} €</b> čistý zisk z arbitráže.
             </p>
         </div>
         <div class="chart-card mb-md">

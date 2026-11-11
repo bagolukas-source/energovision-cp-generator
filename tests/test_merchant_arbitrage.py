@@ -44,8 +44,9 @@ check("degradácia znižuje aj throughput (prah, nie len odpočet)",
       f"{r0['dc_throughput_mwh']:,.0f} → {r1['dc_throughput_mwh']:,.0f} MWh")
 
 # 2b) pri TESNOM spreade prah reálne odreže obchody (nie len zníži zisk na konci)
-# striedavo: úzky deň (50→85, po stratách a marži nepokryje opotrebenie) a široký (50→200)
-_narrow = [50.0] * 48 + [85.0] * 48
+# striedavo: úzky deň (50→83, po stratách a marži nepokryje opotrebenie) a široký (50→200)
+# 83 namiesto 85: pri RTE 0,913 (od 2026-11-11) by deň 50→85 opotrebenie už pokryl
+_narrow = [50.0] * 48 + [83.0] * 48
 _wide = [50.0] * 48 + [200.0] * 48
 TIGHT = np.array((_narrow + _wide) * 182 + _narrow, dtype=float)
 tb = dict(BASE); tb["spot_eur_mwh"] = TIGHT
