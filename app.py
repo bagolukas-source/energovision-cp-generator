@@ -696,6 +696,18 @@ def _secret_gate_b2b_raynet():
 
 
 # ============================================================
+# POST /webhook/generuj-dokumenty-inline — zmluva / splnomocnenie / GDPR zo šablón, DOCX + PDF v odpovedi
+# (bez DB, Notionu a úložiska; vlastná FAIL-CLOSED autentifikácia a validácia v inline_documents.py).
+# Registrácia je poistená: chyba importu nesmie zhodiť zvyšok aplikácie.
+# ============================================================
+try:
+    import inline_documents as _inline_documents
+    _inline_documents.register(app)
+except Exception:  # noqa: BLE001
+    log.exception("[inline-documents] registrácia route zlyhala — /webhook/generuj-dokumenty-inline nie je dostupná")
+
+
+# ============================================================
 # VALIDÁCIA — overuje že lead má dostatočne kvalitné dáta
 # pre generovanie dokumentov
 # ============================================================
