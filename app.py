@@ -4844,17 +4844,14 @@ def generuj_dokumenty_supabase():
                 bundle = br.json()[0]
 
     pocet_panelov = int(bundle.get("pocet_panelov") or 0)
-    panel_sku = bundle.get("panel_sku") or "PAN-001"
-    panel_wp = 535 if panel_sku == "PAN-002" else 470
+    # Výkon panela a záruky podľa SKU — jedno pravidlo zdieľané s /webhook/generuj-dokumenty-inline
+    from generuj_dokumenty import panel_params_from_sku
+    _panel = panel_params_from_sku(bundle.get("panel_sku"))
+    panel_sku = _panel["panel_sku"]
+    panel_wp = _panel["panel_wp"]
     vykon_kwp = round(pocet_panelov * panel_wp / 1000, 2) if pocet_panelov else 0
-
-    # Záruka podľa panela (LONGi Hi-MO X10 = 25r produktová + 30r lineárna)
-    if panel_sku == "PAN-001":  # LONGi Hi-MO X10 470 Wp
-        zaruka_panely_produkt = 25
-        zaruka_panely_linear = 30
-    else:  # PAN-002 LONGi Hi-MO 6 535 Wp
-        zaruka_panely_produkt = 15
-        zaruka_panely_linear = 25
+    zaruka_panely_produkt = _panel["zaruka_panely_produkt"]
+    zaruka_panely_linear = _panel["zaruka_panely_linear"]
 
     # Platobné podmienky
     pt = bundle.get("payment_terms") or "60_30_10"
