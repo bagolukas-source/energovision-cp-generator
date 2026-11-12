@@ -429,14 +429,14 @@ def _is_pdf(b):
     return bool(b) and b[:5] == b"%PDF-" and b"%%EOF" in b[-2048:]
 
 
-def _convert_gotenberg(docx_bytes):
+def _convert_gotenberg(docx_bytes, filename="document.docx"):
     url = os.environ.get("GOTENBERG_URL", "").rstrip("/")
     if not url:
         return None
     user = os.environ.get("GOTENBERG_USER", "")
     pw = os.environ.get("GOTENBERG_PASS", "")
     auth = (user, pw) if user else None
-    files = {"files": ("document.docx", docx_bytes,
+    files = {"files": (filename, docx_bytes,
                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document")}
     try:
         r = requests.post(f"{url}/forms/libreoffice/convert", files=files, auth=auth, timeout=CONVERT_TIMEOUT_S)
@@ -452,14 +452,16 @@ def _soffice_bin():
     return shutil.which("soffice") or shutil.which("libreoffice")
 
 
-def _convert_libreoffice(docx_bytes):
+def _convert_libreoffice(docx_bytes, filename="document.docx"):
+    """`filename` je názov vstupného súboru: šablóny tlačia pole „názov súboru" v päte (inak by sa v PDF
+    objavilo `in.docx`), preto sa používa zmysluplný názov dokumentu bez osobných údajov."""
     soffice = _soffice_bin()
     if not soffice:
         return None
     tmpdir = tempfile.mkdtemp(prefix=TMP_PREFIX)
     proc = None
     try:
-        in_path = os.path.join(tmpdir, "in.docx")
+        in_path = os.path.join(tmpdir, filename)
         with open(in_path, "wb") as fh:
             fh.write(docx_bytes)
         env = dict(os.environ, HOME=tmpdir)
@@ -473,7 +475,7 @@ def _convert_libreoffice(docx_bytes):
             _kill_group(proc)
             log.warning("[inline] libreoffice timeout")
             return None
-        out_pdf = os.path.join(tmpdir, "in.pdf")
+        out_pdf = os.path.join(tmpdir, os.path.splitext(filename)[0] + ".pdf")
         if rc == 0 and os.path.exists(out_pdf):
             with open(out_pdf, "rb") as fh:
                 pdf = fh.read()
@@ -500,12 +502,12 @@ def _kill_group(proc):
         pass
 
 
-def convert_to_pdf(docx_bytes):
+def convert_to_pdf(docx_bytes, filename="document.docx"):
     """(pdf_bytes, converter) alebo (None, None). Poradie rovnaké ako /webhook/docx-to-pdf: Gotenberg, LibreOffice."""
-    pdf = _convert_gotenberg(docx_bytes)
+    pdf = _convert_gotenberg(docx_bytes, filename)
     if pdf:
         return pdf, "gotenberg-libreoffice"
-    pdf = _convert_libreoffice(docx_bytes)
+    pdf = _convert_libreoffice(docx_bytes, filename)
     if pdf:
         return pdf, "libreoffice"
     return None, None
@@ -580,7 +582,7 @@ def generuj_dokumenty_inline():
         log.error("[inline] %s: dokument neúplný (%d problémov)", kind, len(problems))
         return _json({"ok": False, "error": "document_incomplete", "problems": problems}, 422)
 
-    pdf, converter = convert_to_pdf(docx)
+    pdf, converter = convert_to_pdf(docx, DOCX_FILENAMES[kind])
     if pdf is None and not allow_docx_only:
         log.error("[inline] %s: žiadny verný konvertor DOCX→PDF", kind)
         return _json({"ok": False, "error": "pdf_converter_unavailable",

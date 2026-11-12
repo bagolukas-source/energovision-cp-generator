@@ -570,6 +570,32 @@ class ConverterTests(Base):
         self.assertEqual(base64.b64decode(j["pdf_base64"]), FAKE_PDF)
         self.assertEqual(post.call_args[0][0], "https://gotenberg.example.test/forms/libreoffice/convert")
 
+    def test_converters_get_a_meaningful_input_file_name(self):
+        """Päta šablóny tlačí názov súboru — nesmie to byť `in.docx`/`document.docx`."""
+        ok = mock.Mock(ok=True, status_code=200, content=FAKE_PDF)
+        with mock.patch.dict(os.environ, {"GOTENBERG_URL": "https://gotenberg.example.test"}), \
+                mock.patch.object(inl.requests, "post", return_value=ok) as post:
+            self.post(example("zmluva"))
+        self.assertEqual(post.call_args[1]["files"]["files"][0], "Zmluva_o_dielo.docx")
+        seen = []
+
+        class FakeProc:
+            def __init__(self, cmd, **kw):
+                seen.append(cmd)
+                outdir = cmd[cmd.index("--outdir") + 1]
+                src = cmd[-1]
+                with open(os.path.join(outdir, os.path.splitext(os.path.basename(src))[0] + ".pdf"), "wb") as fh:
+                    fh.write(FAKE_PDF)
+
+            def wait(self, timeout=None):
+                return 0
+
+        with mock.patch.object(inl, "_soffice_bin", return_value="/usr/bin/soffice"), \
+                mock.patch.object(inl.subprocess, "Popen", FakeProc):
+            j = self.post(example("splnomocnenie")).get_json()
+        self.assertEqual(j["converter"], "libreoffice")
+        self.assertEqual(os.path.basename(seen[0][-1]), "Splnomocnenie.docx")
+
     def test_gotenberg_failure_falls_back_to_libreoffice(self):
         bad = mock.Mock(ok=False, status_code=500, content=b"err")
         with mock.patch.dict(os.environ, {"GOTENBERG_URL": "https://gotenberg.example.test"}), \
@@ -635,6 +661,15 @@ class ConverterTests(Base):
             text = "".join(p.get_text() for p in doc)
         self.assertIn("Zákazníková", text)
         self.assertNotRegex(text, r"_{3,}")
+        # päta (pole „názov súboru") nenesie technický názov vstupu
+        self.assertNotIn("in.docx", text)
+        self.assertNotIn("document.docx", text)
+        # zmluva má v päte pole s názvom súboru: musí to byť názov dokumentu
+        j = self.post(example("zmluva")).get_json()
+        with fitz.open(stream=base64.b64decode(j["pdf_base64"]), filetype="pdf") as doc:
+            zml = "".join(p.get_text() for p in doc)
+        self.assertNotIn("in.docx", zml)
+        self.assertIn("Zmluva_o_dielo.docx", zml)
 
 
 class HygieneTests(Base):
