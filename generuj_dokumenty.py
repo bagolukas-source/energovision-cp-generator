@@ -319,6 +319,26 @@ def _replace_dots_in_para(para, value):
 
 
 # ============================================================
+# PANEL → výkon a záruky (jediné pravidlo; používajú ho /webhook/generuj-dokumenty-supabase aj -inline)
+# ============================================================
+
+def panel_params_from_sku(panel_sku):
+    """SKU panela → {panel_sku, panel_wp, zaruka_panely_produkt, zaruka_panely_linear}.
+
+    Pravidlo presne ako v pôvodnom /webhook/generuj-dokumenty-supabase: chýbajúce SKU = PAN-001;
+    PAN-002 (LONGi Hi-MO 6, 535 Wp) → 535 Wp a záruky 15/25; PAN-001 (LONGi Hi-MO X10, 470 Wp) → 470 Wp
+    a záruky 25/30; akékoľvek iné SKU → 470 Wp a záruky 15/25 (zachované kvôli identickému správaniu)."""
+    sku = panel_sku or "PAN-001"
+    wp = 535 if sku == "PAN-002" else 470
+    if sku == "PAN-001":
+        produkt, linear = 25, 30
+    else:
+        produkt, linear = 15, 25
+    return {"panel_sku": sku, "panel_wp": wp,
+            "zaruka_panely_produkt": produkt, "zaruka_panely_linear": linear}
+
+
+# ============================================================
 # ZMLUVA O DIELO
 # ============================================================
 
