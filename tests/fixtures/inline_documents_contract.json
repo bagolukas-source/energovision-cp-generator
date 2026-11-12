@@ -6,7 +6,19 @@
   "top_level_keys": ["kind", "lead_data", "allow_docx_only"],
   "kinds": {
     "zmluva": {
-      "required": ["meno_priezvisko", "adresa", "telefon", "email", "vykon_kwp", "cislo_cp", "datum_cp", "miesto_vykonu", "cena_eur", "datum_dnes", "payment_terms"],
+      "required": [
+        "meno_priezvisko",
+        "adresa",
+        "telefon",
+        "email",
+        "vykon_kwp",
+        "cislo_cp",
+        "datum_cp",
+        "miesto_vykonu",
+        "cena_eur",
+        "datum_dnes",
+        "payment_terms"
+      ],
       "optional": ["panel_sku", "zaruka_panely_produkt", "zaruka_panely_linear"],
       "notes": "Zaruky: bud panel_sku, alebo oba explicitne zaruka_panely_* (nie oboje, nie ziadne)."
     },
@@ -21,23 +33,23 @@
     }
   },
   "fields": {
-    "meno_priezvisko": {"type": "text", "min": 3, "max": 120},
-    "adresa": {"type": "text", "min": 5, "max": 200},
-    "trvale_bydlisko": {"type": "text", "min": 5, "max": 200},
-    "miesto_vykonu": {"type": "text", "min": 5, "max": 200},
-    "telefon": {"type": "text", "min": 7, "max": 30},
-    "email": {"type": "text", "min": 6, "max": 254},
-    "cislo_cp": {"type": "text", "min": 3, "max": 40},
-    "cislo_op": {"type": "text", "min": 5, "max": 20},
-    "datum_cp": {"type": "date", "format": "DD.MM.YYYY"},
-    "datum_dnes": {"type": "date", "format": "DD.MM.YYYY"},
-    "datum_narodenia": {"type": "date", "format": "DD.MM.YYYY"},
-    "vykon_kwp": {"type": "number", "min": 0.1, "max": 1000.0, "max_decimals": 2},
-    "cena_eur": {"type": "number", "min": 1.0, "max": 5000000.0, "max_decimals": 2},
-    "payment_terms": {"type": "enum", "values": ["60_30_10", "60_40", "50_50", "30_70"]},
-    "panel_sku": {"type": "enum", "values": ["PAN-001", "PAN-002"]},
-    "zaruka_panely_produkt": {"type": "int", "min": 2, "max": 40},
-    "zaruka_panely_linear": {"type": "int", "min": 2, "max": 50}
+    "meno_priezvisko": { "type": "text", "min": 3, "max": 120 },
+    "adresa": { "type": "text", "min": 5, "max": 200 },
+    "trvale_bydlisko": { "type": "text", "min": 5, "max": 200 },
+    "miesto_vykonu": { "type": "text", "min": 5, "max": 200 },
+    "telefon": { "type": "text", "min": 7, "max": 30 },
+    "email": { "type": "text", "min": 6, "max": 254 },
+    "cislo_cp": { "type": "text", "min": 3, "max": 40 },
+    "cislo_op": { "type": "text", "min": 5, "max": 20 },
+    "datum_cp": { "type": "date", "format": "DD.MM.YYYY" },
+    "datum_dnes": { "type": "date", "format": "DD.MM.YYYY" },
+    "datum_narodenia": { "type": "date", "format": "DD.MM.YYYY" },
+    "vykon_kwp": { "type": "number", "min": 0.1, "max": 1000.0, "max_decimals": 2 },
+    "cena_eur": { "type": "number", "min": 1.0, "max": 5000000.0, "max_decimals": 2 },
+    "payment_terms": { "type": "enum", "values": ["60_30_10", "60_40", "50_50", "30_70"] },
+    "panel_sku": { "type": "enum", "values": ["PAN-001", "PAN-002"] },
+    "zaruka_panely_produkt": { "type": "int", "min": 2, "max": 40 },
+    "zaruka_panely_linear": { "type": "int", "min": 2, "max": 50 }
   },
   "request_examples": {
     "zmluva": {
@@ -90,16 +102,24 @@
       "converter": "string|null",
       "template_sha256": "string(hex64)"
     },
-    "filenames": {"zmluva": "Zmluva_o_dielo.docx", "splnomocnenie": "Splnomocnenie.docx", "gdpr": "GDPR_suhlas.docx"},
+    "filenames": {
+      "zmluva": "Zmluva_o_dielo.docx",
+      "splnomocnenie": "Splnomocnenie.docx",
+      "gdpr": "GDPR_suhlas.docx"
+    },
     "converters": ["gotenberg-libreoffice", "libreoffice"]
   },
   "response_errors": {
-    "401": {"ok": false, "error": "unauthorized"},
-    "503_unconfigured": {"ok": false, "error": "server misconfigured"},
-    "503_no_converter": {"ok": false, "error": "pdf_converter_unavailable", "message": "string"},
-    "413": {"ok": false, "error": "payload_too_large", "max_bytes": 16384},
-    "422_validation": {"ok": false, "error": "validation_failed", "fields": {"<field>": "string"}},
-    "422_incomplete": {"ok": false, "error": "document_incomplete", "problems": ["string"]},
-    "500": {"ok": false, "error": "render_failed"}
+    "401": { "ok": false, "error": "unauthorized" },
+    "503_unconfigured": { "ok": false, "error": "server misconfigured" },
+    "503_no_converter": { "ok": false, "error": "pdf_converter_unavailable", "message": "string" },
+    "413": { "ok": false, "error": "payload_too_large", "max_bytes": 16384 },
+    "422_validation": {
+      "ok": false,
+      "error": "validation_failed",
+      "fields": { "<field>": "string" }
+    },
+    "422_incomplete": { "ok": false, "error": "document_incomplete", "problems": ["string"] },
+    "500": { "ok": false, "error": "render_failed" }
   }
 }
