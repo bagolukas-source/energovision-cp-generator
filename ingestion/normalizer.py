@@ -72,7 +72,63 @@ def _read_table(raw: bytes, filename: str, header=None, nrows=None, skiprows=0,
                     return df
             except Exception as e:
                 last = e
+    # Exporty distribútorov (napr. VSD „Merané profily“) majú nad tabuľkou
+    # metadáta s menej stĺpcami — pandas vtedy odvodí počet stĺpcov z prvého
+    # riadku a spadne. Načítaj s pevnou šírkou podľa najširšieho riadku.
+    df = _read_csv_ragged(raw, header=header, nrows=nrows, skiprows=skiprows,
+                          encs=encs, seps=seps)
+    if df is not None:
+        return df
     raise ValueError(f"CSV sa nedalo načítať: {last}")
+
+
+def _decode(raw: bytes, encs) -> tuple[str, str] | None:
+    for enc in encs:
+        try:
+            return raw.decode(enc), enc
+        except Exception:
+            continue
+    return None
+
+
+def _read_csv_ragged(raw: bytes, header=None, nrows=None, skiprows=0, encs=(), seps=()):
+    """CSV s nerovnakým počtom polí na riadkoch (metadáta nad tabuľkou)."""
+    dec = _decode(raw, encs)
+    if dec is None:
+        return None
+    text, enc = dec
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return None
+    # oddeľovač = ten, ktorý dáva najviac riadkov s ≥2 poľami
+    best = None
+    for s in seps:
+        cnt = sum(1 for ln in lines if ln.count(s) >= 1)
+        if cnt and (best is None or cnt > best[1]):
+            best = (s, cnt)
+    if best is None:
+        return None
+    s = best[0]
+    width = max(ln.count(s) for ln in lines) + 1
+    if width < 2:
+        return None
+    try:
+        df = pd.read_csv(io.BytesIO(raw), sep=s, encoding=enc, header=None,
+                         names=list(range(width)), skiprows=skiprows, dtype=str,
+                         engine="python", skip_blank_lines=True)
+    except Exception:
+        return None
+    df = df.dropna(how="all", axis=1)
+    if header is not None:
+        h = int(header)
+        if h >= len(df):
+            return None
+        cols = [str(c).strip() if pd.notna(c) else f"col{i}" for i, c in enumerate(df.iloc[h].tolist())]
+        df = df.iloc[h + 1:].reset_index(drop=True)
+        df.columns = cols
+    if nrows is not None:
+        df = df.head(int(nrows))
+    return df
 
 
 def _excel_sheet_names(raw: bytes, filename: str) -> list:
@@ -185,11 +241,76 @@ def _col(df: pd.DataFrame, ref):
     raise KeyError(f"stĺpec '{ref}' nenájdený")
 
 
+def _named_refs(spec: dict) -> list:
+    refs = []
+    t = spec.get("timestamp_col")
+    refs += list(t) if isinstance(t, (list, tuple)) else [t]
+    v = spec.get("value_cols") or []
+    refs += list(v) if isinstance(v, (list, tuple)) else [v]
+    return [r for r in refs if isinstance(r, str) and r.strip()]
+
+
+def _has_refs(df: pd.DataFrame, refs: list) -> bool:
+    try:
+        for r in refs:
+            _col(df, r)
+        return True
+    except KeyError:
+        return False
+
+
+def _locate_header(raw: bytes, filename: str, refs: list, sheet) -> pd.DataFrame | None:
+    """Nájdi riadok hlavičky podľa názvov stĺpcov z predpisu.
+
+    AI vracia header_row a skip_rows podľa vzorky, ktorá nemusí mať rovnaké
+    číslovanie riadkov ako súbor (prázdne riadky, metadáta), a pandas ich navyše
+    skladá inak (skiprows sa aplikuje pred header). Pri nesúlade sa hlavička
+    hľadá priamo v dátach.
+    """
+    if not refs:
+        return None
+    try:
+        raw_df = _read_table(raw, filename, header=None, sheet=sheet)
+    except Exception:
+        return None
+    raw_df = raw_df.dropna(how="all").reset_index(drop=True)
+    want = [r.strip().lower() for r in refs]
+    for i in range(min(len(raw_df), 80)):
+        cells = [str(c).strip().lower() for c in raw_df.iloc[i].tolist() if pd.notna(c)]
+        if all(any(w == c or w in c for c in cells) for w in want):
+            cols = [str(c).strip() if pd.notna(c) else f"col{j}" for j, c in enumerate(raw_df.iloc[i].tolist())]
+            df = raw_df.iloc[i + 1:].reset_index(drop=True)
+            df.columns = cols
+            return df
+    return None
+
+
 def _apply_spec_to_kw(raw: bytes, filename: str, spec: dict) -> pd.Series:
     hdr = spec.get("header_row")
     skip = int(spec.get("skip_rows") or 0)
     _sheet = spec.get("sheet_name")
-    df = _read_table(raw, filename, header=hdr, skiprows=skip, sheet=(_sheet if _sheet not in (None, "") else 0))
+    sheet = _sheet if _sheet not in (None, "") else 0
+    refs = _named_refs(spec)
+    df = None
+    try:
+        df = _read_table(raw, filename, header=hdr, skiprows=skip, sheet=sheet)
+    except Exception:
+        df = None
+    if df is None or not _has_refs(df, refs):
+        # header_row a skip_rows od AI sa navzájom prekrývajú — skús len header_row
+        if hdr is not None and skip:
+            try:
+                alt = _read_table(raw, filename, header=hdr, skiprows=0, sheet=sheet)
+                if _has_refs(alt, refs):
+                    df = alt
+            except Exception:
+                pass
+    if df is None or not _has_refs(df, refs):
+        found = _locate_header(raw, filename, refs, sheet)
+        if found is not None:
+            df = found
+    if df is None:
+        raise ValueError("súbor sa nedal načítať podľa predpisu")
     df = df.dropna(how="all")
 
     # timestamp
