@@ -87,6 +87,20 @@ def _sk_dec(x, n=2):
     return f"{x:.{n}f}".replace(".", ",")
 
 
+def _nadvyroba_veta(nadvyroba_pct):
+    """Nadvýroba po slovensky: do +100 % v percentách, nad to ako násobok spotreby.
+
+    „Vyrobí o 993 % viac" čitateľ nepochopí (a pri malej zadanej spotrebe pôsobí ako chyba);
+    „približne 11× viac" je zrozumiteľné.
+    """
+    if nadvyroba_pct <= 100:
+        return f"Vyrobí o {nadvyroba_pct:.0f} % viac"
+    nasobok = (nadvyroba_pct + 100) / 100
+    if nasobok < 10:
+        return f"Vyrobí približne {_sk_dec(nasobok, 1)}× viac"
+    return f"Vyrobí približne {nasobok:.0f}× viac"
+
+
 def gen_copywriting(lead, konfig, ceny, navratnost):
     """Vygeneruje personalizované copywritingové texty na základe leadu."""
     priezvisko = lead["meno"].split()[-1]
@@ -176,7 +190,7 @@ def gen_copywriting(lead, konfig, ceny, navratnost):
     # Záver
     if nadvyroba_pct > 20:
         zaver = (
-            f"Navrhujeme výkon <strong>{_sk_dec(vykon)} kWp</strong>. Vyrobí o {nadvyroba_pct:.0f} % viac, "
+            f"Navrhujeme výkon <strong>{_sk_dec(vykon)} kWp</strong>. {_nadvyroba_veta(nadvyroba_pct)}, "
             f"než ročne spotrebujete — reálne z toho priamo využijete zhruba "
             f"<strong>{pokrytie:.0f} %</strong> svojej spotreby, zvyšok ide do siete za výkupnú cenu "
             f"alebo neskôr do batérie. Počítame konzervatívne: elektrina vyrobená napoludnie sa "
